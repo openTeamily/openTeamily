@@ -69,5 +69,10 @@ recorded shortcuts page. `mod_enter` sends on Ctrl or Cmd+Enter and leaves a
 plain Enter as a newline. IME composition does not send. A missing, invalid, or
 unreadable setting falls back to `enter` and does not block the chat page.
 Message folding, auto-translate and link-preview rendering are not applied in
-the transcript here because those result layouts were not recaptured. This is
-not Teamily or Impeccable acceptance.
+the transcript here because those result layouts were not recaptured. The
+settings hub, language, message-folding, and privacy pages now say so next to
+the recorded controls: `link_previews`, `task_completion_reminders`,
+`auto_translate`, `message_folding`, `document_cards`, and the like/favorite
+visibility switches are still saved, but they do not yet change the
+transcript, send reminders, translate messages, or expose like/favorite lists.
+This is not Teamily or Impeccable acceptance.
