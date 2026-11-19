@@ -344,7 +344,9 @@ async function main() {
           && !hubText.includes('已赚取')
           && !hubText.includes('$CASH')
           && !hubText.includes('CREDIT')
-          && !hubText.includes('剩余 100%'),
+          && !hubText.includes('剩余 100%')
+          && hubText.includes('对话里还不会展开链接预览')
+          && hubText.includes('还不会在任务完成时发出提醒'),
         `panel=${panelText || 'panel empty'} | hub=${hubText || 'hub empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '76-settings-hub-groups.png')));
@@ -392,7 +394,8 @@ async function main() {
         languageText.includes('系统语言')
           && languageText.includes('聊天语言')
           && languageText.includes('自动翻译消息')
-          && languageText.includes('跟随界面语言'),
+          && languageText.includes('跟随界面语言')
+          && languageText.includes('对话里还不会自动翻译消息'),
         languageText || 'language page empty',
       );
       screenshots.push(path.basename(await shot(page, outDir, '47-settings-language.png')));
@@ -410,6 +413,7 @@ async function main() {
         foldingText.includes('选择长消息在对话里最先展示多少内容。')
           && foldingText.includes('长消息会把对话推得很高。')
           && foldingText.includes('长文档收成卡片')
+          && foldingText.includes('当前对话还不会按长度折叠消息')
           && foldingText.includes('‹ 设置'),
         foldingText || 'message-folding page empty',
       );
@@ -431,6 +435,7 @@ async function main() {
           && privacyText.includes('管理你的社交动态对他人的可见性')
           && privacyText.includes('点赞列表')
           && privacyText.includes('收藏列表')
+          && privacyText.includes('还没有公开的点赞或收藏列表')
           && !privacyText.includes('没有留下这一页的版式截图'),
         `saveDisabled=${saveDisabled}; ${privacyText || 'privacy page empty'}`,
       );
