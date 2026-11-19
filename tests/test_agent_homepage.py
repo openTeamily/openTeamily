@@ -78,7 +78,9 @@ class AgentHomepageTests(unittest.TestCase):
         html = page['body'].decode()
         self.assertIn('文档助手', html)
         self.assertIn('整理笔记', html)
-        self.assertIn('OpenTeamily / FlyBot', html)
+        self.assertIn('OpenTeamily', html)
+        self.assertIn('brand-mark', html)
+        self.assertNotIn('OpenTeamily / FlyBot', html)
         self.assertIn('Agent profile', html)
         self.assertIn('Public page', html)
         self.assertIn('Talk via', html)
@@ -188,7 +190,10 @@ class AgentHomepageTests(unittest.TestCase):
         self.assertNotIn('<script>alert(1)</script>', filled)
         self.assertIn('List what this assistant covers', filled)
         self.assertIn('Quick starts', filled)
-        self.assertIn('未接通：这些开场提示只作展示。', filled)
+        self.assertIn('点击开场会在聊天里发起对话', filled)
+        self.assertIn('href="/chat?start=0"', filled)
+        self.assertIn('href="/chat?start=1"', filled)
+        self.assertIn('未接通：公开主页不会发送消息。', filled)
         self.assertNotIn('Help me organize today\'s priorities', filled)
 
     def test_quick_starts_are_optional_public_strings_and_never_leak_instructions(self):
@@ -263,6 +268,100 @@ class AgentHomepageTests(unittest.TestCase):
                 )
             }
             self.assertEqual(names, {'workspace_agent_homepages', 'workspace_agent_quick_starts'})
+
+
+
+    def test_homepage_quick_start_opens_a_member_conversation(self):
+        item = self.create()
+        updated = self.alice.call('POST', f'/v1/workspaces/{self.wid}/agents/{item["id"]}', {
+            'revision': 1,
+            'quick_starts': ['列出这个助手能做什么', '介绍目录怎么组织'],
+        })
+        self.assertEqual(updated['status'], 200, updated)
+        published = self.publish(self.alice, item['id'])
+        token = published['body']['agent']['homepage']['token']
+        page = self.alice.call('GET', '/a/' + token, origin=None, parse='raw')
+        self.assertEqual(page['status'], 200, page)
+        html = page['body'].decode()
+        self.assertIn('href="/chat?start=0"', html)
+        self.assertIn('href="/chat?start=1"', html)
+        self.assertNotIn(token, html)
+        self.assertNotIn(item['id'], html)
+        self.assertNotIn(self.wid, html)
+        self.assertNotIn('系统提示请保密。', html)
+        headers = {key: value for key, value in page['headers']}
+        self.assertIn("frame-ancestors 'none'", headers['Content-Security-Policy'])
+        self.assertIn('sandbox', headers['Content-Security-Policy'])
+        self.assertIn("form-action 'none'", headers['Content-Security-Policy'])
+        cookie_name = self.app.homepage_cookie_name()
+        self.assertEqual(self.alice.cookies.get(cookie_name), token)
+        started = self.alice.call(
+            'POST', '/v1/agent-homepages/start', {'quick_start': 0},
+            {'HTTP_IDEMPOTENCY_KEY': 'home-start-alice-0001'})
+        self.assertEqual(started['status'], 201, started)
+        conversation = started['body']['conversation']
+        self.assertEqual(conversation['workspace_id'], self.wid)
+        self.assertEqual(conversation['agent_id'], item['id'])
+        self.assertEqual(started['body']['message']['body'], '列出这个助手能做什么')
+        self.assertEqual(started['body']['message']['role'], 'user')
+        self.assertEqual(conversation['title'], '列出这个助手能做什么')
+        replay = self.alice.call(
+            'POST', '/v1/agent-homepages/start', {'quick_start': 0},
+            {'HTTP_IDEMPOTENCY_KEY': 'home-start-alice-0001'})
+        self.assertEqual(replay['status'], 200, replay)
+        self.assertEqual(replay['body']['conversation']['id'], conversation['id'])
+        conflict = self.alice.call(
+            'POST', '/v1/agent-homepages/start', {'quick_start': 1},
+            {'HTTP_IDEMPOTENCY_KEY': 'home-start-alice-0001'})
+        self.assertEqual(conflict['status'], 409, conflict)
+
+    def test_homepage_quick_start_rejects_outsiders_and_invalid_input(self):
+        item = self.create()
+        self.alice.call('POST', f'/v1/workspaces/{self.wid}/agents/{item["id"]}', {
+            'revision': 1,
+            'quick_starts': ['列出这个助手能做什么'],
+        })
+        token = self.publish(self.alice, item['id'])['body']['agent']['homepage']['token']
+        self.alice.call('POST', f'/v1/workspaces/{self.wid}/members',
+                        {'username': 'bob', 'role': 'member'})
+        self.assertEqual(self.bob.call('GET', '/a/' + token, origin=None, parse='raw')['status'], 200)
+        member = self.bob.call(
+            'POST', '/v1/agent-homepages/start', {'quick_start': 0},
+            {'HTTP_IDEMPOTENCY_KEY': 'home-start-bob-0001'})
+        self.assertEqual(member['status'], 201, member)
+        self.assertEqual(member['body']['message']['body'], '列出这个助手能做什么')
+        drew = Client(self.app, peer='127.0.0.4')
+        drew.register('drew')
+        self.assertEqual(drew.call('GET', '/a/' + token, origin=None, parse='raw')['status'], 200)
+        outsider = drew.call(
+            'POST', '/v1/agent-homepages/start', {'quick_start': 0},
+            {'HTTP_IDEMPOTENCY_KEY': 'home-start-drew-0001'})
+        self.assertEqual(outsider['status'], 404, outsider)
+        missing = self.carol.call(
+            'POST', '/v1/agent-homepages/start', {'quick_start': 0},
+            {'HTTP_IDEMPOTENCY_KEY': 'home-start-carol-0001'})
+        self.assertEqual(missing['status'], 400, missing)
+        self.alice.call('GET', '/a/' + token, origin=None, parse='raw')
+        self.assertEqual(self.alice.call(
+            'POST', '/v1/agent-homepages/start', {'quick_start': 4},
+            {'HTTP_IDEMPOTENCY_KEY': 'home-start-alice-bad-1'})['status'], 400)
+        self.assertEqual(self.alice.call(
+            'POST', '/v1/agent-homepages/start', {'quick_start': True},
+            {'HTTP_IDEMPOTENCY_KEY': 'home-start-alice-bad-2'})['status'], 400)
+        self.assertEqual(self.alice.call(
+            'POST', '/v1/agent-homepages/start', {'quick_start': 0},
+            {'HTTP_IDEMPOTENCY_KEY': 'home-start-alice-csrf'}, csrf=False)['status'], 403)
+        anonymous = Client(self.app)
+        self.assertEqual(anonymous.call(
+            'POST', '/v1/agent-homepages/start', {'quick_start': 0},
+            {'HTTP_IDEMPOTENCY_KEY': 'home-start-anon-0001'})['status'], 401)
+        revoked = self.alice.call(
+            'POST', f'/v1/workspaces/{self.wid}/agents/{item["id"]}/homepage/revoke', {})
+        self.assertEqual(revoked['status'], 200, revoked)
+        gone = self.alice.call(
+            'POST', '/v1/agent-homepages/start', {'quick_start': 0},
+            {'HTTP_IDEMPOTENCY_KEY': 'home-start-alice-revoked'})
+        self.assertEqual(gone['status'], 404, gone)
 
 
 if __name__ == '__main__':

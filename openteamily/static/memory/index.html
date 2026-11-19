@@ -13,36 +13,38 @@
 <body class="app-workspace">
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
-    <a class="brand-mark" href="/chat" title="OpenTeamily / FlyBot">FB</a>
-    <a href="/chat" title="聊天">聊天</a>
-    <a href="/agents" title="智能体">智能体</a>
-    <a href="/automations" title="自动化">自动化</a>
-    <a href="/memory" title="记忆">记忆</a>
-    <a href="/space" title="作品">作品</a>
-    <a href="/discover" title="发现">发现</a>
+    <a class="brand-mark" href="/chat" title="OpenTeamily" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
+    <a href="/chat" title="聊天" aria-label="聊天"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H9l-5 4V4Z"/></svg><span class="rail-label">聊天</span></a>
+    <a href="/agents" title="智能体" aria-label="智能体"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14v12H5z M9 3h6 M12 3v4 M8 12h1 M15 12h1 M9 16h6"/></svg><span class="rail-label">智能体</span></a>
+        <a href="/skills" title="技能" aria-label="技能"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Z M8.5 10.5h7 M8.5 14h4.5"/></svg><span class="rail-label">技能</span></a>
+<a href="/automations" title="自动化" aria-label="自动化"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg><span class="rail-label">自动化</span></a>
+    <a href="/memory" title="记忆" aria-label="记忆"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4a4 4 0 0 0-4 4v8a4 4 0 0 0 4 4 M16 4a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4 M8 8h8 M8 12h8 M8 16h8 M12 4v16"/></svg><span class="rail-label">记忆</span></a>
+    <a href="/space" title="作品" aria-label="作品"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg><span class="rail-label">作品</span></a>
+    <a href="/meetings" title="会议" aria-label="会议"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v14H4z M8 3v4 M16 3v4 M4 10h16"/></svg><span class="rail-label">会议</span></a>
+    <a href="/discover" title="发现" aria-label="发现"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg><span class="rail-label">发现</span></a>
     <span class="rail-spacer"></span>
-    <a href="/profile" class="rail-signed-in" hidden title="我的资料">我</a>
+    <a href="/profile" class="rail-signed-in" hidden title="我的资料" aria-label="我"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7a4 4 0 1 0 8 0 4 4 0 0 0-8 0 M4 21v-2a8 8 0 0 1 16 0v2"/></svg><span class="rail-label">我</span></a>
     <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换浅色或深色。会写入已有外观设置；按钮在深色下显示「深色」。点击后的标签变化未经 Teamily 核实。">浅色</button>
-    <a href="/download" title="下载">下载</a>
+    <a href="/download" title="下载" aria-label="下载"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12 m-5-5 5 5 5-5 M4 16v5h16v-5"/></svg><span class="rail-label">下载</span></a>
     <div class="account-slot" hidden>
       <button type="button" id="account-menu-button" class="account-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="账户菜单">账户</button>
       <div id="account-menu" class="account-menu" role="menu" hidden>
         <p id="account-identity" class="account-identity"></p>
-        <a href="/profile" role="menuitem">查看我的资料</a>
+        <a href="/profile" role="menuitem" aria-label="查看我的资料">查看我的资料</a>
         <a href="/team" role="menuitem">创建团队</a>
         <div class="account-sub">
           <button type="button" id="help-menu-button" aria-expanded="false" aria-controls="help-menu">帮助</button>
           <div id="help-menu" hidden>
             <button type="button" disabled title="未实现：还没有 OpenTeamily 帮助中心页">帮助中心</button>
             <a href="/guide" role="menuitem">功能指引</a>
-            <a href="/download" role="menuitem">下载</a>
+            <a href="/download" role="menuitem" aria-label="下载">下载</a>
             <a href="/settings#send-shortcut" role="menuitem">快捷键</a>
             <button type="button" disabled title="未实现：还没有 OpenTeamily 服务条款页">服务条款</button>
             <button type="button" disabled title="未实现：还没有 OpenTeamily 隐私政策页">隐私政策</button>
             <a href="https://github.com/openTeamily/openTeamily/issues" rel="noreferrer" target="_blank" role="menuitem" title="指向本仓库的 issue 列表，不是 Teamily 的联系邮箱">报告问题</a>
           </div>
         </div>
-        <a href="/settings" role="menuitem">所有设置</a>
+        <a href="/settings" role="menuitem" aria-label="所有设置">所有设置</a>
         <form id="logout-form" method="post" action="/v1/auth/logout">
           <button type="submit">退出登录</button>
         </form>
@@ -64,14 +66,14 @@
     <header class="memory-top">
       <button type="button" id="dir-expand" class="dir-expand" hidden aria-label="展开侧边栏" title="展开侧边栏（收起后的版式未经对照核实）">展开侧边栏</button>
       <h1 class="visually-hidden">记忆</h1>
-      <p id="view-title" class="visually-hidden">总览</p>
+      <p id="view-title" class="memory-view-title">总览</p>
       <p id="whoami" class="visually-hidden"></p>
       <label class="workspace-picker">工作区
         <select id="workspace"></select>
       </label>
       <p id="graph-counts" class="memory-counts"></p>
     </header>
-    <p class="note memory-disclaimer">对照里的记忆总览是左侧目录、中间图谱和右侧话题。新建会立即落盘。空图谱说明、新建入口和窄屏图谱优先布局是 OpenTeamily 补充，未经目标站对照。画像、分享和导出尚未实现。我的会议进入已有的作品库会议空态，仍没有会议作品接口。还不能写成已经功能对等，也还没有浏览器端到端验收。</p>
+    <details class="note memory-disclaimer"><summary>对照说明</summary><p>对照里的记忆总览是左侧目录、中间图谱和右侧话题。新建会立即落盘。空图谱说明、新建入口和窄屏图谱优先布局是 OpenTeamily 补充，未经目标站对照。画像、分享和导出尚未实现。我的会议进入已有的作品库会议空态，仍没有会议作品接口。还不能写成已经功能对等，也还没有浏览器端到端验收。</p></details>
     <section id="list-panel" class="memory-workspace" data-view="overview">
       <aside class="memory-dir" id="memory-dir">
         <div class="dir-header">
@@ -87,7 +89,7 @@
         </label>
         <div class="memory-filters" role="group" aria-label="筛选">
           <button type="button" data-filter="all" aria-pressed="true">全部 <span id="filter-all-count" class="filter-count">0</span></button>
-          <button type="button" data-filter="updated" title="未实现：对照里「更新」带未读条数，但 OpenTeamily 还没有已读状态接口，所以不显示条数。">更新</button>
+          <button type="button" data-filter="updated" title="按最近更新排序；数字是最近 7 天更新过的页面数（还没有已读状态接口，所以不是未读数）。">更新 <span id="filter-updated-count" class="filter-count">0</span></button>
           <button type="button" data-filter="topics">标签 <span class="filter-caret" aria-hidden="true">▾</span></button>
         </div>
         <div id="topic-filter-box" hidden>
@@ -170,40 +172,88 @@
           <h2>我的资料</h2>
           <button type="button" id="dream-profile" disabled title="未实现：对照里未点开「做梦」。OpenTeamily 还没有整理记忆的接口。">做梦</button>
         </header>
-        <p class="note">未接通：对照里这一页是可编辑的画像正文，但 OpenTeamily 还没有画像接口，不能保存。下面只摆出已记录的三个小节标题，没有写入对照账户里的正文。</p>
+        <p class="note">这些资料仅属于当前工作区中的你，可编辑并保存。尚未自动注入模型；做梦整理尚未实现。</p><form id="memory-profile-form">
         <article class="memory-profile-section">
           <h3>Professional Profile</h3>
-          <p class="memory-profile-empty">还没有这份画像。</p>
+          <label>编辑正文<textarea id="profile-professional" maxlength="10000" rows="5"></textarea></label>
         </article>
         <article class="memory-profile-section">
           <h3>Work Style</h3>
-          <p class="memory-profile-empty">还没有这份画像。</p>
+          <label>编辑正文<textarea id="profile-work_style" maxlength="10000" rows="5"></textarea></label>
         </article>
         <article class="memory-profile-section">
           <h3>Communication &amp; Writing Style</h3>
-          <p class="memory-profile-empty">还没有这份画像。</p>
+          <label>编辑正文<textarea id="profile-communication" maxlength="10000" rows="5"></textarea></label>
         </article>
+        <button type="submit" id="save-memory-profile">保存画像</button><p id="memory-profile-status" role="status"></p></form>
+        <section id="preference-panel" aria-labelledby="preference-title">
+          <h3 id="preference-title">偏好</h3>
+          <p class="note">这里的偏好只保存在当前页面，刷新后不会保留；还没有接后端，也不会改变模型的行为。</p>
+          <ul id="preference-list"></ul>
+          <p id="preferences-empty" class="note">还没有偏好，加一条试试</p>
+          <label>新偏好 <input id="preference-input" maxlength="120" placeholder="例如：回复用中文" autocomplete="off"></label>
+          <button type="button" id="add-preference">添加偏好</button>
+          <p id="preference-status" role="status"></p>
+        </section>
       </section>
-    </section>
-    <form id="editor-form" method="post" action="/v1/workspaces" hidden>
-      <label>标题 <input type="text" name="title" maxlength="80" required autocomplete="off"></label>
-      <label>正文
-        <textarea name="body" maxlength="8000" rows="16"></textarea>
+    <form id="editor-form" class="memory-editor" method="post" action="/v1/workspaces" hidden>
+      <div class="editor-topbar">
+        <p id="editor-saved" class="editor-saved" hidden></p>
+        <div class="editor-top-actions">
+          <button type="button" disabled title="未接通：还没有整理记忆的接口。">做梦</button>
+          <button type="button" disabled title="未接通：还没有分享记忆页的接口。">分享</button>
+          <button type="button" disabled title="未接通：还没有页内历史记录接口。">历史</button>
+        </div>
+      </div>
+      <label class="editor-title-field"><span class="visually-hidden">标题</span> <input type="text" name="title" maxlength="80" required autocomplete="off" placeholder="标题"></label>
+      <label class="editor-topics-field">话题 <input type="text" name="topics" maxlength="400" autocomplete="off" placeholder="添加标签"></label>
+      <div class="editor-toolbar" role="toolbar" aria-label="正文格式">
+        <button type="button" data-rich="undo" title="撤销" aria-label="撤销"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5 M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
+        <button type="button" data-rich="redo" title="重做" aria-label="重做"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5 M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
+        <span class="editor-tool-sep" aria-hidden="true"></span>
+        <button type="button" data-rich="bold" title="粗体" aria-label="粗体"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5h6a3.5 3.5 0 0 1 0 7H7z M7 12h7a3.5 3.5 0 0 1 0 7H7z"/></svg></button>
+        <button type="button" data-rich="italic" title="斜体" aria-label="斜体"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5h-4 M14 19h-4 M14 5l-4 14"/></svg></button>
+        <button type="button" data-rich="strike" title="删除线" aria-label="删除线"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14 M16 7a4 3 0 0 0-4-2c-2.2 0-4 1.2-4 3s1.5 2.4 4 3 M8 17a4 3 0 0 0 4 2c2.2 0 4-1.2 4-3"/></svg></button>
+        <button type="button" data-rich="code" title="行内代码" aria-label="行内代码"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 8-4 4 4 4 M15 8l4 4-4 4"/></svg></button>
+        <span class="editor-tool-sep" aria-hidden="true"></span>
+        <button type="button" data-rich="h1" title="一级标题" aria-label="一级标题">H1</button>
+        <button type="button" data-rich="h2" title="二级标题" aria-label="二级标题">H2</button>
+        <button type="button" data-rich="h3" title="三级标题" aria-label="三级标题">H3</button>
+        <span class="editor-tool-sep" aria-hidden="true"></span>
+        <button type="button" data-rich="ul" title="无序列表" aria-label="无序列表"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11 M9 12h11 M9 18h11 M4.5 6h.01 M4.5 12h.01 M4.5 18h.01"/></svg></button>
+        <button type="button" data-rich="ol" title="有序列表" aria-label="有序列表"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 6h10 M10 12h10 M10 18h10 M4 5l1.5-1v5 M3.5 14.5c.3-.9 2.5-1 2.5.3 0 1-2.5 1.7-2.5 3.2h2.6"/></svg></button>
+        <button type="button" data-rich="quote" title="引用" aria-label="引用"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h4v4c0 3-1.5 5-4 6 M15 7h4v4c0 3-1.5 5-4 6"/></svg></button>
+        <button type="button" data-rich="hr" title="分隔线" aria-label="分隔线"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16"/></svg></button>
+        <button type="button" data-rich="link" title="链接" aria-label="链接"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1 M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg></button>
+        <button type="button" id="editor-source-toggle" class="editor-source-toggle" aria-pressed="false" title="切换 Markdown 源码；保存的正文始终是 Markdown">Markdown</button>
+      </div>
+      <div id="editor-rich" class="editor-rich" contenteditable="true" role="textbox" aria-multiline="true" aria-label="正文" data-placeholder="开始写作…" spellcheck="true"></div>
+      <label class="editor-body-field" hidden><span class="visually-hidden">正文（Markdown）</span>
+        <textarea name="body" maxlength="8000" rows="16" placeholder="开始写作…"></textarea>
       </label>
-      <label>话题 <input type="text" name="topics" maxlength="400" autocomplete="off" placeholder="用逗号分隔"></label>
+      <p id="editor-length" class="note editor-length" hidden></p>
       <p class="note">正文里用 [[已有标题]] 可以连到同工作区的记忆页。</p>
       <p id="editor-meta" class="note"></p>
       <div id="page-links"></div>
-      <label>添加连接
-        <select id="link-target">
-          <option value="">选择记忆页</option>
-        </select>
-      </label>
-      <button type="button" id="add-link">添加连接</button>
+      <div class="editor-link-row">
+        <label>添加连接
+          <select id="link-target">
+            <option value="">选择记忆页</option>
+          </select>
+        </label>
+        <button type="button" id="add-link">添加连接</button>
+      </div>
       <div class="actions">
         <button type="submit" id="save-page">保存</button>
         <button type="button" id="delete-page">删除</button>
         <button type="button" id="close-editor">返回列表</button>
+      </div>
+      <div id="page-delete-confirm" role="alertdialog" aria-labelledby="page-delete-question" hidden>
+        <p id="page-delete-question"></p>
+        <div class="actions">
+          <button type="button" id="page-delete-confirm-submit">确认删除</button>
+          <button type="button" id="page-delete-confirm-cancel">取消</button>
+        </div>
       </div>
     </form>
     <form id="action-editor-form" method="post" action="/v1/workspaces" hidden>
@@ -227,7 +277,15 @@
         <button type="button" id="delete-action">删除</button>
         <button type="button" id="close-action-editor">返回列表</button>
       </div>
+      <div id="action-delete-confirm" role="alertdialog" aria-labelledby="action-delete-question" hidden>
+        <p id="action-delete-question"></p>
+        <div class="actions">
+          <button type="button" id="action-delete-confirm-submit">确认删除</button>
+          <button type="button" id="action-delete-confirm-cancel">取消</button>
+        </div>
+      </div>
     </form>
+    </section>
   </section>
   </main>
 </body>

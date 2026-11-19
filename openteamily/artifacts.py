@@ -35,6 +35,11 @@ CREATE TABLE IF NOT EXISTS artifacts (
  UNIQUE(workspace_id, key_hash),
  UNIQUE(workspace_id, title_hash));
 CREATE INDEX IF NOT EXISTS artifact_workspace ON artifacts(workspace_id, id);
+CREATE TABLE IF NOT EXISTS artifact_favorites (
+ artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ created INTEGER NOT NULL,
+ PRIMARY KEY (artifact_id, user_id));
 CREATE TABLE IF NOT EXISTS artifact_meta (
  artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
  render TEXT NOT NULL CHECK(render IN ('website')));
@@ -271,7 +276,135 @@ def view(row, include_body=True):
             data['dashboard'] = decode_dashboard(row['dashboard_json']) or dict(EMPTY_DASHBOARD)
     elif include_body:
         data['body'] = row['body']
+    if not include_body:
+        thumb = preview(row)
+        if thumb is not None:
+            data['preview'] = thumb
     return data
+
+
+PREVIEW_LINES = 4
+PREVIEW_LINE_MAX = 90
+PREVIEW_STROKES = 24
+PREVIEW_POINTS = 24
+_TAG = re.compile(r'<[^>]*>')
+_BLOCK_TAG = re.compile(r'</?(?:p|div|h[1-6]|li|br|tr|blockquote|pre|section|article)\b[^>]*>', re.IGNORECASE)
+_HEADING = re.compile(r'<h[1-3]\b[^>]*>(.*?)</h[1-3]>', re.IGNORECASE | re.DOTALL)
+
+
+def _preview_text(value):
+    text = re.sub(r'\s+', ' ', unescape(value or '')).strip()
+    return text[:PREVIEW_LINE_MAX]
+
+
+def _text_lines(body, html=False):
+    source = body or ''
+    if html:
+        source = re.sub(r'(?is)<(script|style)\b.*?</\1>', ' ', source)
+        source = _BLOCK_TAG.sub('\n', source)
+        source = _TAG.sub(' ', source)
+    lines = []
+    for raw in source.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        line = re.sub(r'^(#{1,6}\s+|[-*+]\s+|>\s*|\d+[.)]\s+)', '', line)
+        line = re.sub(r'[*_`~]{1,3}', '', line)
+        line = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', line)
+        line = _preview_text(line)
+        if line:
+            lines.append(line)
+        if len(lines) >= PREVIEW_LINES + 1:
+            break
+    return lines
+
+
+def preview(row):
+    """Small, text-only thumbnail model derived from the stored content.
+
+    The client draws it with DOM text and SVG shapes; no stored HTML is ever
+    passed through. Media previews are the media file itself, so none here.
+    """
+    kind = public_kind(row)
+    if kind == 'media':
+        return None
+    if kind == 'whiteboard':
+        board = decode_board(row['board_json']) or dict(EMPTY_BOARD)
+        shapes = []
+        for stroke in board['strokes'][:PREVIEW_STROKES]:
+            item = {'type': stroke['type'], 'color': stroke['color']}
+            if stroke['type'] == 'path':
+                points = stroke['points']
+                step = max(1, -(-len(points) // PREVIEW_POINTS))
+                sampled = points[::step]
+                if sampled[-1] is not points[-1]:
+                    sampled.append(points[-1])
+                item['points'] = [[round(x), round(y)] for x, y in sampled]
+                item['width'] = stroke['width']
+            elif stroke['type'] == 'text':
+                item.update(x=round(stroke['x']), y=round(stroke['y']), size=stroke['size'],
+                            text=stroke['text'][:40])
+            else:
+                item.update(x=round(stroke['x']), y=round(stroke['y']),
+                            width=round(stroke['width']), height=round(stroke['height']))
+            shapes.append(item)
+        return {'type': 'board', 'width': board['width'], 'height': board['height'],
+                'shapes': shapes, 'count': len(board['strokes'])}
+    if kind == 'slides':
+        deck = decode_slides(row['slides_json']) or dict(EMPTY_SLIDES)
+        slides = deck['slides']
+        first = slides[0] if slides else {'title': '', 'bullets': []}
+        return {'type': 'slides', 'title': _preview_text(first['title']),
+                'bullets': [_preview_text(item) for item in first['bullets'][:3]],
+                'count': len(slides)}
+    if kind == 'dashboard':
+        dashboard = decode_dashboard(row['dashboard_json']) or dict(EMPTY_DASHBOARD)
+        widgets = []
+        for widget in dashboard['widgets'][:4]:
+            item = {'type': widget['type'], 'title': _preview_text(widget['title'])}
+            if widget['type'] == 'metric':
+                item['value'] = _preview_text(widget['value'])[:24]
+            elif widget['type'] == 'bar':
+                top = max(widget['values']) or 1
+                item['bars'] = [round(value * 100 / top) for value in widget['values'][:8]]
+            else:
+                item['columns'] = [_preview_text(column)[:24] for column in widget['columns'][:4]]
+                item['rows'] = min(len(widget['rows']), 99)
+            widgets.append(item)
+        return {'type': 'dashboard', 'widgets': widgets}
+    body = row['body'] if 'body' in row.keys() else ''
+    if kind == 'website':
+        match = _HEADING.search(body or '')
+        heading = _preview_text(_TAG.sub(' ', match.group(1))) if match else ''
+        lines = _text_lines(body, html=True)
+        if heading and lines and lines[0] == heading:
+            lines = lines[1:]
+        return {'type': 'website', 'heading': heading, 'lines': lines[:PREVIEW_LINES]}
+    lines = _text_lines(body)
+    heading = ''
+    first = (body or '').lstrip().split('\n', 1)[0]
+    if first.startswith('#') and lines:
+        heading, lines = lines[0], lines[1:]
+    # Preserve the first visible block shapes instead of flattening headings,
+    # lists and code into indistinguishable prose. Bounded, text-only, never HTML.
+    blocks = []
+    in_code = False
+    for raw in (body or '').splitlines():
+        value = raw.strip()
+        if value.startswith('```'):
+            in_code = not in_code
+            continue
+        if not value:
+            continue
+        block_type = ('code' if in_code else 'heading' if re.match(r'^#{1,3}\s', value)
+                      else 'list' if re.match(r'^(?:[-*+] |[0-9]+[.)] )', value)
+                      else 'quote' if value.startswith('>') else 'text')
+        text = _text_lines(value)
+        if text:
+            blocks.append({'type': block_type, 'text': text[0]})
+        if len(blocks) >= 6:
+            break
+    return {'type': 'document', 'heading': heading, 'lines': lines[:PREVIEW_LINES], 'blocks': blocks}
 
 
 def can_edit(role, user_id, row):
@@ -1373,3 +1506,18 @@ def parse_multipart(content_type, raw):
                     return None
             fields[name] = payload
     return {'fields': fields, 'files': uploads}
+
+
+def render_listed_media(row, path):
+    """Only for explicitly listed works; path is a validated local public slug."""
+    mime, source = row['media_mime'], escape(path, quote=True)
+    title = escape(row['title'] or '媒体')
+    if mime.startswith('image/'):
+        player = '<img style="max-width:100%;height:auto" src="' + source + '" alt="' + title + '">'
+    elif mime.startswith('audio/'):
+        player = '<audio controls preload="metadata" src="' + source + '"></audio>'
+    else:
+        player = '<video style="max-width:100%" controls preload="metadata" src="' + source + '"></video>'
+    return ('<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<title>' + title + '</title><body><h1>' + title + '</h1>' + player +
+            '<p><a href="' + source + '" download>下载媒体</a></p></body></html>')

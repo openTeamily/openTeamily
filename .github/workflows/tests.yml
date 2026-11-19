@@ -42,7 +42,10 @@ jobs:
       - run: node --test tests/memory_graph_empty.test.mjs
       - run: node --test tests/discover_page.test.mjs
       - run: node --test tests/profile_page.test.mjs
+      - run: node --test tests/meetings_page.test.mjs
       - run: node --test tests/agents_creator_filter.test.mjs
+      - run: node --test tests/skills_page.test.mjs
+      - run: node --test tests/look_avatar.test.mjs
       - name: Python tests with explicit trusted runner Node
         run: |
           install -d -m 0700 "$RUNNER_TEMP/openteamily-planner-bin"

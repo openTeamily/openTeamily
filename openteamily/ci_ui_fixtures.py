@@ -34,6 +34,7 @@ SOCIAL_MESSAGE_TEXT = '[CI FIXTURE] Social message for search.'
 AUTOMATION_TITLE = '[CI FIXTURE] Sample briefing'
 AUTOMATION_PROMPT = 'Write one sentence of clearly labeled CI fixture text.'
 DOCUMENT_TITLE = '[CI FIXTURE] Document'
+DOCUMENT_DISCOVER_SLUG = 'ci-fixture-doc'
 DOCUMENT_BODY = 'This is synthetic CI screenshot fixture text, not production data.'
 WEBSITE_TITLE = '[CI FIXTURE] Website'
 WEBSITE_BODY = '<h1>CI Fixture Site</h1><p>Synthetic static HTML for screenshots.</p>'
@@ -206,12 +207,21 @@ def seed_fixtures(data_dir, origin, password, provider_base, model_api_key, *, i
     _require(owner.call('POST', '/v1/workspaces/%s/automations/%s' % (wid, aid),
                         {'revision': revision, 'changes': {'enabled': True}}),
              (200,), 'enable the fixture automation')
-    _require(owner.call('POST', '/v1/workspaces/%s/artifacts' % wid, {
+    document = _require(owner.call('POST', '/v1/workspaces/%s/artifacts' % wid, {
         'title': DOCUMENT_TITLE, 'body': DOCUMENT_BODY, 'kind': 'document',
     }, {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-doc-0001'}), (201,), 'create the fixture document')
-    _require(owner.call('POST', '/v1/workspaces/%s/artifacts' % wid, {
+    _require(owner.call(
+        'POST',
+        '/v1/workspaces/%s/artifacts/%s/discover' % (wid, document['body']['artifact']['id']),
+        {'slug': DOCUMENT_DISCOVER_SLUG},
+        {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-doc-discover-0001'},
+    ), (201,), 'list the fixture document on discover')
+    website = _require(owner.call('POST', '/v1/workspaces/%s/artifacts' % wid, {
         'title': WEBSITE_TITLE, 'body': WEBSITE_BODY, 'kind': 'website',
     }, {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-site-0001'}), (201,), 'create the fixture website')
+    _require(owner.call('POST', '/v1/workspaces/%s/artifacts/%s/discover' %
+                        (wid, website['body']['artifact']['id']), {'slug': 'ci-fixture-site'}),
+             (201,), 'list the fixture website on discover')
     raw, content_type = multipart(
         [('title', MEDIA_TITLE), ('kind', 'media')],
         [('file', 'ci-fixture.png', 'image/png', solid_png())],

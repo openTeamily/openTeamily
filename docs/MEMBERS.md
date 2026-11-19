@@ -36,3 +36,7 @@ An additive `workspace_members` table (`CREATE TABLE IF NOT EXISTS`) in the exis
 ## Not in this slice
 
 Any workspace member can list, inspect, poll jobs and read control-plane event logs for instances in that workspace. Only the owner or an admin can create, start, stop or restart. Members who try to operate get `403`; non-members still get `404`. Manager grants are unchanged. A same-origin page at `/members` lists members, adds a registered username, changes roles, removes or leaves, and mints, lists, revokes or accepts invite links through the existing API. No owner transfer, no group multi-agent run. Browser acceptance is not claimed. These defaults are not yet Teamily-verified.
+
+## Inline confirmation (page only)
+
+Removing a member, leaving a workspace and revoking an invite are two-step inline confirmations on `/members`. The row button opens `role="alertdialog"` copy in the same row — `移除 bob？`, `退出工作区？` (confirm label `确认退出`), `撤销这条邀请？` — with `aria-labelledby` on the question, focus starting on `取消`, and Escape closing it. `取消` or Escape sends no request; `确认` sends the one existing API call listed above. The page never calls `window.confirm`. Invite metadata (`invites.view`) carries no username, so the revoke question cannot name the invitee. No endpoint, config item or storage is added.

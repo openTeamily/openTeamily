@@ -110,7 +110,7 @@ def completions_url(base):
     return base + '/chat/completions'
 
 
-def infer_chat(model_api, prompt, timeout=30, opener=urlopen):
+def infer_chat(model_api, prompt, timeout=30, opener=urlopen, tools=None, execute_tool=None):
     if not isinstance(model_api, dict):
         raise AgentError(0, {'error': {'message': 'Model access was empty'}})
     provider = model_api.get('provider')
@@ -119,39 +119,67 @@ def infer_chat(model_api, prompt, timeout=30, opener=urlopen):
     key = model_api.get('api_key')
     if provider not in ('openai', 'custom') or not valid_provider_url(base) or not model or not key:
         raise AgentError(0, {'error': {'message': 'Model access is incomplete or not allowed'}})
-    payload = json.dumps({
-        'model': model,
-        'messages': [{'role': 'user', 'content': prompt}],
-        'max_tokens': 512,
-    }).encode()
-    headers = {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + key,
-        'User-Agent': USER_AGENT,
-    }
-    req = Request(completions_url(base), data=payload, headers=headers, method='POST')
-    context = ssl.create_default_context() if urlsplit(base).scheme == 'https' else None
-    try:
-        with opener(req, timeout=timeout, context=context) as response:
-            raw = response.read(16384)
-    except TypeError:
-        # Test openers may not accept context=
-        with opener(req, timeout=timeout) as response:
-            raw = response.read(16384)
-    except HTTPError as error:
-        error.read()
-        raise AgentError(error.code, {'error': {'message': 'Model provider rejected the request'}}) from None
-    except URLError:
-        raise AgentError(0, {'error': {'message': 'Cannot reach the model provider'}}) from None
-    try:
-        parsed = json.loads(raw.decode('utf-8'))
-        text = parsed['choices'][0]['message']['content']
-        if not isinstance(text, str):
-            raise ValueError()
-    except (KeyError, IndexError, TypeError, ValueError, UnicodeError):
-        raise AgentError(0, {'error': {'message': 'Model provider returned an unexpected body'}}) from None
-    return text
+    messages = [{'role': 'user', 'content': prompt}]
+    for _round in range(5):
+        request_body = {'model': model, 'messages': messages, 'max_tokens': 512}
+        if tools:
+            request_body.update(tools=tools, parallel_tool_calls=False)
+        payload = json.dumps(request_body).encode()
+        headers = {'Accept': 'application/json', 'Content-Type': 'application/json',
+                   'Authorization': 'Bearer ' + key, 'User-Agent': USER_AGENT}
+        req = Request(completions_url(base), data=payload, headers=headers, method='POST')
+        context = ssl.create_default_context() if urlsplit(base).scheme == 'https' else None
+        try:
+            try:
+                response = opener(req, timeout=timeout, context=context)
+            except TypeError:
+                response = opener(req, timeout=timeout)
+            with response:
+                raw = response.read(65537)
+            if len(raw) > 65536:
+                raise ValueError()
+            parsed = json.loads(raw.decode('utf-8'))
+            message = parsed['choices'][0]['message']
+            calls = message.get('tool_calls')
+            if not calls:
+                text = message.get('content')
+                if not isinstance(text, str):
+                    raise ValueError()
+                return text
+            if not execute_tool or not isinstance(calls, list) or len(calls) > 4:
+                raise ValueError()
+            messages.append({'role': 'assistant', 'content': message.get('content'), 'tool_calls': calls})
+            for call in calls:
+                name = call['function']['name']
+                if name not in [t['function']['name'] for t in tools or []]:
+                    raise ValueError()
+                args = json.loads(call['function']['arguments'])
+                result = execute_tool(call['id'], name, args)
+                messages.append({'role': 'tool', 'tool_call_id': call['id'], 'content': json.dumps(result)})
+        except HTTPError as error:
+            raise AgentError(error.code, {'error': {'message': 'Model provider rejected the request'}}) from None
+        except URLError:
+            raise AgentError(0, {'error': {'message': 'Cannot reach the model provider'}}) from None
+        except (KeyError, IndexError, TypeError, ValueError, UnicodeError):
+            raise AgentError(0, {'error': {'message': 'Model provider returned an unexpected body'}}) from None
+    raise AgentError(0, {'error': {'message': 'Tool round limit exceeded'}})
+
+
+def connected_tool_bridge(task, origin, token, requester=request, sleeper=time.sleep, clock=time.time):
+    path = '/v1/agent/tasks/' + task['id'] + '/tools'
+    tools = requester(origin, 'POST', path, token, {})[1].get('tools', [])
+
+    def execute(call_id, name, arguments):
+        row = requester(origin, 'POST', path + '/calls', token,
+                        {'call_id': call_id, 'name': name, 'arguments': arguments})[1]['call']
+        deadline = min(clock() + 40, task.get('deadline', clock() + 40) - 1)
+        while row['status'] in ('pending', 'approved') and clock() < deadline:
+            sleeper(1)
+            requester(origin, 'POST', '/v1/agent/heartbeat', token, {})
+            row = requester(origin, 'POST', path + '/calls/' + row['id'], token, {})[1]['call']
+        return row.get('result') or {'error': 'tool_' + row['status'],
+                                    'note': 'Owner approval required in Settings > App connectors. No implicit retry.'}
+    return tools, execute
 
 
 def echo_result(prompt):
@@ -174,14 +202,18 @@ def handle_task(task, origin=None, token=None, requester=request, inferer=infer_
         try:
             access = requester(origin, 'POST', '/v1/agent/tasks/' + task['id'] + '/model-access', token, {})[1]
             model_api = access.get('model_api') if isinstance(access, dict) else None
-            text = inferer(model_api, prompt, timeout=infer_timeout)
+            if access.get('connected_tools') and inferer is infer_chat:
+                tools, execute = connected_tool_bridge(task, origin, token, requester)
+                text = inferer(model_api, prompt, timeout=infer_timeout, tools=tools, execute_tool=execute)
+            else:
+                text = inferer(model_api, prompt, timeout=infer_timeout)
             return 'succeeded', {
                 'text': text,
                 'model': model_api.get('model') if isinstance(model_api, dict) else None,
                 'source': model_api.get('source') if isinstance(model_api, dict) else None,
             }
-        except AgentError as error:
-            return 'failed', {'error': str(error)}
+        except (AgentError, OSError, TimeoutError):
+            return 'failed', {'error': 'Inference or connected tool request failed; no automatic retry'}
         finally:
             if isinstance(model_api, dict):
                 model_api.pop('api_key', None)

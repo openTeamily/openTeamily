@@ -9,7 +9,14 @@ The 2026-11-18 real-account walk captured the full four-step onboarding:
 3. **我们能帮你分担些什么？** — one-off tasks and routines derived from the role.
 4. **你的 Agent** — Personal Agent look (colour, expression, headwear, glasses, hand item).
 
-This slice implements **step 1 only** (industry and role) and stores it for later recommendations (not currently consumed by recommendations). Step 2 is intentionally out of scope because account connection authorization remains unimplemented; steps 3 and 4 remain pending. There is no forced redirect: `/chat` shows a non-blocking hint when the context is missing.
+Step 1 (industry and role) follows the captured layout. Steps 2–4 are a **functional flow that has not been compared with Teamily** (no comparable layout capture): step 2 lists the eight captured apps as not connected because account authorization is unimplemented; step 3 stores up to six picks from self-written task/routine suggestions (two industry-specific ones for some industries plus four general ones) and creates no automation; step 4 stores a Personal Agent look (colour, expression, headwear, glasses, hand item; self-written option labels). The saved look is rendered as an original CSS avatar in step 4, the owner's Personal Agent card on `/agents`, and its `/chat` session/header; no bitmap image is generated. The steps appear on `/onboarding` once step 1 is saved or skipped. See [PERSONAL_LOOK.md](PERSONAL_LOOK.md).
+
+| Method | Path | Behavior |
+|---|---|---|
+| POST | `/v1/onboarding/picks` | `{picks: [key…]}` (≤6 unique known keys). Returns `{steps}`. |
+| POST | `/v1/onboarding/look` | `{look: {color, expression, headwear, glasses, hand}}`, each from `look_options`. Returns `{steps}`. |
+
+`GET /v1/onboarding` now also returns `steps` (`apps`, `recommendations`, `look_options`, `picks`, `look`, `compared: false`). Additive `user_onboarding_steps` table. There is no forced redirect: `/chat` shows a non-blocking hint when the context is missing.
 
 ## API
 

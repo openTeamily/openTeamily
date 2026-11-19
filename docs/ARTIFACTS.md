@@ -55,6 +55,10 @@ The `/space` left directory now follows the recorded empty-library layout: the h
 
 The `/space?view=meetings` page now also exposes the recorded heading「我的会议」and a wave-form empty icon above the existing empty copy. Captions and「我参加的」/「全部」tabs are unchanged, still without a meetings API or invented recordings. The workspace picker stays visible for OpenTeamily multi-workspace use. The existing disabled「通知」control is an original bell icon with the accessible name「通知」; there is still no notifications API.
 
+## Removing an artifact
+
+「删除」 asks before it deletes. The question is built in the page as an inline `role="alertdialog"` (`删除「<title>」？`, falling back to `删除这个作品？` when the title is empty) with「取消」and「确认」；opening it sends no request, focus starts on「取消」, and `Escape` closes it and returns focus to「删除」. Only「确认」sends the single `POST …/remove`. The page does not use `window.confirm`, and `static/artifacts/index.html` is unchanged.
+
 ## Not claimed
 
 No public homepage, no scripted web apps, no meeting-notes ingest, no Teamily comparison, no browser E2E. This issue stays open until those are done and compared.

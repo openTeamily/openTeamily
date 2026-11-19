@@ -63,6 +63,17 @@ class SettingsPageTests(unittest.TestCase):
         self.assertEqual(head['status'], 200)
         self.assertEqual(head['body'], b'')
 
+    def test_composer_deep_links_pass_only_known_queries(self):
+        for kind in ('document', 'website', 'slides', 'dashboard', 'whiteboard'):
+            self.assertEqual(self.raw.call('GET', '/space', query='new=' + kind)['status'], 200, kind)
+        self.assertEqual(self.raw.call('GET', '/space', query='new=image')['status'], 400)
+        self.assertEqual(self.raw.call('GET', '/automations', query='template=daily_brief')['status'], 200)
+        self.assertEqual(self.raw.call('GET', '/automations', query='template=custom')['status'], 400)
+        self.assertEqual(self.raw.call('GET', '/automations', query='template=nope')['status'], 400)
+        self.assertEqual(self.raw.call('GET', '/shell/thumb.mjs')['status'], 200)
+        self.assertEqual(self.raw.call('GET', '/memory/rich.mjs')['status'], 200)
+        self.assertEqual(self.raw.call('GET', '/shell/thumb.mjs', query='x=1')['status'], 400)
+
     def test_page_rejects_cross_origin_queries_and_writes(self):
         self.assertEqual(self.raw.call('GET', '/settings', origin='https://evil.test')['status'], 403)
         self.assertEqual(self.raw.call('GET', '/settings', host='evil.test')['status'], 403)
@@ -120,20 +131,25 @@ class SettingsPageTests(unittest.TestCase):
         account = html.find('id="group-account"')
         ai = html.find('id="group-ai"')
         prefs = html.find('id="group-prefs"')
-        self.assertTrue(-1 < account < ai < prefs)
+        support = html.find('id="group-support"')
+        self.assertTrue(-1 < account < ai < prefs < support)
+        self.assertIn('支持与法律', html)
+        support_html = html[support:]
+        self.assertIn('href="/about"', support_html)
+        self.assertIn('href="/guide"', support_html)
         self.assertIn('href="/profile"', html)
         self.assertIn('href="/settings/language"', html)
         self.assertIn('href="/settings/channels"', html)
         self.assertIn('href="/settings/agent-access"', html)
         self.assertIn('href="#model-api"', html)
-        self.assertIn('href="#skill-secrets"', html)
+        self.assertIn('href="/settings/skill-configuration"', html)
         self.assertIn('href="/settings/connectors"', html)
         self.assertIn('href="/runtimes"', html)
         language = html.find('href="/settings/language"')
         channels = html.find('href="/settings/channels"')
         agent_api = html.find('href="/settings/agent-access"')
         model_api = html.find('href="#model-api"')
-        skills = html.find('href="#skill-secrets"')
+        skills = html.find('href="/settings/skill-configuration"')
         connectors = html.find('href="/settings/connectors"')
         runtimes = html.find('href="/runtimes"')
         self.assertTrue(-1 < language < channels < agent_api < model_api < skills < connectors < runtimes)
@@ -172,7 +188,8 @@ class SettingsPageTests(unittest.TestCase):
         for path in ('/settings/appearance', '/settings/language',
                      '/settings/message-folding', '/settings/privacy',
                      '/settings/shortcuts', '/settings/channels',
-                     '/settings/agent-access', '/settings/connectors'):
+                     '/settings/agent-access', '/settings/connectors',
+                     '/settings/skill-configuration'):
             page = self.raw.call('GET', path)
             self.assertEqual(page['status'], 200, path)
             html = page['body'].decode()
@@ -215,9 +232,12 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('不会添加或连接服务器', connectors)
         self.assertIn('class="connector-search-icon"', connectors)
         self.assertEqual(connectors.count('class="connector-row"'), 39)
-        self.assertEqual(connectors.count('>未连接<'), 39)
-        self.assertEqual(connectors.count('不会真连。">+ 连接'), 39)
-        self.assertEqual(connectors.count('disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。"'), 39)
+        # Rows start disabled until the user's own Composio key is loaded.
+        self.assertEqual(connectors.count('>未配置 Composio<'), 32)  # 31 rows + key card badge
+        self.assertEqual(connectors.count('data-state="unavailable">未接通<'), 8)
+        self.assertEqual(connectors.count('disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接'), 31)
+        self.assertEqual(connectors.count('disabled title="未接通：Composio 没有这个应用，暂时不能连接。">+ 连接'), 8)
+        self.assertIn('id="composio-key-form"', connectors)
         self.assertIn('id="connectors-catalog"', connectors)
         self.assertIn('没有匹配的应用。', connectors)
         self.assertIn('id="connectors-empty"', connectors)

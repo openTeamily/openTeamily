@@ -30,6 +30,7 @@ function redact(value) {
 async function call(origin, token, method, path, body) {
   const response = await fetch(origin + path, {
     method,
+    signal: AbortSignal.timeout(20000),
     headers: {
       'Authorization': 'Bearer ' + token,
       'Content-Type': 'application/json',
@@ -47,24 +48,58 @@ async function call(origin, token, method, path, body) {
   return parsed
 }
 
-async function infer(modelApi, prompt) {
+export async function infer(modelApi, prompt, bridge = null, fetcher = globalThis.fetch) {
   const base = String(modelApi.base_url || '').replace(/\/+$/, '')
-  const response = await fetch(base + '/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': 'Bearer ' + modelApi.api_key,
-      'Content-Type': 'application/json',
+  const messages = [{ role: 'user', content: prompt }]
+  const tools = bridge ? (await bridge.discover()).tools || [] : []
+  for (let round = 0; round < 5; round += 1) {
+    const response = await fetcher(base + '/chat/completions', {
+      method: 'POST', signal: AbortSignal.timeout(30000),
+      headers: { 'Authorization': 'Bearer ' + modelApi.api_key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: modelApi.model, messages,
+        ...(tools.length ? {tools, parallel_tool_calls: false} : {}) }),
+    })
+    const parsed = await response.json()
+    const message = parsed?.choices?.[0]?.message
+    if (!response.ok || !message) throw new Error('model provider returned an unexpected body')
+    if (!message.tool_calls?.length) {
+      if (typeof message.content !== 'string') throw new Error('model response has no text')
+      return message.content
+    }
+    if (!bridge || message.tool_calls.length > 4) throw new Error('tool call limit exceeded')
+    // Provider text and tool outputs are untrusted data, not authorization.
+    messages.push({role: 'assistant', content: message.content || null, tool_calls: message.tool_calls})
+    for (const call of message.tool_calls) {
+      const name = call.function?.name
+      if (!tools.some(t => t.function.name === name)) throw new Error('tool was not discovered')
+      const args = JSON.parse(call.function.arguments)
+      const result = await bridge.execute(call.id, name, args)
+      messages.push({role: 'tool', tool_call_id: call.id, content: JSON.stringify(result)})
+    }
+  }
+  throw new Error('tool round limit exceeded')
+}
+
+export function toolBridge(origin, token, task, requester = call, {
+  wait = ms => new Promise(resolve => setTimeout(resolve, ms)), now = () => Date.now(),
+} = {}) {
+  const path = `/v1/agent/tasks/${task.id}/tools`
+  return {
+    discover: () => requester(origin, token, 'POST', path, {}),
+    async execute(callId, name, args) {
+      const proposal = await requester(origin, token, 'POST', path + '/calls', {call_id: callId, name, arguments: args})
+      let result = proposal.call
+      // Every call (reads too) needs an explicit owner approval in settings.
+      // No provider mutation is retried after timeout/unknown result.
+      const deadline = Math.min(now() + 40000, (task.deadline || now() / 1000 + 40) * 1000 - 1000)
+      while (['pending', 'approved'].includes(result.status) && now() < deadline) {
+        await wait(1000)
+        await requester(origin, token, 'POST', '/v1/agent/heartbeat', {})
+        result = (await requester(origin, token, 'POST', path + '/calls/' + result.id, {})).call
+      }
+      return result.result || {error: 'tool_' + result.status, note: 'Await owner approval in Settings > App connectors; no implicit retry.'}
     },
-    body: JSON.stringify({
-      model: modelApi.model,
-      messages: [{ role: 'user', content: prompt }],
-    }),
-  })
-  const parsed = await response.json()
-  const text = parsed && parsed.choices && parsed.choices[0] && parsed.choices[0].message
-    ? parsed.choices[0].message.content : null
-  if (!response.ok || typeof text !== 'string') throw new Error('model provider returned an unexpected body')
-  return text
+  }
 }
 
 export async function runCycle(config, { requester = call, inferer = infer, once = true } = {}) {
@@ -86,7 +121,8 @@ export async function runCycle(config, { requester = call, inferer = infer, once
       } else if (payload.kind === 'infer') {
         const access = await requester(origin, token, 'POST', `/v1/agent/tasks/${payload.id}/model-access`, {})
         modelApi = access.model_api
-        const text = await inferer(modelApi, payload.prompt)
+        const bridge = access.connected_tools ? toolBridge(origin, token, payload, requester) : null
+        const text = await inferer(modelApi, payload.prompt, bridge)
         status = 'succeeded'
         result = { text, model: modelApi && modelApi.model, source: modelApi && modelApi.source }
       }

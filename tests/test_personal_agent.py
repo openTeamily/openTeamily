@@ -64,6 +64,20 @@ class PersonalAgentTests(unittest.TestCase):
             self.assertEqual(db.execute('SELECT COUNT(*) FROM workspace_agents').fetchone()[0], 11)
             self.assertEqual(db.execute('SELECT COUNT(*) FROM builtin_agents').fetchone()[0], 10)
 
+    def test_personal_look_is_exposed_only_to_its_owner(self):
+        look = {'color': '天空蓝', 'expression': '微笑', 'headwear': '耳机',
+                'glasses': '无', 'hand': '咖啡杯'}
+        alice = self.alice.call('POST', '/v1/personal-agent')['body']['personal_agent']
+        self.assertIsNone(alice['look'])
+        saved = self.alice.call('POST', '/v1/onboarding/look', {'look': look})
+        self.assertEqual(saved['status'], 200, saved)
+        got = self.alice.call('GET', '/v1/personal-agent')['body']['personal_agent']
+        self.assertEqual(got['look'], look)
+        self.assertEqual(got['agent']['id'], alice['agent']['id'])
+        bob = self.bob.call('POST', '/v1/personal-agent')['body']['personal_agent']
+        self.assertIsNone(bob['look'])
+        self.assertNotEqual(bob['agent']['id'], alice['agent']['id'])
+
     def test_personal_space_is_isolated_per_user(self):
         alice = self.alice.call('POST', '/v1/personal-agent')['body']['personal_agent']
         bob = self.bob.call('POST', '/v1/personal-agent')['body']['personal_agent']

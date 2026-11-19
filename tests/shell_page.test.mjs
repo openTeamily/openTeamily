@@ -1,3 +1,4 @@
+import {readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
@@ -243,4 +244,46 @@ test('calling both menu helpers without an existing 工作背景 link keeps the 
   ensureOnboardingMenuItem(doc);
   ensureChannelsAndConnectorsMenuItems(doc);
   assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', 'Agent 渠道', '应用连接器', '工作背景', 'account-sub', '所有设置']);
+});
+
+
+test('shared icon rails keep accessible link names and leave account-menu text visible', () => {
+  for (const name of ['chat', 'discover', 'settings', 'memory', 'artifacts', 'onboarding', 'agents']) {
+    const html = readFileSync(new URL('../openteamily/static/' + name + '/index.html', import.meta.url), 'utf8');
+    const nav = html.split('<nav class="app-rail"')[1].split('<div class="account-slot"')[0];
+    assert.match(nav, /href="\/chat"[^>]*aria-label="聊天">[\s\S]*?<svg/);
+    assert.match(nav, /class="rail-label">发现<\/span>/);
+    const menu = html.split('<div class="account-slot"')[1].split('</nav>')[0];
+    assert.doesNotMatch(menu, /class="rail-label"/);
+    assert.match(menu, /所有设置<\/a>/);
+  }
+});
+
+test('workspace tokens meet text contrast in explicit light and dark themes', () => {
+  const css = readFileSync(new URL('../openteamily/static/shell/app.css', import.meta.url), 'utf8');
+  const luminance = hex => {
+    const rgb = hex.match(/../g).map(n => parseInt(n, 16) / 255).map(n => n <= .04045 ? n / 12.92 : ((n + .055) / 1.055) ** 2.4);
+    return rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722;
+  };
+  const ratio = (a,b) => { const x = luminance(a), y = luminance(b); return (Math.max(x,y)+.05)/(Math.min(x,y)+.05); };
+  for (const theme of ['light','dark']) {
+    const block = css.split('html[data-theme-resolved="' + theme + '"] {')[1].split('}')[0];
+    const values = Object.fromEntries([...block.matchAll(/--ot-([\w-]+): #([0-9a-f]{6});/g)].map(m => [m[1],m[2]]));
+    for (const bg of ['bg','surface','surface-2','accent-soft']) {
+      for (const fg of ['ink','muted']) assert.ok(ratio(values[fg], values[bg]) >= 4.5, theme + ' ' + fg + '/' + bg);
+    }
+    assert.ok(ratio(values.accent, theme === 'light' ? 'ffffff' : '121c17') >= 4.5);
+  }
+  assert.match(css, /prefers-reduced-motion/);
+  assert.match(css, /outline: 2px solid var\(--ot-focus\)/);
+});
+
+
+test('shared hover and expanded states keep explicit contrast pairs', () => {
+  const css = readFileSync(new URL('../openteamily/static/shell/app.css', import.meta.url), 'utf8');
+  for (const selector of ['.skip-link:hover', 'a.brand-mark:hover', '.account-trigger[aria-expanded="true"]:hover']) {
+    const block = css.slice(css.lastIndexOf(selector)).split('}')[0];
+    assert.match(block, /background: var\(--ot-accent(?:-hover)?\)/);
+    assert.match(block, /color: var\(--ot-on-accent\)/);
+  }
 });

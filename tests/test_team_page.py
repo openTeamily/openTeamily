@@ -59,11 +59,17 @@ class TeamPageTests(unittest.TestCase):
         self.assertIn('设一个全新、独立的团队工作区开始。', html)
         self.assertIn('转化我当前的工作区', html)
         self.assertIn('将当前工作区升入该团队。', html)
-        self.assertIn('id="step-later"', html)
-        self.assertNotIn('id="step-2"', html)
-        self.assertNotIn('id="step-3"', html)
         self.assertIn('继续', html)
-
+        # Issue #246: step 2 is now the real invite step, so the old
+        # "step-later" placeholder is gone and steps 2 and 3 exist.
+        self.assertNotIn('id="step-later"', html)
+        self.assertIn('id="step-2"', html)
+        self.assertIn('邀请成员', html)
+        self.assertIn('id="invite-role"', html)
+        self.assertIn('id="invite-expiry"', html)
+        self.assertIn('id="invite-skip"', html)
+        self.assertIn('跳过，只建团队', html)
+        self.assertIn('id="step-3"', html)
     def test_new_team_alias_is_served_and_unknown_new_paths_404(self):
         alias = self.raw.call('GET', '/new/team')
         self.assertEqual(alias['status'], 200)

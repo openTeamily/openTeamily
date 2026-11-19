@@ -38,6 +38,14 @@ class ProfileDownloadPageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('GET', '/profile/app.css')['status'], 200)
         self.assertEqual(self.raw.call('GET', '/profile', query='x=1')['status'], 400)
         self.assertEqual(self.raw.call('POST', '/profile')['status'], 405)
+        edit = self.raw.call('GET', '/profile/edit')
+        self.assertEqual(edit['status'], 200)
+        edit_html = edit['body'].decode()
+        self.assertIn('编辑资料', edit_html)
+        self.assertIn('id="profile-home"', edit_html)
+        self.assertIn('id="followers-dialog"', edit_html)
+        self.assertIn('还没有帖子，发布你的第一篇吧。', edit_html)
+        self.assertEqual(self.raw.call('GET', '/profile/edit', query='x=1')['status'], 400)
 
     def test_download_lists_existing_runtime_and_disables_missing_clients(self):
         page = self.raw.call('GET', '/download')
@@ -51,3 +59,18 @@ class ProfileDownloadPageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('GET', '/download/app.mjs')['status'], 200)
         self.assertEqual(self.raw.call('GET', '/download', origin='https://evil.test')['status'], 403)
         self.assertEqual(self.raw.call('GET', '/download', query='x=1')['status'], 400)
+
+    def test_about_page_is_original_and_rejects_queries(self):
+        page = self.raw.call('GET', '/about')
+        self.assertEqual(page['status'], 200)
+        html = page['body'].decode()
+        self.assertIn('关于 · OpenTeamily', html)
+        self.assertIn('可自托管', html)
+        self.assertIn('href="/about/app.css"', html)
+        self.assertNotIn('teamily.com', html.lower())
+        self.assertNotIn("World's First", html)
+        self.assertNotIn('Human-AI Social Network', html)
+        self.assertEqual(page['headers']['Cache-Control'], 'no-store')
+        self.assertEqual(self.raw.call('GET', '/about/app.css')['status'], 200)
+        self.assertEqual(self.raw.call('GET', '/about', query='x=1')['status'], 400)
+        self.assertEqual(self.raw.call('POST', '/about')['status'], 405)

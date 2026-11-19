@@ -7,6 +7,7 @@ the captured work-context step and stores it for later recommendations.
 Connectors are intentionally out of scope (Birfy/Bot Social territory); the
 automation and avatar steps remain pending.
 """
+import json
 import re
 
 SCHEMA = '''
@@ -71,3 +72,93 @@ def industries_view():
 
 def load(db, user_id):
     return db.execute('SELECT * FROM user_onboarding WHERE user_id=?', (user_id,)).fetchone()
+
+
+# Steps 2-4 (issue #130). The 2026-11-18 walk captured the step titles, the app
+# list and the look attributes, but not a comparable layout, so this is a
+# functional flow that has not been compared with Teamily. Step 2 lists apps
+# honestly as not connected (no OAuth here); step 3 stores picks of self-written
+# task/routine suggestions (no automation is created); step 4 stores the Personal
+# Agent look. Recommendation copy and look option labels are self-written.
+STEPS_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS user_onboarding_steps (
+ user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+ picks TEXT NOT NULL,
+ look TEXT,
+ updated INTEGER NOT NULL);
+'''
+SCHEMA += STEPS_SCHEMA
+
+APPS = (('gmail', 'Gmail'), ('outlook', 'Outlook'), ('google-calendar', 'Google Calendar'), ('github', 'GitHub'),
+        ('google-drive', 'Google Drive'), ('notion', 'Notion'), ('google-sheets', 'Google Sheets'),
+        ('google-docs', 'Google Docs'))
+
+GENERAL = (
+    ('daily-brief', 'routine', '每日工作早报', '每天早上汇总待办和需要回复的消息。'),
+    ('meeting-notes', 'task', '整理会议纪要', '把会议记录整理成结论和行动项。'),
+    ('weekly-review', 'routine', '每周复盘', '每周五总结本周进展和下周重点。'),
+    ('draft-reply', 'task', '起草回复', '根据上下文起草邮件或消息回复。'),
+)
+BY_INDUSTRY = {
+    '科技与软件': (('release-notes', 'task', '撰写发布说明', '根据变更记录起草版本发布说明。'),
+                ('issue-triage', 'routine', '每日问题分拣', '每天整理新问题并标出优先级。')),
+    '广告与营销': (('social-copy', 'task', '社媒文案', '为一次活动写几版社媒文案。'),
+                ('campaign-watch', 'routine', '活动数据周报', '每周汇总投放和互动数据。')),
+    '教育': (('lesson-outline', 'task', '课程大纲', '为一节课准备大纲和练习。'),
+           ('homework-feedback', 'routine', '作业反馈提醒', '每周提醒整理作业反馈。')),
+    '电子商务与零售': (('listing-copy', 'task', '商品详情文案', '为商品写标题和卖点。'),
+                ('stock-check', 'routine', '库存日报', '每天汇总低库存商品。')),
+}
+PICK_MAX = 6
+
+LOOK_OPTIONS = {
+    'color': ('珊瑚橙', '天空蓝', '薄荷绿', '葡萄紫', '柠檬黄', '石墨灰'),
+    'expression': ('微笑', '专注', '好奇', '酷'),
+    'headwear': ('无', '棒球帽', '耳机', '贝雷帽'),
+    'glasses': ('无', '圆框眼镜', '墨镜'),
+    'hand': ('无', '咖啡杯', '笔记本', '魔法棒'),
+}
+
+
+def recommendations(industry):
+    return [{'key': key, 'kind': kind, 'title': title, 'summary': summary}
+            for key, kind, title, summary in BY_INDUSTRY.get(industry, ()) + GENERAL]
+
+
+def all_recommendation_keys():
+    keys = {item[0] for item in GENERAL}
+    for items in BY_INDUSTRY.values():
+        keys.update(item[0] for item in items)
+    return keys
+
+
+def valid_look(look):
+    return (isinstance(look, dict) and set(look) == set(LOOK_OPTIONS)
+            and all(look[name] in options for name, options in LOOK_OPTIONS.items()))
+
+
+def load_steps(db, user_id):
+    return db.execute('SELECT * FROM user_onboarding_steps WHERE user_id=?', (user_id,)).fetchone()
+
+
+def load_look(db, user_id):
+    """Return the saved Personal Agent look only when it still matches the options."""
+    row = load_steps(db, user_id)
+    if row is None or not row['look']:
+        return None
+    try:
+        look = json.loads(row['look'])
+    except (TypeError, ValueError):
+        return None
+    return look if valid_look(look) else None
+
+
+def steps_view(row, industry):
+    return {
+        'apps': [{'key': key, 'name': name, 'connected': False} for key, name in APPS],
+        'recommendations': recommendations(industry),
+        'look_options': {name: list(options) for name, options in LOOK_OPTIONS.items()},
+        'picks': json.loads(row['picks']) if row is not None else [],
+        'look': json.loads(row['look']) if row is not None and row['look'] else None,
+        'compared': False,
+    }

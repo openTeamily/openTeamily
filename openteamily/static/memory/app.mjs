@@ -1,3 +1,9 @@
+import { domToMarkdown, renderMarkdown, safeHref } from './rich.mjs';
+export function recentlyUpdatedCount(pages, now = Date.now(), days = 7) {
+  const since = now / 1000 - days * 86400;
+  return (pages || []).filter((page) => Number(page.updated || 0) >= since).length;
+}
+
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
@@ -48,6 +54,38 @@ export function parseTopics(value) {
     names.push(name);
   }
   return names;
+}
+
+
+export function applyMarkdown(textarea, kind) {
+  if (!textarea) return '';
+  const value = textarea.value;
+  const start = textarea.selectionStart ?? value.length;
+  const end = textarea.selectionEnd ?? value.length;
+  const selected = value.slice(start, end);
+  const wraps = {
+    bold: ['**', '**', '粗体'],
+    italic: ['_', '_', '斜体'],
+    strike: ['~~', '~~', '删除线'],
+    code: ['`', '`', '代码'],
+    h1: ['# ', '', '标题'],
+    h2: ['## ', '', '小标题'],
+    h3: ['### ', '', '小标题'],
+    ul: ['- ', '', '列表项'],
+    ol: ['1. ', '', '列表项'],
+    hr: ['\n---\n', '', ''],
+    quote: ['> ', '', '引用'],
+    link: ['[', '](https://)', '链接文字'],
+  };
+  const [pre, post, fallback] = wraps[kind] || ['', '', '文本'];
+  const body = selected || fallback;
+  const next = value.slice(0, start) + pre + body + post + value.slice(end);
+  textarea.value = next;
+  if (typeof textarea.setSelectionRange === 'function') {
+    textarea.setSelectionRange(start + pre.length, start + pre.length + body.length);
+  }
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  return next;
 }
 
 export function formatTopics(topics) {
@@ -260,6 +298,7 @@ export function applyDirectoryCollapsed(root, collapsed) {
 
 
 export const MEMORY_EMPTY_WORKSPACE = '这个工作区还没有记忆页。';
+export const PREFERENCES_EMPTY = '还没有偏好，加一条试试';
 export const MEMORY_EMPTY_NO_MATCH = '没有匹配的记忆页。试试其他关键词。';
 export const GRAPH_EMPTY_MESSAGE = '创建两个或更多记忆页后，这里会把它们连成图谱';
 
@@ -336,6 +375,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let sideTab = 'topics';
   let graphZoom = 1;
   let topicQuery = '';
+  let pendingDelete = null;
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -454,6 +494,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       : (String(needle || '').trim() ? MEMORY_EMPTY_NO_MATCH : MEMORY_EMPTY_WORKSPACE);
     const count = document.getElementById('filter-all-count');
     if (count) count.textContent = String((pageChoices || []).length);
+    const recent = document.getElementById('filter-updated-count');
+    if (recent) recent.textContent = String(recentlyUpdatedCount(pageChoices));
   }
 
   function renderDirectory() {
@@ -505,8 +547,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     view.history.replaceState({}, '', path + queryForMemoryPage(currentView));
   }
 
+  let profileRevision = null;
+  let profileRequest = 0;
+  async function loadMemoryProfile() {
+    profileRevision = null;
+    const token = ++profileRequest, wid = workspaceId();
+    const save = document.getElementById('save-memory-profile'); if (save) save.disabled = true;
+    if (!wid) return;
+    const result = await request('GET', `/v1/workspaces/${wid}/memory/profile`);
+    if (token !== profileRequest || workspaceId() !== wid) return;
+    const status = document.getElementById('memory-profile-status');
+    if (result.status !== 200) { if (status) status.textContent = '无法读取画像。'; return; }
+    const profile = result.body.profile;
+    profileRevision = profile.revision;
+    if (save) save.disabled = false;
+    for (const field of ['professional', 'work_style', 'communication']) {
+      const input = document.getElementById('profile-' + field); if (input) input.value = profile[field];
+    }
+    if (status) status.textContent = '';
+  }
   function showView(name, {sync = true} = {}) {
     currentView = name || 'overview';
+    if (editor) editor.hidden = true;
+    if (actionEditor) actionEditor.hidden = true;
     const workspace = document.getElementById('list-panel');
     if (workspace) workspace.dataset.view = currentView;
     const title = document.getElementById('view-title');
@@ -520,6 +583,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (side) side.hidden = currentView !== 'overview';
     if (actions) actions.hidden = currentView !== 'actions';
     if (profile) profile.hidden = currentView !== 'profile';
+    if (currentView === 'profile') loadMemoryProfile();
     for (const button of document.querySelectorAll('.memory-views [data-view]')) {
       if (button.getAttribute('data-view') === currentView) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
@@ -622,7 +686,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const topicEmpty = document.getElementById('topic-empty');
     const payload = graph || {nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}};
     const stats = payload.counts || {nodes: 0, edges: 0, topics: 0};
-    if (counts) counts.textContent = `${stats.nodes} 节点 · ${stats.edges} 连接 · ${stats.topics} 话题`;
+    if (counts) {
+      const linked = new Set();
+      for (const edge of payload.edges || []) {
+        if (edge.source) linked.add(edge.source);
+        if (edge.target) linked.add(edge.target);
+      }
+      const unconnected = (payload.nodes || []).filter((node) => !linked.has(node.id)).length;
+      counts.replaceChildren();
+      for (const [value, label] of [[stats.nodes, '节点'], [stats.edges, '连接'], [unconnected, '未连接'], [stats.topics, '话题']]) {
+        const item = document.createElement('span');
+        item.className = 'memory-count';
+        const strong = document.createElement('strong');
+        strong.textContent = String(value ?? 0);
+        const caption = document.createElement('span');
+        caption.textContent = label;
+        item.append(strong, caption);
+        counts.appendChild(item);
+      }
+    }
     const empty = document.getElementById('graph-empty');
     if (empty) {
       empty.hidden = !graphEmptyStateVisible({
@@ -825,6 +907,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function loadWorkspace() {
+    closeDeleteConfirm({restoreFocus: false});
     const id = workspaceId();
     currentPage = null;
     currentAction = null;
@@ -861,7 +944,100 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     showView(currentView);
   }
 
+  // While a page or action is open the directory column stays visible (as in
+  // the recorded editor); only the overview/side/actions/profile panels hide.
+  function showPageMode() {
+    listPanel.hidden = false;
+    listPanel.dataset.view = 'page';
+    for (const id of ['overview-panel', 'memory-side', 'actions-panel', 'profile-panel']) {
+      const panel = document.getElementById(id);
+      if (panel) panel.hidden = true;
+    }
+  }
+
+  const rich = document.getElementById('editor-rich');
+  const sourceToggle = document.getElementById('editor-source-toggle');
+  let sourceMode = false;
+  // Only an edited rich body is re-serialised, so opening and saving a page
+  // without touching the text keeps its stored markdown byte-for-byte.
+  let richDirty = false;
+  function syncBodyFromRich() {
+    if (!rich || sourceMode || !richDirty) return;
+    const markdown = domToMarkdown(rich);
+    editor.elements.body.value = markdown;
+    const length = document.getElementById('editor-length');
+    if (length) {
+      const over = markdown.length > 8000;
+      length.hidden = !over;
+      length.textContent = over ? `正文 ${markdown.length} / 8000 字符，超出上限，保存会被拒绝。` : '';
+    }
+  }
+  function loadRichBody(markdown) {
+    if (!rich) return;
+    renderMarkdown(document, rich, markdown);
+    richDirty = false;
+  }
+  function setSourceMode(next) {
+    if (!rich) return;
+    if (next === sourceMode) return;
+    if (next) syncBodyFromRich();
+    sourceMode = next;
+    const field = editor.querySelector('.editor-body-field');
+    if (field) field.hidden = !next;
+    rich.hidden = next;
+    if (!next) loadRichBody(editor.elements.body.value);
+    if (sourceToggle) sourceToggle.setAttribute('aria-pressed', next ? 'true' : 'false');
+  }
+  if (rich) {
+    try { document.execCommand('defaultParagraphSeparator', false, 'p'); } catch { /* older engines */ }
+    rich.addEventListener('input', () => { richDirty = true; syncBodyFromRich(); });
+    rich.addEventListener('paste', (event) => {
+      // Paste as plain text so foreign HTML never enters the page.
+      const text = event.clipboardData && event.clipboardData.getData('text/plain');
+      if (text == null) return;
+      event.preventDefault();
+      document.execCommand('insertText', false, text);
+    });
+  }
+  if (sourceToggle) sourceToggle.addEventListener('click', () => setSourceMode(!sourceMode));
+
+  function richCommand(kind) {
+    if (!rich) return;
+    rich.focus();
+    const block = (tag) => {
+      const current = String(document.queryCommandValue('formatBlock') || '').toLowerCase();
+      document.execCommand('formatBlock', false, current === tag ? 'p' : tag);
+    };
+    const simple = {undo: 'undo', redo: 'redo', bold: 'bold', italic: 'italic', strike: 'strikeThrough',
+      ul: 'insertUnorderedList', ol: 'insertOrderedList', hr: 'insertHorizontalRule'};
+    if (simple[kind]) document.execCommand(simple[kind], false, null);
+    else if (kind === 'h1' || kind === 'h2' || kind === 'h3') block(kind);
+    else if (kind === 'quote') block('blockquote');
+    else if (kind === 'code') {
+      const selection = document.getSelection();
+      if (selection && selection.rangeCount && rich.contains(selection.anchorNode)) {
+        const range = selection.getRangeAt(0);
+        const code = document.createElement('code');
+        code.textContent = range.toString() || '代码';
+        range.deleteContents();
+        range.insertNode(code);
+        selection.removeAllRanges();
+        const after = document.createRange();
+        after.selectNodeContents(code);
+        selection.addRange(after);
+      }
+    } else if (kind === 'link') {
+      const answer = globalThis.prompt ? globalThis.prompt('链接地址（https://、mailto: 或站内 /路径）', 'https://') : '';
+      const href = safeHref(answer);
+      if (href) document.execCommand('createLink', false, href);
+      else if (answer) show('error', '只支持 https://、http://、mailto: 或站内路径的链接。');
+    }
+    richDirty = true;
+    syncBodyFromRich();
+  }
+
   async function openPage(pageId) {
+    closeDeleteConfirm({restoreFocus: false});
     hideGraphHoverCard(document.getElementById('graph-hover-card'));
     const id = workspaceId();
     if (!id) return;
@@ -872,18 +1048,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     currentPage = seen.body.page;
     currentAction = null;
-    listPanel.hidden = true;
+    showPageMode();
     if (actionEditor) actionEditor.hidden = true;
     editor.hidden = false;
     editor.elements.title.value = currentPage.title;
     editor.elements.body.value = currentPage.body || '';
+    loadRichBody(currentPage.body || '');
     editor.elements.topics.value = formatTopics(currentPage.topics);
     document.getElementById('editor-meta').textContent =
       `修订 ${currentPage.revision} · 作者 ${currentPage.created_by} · 最近更新 ${currentPage.updated_by}`;
+    const savedHint = document.getElementById('editor-saved');
+    if (savedHint) {
+      const when = memoryUpdatedLabel(currentPage.updated);
+      savedHint.hidden = false;
+      savedHint.textContent = when ? ('已保存 · ' + when) : ('已保存 · 修订 ' + currentPage.revision);
+    }
+
     renderPageLinks();
   }
 
   async function openAction(actionId) {
+    closeDeleteConfirm({restoreFocus: false});
     const id = workspaceId();
     if (!id) return;
     const seen = await request('GET', `/v1/workspaces/${id}/memory/actions/${actionId}`);
@@ -893,7 +1078,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     currentAction = seen.body.action;
     currentPage = null;
-    listPanel.hidden = true;
+    showPageMode();
     editor.hidden = true;
     actionEditor.hidden = false;
     actionEditor.elements.title.value = currentAction.title;
@@ -933,7 +1118,87 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadSession();
   });
 
-  workspaceSelect.addEventListener('change', () => loadWorkspace());
+  const profileForm = document.getElementById('memory-profile-form');
+  if (profileForm) profileForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (profileRevision === null) return;
+    const wid = workspaceId();
+    const payload = {revision: profileRevision};
+    for (const field of ['professional', 'work_style', 'communication']) payload[field] = document.getElementById('profile-' + field).value;
+    const status = document.getElementById('memory-profile-status');
+    const result = await request('POST', `/v1/workspaces/${wid}/memory/profile`, payload);
+    if (workspaceId() !== wid) return;
+    if (result.status !== 200) { status.textContent = result.status === 409 ? '画像已在别处更新，请重新打开后重试。' : '画像未保存。'; return; }
+    profileRevision = result.body.profile.revision; status.textContent = '画像已保存。';
+  });
+  // 「偏好」 lives in the 我的资料 view. It is local page state only: no
+  // request is made, nothing is stored, and a reload starts from an empty list.
+  const preferences = [];
+  let preferenceSerial = 0;
+
+  function renderPreferences() {
+    const list = document.getElementById('preference-list');
+    const empty = document.getElementById('preferences-empty');
+    if (!list) return;
+    list.replaceChildren();
+    for (const item of preferences) {
+      const row = document.createElement('li');
+      row.className = 'preference-row';
+      const text = document.createElement('span');
+      text.className = 'preference-text';
+      text.textContent = item.text;
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'preference-remove';
+      remove.textContent = '删除';
+      remove.dataset.id = item.id;
+      remove.addEventListener('click', () => {
+        const index = preferences.findIndex(entry => entry.id === item.id);
+        if (index < 0) return;
+        preferences.splice(index, 1);
+        renderPreferences();
+        document.getElementById('preference-status').textContent = '已删除偏好。';
+      });
+      row.appendChild(text);
+      row.appendChild(remove);
+      list.appendChild(row);
+    }
+    if (empty) {
+      empty.textContent = PREFERENCES_EMPTY;
+      empty.hidden = preferences.length > 0;
+    }
+  }
+
+  const addPreference = document.getElementById('add-preference');
+  if (addPreference) {
+    addPreference.addEventListener('click', () => {
+      const input = document.getElementById('preference-input');
+      const status = document.getElementById('preference-status');
+      const text = String((input && input.value) || '').trim();
+      if (!text) {
+        status.textContent = '请先写一条偏好。';
+        return;
+      }
+      preferences.push({id: 'pref-' + (++preferenceSerial), text});
+      input.value = '';
+      renderPreferences();
+      status.textContent = '已添加偏好。';
+    });
+  }
+  renderPreferences();
+
+  function invalidateMemoryProfile() {
+    // A workspace switch must not leave the previous workspace's revision or
+    // an enabled Save button while the new workspace profile is still loading.
+    profileRevision = null;
+    profileRequest += 1;
+    const save = document.getElementById('save-memory-profile'); if (save) save.disabled = true;
+  }
+  workspaceSelect.addEventListener('change', async () => {
+    invalidateMemoryProfile();
+    await loadWorkspace();
+    if (currentView === 'profile') await loadMemoryProfile();
+  });
   document.getElementById('search').addEventListener('input', () => renderDirectory());
   document.getElementById('search').addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
@@ -1009,6 +1274,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const zoomOut = document.getElementById('graph-zoom-out');
   const zoomReset = document.getElementById('graph-zoom-reset');
   document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && pendingDelete) {
+      closeDeleteConfirm();
+      return;
+    }
     if (event.key === 'Escape') hideGraphHoverCard(document.getElementById('graph-hover-card'));
   });
   if (zoomIn) zoomIn.addEventListener('click', () => { graphZoom = Math.min(2.4, graphZoom + 0.2); renderGraph(currentGraph); });
@@ -1053,10 +1322,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await openPage(parsed.page.id);
   });
 
+  const toolbar = editor.querySelector('.editor-toolbar');
+  if (toolbar) {
+    toolbar.addEventListener('mousedown', (event) => {
+      // Keep the text selection inside the editor when a tool is pressed.
+      if (event.target.closest('[data-rich]')) event.preventDefault();
+    });
+    toolbar.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-rich]');
+      if (!button) return;
+      const kind = button.getAttribute('data-rich');
+      if (sourceMode || !rich) {
+        if (kind !== 'undo' && kind !== 'redo') applyMarkdown(editor.elements.body, kind);
+        editor.elements.body.focus();
+        return;
+      }
+      richCommand(kind);
+    });
+  }
+
   editor.addEventListener('submit', async (event) => {
     event.preventDefault();
     const id = workspaceId();
     if (!id || !currentPage) return;
+    syncBodyFromRich();
     const saved = await request('POST', `/v1/workspaces/${id}/memory/${currentPage.id}`, {
       revision: currentPage.revision,
       changes: {
@@ -1069,26 +1358,96 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(saved.body.error, '无法保存记忆页。'));
       return;
     }
+    closeDeleteConfirm({restoreFocus: false});
     currentPage = saved.body.page;
     editor.elements.topics.value = formatTopics(currentPage.topics);
     document.getElementById('editor-meta').textContent =
       `修订 ${currentPage.revision} · 作者 ${currentPage.created_by} · 最近更新 ${currentPage.updated_by}`;
+    const savedHint = document.getElementById('editor-saved');
+    if (savedHint) {
+      const when = memoryUpdatedLabel(currentPage.updated);
+      savedHint.hidden = false;
+      savedHint.textContent = when ? ('已保存 · ' + when) : ('已保存 · 修订 ' + currentPage.revision);
+    }
+
     await loadGraph();
     renderPageLinks();
     show('ok', '已保存。');
   });
 
-  document.getElementById('delete-page').addEventListener('click', async () => {
-    const id = workspaceId();
-    if (!id || !currentPage) return;
-    const removed = await request('POST', `/v1/workspaces/${id}/memory/${currentPage.id}/remove`, {});
+  const deleteParts = {
+    page: {
+      trigger: document.getElementById('delete-page'),
+      dialog: document.getElementById('page-delete-confirm'),
+      question: document.getElementById('page-delete-question'),
+      confirm: document.getElementById('page-delete-confirm-submit'),
+      cancel: document.getElementById('page-delete-confirm-cancel'),
+    },
+    action: {
+      trigger: document.getElementById('delete-action'),
+      dialog: document.getElementById('action-delete-confirm'),
+      question: document.getElementById('action-delete-question'),
+      confirm: document.getElementById('action-delete-confirm-submit'),
+      cancel: document.getElementById('action-delete-confirm-cancel'),
+    },
+  };
+
+  function deleteRemovePath(kind, workspace, id) {
+    return kind === 'page'
+      ? `/v1/workspaces/${workspace}/memory/${id}/remove`
+      : `/v1/workspaces/${workspace}/memory/actions/${id}/remove`;
+  }
+
+  function closeDeleteConfirm({restoreFocus = true} = {}) {
+    const pending = pendingDelete;
+    if (!pending) return;
+    pendingDelete = null;
+    const parts = deleteParts[pending.kind];
+    if (parts.question) parts.question.textContent = '';
+    if (parts.dialog) parts.dialog.hidden = true;
+    if (parts.trigger) {
+      parts.trigger.hidden = false;
+      if (restoreFocus && parts.trigger.focus) parts.trigger.focus();
+    }
+  }
+
+  function openDeleteConfirm(kind, target) {
+    const workspace = workspaceId();
+    if (!workspace || !target || !target.id) return;
+    const parts = deleteParts[kind];
+    if (!parts.dialog || !parts.question) return;
+    closeDeleteConfirm({restoreFocus: false});
+    // The question owns the target it names: confirming must not re-read the
+    // editor's current row or the current workspace.
+    pendingDelete = {kind, workspace, id: target.id};
+    parts.question.textContent =
+      `${kind === 'page' ? '删除这条记忆页' : '删除这条下一步行动'}「${String(target.title || '')}」？`;
+    if (parts.trigger) parts.trigger.hidden = true;
+    parts.dialog.hidden = false;
+    if (parts.cancel && parts.cancel.focus) parts.cancel.focus();
+  }
+
+  async function removePending(kind) {
+    const pending = pendingDelete;
+    if (!pending || pending.kind !== kind) return;
+    closeDeleteConfirm({restoreFocus: false});
+    const removed = await request('POST', deleteRemovePath(kind, pending.workspace, pending.id), {});
     if (removed.status !== 200) {
-      show('error', messageFor(removed.body.error, '无法删除记忆页。'));
+      show('error', messageFor(removed.body.error,
+        kind === 'page' ? '无法删除记忆页。' : '无法删除下一步行动。'));
       return;
     }
     show('ok', '已删除。');
     await loadWorkspace();
+  }
+
+  document.getElementById('delete-page').addEventListener('click', () => {
+    openDeleteConfirm('page', currentPage);
   });
+  for (const [kind, parts] of Object.entries(deleteParts)) {
+    if (parts.confirm) parts.confirm.addEventListener('click', () => removePending(kind));
+    if (parts.cancel) parts.cancel.addEventListener('click', () => closeDeleteConfirm());
+  }
 
   const addLink = document.getElementById('add-link');
   if (addLink) {
@@ -1183,22 +1542,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(saved.body.error, '无法保存下一步行动。'));
       return;
     }
+    closeDeleteConfirm({restoreFocus: false});
     currentAction = saved.body.action;
     document.getElementById('action-editor-meta').textContent =
       `修订 ${currentAction.revision} · 作者 ${currentAction.created_by} · 最近更新 ${currentAction.updated_by}`;
     show('ok', '已保存。');
   });
 
-  document.getElementById('delete-action').addEventListener('click', async () => {
-    const id = workspaceId();
-    if (!id || !currentAction) return;
-    const removed = await request('POST', `/v1/workspaces/${id}/memory/actions/${currentAction.id}/remove`, {});
-    if (removed.status !== 200) {
-      show('error', messageFor(removed.body.error, '无法删除下一步行动。'));
-      return;
-    }
-    show('ok', '已删除。');
-    await loadWorkspace();
+  document.getElementById('delete-action').addEventListener('click', () => {
+    openDeleteConfirm('action', currentAction);
   });
 
   document.getElementById('close-action-editor').addEventListener('click', () => loadWorkspace());

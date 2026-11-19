@@ -7,7 +7,7 @@ from tests import test_settings_page as settings_page_tests
 PAGES = (
     '/settings', '/agents', '/chat', '/automations', '/artifacts', '/space',
     '/members', '/team', '/runtimes', '/memory', '/discover',
-    '/profile', '/onboarding', '/download', '/guide',
+    '/profile', '/onboarding', '/meetings', '/download', '/guide',
 )
 
 CAPTURE_IDS = {
@@ -34,7 +34,8 @@ CAPTURE_IDS = {
                'empty-starred', 'empty-memory', 'empty-meetings',
                'meetings-chrome'),
     '/members': ('member-list', 'invite-list'),
-    '/team': ('wizard-form', 'step-1', 'step-later', 'next', 'back', 'submit'),
+    '/team': ('wizard-form', 'step-1', 'step-2', 'step-3', 'next', 'back',
+               'submit', 'invite-skip'),
     '/runtimes': ('runtimes-panel', 'connect-panel', 'key-list',
                   'connection-list', 'issued-token', 'detect-runtimes',
                   'detected-list', 'hosted-agent-section',
@@ -51,6 +52,8 @@ CAPTURE_IDS = {
 
     '/onboarding': ('main-panel', 'onboarding-form', 'industry', 'role-choices',
                     'onboarding-save', 'onboarding-skip'),
+    '/meetings': ('main-panel', 'meeting-list', 'meeting-form', 'meeting-title',
+                  'meeting-started-at', 'action-list', 'save-meeting'),
     '/download': ('main-panel', 'download-web', 'download-runtime',
                   'download-unavailable', 'daemon-command'),
     '/guide': ('main-panel', 'whoami', 'guide-search', 'guide-categories',
@@ -114,7 +117,10 @@ class ShellPageTests(unittest.TestCase):
             self.assertIn('class="skip-link"', html, path)
             self.assertIn('href="#main"', html, path)
             self.assertIn('id="main"', html, path)
-            self.assertIn('OpenTeamily / FlyBot', html, path)
+            self.assertIn('OpenTeamily', html, path)
+            self.assertIn('class="brand-mark"', html, path)
+            self.assertIn('brand-glyph', html, path)
+            self.assertNotIn('>FB</a>', html, path)
             self.assertTrue(
                 'aria-label="管理导航"' in html or 'aria-label="应用导航"' in html, path)
             self.assertIn('<nav', html, path)

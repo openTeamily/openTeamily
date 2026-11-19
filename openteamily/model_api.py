@@ -51,10 +51,10 @@ WRAP_NAME = 'model-api.wrap'
 EMPTY = {'provider': None, 'base_url': None, 'model': None, 'api_key_set': False, 'revision': 0, 'scope': None}
 
 
-def wrapping_key(store):
+def wrapping_key(store, name=WRAP_NAME):
     """Load or create a 32-byte wrapping key in the private data directory."""
     directory = store.path.parent
-    path = directory / WRAP_NAME
+    path = directory / name
     flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW
     fd = os.open(path, flags, 0o600)
     try:

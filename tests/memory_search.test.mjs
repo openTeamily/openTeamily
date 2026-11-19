@@ -89,6 +89,8 @@ function fakeDocument() {
     },
     createElement(tag) { return new Element(tag); },
     createElementNS(_ns, tag) { return new Element(tag); },
+    // The WYSIWYG memory editor renders the opened page body with text nodes.
+    createTextNode(text) { const node = new Element('#text'); node.textContent = String(text); node.nodeType = 3; return node; },
     querySelectorAll() { return []; },
     addEventListener() {},
   };
@@ -196,4 +198,12 @@ test('typing in the memory directory search filters in place and keeps an open e
   assert.equal(el('list-empty').hidden, true);
   assert.equal(el('editor-form').hidden, false);
   assert.equal(el('editor-form').elements.title.value, '项目简报');
+});
+
+test('updated filter count only counts pages edited in the last seven days', async () => {
+  const { recentlyUpdatedCount } = await import('../openteamily/static/memory/app.mjs');
+  const now = Date.UTC(2026, 10, 19) ;
+  const day = 86400;
+  assert.equal(recentlyUpdatedCount([{ updated: now / 1000 - day }, { updated: now / 1000 - 8 * day }, {}], now), 1);
+  assert.equal(recentlyUpdatedCount(null, now), 0);
 });

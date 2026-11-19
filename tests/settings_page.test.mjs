@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { applyConnectorSearch, applySettingsView, CONNECTOR_CATALOG, csrfCookie, describeAppearance, diff, filterConnectorCatalog, newlineBinding, privacyChanges, readForm, settingsViewFromLocation, syncAppearanceExtras, syncMcpDialog, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
+import { applyComposioRows, applyConnectorSearch, applySettingsView, composioRowState, pickConnection, CONNECTOR_CATALOG, csrfCookie, describeAppearance, diff, filterConnectorCatalog, mount, newlineBinding, privacyChanges, readForm, settingsViewFromLocation, syncAppearanceExtras, syncMcpDialog, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -93,6 +93,8 @@ test('settingsViewFromLocation maps recorded paths and leftover hashes', () => {
   assert.equal(settingsViewFromLocation('/settings/channels', ''), 'channels');
   assert.equal(settingsViewFromLocation('/settings/agent-access', ''), 'agent-access');
   assert.equal(settingsViewFromLocation('/settings/connectors', ''), 'connectors');
+  assert.equal(settingsViewFromLocation('/settings/skill-configuration', ''), 'skill-configuration');
+  assert.equal(settingsViewFromLocation('/settings', '#skill-secrets'), 'skill-configuration');
   assert.equal(settingsViewFromLocation('/settings', '#appearance'), 'appearance');
   assert.equal(settingsViewFromLocation('/settings', '#language-section'), 'language');
   assert.equal(settingsViewFromLocation('/settings', '#send-shortcut'), 'shortcuts');
@@ -336,9 +338,16 @@ test('settings connectors markup lists the catalog as disconnected without leaki
   const ids = [...html.matchAll(/data-connector-id="([^"]+)"/g)].map((match) => match[1]);
   assert.deepEqual(ids, CONNECTOR_CATALOG.map((item) => item.id));
   assert.equal((html.match(/class="connector-row"/g) || []).length, 39);
-  assert.equal((html.match(/<span class="connector-status">未连接<\/span>/g) || []).length, 39);
-  assert.equal((html.match(/不会真连。">\+ 连接<\/button>/g) || []).length, 39);
-  assert.equal((html.match(/disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。"/g) || []).length, 39);
+  // Before the signed-in Composio state loads, every row is disabled: 31 rows
+  // map to a Composio toolkit and say 未配置 Composio, 8 have no toolkit (未接通).
+  assert.equal((html.match(/<span class="connector-status" data-state="unconfigured">未配置 Composio<\/span>/g) || []).length, 31);
+  assert.equal((html.match(/<span class="connector-status" data-state="unavailable">未接通<\/span>/g) || []).length, 8);
+  assert.equal((html.match(/data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">\+ 连接<\/button>/g) || []).length, 31);
+  assert.equal((html.match(/disabled title="未接通：Composio 没有这个应用，暂时不能连接。">\+ 连接<\/button>/g) || []).length, 8);
+  assert.match(html, /id="composio-key-input" name="api_key" type="password"/);
+  assert.equal((html.match(/class="connector-mark"/g) || []).length, 39);
+  assert.match(html, /data-mark="github"/);
+  assert.match(html, /class="channel-mark" data-mark="slack"/);
   assert.match(html, /class="connector-search-icon"/);
   assert.match(html, /id="connectors-empty"[^>]*hidden[^>]*>没有匹配的应用。/);
   assert.doesNotMatch(html, /还没有可连接的应用目录/);
@@ -351,4 +360,394 @@ test('settings connectors markup lists the catalog as disconnected without leaki
   for (const marker of SECRET_MARKERS) {
     assert.equal(sources.includes(marker), false, marker);
   }
+});
+
+// --- skill-secret delete confirmation (page only) ---
+
+const SETTINGS_VALUES = {
+  appearance: 'light', appearance_schedule: 'sunset_sunrise', appearance_start: '20:00',
+  appearance_end: '07:00', language: 'zh-CN', chat_language: '', auto_translate: false,
+  send_shortcut: 'enter', message_folding: 'all', document_cards: true, link_previews: true,
+  task_completion_reminders: false, likes_visible: true, favorites_visible: true,
+};
+
+class SettingsNode {
+  constructor(tag = 'div', doc = null) {
+    this.tagName = tag;
+    this._doc = doc;
+    this.dataset = {};
+    this.attributes = {};
+    this.handlers = {};
+    this.children = [];
+    this.parentElement = null;
+    this.hidden = false;
+    this.disabled = false;
+    this.checked = false;
+    this.value = '';
+    this.className = '';
+    this.type = '';
+    this.id = '';
+    this.name = '';
+    this._text = '';
+    this.elements = {};
+    this.selectedOptions = [{textContent: '中文'}];
+  }
+  set textContent(value) {
+    this._text = value;
+    if (value === '') this.children = [];
+  }
+  get textContent() {
+    return this._text + this.children.map(child => child.textContent).join('');
+  }
+  addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }
+  removeEventListener() {}
+  setAttribute(name, value) { this.attributes[name] = value; }
+  getAttribute(name) { return this.attributes[name]; }
+  appendChild(child) {
+    child.parentElement = this;
+    this.children.push(child);
+    return child;
+  }
+  remove() {
+    if (!this.parentElement) return;
+    const index = this.parentElement.children.indexOf(this);
+    if (index >= 0) this.parentElement.children.splice(index, 1);
+    this.parentElement = null;
+  }
+  replaceChildren(...nodes) { this.children = []; for (const node of nodes) this.appendChild(node); }
+  focus() { if (this._doc) this._doc.activeElement = this; }
+  querySelector(selector) {
+    if (this.tagName === 'form' && /select\[name="language"\]/.test(selector)) {
+      return this.elements.language || null;
+    }
+    return null;
+  }
+  querySelectorAll() { return []; }
+  addEventListenerOnce(type, handler) { this.addEventListener(type, handler); }
+}
+
+function settingsDocument() {
+  const elements = new Map();
+  const doc = {
+    readyState: 'complete',
+    cookie: 'ot_dev_csrf=token-a',
+    activeElement: null,
+    documentElement: {lang: '', dataset: {}},
+    body: {dataset: {}},
+    handlers: {},
+    getElementById(id) {
+      if (!elements.has(id)) {
+        const tag = id.endsWith('-form') ? 'form' : id === 'skill-secret-list' ? 'ul' : 'div';
+        const node = new SettingsNode(tag, doc);
+        node.id = id;
+        node.elements = new Proxy({}, {
+          get(target, name) {
+            if (typeof name !== 'string') return undefined;
+            if (!target[name]) {
+              const field = new SettingsNode('input', doc);
+              field.name = name;
+              target[name] = field;
+            }
+            return target[name];
+          },
+        });
+        elements.set(id, node);
+      }
+      return elements.get(id);
+    },
+    createElement(tag) { return new SettingsNode(tag, doc); },
+    querySelectorAll() { return []; },
+    addEventListener(type, handler) { (doc.handlers[type] ||= []).push(handler); },
+    fire(type, event = {}) {
+      const payload = {type, preventDefault() {}, ...event};
+      if (payload.target && typeof payload.target === 'object') {
+        for (const handler of payload.target.handlers?.[type] || []) handler(payload);
+      }
+      for (const handler of doc.handlers[type] || []) handler(payload);
+      return payload;
+    },
+  };
+  return {doc, elements};
+}
+
+function settingsJson(status, body) { return {status, json: async () => body}; }
+
+function makeSettingsApi({secrets = ['GITHUB_TOKEN', 'OPENAI_KEY']}) {
+  const calls = [];
+  const items = secrets.map(name => ({name}));
+  async function fetcher(path, options = {}) {
+    const method = options.method || 'GET';
+    const body = options.body ? JSON.parse(options.body) : undefined;
+    calls.push({method, path, body});
+    if (path === '/v1/auth/session') return settingsJson(200, {user: {id: 'u-me', username: 'alice'}});
+    if (path === '/v1/settings') return settingsJson(200, {settings: {values: {...SETTINGS_VALUES}, revision: 4}});
+    if (path === '/v1/model-api') return settingsJson(200, {model_api: {revision: 1, api_key_set: false}, effective: {source: 'platform'}});
+    if (path === '/v1/skill-secrets' && method === 'GET') return settingsJson(200, {items: items.map(item => ({...item}))});
+    if (path === '/v1/skill-secrets' && method === 'POST') {
+      if (body && body.action === 'delete') {
+        const index = items.findIndex(item => item.name === body.name);
+        if (index >= 0) items.splice(index, 1);
+        return settingsJson(200, {deleted: body.name});
+      }
+      if (body && body.action === 'set') {
+        items.push({name: body.name});
+        return settingsJson(200, {saved: body.name});
+      }
+    }
+    throw new Error('unexpected request ' + method + ' ' + path);
+  }
+  return {fetcher, calls, items};
+}
+
+async function settleSettings(rounds = 24) {
+  for (let index = 0; index < rounds; index += 1) await new Promise(resolve => setImmediate(resolve));
+}
+
+const REAL_FORM_DATA = globalThis.FormData;
+function stubFormData(node) {
+  globalThis.FormData = class {
+    constructor() { this.node = node; }
+    get(name) {
+      const field = this.node && this.node.elements && this.node.elements[name];
+      if (!field) return null;
+      return field.type === 'checkbox' ? (field.checked ? 'on' : null) : field.value;
+    }
+    has(name) {
+      const field = this.node && this.node.elements && this.node.elements[name];
+      return Boolean(field && (field.type === 'checkbox' ? field.checked : true));
+    }
+  };
+}
+
+function stubWindowListeners() {
+  const previous = globalThis.addEventListener;
+  if (typeof globalThis.addEventListener !== 'function') {
+    globalThis.addEventListener = () => {};
+    return () => { delete globalThis.addEventListener; };
+  }
+  return () => { globalThis.addEventListener = previous; };
+}
+
+async function mountSettingsPage({secrets} = {}) {
+  const {doc} = settingsDocument();
+  const {fetcher, calls, items} = makeSettingsApi(secrets === undefined ? {} : {secrets});
+  stubFormData(doc.getElementById('settings-form'));
+  const restoreListeners = stubWindowListeners();
+  try {
+    await mount(doc, {fetcher});
+    await settleSettings();
+  } finally {
+    globalThis.FormData = REAL_FORM_DATA;
+    restoreListeners();
+  }
+  return {
+    doc, calls, items,
+    list: doc.getElementById('skill-secret-list'),
+    secretForm: doc.getElementById('skill-secrets-form'),
+    status: doc.getElementById('status'),
+  };
+}
+
+function secretRow(list, name) {
+  return list.children.find(row => row.children.some(child => child.tagName === 'button' && child.textContent === '删除')
+    && row.textContent.includes(name));
+}
+
+function secretDialog(row) {
+  return row.children.find(child => child.getAttribute('role') === 'alertdialog');
+}
+
+test('removeSecretPrompt words the delete question with the server-side name', async () => {
+  const {removeSecretPrompt} = await import('../openteamily/static/settings/app.mjs');
+  assert.deepEqual(removeSecretPrompt({name: 'GITHUB_TOKEN'}),
+    {question: '删除技能密钥「GITHUB_TOKEN」？', confirmLabel: '确认删除'});
+});
+
+test('clicking delete asks inline before calling the API', async () => {
+  const {doc, calls, list, status} = await mountSettingsPage();
+  const before = calls.length;
+  const row = secretRow(list, 'GITHUB_TOKEN');
+  const remove = row.children.find(child => child.tagName === 'button' && child.textContent === '删除');
+
+  doc.fire('click', {target: remove});
+  await settleSettings();
+
+  const posts = calls.slice(before).filter(call => call.method === 'POST');
+  assert.equal(posts.length, 0, 'the first click must not call the API');
+  assert.equal(remove.hidden, true, 'the trigger yields its place to the question');
+  const box = secretDialog(row);
+  assert.ok(box, 'an alertdialog appears in the same row');
+  const question = box.children[0];
+  assert.equal(question.textContent, '删除技能密钥「GITHUB_TOKEN」？');
+  assert.equal(box.getAttribute('aria-labelledby'), question.id);
+  assert.equal(box.children[1].textContent, '取消');
+  assert.equal(box.children[2].textContent, '确认删除');
+  assert.equal(doc.activeElement, box.children[1], 'focus starts on cancel');
+  assert.match(row.textContent, /GITHUB_TOKEN/, 'the key is still listed');
+  assert.equal(status.textContent, '', 'the status line is untouched');
+});
+
+test('cancelling the delete question sends nothing and restores focus', async () => {
+  const {doc, calls, list} = await mountSettingsPage();
+  const before = calls.length;
+  const row = secretRow(list, 'GITHUB_TOKEN');
+  const remove = row.children.find(child => child.tagName === 'button' && child.textContent === '删除');
+  doc.fire('click', {target: remove});
+  const box = secretDialog(row);
+  assert.ok(box, 'a question opens for the row');
+
+  doc.fire('click', {target: box.children[1]});
+  await settleSettings();
+
+  assert.equal(calls.length, before, 'cancel sends no request');
+  assert.equal(remove.hidden, false, 'the trigger comes back');
+  assert.equal(doc.activeElement, remove, 'focus returns to the trigger');
+  assert.equal(secretDialog(row), undefined, 'the question is gone');
+});
+
+test('Escape closes the delete question without sending anything', async () => {
+  const {doc, calls, list} = await mountSettingsPage();
+  const before = calls.length;
+  const row = secretRow(list, 'OPENAI_KEY');
+  const remove = row.children.find(child => child.tagName === 'button' && child.textContent === '删除');
+  doc.fire('click', {target: remove});
+  assert.ok(secretDialog(row), 'a question opens for the row before Escape');
+
+  doc.fire('keydown', {key: 'Escape'});
+  await settleSettings();
+
+  assert.equal(calls.length, before, 'Escape sends no request');
+  assert.equal(secretDialog(row), undefined, 'the question is gone');
+  assert.equal(remove.hidden, false);
+  assert.equal(doc.activeElement, remove, 'focus returns to the trigger');
+});
+
+test('confirming the delete issues exactly one request with the row name and refreshes the list', async () => {
+  const {doc, calls, list, status} = await mountSettingsPage();
+  const row = secretRow(list, 'GITHUB_TOKEN');
+  const remove = row.children.find(child => child.tagName === 'button' && child.textContent === '删除');
+  const before = calls.length;
+  doc.fire('click', {target: remove});
+  const box = secretDialog(row);
+  assert.ok(box, 'a question opens for the row');
+
+  doc.fire('click', {target: box.children[2]});
+  await settleSettings();
+
+  const posts = calls.slice(before).filter(call => call.method === 'POST');
+  assert.equal(posts.length, 1, 'confirm sends exactly one request');
+  assert.deepEqual(posts[0].body, {name: 'GITHUB_TOKEN', action: 'delete'});
+  assert.equal(calls.slice(before).filter(call => call.method === 'GET' && call.path === '/v1/skill-secrets').length, 1,
+    'the list reloads once');
+  assert.equal(secretRow(list, 'GITHUB_TOKEN'), undefined, 'the deleted key leaves the list');
+  assert.ok(secretRow(list, 'OPENAI_KEY'), 'the other key stays');
+  assert.equal(status.dataset.kind, 'ok');
+  assert.match(status.textContent, /GITHUB_TOKEN/);
+  assert.equal(list.children.some(rowNode => secretDialog(rowNode)), false, 'no question survives the reload');
+});
+
+test('opening a second delete question retires the first one', async () => {
+  const {doc, calls, list} = await mountSettingsPage();
+  const first = secretRow(list, 'GITHUB_TOKEN');
+  const second = secretRow(list, 'OPENAI_KEY');
+  const firstRemove = first.children.find(child => child.tagName === 'button');
+  const secondRemove = second.children.find(child => child.tagName === 'button');
+  const before = calls.length;
+
+  doc.fire('click', {target: firstRemove});
+  doc.fire('click', {target: secondRemove});
+  await settleSettings();
+
+  assert.equal(secretDialog(first), undefined, 'the first row gives up its question');
+  assert.ok(secretDialog(second), 'the second row owns the only question');
+  assert.equal(list.children.filter(rowNode => secretDialog(rowNode)).length, 1, 'one question at a time');
+  assert.equal(firstRemove.hidden, false, 'the first trigger is visible again');
+  assert.equal(calls.length, before, 'opening questions sends no request');
+});
+
+test('re-rendering the list retires a pending delete question', async () => {
+  const {doc, list, secretForm} = await mountSettingsPage();
+  const row = secretRow(list, 'GITHUB_TOKEN');
+  const remove = row.children.find(child => child.tagName === 'button');
+  doc.fire('click', {target: remove});
+  assert.ok(secretDialog(row), 'the question is open');
+
+  secretForm.elements.name.value = 'NEW_KEY';
+  secretForm.elements.value.value = 'v';
+  doc.fire('submit', {target: secretForm});
+  await settleSettings();
+
+  assert.equal(list.children.filter(rowNode => secretDialog(rowNode)).length, 0, 'no question hangs on the fresh rows');
+  assert.ok(secretRow(list, 'NEW_KEY'), 'the new key is listed');
+
+  doc.activeElement = null;
+  doc.fire('keydown', {key: 'Escape'});
+  await settleSettings();
+  assert.equal(doc.activeElement, null, 'Escape finds no stale question left over from the old rows');
+});
+
+test('composioRowState never shows success without a real connected state', () => {
+  const mapped = {toolkit: 'github', managed: 'yes'};
+  assert.deepEqual(composioRowState(null, true, null).disabled, true);
+  assert.equal(composioRowState({toolkit: null}, true, null).status, '未接通');
+  const unconfigured = composioRowState(mapped, false, {state: 'connected', id: 'x'});
+  assert.equal(unconfigured.status, '未配置 Composio');
+  assert.equal(unconfigured.disabled, true);
+  assert.match(unconfigured.title, /你自己的 Composio API key/);
+  assert.equal(composioRowState(mapped, true, null).status, '未连接');
+  assert.equal(composioRowState(mapped, true, null).action, 'connect');
+  assert.equal(composioRowState(mapped, true, {state: 'connecting'}).status, '连接中…');
+  assert.equal(composioRowState(mapped, true, {state: 'connected'}).status, '已连接');
+  assert.equal(composioRowState(mapped, true, {state: 'connected'}).action, 'disconnect');
+  const failed = composioRowState(mapped, true, {state: 'failed', status_reason: 'User denied'});
+  assert.equal(failed.status, '连接失败');
+  assert.match(failed.title, /User denied/);
+  const own = composioRowState({toolkit: 'vercel', managed: 'own'}, true, null);
+  assert.equal(own.disabled, true);
+  assert.match(own.title, /未接通/);
+});
+
+test('pickConnection prefers a connected account and ignores deleted ones', () => {
+  const items = [
+    {id: 'a', toolkit: 'github', state: 'failed', created_at: 3},
+    {id: 'b', toolkit: 'github', state: 'connected', created_at: 1},
+    {id: 'c', toolkit: 'notion', state: 'connected', created_at: 2},
+    {id: 'd', toolkit: 'github', state: 'failed', status: 'DELETED', created_at: 9},
+  ];
+  assert.equal(pickConnection(items, 'github').id, 'b');
+  assert.equal(pickConnection(items, 'linear'), null);
+});
+
+test('applyComposioRows updates status, button and connection id from server data', () => {
+  function node(attrs) {
+    const status = {textContent: '', attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }};
+    const button = {textContent: '', disabled: true, title: '', attrs: {},
+                    setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; }};
+    return {status, button, getAttribute: k => attrs[k] ?? null,
+            querySelector: sel => sel === 'button' ? button : status};
+  }
+  const github = node({'data-connector-id': 'github', 'data-composio-toolkit': 'github', 'data-composio-managed': 'yes'});
+  const amap = node({'data-connector-id': 'amap'});
+  const document = {getElementById: id => id === 'connectors-catalog' ? {querySelectorAll: () => [github, amap]} : null};
+  applyComposioRows(document, true, [{id: 'c1', toolkit: 'github', state: 'connected', created_at: 1}]);
+  assert.equal(github.status.textContent, '已连接');
+  assert.equal(github.status.attrs['data-state'], 'connected');
+  assert.equal(github.button.textContent, '断开');
+  assert.equal(github.button.disabled, false);
+  assert.equal(github.button.attrs['data-connection-id'], 'c1');
+  assert.equal(amap.status.textContent, '未接通');
+  assert.equal(amap.button.disabled, true);
+  applyComposioRows(document, false, []);
+  assert.equal(github.status.textContent, '未配置 Composio');
+  assert.equal(github.button.disabled, true);
+  assert.equal(github.button.attrs['data-connection-id'], undefined);
+});
+
+
+test('connected-tool approvals do not imply a connected account before key setup', () => {
+  const source = readFileSync(fileURLToPath(new URL('../openteamily/static/settings/connected-tools.mjs', import.meta.url)), 'utf8');
+  assert.doesNotMatch(source, /已连接/);
+  assert.match(source, /允许此调用一次/);
+  assert.match(source, /decision/);
+  assert.doesNotMatch(source, /innerHTML/);
 });

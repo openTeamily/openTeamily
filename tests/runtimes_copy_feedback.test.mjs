@@ -70,6 +70,7 @@ async function mountRuntimes(tag) {
     if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
     if (path === '/v1/runtime-keys') return {status: 200, json: async () => ({device_id: 'desk', items: []})};
     if (path === '/v1/runtime/connections') return {status: 200, json: async () => ({items: []})};
+    if (path === '/v1/runtime/tasks') return {status: 200, json: async () => ({items: []})};
     throw new Error('unexpected ' + path);
   };
   // Mirror the served markup: an idle 「复制」 button and an empty, hidden receipt slot.
@@ -104,6 +105,50 @@ test('copying the install command shows a receipt on the button itself, then rev
 
   assert.equal(button.textContent, '复制', 'the button returns to its idle label');
   assert.equal(feedback.textContent, '', 'the in-place receipt clears after two seconds');
+  assert.equal(feedback.hidden, true, 'the in-place receipt is hidden again after two seconds');
+});
+
+test('a second click restarts the two-second window instead of stacking timers', async (t) => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  let writes = 0;
+  const restoreClipboard = installClipboard(async () => { writes += 1; });
+  const {doc, restore} = await mountRuntimes('double-click-' + Math.random());
+  t.after(() => { restore(); restoreClipboard(); });
+  const button = doc.getElementById('copy-install');
+  const feedback = doc.getElementById('copy-install-feedback');
+
+  await button.handlers.click[0]();
+  t.mock.timers.tick(1000);
+  await button.handlers.click[0]();
+  t.mock.timers.tick(1000); // the first click's two seconds are up here
+
+  assert.equal(writes, 2, 'both clicks reach the clipboard');
+  assert.equal(button.textContent, '已复制', 'the first click\'s timer does not clear the second click\'s receipt');
+  assert.equal(feedback.hidden, false, 'the receipt is still visible at the first click\'s two-second mark');
+
+  t.mock.timers.tick(1000); // the second click's two seconds are up here
+
+  assert.equal(button.textContent, '复制', 'the receipt reverts two seconds after the last click');
+  assert.equal(feedback.textContent, '', 'the receipt text clears two seconds after the last click');
+  assert.equal(feedback.hidden, true, 'the receipt is hidden two seconds after the last click');
+});
+
+test('a rejected clipboard write keeps the button idle and reports the existing error', async (t) => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const restoreClipboard = installClipboard(async () => { throw new Error('denied'); });
+  const {doc, restore} = await mountRuntimes('reject-' + Math.random());
+  t.after(() => { restore(); restoreClipboard(); });
+  const button = doc.getElementById('copy-install');
+  const feedback = doc.getElementById('copy-install-feedback');
+  const status = doc.getElementById('status');
+
+  await button.handlers.click[0]();
+
+  assert.equal(button.textContent, '复制', 'a rejected write does not claim success on the button');
+  assert.equal(feedback.textContent, '', 'a rejected write leaves the in-place receipt empty');
+  assert.equal(feedback.hidden, true, 'a rejected write leaves the in-place receipt hidden');
+  assert.equal(status.textContent, '无法复制，请手动复制命令。', 'a rejected write keeps the existing error wording');
+  assert.equal(status.dataset.kind, 'error', 'a rejected write reports the error state');
 });
 
 test('the copy button keeps its label when the clipboard is unavailable', async (t) => {

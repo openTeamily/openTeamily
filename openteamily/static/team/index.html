@@ -13,36 +13,38 @@
 <body class="app-workspace">
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
-    <a class="brand-mark" href="/chat" title="OpenTeamily / FlyBot">FB</a>
-    <a href="/chat" title="聊天">聊天</a>
-    <a href="/agents" title="智能体">智能体</a>
-    <a href="/automations" title="自动化">自动化</a>
-    <a href="/memory" title="记忆">记忆</a>
-    <a href="/space" title="作品">作品</a>
-    <a href="/discover" title="发现">发现</a>
+    <a class="brand-mark" href="/chat" title="OpenTeamily" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
+    <a href="/chat" title="聊天" aria-label="聊天"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H9l-5 4V4Z"/></svg><span class="rail-label">聊天</span></a>
+    <a href="/agents" title="智能体" aria-label="智能体"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14v12H5z M9 3h6 M12 3v4 M8 12h1 M15 12h1 M9 16h6"/></svg><span class="rail-label">智能体</span></a>
+        <a href="/skills" title="技能" aria-label="技能"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Z M8.5 10.5h7 M8.5 14h4.5"/></svg><span class="rail-label">技能</span></a>
+<a href="/automations" title="自动化" aria-label="自动化"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg><span class="rail-label">自动化</span></a>
+    <a href="/memory" title="记忆" aria-label="记忆"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4a4 4 0 0 0-4 4v8a4 4 0 0 0 4 4 M16 4a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4 M8 8h8 M8 12h8 M8 16h8 M12 4v16"/></svg><span class="rail-label">记忆</span></a>
+    <a href="/space" title="作品" aria-label="作品"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg><span class="rail-label">作品</span></a>
+    <a href="/meetings" title="会议" aria-label="会议"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v14H4z M8 3v4 M16 3v4 M4 10h16"/></svg><span class="rail-label">会议</span></a>
+    <a href="/discover" title="发现" aria-label="发现"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg><span class="rail-label">发现</span></a>
     <span class="rail-spacer"></span>
-    <a href="/profile" class="rail-signed-in" hidden title="我的资料">我</a>
+    <a href="/profile" class="rail-signed-in" hidden title="我的资料" aria-label="我"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7a4 4 0 1 0 8 0 4 4 0 0 0-8 0 M4 21v-2a8 8 0 0 1 16 0v2"/></svg><span class="rail-label">我</span></a>
     <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换浅色或深色。会写入已有外观设置；按钮在深色下显示「深色」。点击后的标签变化未经 Teamily 核实。">浅色</button>
-    <a href="/download" title="下载">下载</a>
+    <a href="/download" title="下载" aria-label="下载"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12 m-5-5 5 5 5-5 M4 16v5h16v-5"/></svg><span class="rail-label">下载</span></a>
     <div class="account-slot" hidden>
       <button type="button" id="account-menu-button" class="account-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="账户菜单">账户</button>
       <div id="account-menu" class="account-menu" role="menu" hidden>
         <p id="account-identity" class="account-identity"></p>
-        <a href="/profile" role="menuitem">查看我的资料</a>
+        <a href="/profile" role="menuitem" aria-label="查看我的资料">查看我的资料</a>
         <a href="/team" role="menuitem">创建团队</a>
         <div class="account-sub">
           <button type="button" id="help-menu-button" aria-expanded="false" aria-controls="help-menu">帮助</button>
           <div id="help-menu" hidden>
             <button type="button" disabled title="未实现：还没有 OpenTeamily 帮助中心页">帮助中心</button>
             <a href="/guide" role="menuitem">功能指引</a>
-            <a href="/download" role="menuitem">下载</a>
+            <a href="/download" role="menuitem" aria-label="下载">下载</a>
             <a href="/settings#send-shortcut" role="menuitem">快捷键</a>
             <button type="button" disabled title="未实现：还没有 OpenTeamily 服务条款页">服务条款</button>
             <button type="button" disabled title="未实现：还没有 OpenTeamily 隐私政策页">隐私政策</button>
             <a href="https://github.com/openTeamily/openTeamily/issues" rel="noreferrer" target="_blank" role="menuitem" title="指向本仓库的 issue 列表，不是 Teamily 的联系邮箱">报告问题</a>
           </div>
         </div>
-        <a href="/settings" role="menuitem">所有设置</a>
+        <a href="/settings" role="menuitem" aria-label="所有设置">所有设置</a>
         <form id="logout-form" method="post" action="/v1/auth/logout">
           <button type="submit">退出登录</button>
         </form>
@@ -63,7 +65,7 @@
   <section id="main-panel" hidden>
     <p id="whoami" class="visually-hidden"></p>
     <div class="team-wizard">
-      <p id="wizard-progress" class="wizard-progress"><span class="wizard-dots" aria-hidden="true"><span class="is-current"></span><span></span><span></span></span>第 1 / 3 步</p>
+      <p id="wizard-progress" class="wizard-progress"><span class="wizard-dots" aria-hidden="true"><span class="is-current"></span><span></span><span></span></span><span id="wizard-step-label">第 1 / 3 步</span></p>
       <header class="wizard-header">
         <h1>创建团队</h1>
       </header>
@@ -83,32 +85,70 @@
             <legend>选择创建方式</legend>
             <label class="mode-card">
               <input type="radio" name="mode" value="new" checked>
+              <span class="mode-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7a4 4 0 1 0 8 0 4 4 0 0 0-8 0 M4 20v-1a6 6 0 0 1 16 0v1"/></svg></span>
               <span class="mode-body">
                 <span class="mode-title">创建独立的团队工作区</span>
                 <span class="mode-hint">设一个全新、独立的团队工作区开始。</span>
               </span>
+              <span class="mode-check" aria-hidden="true">✓</span>
             </label>
             <label class="mode-card">
               <input type="radio" name="mode" value="convert">
+              <span class="mode-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10l8-6 8 6v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z M9 20v-7h6v7"/></svg></span>
               <span class="mode-body">
                 <span class="mode-title">转化我当前的工作区</span>
                 <span class="mode-hint">将当前工作区升入该团队。</span>
               </span>
+              <span class="mode-check" aria-hidden="true">✓</span>
             </label>
           </fieldset>
-        </div>
-        <div id="step-later" class="step" hidden>
-          <h2>继续创建</h2>
-          <p class="note">对照只拍到第 1 / 3 步。第 2 步和第 3 步还没有截图，这里不会编造它们的版式。下面的提交沿用已有的创建接口，不能写成已经和 Teamily 对等。团队内的角色和邀请也还没有对照过。</p>
           <p id="convert-workspace-note" class="note" hidden>转化会作用到当前工作区。如果这个账号有多个可转换的工作区，才会出现下面这个 OpenTeamily 自己的选择框；对照里没有这一项。</p>
-          <label id="convert-workspace-field" hidden>要转换的工作区
+          <label id="convert-workspace-field" class="wizard-field" hidden>要转换的工作区
             <select name="workspace_id"></select>
           </label>
+        </div>
+        <div id="step-2" class="step" hidden>
+          <h2>邀请成员</h2>
+          <p class="wizard-lead">团队建好后，给第一位同事生成一条邀请。现在不邀请也可以跳过。</p>
+          <label class="wizard-field">对方在团队里的角色
+            <select id="invite-role" name="invite_role">
+              <option value="member" selected>成员</option>
+              <option value="admin">管理员</option>
+            </select>
+          </label>
+          <p class="wizard-hint">管理员也能管理成员和邀请。</p>
+          <label class="wizard-field">邀请有效期
+            <select id="invite-expiry" name="invite_expiry">
+              <option value="86400">1 天</option>
+              <option value="604800" selected>7 天</option>
+              <option value="2592000">30 天</option>
+            </select>
+          </label>
+          <label class="wizard-field">同事的邮箱（可选）
+            <input type="email" id="invite-email" name="invite_email" maxlength="254" autocomplete="off" placeholder="teammate@example.com">
+          </label>
+          <p class="wizard-hint">邮箱只用来拼一封由你本机邮件客户端发出的邀请；服务器不发送邮件，也不接收这个输入。邀请由服务端生成一次性令牌，点下面的按钮之后才出现，且只显示这一次。</p>
+          <p class="note">邀请接口 <code>POST /v1/workspaces/&lt;id&gt;/invites</code> 只接受角色、有效期、使用次数与是否需要审批，不接受邮箱；把令牌复制给同事，对方在 <a href="/members">成员页</a> 的「接受邀请」里粘贴即可。</p>
+          <section id="invite-result" hidden>
+            <h3>邀请已生成</h3>
+            <p id="invite-summary" class="wizard-hint"></p>
+            <p><code id="invite-token"></code></p>
+            <div class="actions">
+              <button type="button" id="copy-invite">复制令牌</button>
+              <a id="invite-mailto" href="#" hidden>写邮件邀请</a>
+              <a id="finish-members" href="/members">打开成员页</a>
+            </div>
+          </section>
+        </div>
+        <div id="step-3" class="step" hidden>
+          <h2>下一步</h2>
+          <p class="note">第 3 步（团队内的角色与批量邀请）还没有对照过 Teamily，这里不会编造版式。团队已经建好，可以去 <a href="/members">成员页</a> 管理成员和邀请，或去 <a href="/chat">聊天</a> 开始工作。</p>
         </div>
         <div class="actions">
           <button type="button" id="back" hidden>上一步</button>
           <button type="button" id="next" disabled>继续 <span aria-hidden="true">→</span></button>
-          <button type="submit" id="submit" hidden>创建团队</button>
+          <button type="button" id="invite-skip" hidden>跳过，只建团队</button>
+          <button type="submit" id="submit" hidden>创建团队并生成邀请</button>
         </div>
       </form>
     </div>

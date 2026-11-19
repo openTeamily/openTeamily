@@ -14,10 +14,24 @@ const WORKFLOW = path.join(root, '.github', 'workflows', 'tests.yml');
 export function listedTestFiles(source) {
   const listed = [];
   // A step line only: an indented `- run: node --test tests/x.test.mjs`. A commented
-  // out step (`# - run: ...`) must NOT count as listed, or the guard goes green while
-  // CI never runs the file.
-  for (const match of source.matchAll(/^[ \t]*-[ \t]+run:[ \t]+node --test (tests\/[\w.-]+\.test\.mjs)/gm)) {
-    listed.push(match[1]);
+  // out step (`# - run: ...`), and a line that only looks like a step because it sits
+  // inside a `run: |` or `run: >` block scalar body, must NOT count as listed, or the
+  // guard goes green while CI never runs the file.
+  let blockIndent = null;
+  for (const line of source.split('\n')) {
+    const indent = line.length - line.trimStart().length;
+    if (blockIndent !== null) {
+      if (line.trim() === '' || indent > blockIndent) continue;
+      blockIndent = null;
+    }
+    // `key: |`, `key: >-`, `key: |2`: everything indented under this line is scalar
+    // text, so nothing inside it is a workflow step.
+    if (/^[ \t]*[^\s#][^:]*:[ \t]*[|>][0-9]?[-+]?[ \t]*$/.test(line)) {
+      blockIndent = indent;
+      continue;
+    }
+    const match = /^[ \t]*-[ \t]+run:[ \t]+node --test (tests\/[\w.-]+\.test\.mjs)/.exec(line);
+    if (match) listed.push(match[1]);
   }
   return listed;
 }
@@ -52,4 +66,32 @@ test('the CI workflow names every tests/*.test.mjs exactly once, and names none 
     [],
     'the workflow names test files that no longer exist: ' + (stale.join(', ') || '(none)'),
   );
+});
+
+test('a step line inside a run: block scalar does not count as listed', () => {
+  const source = [
+    '    steps:',
+    '      - run: |',
+    '          echo hi',
+    '          - run: node --test tests/chat_page.test.mjs',
+    '      - run: node --test tests/guide_page.test.mjs',
+  ].join('\n');
+  assert.deepEqual(listedTestFiles(source), ['tests/guide_page.test.mjs'],
+    'a line inside a run: block scalar was counted as a real workflow step');
+});
+
+test('a step line inside a folded run: > block scalar does not count either', () => {
+  const source = [
+    '      - run: >',
+    '          echo hi',
+    '          - run: node --test tests/chat_page.test.mjs',
+  ].join('\n');
+  assert.deepEqual(listedTestFiles(source), [],
+    'a line inside a folded run: block scalar was counted as a real workflow step');
+});
+
+test('the same step line spelled as a real step still counts', () => {
+  const source = '      - run: node --test tests/chat_page.test.mjs\n';
+  assert.deepEqual(listedTestFiles(source), ['tests/chat_page.test.mjs'],
+    'a real indented step line was not counted as listed');
 });

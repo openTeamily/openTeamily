@@ -21,7 +21,7 @@ test('parseTags splits, dedupes and bounds tags', () => {
 
 class FakeElement {
   constructor(tag = 'div') {
-    this.tagName = tag;
+    this.tagName = tag.toUpperCase();
     this.dataset = {};
     this.attributes = {};
     this.handlers = {};
@@ -30,10 +30,12 @@ class FakeElement {
     this.value = '';
     this.textContent = '';
     this.href = '';
+    this.submits = 0;
   }
   addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }
   setAttribute(name, value) { this.attributes[name] = value; }
   getAttribute(name) { return this.attributes[name]; }
+  requestSubmit() { this.submits += 1; }
 }
 
 const PROFILE_FIELDS = ['name', 'handle', 'bio', 'tags', 'gender', 'location', 'website'];
@@ -81,6 +83,7 @@ async function mountProfile(options = {}) {
   const fetcher = async (path, init) => {
     calls.push([path, init && init.method]);
     if (path === '/v1/auth/session') {
+      if (options.session401) return {status: 401, json: async () => ({error: {message: 'not signed in'}})};
       return {status: 200, json: async () => ({user: {username: 'alice'}})};
     }
     if (path !== '/v1/profile') throw new Error('unexpected ' + path);
@@ -92,6 +95,9 @@ async function mountProfile(options = {}) {
           current: {name: 'Alicia', handle: 'alice', revision: 4},
         }})};
       }
+      if (options.failPost) {
+        return {status: 500, json: async () => ({error: {message: options.failPost}})};
+      }
       return {status: 200, json: async () => ({profile: {name: 'Alice', handle: 'alice', revision: 4}})};
     }
     if (profileCalls() > 1) {
@@ -99,8 +105,11 @@ async function mountProfile(options = {}) {
       if (options.failRepeat) return {status: 500, json: async () => ({error: {message: options.failRepeat}})};
     }
     const name = profileCalls() > 1 && options.repeatName ? options.repeatName : 'Alice';
-    return {status: 200, json: async () => ({profile: {name, handle: 'alice', revision: 3}})};
+    const profile = options.profile ? {...options.profile} : {name, handle: 'alice', revision: 3};
+    if (profileCalls() > 1 && options.repeatName) profile.name = options.repeatName;
+    return {status: 200, json: async () => ({profile})};
   };
+  if (options.setup) options.setup(doc);
   const restore = installGlobals(doc, fetcher);
   await import('../openteamily/static/profile/app.mjs?dom=' + (options.tag || 'profile'));
   await flush();
@@ -192,4 +201,110 @@ test('a 409 save shows a Chinese status line instead of the server English text'
     assert.equal(doc.getElementById('profile-form').elements.name.value, 'Alicia',
       'the 409 payload should still refill the form with the current profile');
   } finally { restore(); }
+});
+
+test('昵称为空时保存被本地拦下，不发 POST 也不禁用保存按钮', async () => {
+  const {doc, postCalls, restore} = await mountProfile({tag: 'blank-name'});
+  try {
+    const form = doc.getElementById('profile-form');
+    form.elements.name.value = '   ';
+    const save = doc.getElementById('profile-save');
+    await submitHandler(doc)({preventDefault() {}});
+    const status = doc.getElementById('status');
+    assert.equal(postCalls(), 0, 'a blank name must be rejected before any POST /v1/profile is sent');
+    assert.equal(status.dataset.kind, 'error');
+    assert.equal(status.textContent, '请填写昵称。');
+    assert.equal(save.disabled, false, 'a locally rejected save must leave the save button usable');
+  } finally { restore(); }
+});
+
+test('保存返回 500 时状态行显示服务端错误，按钮恢复可用且输入不被清掉', async () => {
+  const {doc, postCalls, restore} = await mountProfile({tag: 'save-500', failPost: '存储不可用'});
+  try {
+    const form = doc.getElementById('profile-form');
+    form.elements.name.value = 'Alice 新';
+    const save = doc.getElementById('profile-save');
+    await submitHandler(doc)({preventDefault() {}});
+    const status = doc.getElementById('status');
+    assert.equal(postCalls(), 1);
+    assert.equal(status.dataset.kind, 'error', 'a failed save must set the status line to an error');
+    assert.equal(status.textContent, '存储不可用', 'a failed save must show the server message, not a success line');
+    assert.equal(save.disabled, false, 'the save button must be usable again after a failed save');
+    assert.equal(form.elements.name.value, 'Alice 新', 'a failed save must not wipe what the user typed');
+  } finally { restore(); }
+});
+
+test('未登录的 401 会话只显示登录面板，不读资料并清掉旧状态行', async () => {
+  const {doc, profileCalls, restore} = await mountProfile({
+    tag: 'session-401',
+    session401: true,
+    setup(doc) {
+      doc.getElementById('main-panel').hidden = false;
+      doc.getElementById('status').dataset.kind = 'error';
+      doc.getElementById('status').textContent = '旧错误';
+    },
+  });
+  try {
+    assert.equal(doc.getElementById('login-panel').hidden, false,
+      'a 401 session must show the login panel');
+    assert.equal(doc.getElementById('main-panel').hidden, true,
+      'a 401 session must hide the profile form panel');
+    const status = doc.getElementById('status');
+    assert.equal(status.textContent, '',
+      'a signed-out visit must clear the stale status line instead of reporting a session error');
+    assert.equal(status.dataset.kind, '');
+    assert.equal(profileCalls(), 0, 'a 401 session must not request GET /v1/profile');
+  } finally { restore(); }
+});
+
+test('输入框里的 Enter 提交表单，textarea 里的 Enter 只换行', async () => {
+  const {doc, restore} = await mountProfile({tag: 'enter-key'});
+  try {
+    const form = doc.getElementById('profile-form');
+    assert.ok(Array.isArray(form.handlers.keydown) && form.handlers.keydown.length === 1,
+      'the profile form has no keydown handler, so Enter does nothing');
+    const keydown = form.handlers.keydown[0];
+    let prevented = 0;
+    keydown({key: 'Enter', target: {tagName: 'INPUT'}, preventDefault() { prevented += 1; }});
+    assert.equal(form.submits, 1, 'Enter in a text input must submit the profile form');
+    assert.equal(prevented, 1, 'the Enter key must be consumed so the form is submitted once');
+    keydown({key: 'Enter', target: {tagName: 'TEXTAREA'}, preventDefault() { prevented += 1; }});
+    assert.equal(form.submits, 1, 'Enter in the bio textarea must insert a newline, not submit');
+    assert.equal(prevented, 1, 'the textarea Enter must not be consumed by the form');
+  } finally { restore(); }
+});
+
+test('资料首次加载用用户名兜底显示名和 handle，并给出对应的公开地址', async () => {
+  const blank = await mountProfile({
+    tag: 'defaults-blank',
+    profile: {name: '', handle: '', revision: 0},
+  });
+  try {
+    const doc = blank.doc;
+    const form = doc.getElementById('profile-form');
+    assert.equal(form.elements.name.value, 'alice',
+      'an unsaved profile must show the account username as the display name');
+    assert.equal(form.elements.handle.value, 'alice',
+      'an empty handle must fall back to the sanitized username');
+    assert.equal(doc.getElementById('profile-meta').textContent,
+      '还没有保存过资料。保存后会生成 Teamily ID。',
+      'an unsaved profile must say that no profile has been saved yet');
+    assert.equal(doc.getElementById('profile-public').href, '/v1/profile',
+      'before the first save the public link must point back at the API, not at /p/');
+    assert.equal(doc.getElementById('whoami').textContent, 'alice');
+    assert.equal(doc.getElementById('whoami').dataset.username, 'alice');
+    assert.equal(doc.getElementById('profile-username').textContent, 'alice');
+  } finally { blank.restore(); }
+
+  const saved = await mountProfile({
+    tag: 'defaults-saved',
+    profile: {name: 'Alice', handle: 'alice.smith', revision: 7},
+  });
+  try {
+    const doc = saved.doc;
+    assert.equal(doc.getElementById('profile-meta').textContent,
+      '修订 7 · Teamily ID 可用于公开资料地址');
+    assert.equal(doc.getElementById('profile-public').href, '/p/alice.smith',
+      'a saved handle must link to the public profile page');
+  } finally { saved.restore(); }
 });

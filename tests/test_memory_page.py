@@ -48,7 +48,8 @@ class MemoryPageServingTests(unittest.TestCase):
         self.assertNotIn('<button type="button" data-view="meetings"', html)
         self.assertIn('话题亮点', html)
         self.assertIn('未实现', html)
-        self.assertIn('未接通', html)
+        self.assertIn('尚未自动注入模型', html)
+        self.assertIn('id="memory-profile-form"', html)
         self.assertIn('做梦', html)
         self.assertIn('Professional Profile', html)
         self.assertIn('Work Style', html)
@@ -194,3 +195,14 @@ class MemoryPageServingTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class MemoryProfileWorkspaceSwitchTests(unittest.TestCase):
+    def test_workspace_switch_invalidates_previous_profile_before_loading(self):
+        source = (Path(__file__).resolve().parents[1] / 'openteamily/static/memory/app.mjs').read_text()
+        handler = source.split("workspaceSelect.addEventListener('change'", 1)[1].split('});', 1)[0]
+        self.assertLess(handler.index('invalidateMemoryProfile()'), handler.index('await loadWorkspace()'))
+        helper = source.split('function invalidateMemoryProfile()', 1)[1].split('\n  }', 1)[0]
+        self.assertIn('profileRevision = null', helper)
+        self.assertIn('profileRequest += 1', helper)
+        self.assertIn('save.disabled = true', helper)

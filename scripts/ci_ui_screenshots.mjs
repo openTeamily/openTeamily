@@ -62,6 +62,15 @@ async function shot(page, outDir, name) {
   return file;
 }
 
+
+async function openGroupAgentSheet(page) {
+  const sheet = page.locator('#group-agent-action details.group-agent-sheet');
+  if (!(await sheet.count())) return;
+  if (await sheet.getAttribute('open') === null) {
+    await sheet.locator(':scope > summary').click();
+  }
+}
+
 async function openListItem(page, title, listSelector = '#main-panel') {
   const button = page.locator(`${listSelector} button.link`, { hasText: title }).first();
   await button.waitFor({ state: 'visible', timeout: 15000 });
@@ -70,6 +79,17 @@ async function openListItem(page, title, listSelector = '#main-panel') {
 
 async function waitForInputValue(page, selector, expected, timeout = 15000) {
   await page.locator(selector).waitFor({ state: 'visible', timeout });
+  await page.waitForFunction(
+    ({ selector, expected }) => document.querySelector(selector)?.value === expected,
+    { selector, expected },
+    { timeout },
+  );
+}
+
+// The memory editor keeps its markdown in a hidden field behind the WYSIWYG
+// surface, so this waits on the stored value without requiring visibility.
+async function waitForStoredValue(page, selector, expected, timeout = 15000) {
+  await page.locator(selector).waitFor({ state: 'attached', timeout });
   await page.waitForFunction(
     ({ selector, expected }) => document.querySelector(selector)?.value === expected,
     { selector, expected },
@@ -422,8 +442,11 @@ async function main() {
       const allConnectDisabled = connectCount === 39
         && await connectButtons.evaluateAll((nodes) => nodes.every((node) => node.disabled));
       const statuses = await page.locator('#connectors-catalog .connector-status').allTextContents();
+      // The screenshot account has not saved its own Composio key, so every
+      // row stays disabled: 31 say 未配置 Composio and 8 (no toolkit) say 未接通.
       const allDisconnected = statuses.length === 39
-        && statuses.every((text) => text.includes('未连接') && !text.includes('已连接'));
+        && statuses.filter((text) => text.trim() === '未配置 Composio').length === 31
+        && statuses.filter((text) => text.trim() === '未接通').length === 8;
       const connectorsText = `${await visibleText(connectors)}`;
       const addMcp = page.locator('#add-mcp-server');
       const addMcpDisabled = await addMcp.isDisabled();
@@ -437,8 +460,8 @@ async function main() {
           && connectorsText.includes('添加 MCP 服务器')
           && connectorsText.includes('GitHub')
           && connectorsText.includes('Mailbox')
-          && connectorsText.includes('未连接')
-          && connectorsText.includes('还没有连接器后端或账号授权接口')
+          && connectorsText.includes('Composio API key')
+          && connectorsText.includes('未配置 Composio')
           && !connectorsText.includes('还没有可连接的应用目录。')
           && !connectorsText.includes('已连接')
           && !/积分|套餐|升级/.test(connectorsText),
@@ -609,6 +632,15 @@ async function main() {
         `avatar=${identity || 'empty'} hidden=${identityHidden} expected=${expectedInitial} order=${[filterBox && Math.round(filterBox.x), searchBox && Math.round(searchBox.x), addBox && Math.round(addBox.x)].join(',')}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '16-agents-conversation.png')));
+      const chrome = await page.evaluate(() => ({
+        rail: document.querySelector('.app-rail').getBoundingClientRect().width,
+        sessions: document.getElementById('session-pane').getBoundingClientRect().width,
+        icons: document.querySelectorAll('.chat-actions svg').length,
+        shellOverflow: document.documentElement.scrollWidth > innerWidth,
+      }));
+      record('ui_chat_compact_chrome', chrome.rail <= 64 && chrome.sessions <= 320 && chrome.icons >= 3 && !chrome.shellOverflow,
+        JSON.stringify(chrome));
+
       screenshots.push(path.basename(await shot(page, outDir, '22-chat-desktop.png')));
       screenshots.push(path.basename(await shot(page, outDir, '62-chat-list-previews.png')));
       screenshots.push(path.basename(await shot(page, outDir, '68-chat-header-identity.png')));
@@ -672,6 +704,29 @@ async function main() {
         `composer=${JSON.stringify(composerValue)} ${afterEnter.slice(0, 240) || 'enter send empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '61-chat-send-enter.png')));
+      try {
+        const message = page.locator('#message-list > li').filter({hasText:enterText}).last();
+        await message.locator('.message-more').click({force:true});
+        await page.locator('[data-menu="save"]').click();
+        await page.locator('#save-message-dialog').waitFor({state:'visible'});
+        const warning = await page.locator('#save-message-dialog').innerText();
+        if (!warning.includes('工作区内所有成员')) throw new Error('workspace sharing disclosure absent');
+        // Cancel is a genuine no-op; reopen and explicitly confirm the workspace copy.
+        await page.locator('#save-message-cancel').click();
+        await message.locator('.message-more').click({force:true});
+        await page.locator('[data-menu="save"]').click();
+        await page.locator('#save-message-title').fill('[CI FIXTURE] Explicit saved social message');
+        const saved = page.waitForResponse(r=>r.request().method()==='POST' && /\/messages\/[a-f0-9]+\/save$/.test(new URL(r.url()).pathname));
+        await page.locator('#save-message-submit').click();
+        const response = await saved; const result = await response.json();
+        if (response.status() !== 201) throw new Error('social save failed: ' + response.status());
+        await page.locator('#save-message-dialog').waitFor({state:'hidden'});
+        const persisted = await context.request.get(`${origin}/v1/workspaces/${ready.workspace_id}/artifacts/${result.artifact.id}`);
+        const copy = await persisted.json();
+        record('chat_social_save', persisted.status()===200 && copy.artifact.body===enterText, 'explicit workspace-visible copy persisted');
+        screenshots.push(path.basename(await shot(page, outDir, '95-chat-saved-message.png')));
+      } catch (error) { record('chat_social_save', false, String(error)); }
+
     } catch (error) {
       record('chat_send_enter_shortcut', false, String(error));
     } finally {
@@ -767,8 +822,13 @@ async function main() {
           && (await visibleText(page.locator('#member-choices'))).includes('AI 智能体（自动回复未接通）'),
         'An existing human and agent are selected; custom group create is enabled');
       await page.locator('#compose-mode-team').click();
-      record('chat_group_agent_team_unconnected', await page.locator('#compose-dialog-submit').isDisabled(),
-        'Agent selections do not enable the unconnected AI-team mode');
+      await page.locator('#team-template-choices input[value="product-squad"]').waitFor({state: 'visible', timeout: 8000});
+      const disabledBeforePick = await page.locator('#compose-dialog-submit').isDisabled();
+      await page.locator('#team-template-choices input[value="product-squad"]').check();
+      record('chat_group_agent_team_template',
+        disabledBeforePick && await page.locator('#compose-dialog-submit').isEnabled()
+          && (await visibleText(page.locator('#team-template-choices'))).includes('产品研发小队'),
+        'AI-team mode requires picking a real template before create is enabled');
       await page.locator('#compose-mode-custom').click();
       screenshots.push(path.basename(await shot(page, outDir, '79-chat-group-agent-picker.png')));
       await page.locator('#compose-dialog-submit').click();
@@ -798,6 +858,7 @@ async function main() {
     try {
       await page.locator('#conversation-list button').filter({hasText: '[CI FIXTURE] Agent members group'}).click();
       await page.locator('#group-agent-action').waitFor({state: 'visible', timeout: 8000});
+      await openGroupAgentSheet(page);
       const groupAgentChoice = page.locator(`#group-agent-choices input[name="group-agent"][value="${ready.agent_id}"]`);
       await groupAgentChoice.waitFor({state: 'visible', timeout: 8000});
       await groupAgentChoice.check();
@@ -969,6 +1030,15 @@ async function main() {
         await waitForLocatorText(page, '#artifact-list', title);
       }
       artifacts = await visibleText(page.locator('#artifact-list'));
+      const libraryLayout = () => page.locator('#artifact-list').evaluate(node => ({layout: node.dataset.layout, display: getComputedStyle(node).display}));
+      const initialLayout = await libraryLayout();
+      await page.locator('#layout-toggle [data-layout="list"]').click();
+      const listLayout = await libraryLayout();
+      await page.locator('#layout-toggle [data-layout="grid"]').click();
+      const restoredLayout = await libraryLayout();
+      record('ui_library_real_layout_toggle', initialLayout.layout === 'grid' && initialLayout.display === 'grid'
+        && listLayout.layout === 'list' && restoredLayout.layout === 'grid', JSON.stringify({initialLayout,listLayout,restoredLayout}));
+
     } catch (error) {
       artifacts = String(error);
     }
@@ -1102,7 +1172,7 @@ async function main() {
       const starred = await visibleText(page.locator('#empty-starred'));
       record(
         'artifacts_starred_empty',
-        starred.includes('暂无保存') && starred.includes('保存聊天中的消息') && starred.includes('保存聊天中的图片') && starred.includes('保存智能体成果') && starred.includes('未实现'),
+        starred.includes('暂无收藏') && starred.includes('保存聊天中的消息') && starred.includes('保存聊天中的图片') && starred.includes('保存智能体成果') && starred.includes('未实现'),
         starred || 'starred empty missing',
       );
       screenshots.push(path.basename(await shot(page, outDir, '34-space-starred-empty.png')));
@@ -1214,10 +1284,61 @@ async function main() {
       }
     };
     await openArtifact(ready.document_title, '08-artifacts-document.png', 'artifacts_document', async () => {
-      await waitForInputValue(page, '#editor-form textarea[name="body"]', ready.document_body);
+      await page.locator('#document-rich').waitFor({state: 'visible'});
+      await waitForStoredValue(page, '#editor-form textarea[name="body"]', ready.document_body);
       const body = await page.locator('#editor-form textarea[name="body"]').inputValue();
       return body === ready.document_body;
     }, { soft: false });
+    try {
+      await page.locator('#cancel-editor').click();
+      await page.locator('#new-menu-button').click();
+      await page.locator('#new-artifact').click();
+      const title = '[CI FIXTURE] Rich document round trip';
+      await page.locator('#editor-form input[name="title"]').fill(title);
+      await page.locator('#document-rich').fill('First rich paragraph');
+      await waitForStoredValue(page, '#editor-form textarea[name="body"]', 'First rich paragraph');
+      await page.locator('#document-rich').evaluate(root => {
+        root.focus();
+        const selection = window.getSelection();
+        selection.selectAllChildren(root);
+      });
+      await page.locator('[data-doc-format="h2"]').click();
+      await waitForLocatorText(page, '#document-rich h2', 'First rich paragraph');
+      await waitForStoredValue(page, '#editor-form textarea[name="body"]', '## First rich paragraph');
+      await page.locator('#document-source-toggle').click();
+      const markdown = '# Rich heading\n\n- First point\n- Second point';
+      await page.locator('#document-source').fill(markdown);
+      await page.locator('#document-source-toggle').click();
+      await waitForLocatorText(page, '#document-rich h1', 'Rich heading');
+      const saved = page.waitForResponse(response => response.request().method() === 'POST' && /\/artifacts$/.test(new URL(response.url()).pathname));
+      await page.locator('#save-artifact').click();
+      const response = await saved;
+      const result = await response.json();
+      if (response.status() !== 201) throw new Error('rich document not created: ' + response.status());
+      await waitForLocatorText(page, '#status', '已保存');
+      await page.reload();
+      await selectWorkspace(page, ready.workspace_name);
+      await openListItem(page, title, '#artifact-list');
+      await waitForStoredValue(page, '#editor-form textarea[name="body"]', markdown);
+      await page.locator('#document-rich h1').waitFor({state:'visible'});
+      record('artifacts_rich_roundtrip', await page.locator('#document-rich li').count() === 2 && !!result.artifact.id, 'rich typing + heading toolbar + Markdown toggle + save + reload');
+      screenshots.push(path.basename(await shot(page, outDir, '93-space-rich-document.png')));
+      await page.locator('#cancel-editor').click();
+      const row = page.locator('#artifact-list .artifact-item').filter({has: page.locator('.artifact-open', {hasText: title})});
+      // Use the returned title to select this exact saved card, not the first fixture row.
+      const card = (await row.count()) ? row : page.locator('#artifact-list .artifact-item').filter({hasText:title});
+      const favorite = card.locator('.artifact-bookmark');
+      const marked = page.waitForResponse(r => r.request().method()==='POST' && r.url().endsWith('/favorite'));
+      await favorite.click();
+      if ((await marked).status() !== 200) throw new Error('favorite not persisted');
+      await page.reload();
+      await selectWorkspace(page, ready.workspace_name);
+      await page.locator('.artifact-scopes [data-scope="favorites"]').click();
+      await waitForLocatorText(page, '#artifact-list', title);
+      record('artifacts_favorite_persisted', await page.locator('#artifact-list .artifact-bookmark[aria-pressed="true"]').count() >= 1, 'private favorite survives reload');
+      screenshots.push(path.basename(await shot(page, outDir, '94-space-favorites.png')));
+    } catch (error) { record('artifacts_rich_roundtrip', false, String(error)); }
+
     await openArtifact(ready.media_title, '09-artifacts-media.png', 'artifacts_media', async () => {
       const image = page.locator('#media-image');
       await image.waitFor({ state: 'visible', timeout: 15000 });
@@ -1275,11 +1396,16 @@ async function main() {
       await page.locator('#wizard-form input[name="name"]').fill('CI Fixture Preview Team');
       await page.locator('#wizard-form input[name="slug"]').fill('ci-preview-team');
       await page.locator('#next').click();
-      await page.locator('#step-later').waitFor({ state: 'visible', timeout: 10000 });
+      await page.locator('#step-2').waitFor({ state: 'visible', timeout: 10000 });
+      const step2Text = await visibleText(page.locator('#step-2'));
       record(
         'team_wizard_continuation',
-        await page.locator('#step-later').isVisible() && await page.locator('#submit').isVisible(),
-        'name and slug accepted; unverified continuation visible, not submitted',
+        await page.locator('#step-2').isVisible()
+          && await page.locator('#invite-role').isVisible()
+          && await page.locator('#invite-skip').isVisible()
+          && await page.locator('#submit').isVisible()
+          && step2Text.includes('邀请成员'),
+        'name and slug accepted; invite step visible, not submitted',
         { soft: true },
       );
       screenshots.push(path.basename(await shot(page, outDir, '13b-team-wizard-continuation.png')));
@@ -1299,6 +1425,11 @@ async function main() {
     await page.locator('[data-tab="connect"]').click();
     await page.locator('#connect-panel').waitFor({ state: 'visible', timeout: 15000 });
     const connect = await visibleText(page.locator('#connect-panel'));
+    // main-panel is shown before loadKeys()/connections finish. Wait on the
+    // actual seeded state, not visibility of the still-empty connect container.
+    await waitForLocatorText(page, '#key-list', ready.runtime_key_name);
+    await waitForLocatorText(page, '#connection-list', ready.runtime_key_name);
+    await page.locator('#daemon-script').waitFor({state: 'visible', timeout: 15000});
     const keys = await visibleText(page.locator('#key-list'));
     const connections = await visibleText(page.locator('#connection-list'));
     const generateDisabled = await page.locator('#generate-key').isDisabled();
@@ -1488,8 +1619,8 @@ async function main() {
           && profileView.includes('Professional Profile')
           && profileView.includes('Work Style')
           && profileView.includes('Communication & Writing Style')
-          && profileView.includes('还没有这份画像')
-          && profileView.includes('未接通')
+          && profileView.includes('保存画像')
+          && profileView.includes('尚未自动注入模型')
           && profileDir.includes(ready.memory_title)
           && profileDir.includes(`${ready.memory_topic} 1`)
           && profileDir.includes(ready.memory_body)
@@ -1501,6 +1632,26 @@ async function main() {
         profileView || 'memory profile empty',
       );
       screenshots.push(path.basename(await shot(page, outDir, '42-memory-profile.png')));
+      await page.waitForFunction(() => !document.getElementById('save-memory-profile').disabled);
+      await page.locator('#profile-professional').fill('[CI FIXTURE] Personal professional context');
+      await page.locator('#profile-work_style').fill('[CI FIXTURE] Async work style');
+      await page.locator('#profile-communication').fill('[CI FIXTURE] Concise communication');
+      await page.locator('#save-memory-profile').click();
+      await waitForLocatorText(page, '#memory-profile-status', '画像已保存');
+      await page.reload({waitUntil: 'load'});
+      await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+      // The profile is private per workspace; reopen the same fixture workspace after reload.
+      await selectWorkspace(page, ready.workspace_name);
+      await page.locator('#profile-panel').waitFor({state: 'visible'});
+      await page.waitForFunction(
+        () => !document.getElementById('save-memory-profile').disabled
+          && document.getElementById('profile-professional').value === '[CI FIXTURE] Personal professional context',
+        null, {timeout: 15000},
+      ).catch(() => {});
+      record('memory_profile_persists', (await page.locator('#profile-professional').inputValue()) === '[CI FIXTURE] Personal professional context'
+        && (await page.locator('#profile-work_style').inputValue()) === '[CI FIXTURE] Async work style',
+        'synthetic personal profile persisted after reload; no model injection');
+
     } catch (error) {
       record('memory_profile_layout', false, String(error));
     }
@@ -1577,7 +1728,7 @@ async function main() {
     try {
       await page.locator('#memory-list button', { hasText: ready.memory_title }).first().click();
       await waitForInputValue(page, '#editor-form input[name="title"]', ready.memory_title);
-      await waitForInputValue(page, '#editor-form textarea[name="body"]', ready.memory_body);
+      await waitForStoredValue(page, '#editor-form textarea[name="body"]', ready.memory_body);
       record('memory_editor_seeded', true, await visibleText(page.locator('#editor-meta')));
       await page.locator('#close-editor').click();
       await page.locator('#list-panel').waitFor({ state: 'visible', timeout: 15000 });
@@ -1590,17 +1741,25 @@ async function main() {
       await waitForInputValue(page, '#editor-form input[name="title"]', '未命名页面');
       await waitForLocatorText(page, '#status', '已创建记忆页');
       await page.locator('#editor-form input[name="title"]').fill(ready.memory_create_title);
-      await page.locator('#editor-form textarea[name="body"]').fill(ready.memory_create_body);
+      // WYSIWYG first: typing into the rich surface must land as markdown in the saved field.
+      await page.locator('#editor-rich').fill(ready.memory_create_body);
+      await waitForStoredValue(page, '#editor-form textarea[name="body"]', ready.memory_create_body);
       await page.locator('#save-page').click();
       await waitForLocatorText(page, '#status', '已保存');
       await waitForLocatorText(page, '#editor-meta', '修订 2');
       await page.locator('#editor-form input[name="title"]').fill(ready.memory_edited_title);
+      // Then the Markdown source toggle edits the same stored body directly.
+      if ((await page.locator('#editor-source-toggle').getAttribute('aria-pressed')) !== 'true') {
+        await page.locator('#editor-source-toggle').click();
+      }
       await page.locator('#editor-form textarea[name="body"]').fill(ready.memory_edited_body);
       await page.locator('#save-page').click();
       await waitForLocatorText(page, '#status', '已保存');
       await waitForLocatorText(page, '#editor-meta', '修订 3');
       await waitForInputValue(page, '#editor-form input[name="title"]', ready.memory_edited_title);
-      await waitForInputValue(page, '#editor-form textarea[name="body"]', ready.memory_edited_body);
+      await waitForStoredValue(page, '#editor-form textarea[name="body"]', ready.memory_edited_body);
+      await page.locator('#editor-source-toggle').click();
+      await waitForLocatorText(page, '#editor-rich', ready.memory_edited_body);
       const memoryMeta = await visibleText(page.locator('#editor-meta'));
       record(
         'memory_create_edit',
@@ -1614,6 +1773,8 @@ async function main() {
 
     try {
       await page.locator('#delete-page').click();
+      await page.locator('#page-delete-confirm').waitFor({ state: 'visible', timeout: 15000 });
+      await page.locator('#page-delete-confirm-submit').click();
       await waitForLocatorText(page, '#status', '已删除');
       await page.locator('#list-panel').waitFor({ state: 'visible', timeout: 15000 });
       await waitForLocatorText(page, '#memory-list', ready.memory_title);
@@ -1658,6 +1819,8 @@ async function main() {
 
     try {
       await page.locator('#delete-action').click();
+      await page.locator('#action-delete-confirm').waitFor({ state: 'visible', timeout: 15000 });
+      await page.locator('#action-delete-confirm-submit').click();
       await waitForLocatorText(page, '#status', '已删除');
       await page.locator('#list-panel').waitFor({ state: 'visible', timeout: 15000 });
       await waitForLocatorText(page, '#action-list', ready.action_title);
@@ -1763,7 +1926,10 @@ async function main() {
           && discoverText.includes('关注')
           && discoverText.includes('动态')
           && discoverText.includes('搜索动态、创作者')
-          && discoverText.includes('动态信息流还没有接口')
+          && discoverText.includes('[CI FIXTURE] Document')
+          && discoverText.includes('文档')
+          && discoverText.includes('支持点赞、收录和关注作者')
+          && !discoverText.includes('动态信息流还没有接口')
           && discoverText.includes('热门')
           && discoverText.includes('/discover?tab=agents')
           && await page.locator('#feed-panel').isVisible()
@@ -1772,6 +1938,15 @@ async function main() {
         `whoami=${discoverWho || '(empty)'}; current=${discoverCurrent}; ${discoverText || 'discover empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '52-discover.png')));
+      await page.locator('#feed-kind-website').click();
+      await waitForLocatorText(page, '#feed-count', '已显示 1 件公开作品');
+      record('discover_work_type_filter',
+        await page.locator('#feed-grid a[href="/w/ci-fixture-site"]').count() === 1
+          && await page.locator('#feed-grid a[href="/w/ci-fixture-doc"]').count() === 0
+          && await page.locator('#feed-kind-website').getAttribute('aria-current') === 'true',
+        'website type filter uses the opted-in website fixture');
+      await page.locator('#feed-kind-all').click();
+      await waitForLocatorText(page, '#feed-count', '已显示 2 件公开作品');
       await page.locator('#feed-tab-following').click();
       await waitForLocatorText(page, '#feed-following-empty', '关注列表暂无动态');
       const followingText = `${await visibleText(page.locator('#feed-panel'))}`;
@@ -1781,12 +1956,23 @@ async function main() {
           && (await page.locator('#feed-following-empty').isVisible())
           && followingText.includes('关注列表暂无动态')
           && followingText.includes('你关注的人发布动态后会显示在这里。')
-          && followingText.includes('关注关系还没有接口')
+          && followingText.includes('你关注的作者已公开')
           && !followingText.includes('没有对照截图')
           && !/积分|套餐|升级|CREDITS/.test(followingText),
         followingText.slice(0, 240) || 'following empty',
       );
       screenshots.push(path.basename(await shot(page, outDir, '63-discover-following.png')));
+      await page.locator('#feed-tab-activity').click();
+      await waitForLocatorText(page, '#feed-count', '已显示 2 件公开作品');
+      await page.locator('#feed-grid article button').filter({hasText: /^点赞/}).first().click();
+      await page.locator('#feed-grid article button[aria-pressed="true"]').first().waitFor({state: 'visible'});
+      record('discover_like_persists', await page.locator('#feed-grid article button').filter({hasText: /取消点赞/}).count() === 1,
+        'a synthetic fixture work was liked through the real CSRF-protected endpoint');
+      await page.locator('#feed-grid article button').filter({hasText: /^收录/}).first().click();
+      await page.locator('#feed-tab-collected').click();
+      await waitForLocatorText(page, '#feed-count', '已显示 1 件公开作品');
+      record('discover_collection_feed', await page.locator('#feed-grid article').count() === 1,
+        'private collection feed contains the saved synthetic work');
       await page.goto(`${origin}/discover?tab=agents`, { waitUntil: 'load' });
       await page.locator('#catalog-view').waitFor({ state: 'visible', timeout: 15000 });
       await page.locator('#discover-list article').first().waitFor({state: 'visible'});
@@ -1898,7 +2084,7 @@ async function main() {
       const token = homepagePath.slice(3);
       record(
         'agent_public_homepage',
-        homeText.includes('OpenTeamily / FlyBot')
+        homeText.includes('OpenTeamily')
           && homeText.includes('Agent profile')
           && statusLabel === 'Public page'
           && homeText.includes(ready.agent_name)
@@ -1937,7 +2123,11 @@ async function main() {
       await page.locator('#industry').selectOption('科技与软件');
       await page.locator('#role-choices input[value="产品经理"]').check();
       await page.locator('#onboarding-save').click();
-      await page.waitForURL(url => url.pathname === '/chat');
+      // Step 1 now continues to step 2 like the recorded wizard; the saved context must already
+      // clear the chat banner even if the user leaves the wizard here (进入 OpenTeamily sits on step 4).
+      await page.locator('#onboarding-steps').waitFor({state: 'visible'});
+      await page.locator('[data-step="2"]').waitFor({state: 'visible'});
+      await page.goto(`${origin}/chat`, {waitUntil: 'load'});
       await page.locator('#main-panel').waitFor({state: 'visible'});
       await page.waitForFunction(() => document.getElementById('onboarding-banner').hidden);
       const personalResponse = await page.request.get(`${origin}/v1/personal-agent`);
@@ -1949,11 +2139,37 @@ async function main() {
         && Boolean(personalState.personal_agent && personalState.personal_agent.agent),
         'Saved work context survives reload alongside the personal agent; no recommendations or connector claims');
       screenshots.push(path.basename(await shot(page, outDir, '86-onboarding-saved-context.png')));
+      try {
+        await page.locator('#onboarding-save').click();
+        await page.locator('#onboarding-steps').waitFor({state: 'visible'});
+        const appsText = await visibleText(page.locator('#onboarding-apps'));
+        const connectDisabled = await page.locator('#onboarding-apps .app-connect').evaluateAll(
+          (buttons) => buttons.length > 0 && buttons.every((button) => button.disabled));
+        await page.locator('[data-step="2"] button[data-go="3"]:not(.onboarding-later)').click();
+        await page.locator('#onboarding-picks input[value="release-notes"]').check();
+        await page.locator('#onboarding-picks-form button[type="submit"]').click();
+        await waitForLocatorText(page, '#onboarding-steps-meta', '已选 1 项');
+        await page.locator('#onboarding-look select[name="color"]').selectOption('天空蓝');
+        await page.locator('#onboarding-look-form button[type="submit"]').click();
+        await waitForLocatorText(page, '#onboarding-look-preview', '颜色：天空蓝');
+        record('onboarding_steps_2_4',
+          appsText.includes('Gmail · 未连接') && !appsText.includes('已连接') && connectDisabled
+          && (await visibleText(page.locator('#onboarding-steps-meta'))).includes('形象已保存'),
+          'Steps 2-4 wizard: apps honestly unconnected with disabled connect buttons, picks and look saved');
+        screenshots.push(path.basename(await shot(page, outDir, '87-onboarding-steps.png')));
+        await page.locator('#onboarding-enter').click();
+        await page.waitForURL(url => url.pathname === '/chat');
+        record('onboarding_enter_chat', true, 'Step 4 进入 OpenTeamily opens chat');
+      } catch (error) {
+        record('onboarding_steps_2_4', false, String(error));
+      }
+      await page.goto(`${origin}/onboarding`, {waitUntil: 'load'});
+      await page.locator('#industry option[value="其他"]').waitFor({state: 'attached'});
       await page.locator('#industry').selectOption('其他');
       await page.locator('#custom-industry').fill('[CI FIXTURE] Independent research');
       await page.locator('#custom-role').fill('[CI FIXTURE] Analyst');
       await page.locator('#onboarding-save').click();
-      await page.waitForURL(url => url.pathname === '/chat');
+      await page.locator('#onboarding-steps').waitFor({state: 'visible'});
       await page.goto(`${origin}/onboarding`, {waitUntil: 'load'});
       await waitForLocatorText(page, '#onboarding-meta', '[CI FIXTURE] Independent research');
       record('onboarding_custom_reopen',

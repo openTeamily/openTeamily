@@ -63,7 +63,7 @@ test('the empty state names an empty category instead of blaming a search', () =
   assert.equal(emptyGuideMessage(emptyCategory, '   '), '这一类还没有指引。');
   const noHits = filterCatalog(CATALOG, {category: 'memory', query: 'xyz-not-a-feature'});
   assert.deepEqual(noHits, []);
-  assert.equal(emptyGuideMessage(noHits, 'xyz-not-a-feature'), '没有匹配的指引。');
+  assert.equal(emptyGuideMessage(noHits, 'xyz-not-a-feature'), '没有匹配的条目。换个词，或按 Esc 清空搜索。');
   assert.equal(emptyGuideMessage(filterCatalog(CATALOG, {category: 'chat'}), ''), '');
 });
 
@@ -151,6 +151,7 @@ function fakeGuideDocument() {
     },
     createElement(tag) { return new FakeElement(tag); },
     createElementNS(_namespace, tag) { return new FakeElement(tag); },
+    createTextNode(text) { return {textContent: String(text), tagName: '#TEXT', children: []}; },
     querySelectorAll() { return []; },
     addEventListener() {},
   };
@@ -188,5 +189,171 @@ test('a category deep link selects its chip and narrows the list', async () => {
     globalThis.location = previous.location;
     globalThis.history = previous.history;
     globalThis.fetch = previous.fetch;
+  }
+});
+
+async function mountGuide(search) {
+  const {doc, el} = fakeGuideDocument();
+  const replaced = [];
+  const previous = {
+    document: globalThis.document,
+    location: globalThis.location,
+    history: globalThis.history,
+    fetch: globalThis.fetch,
+  };
+  globalThis.document = doc;
+  globalThis.location = {pathname: '/guide', search};
+  globalThis.history = {replaceState: (...args) => replaced.push(args)};
+  globalThis.fetch = async (path) => (path === '/v1/auth/session'
+    ? {status: 200, json: async () => ({user: {id: 'user-1', username: 'alice'}})}
+    : {status: 404, json: async () => ({error: {message: 'missing'}})});
+  await import(`../openteamily/static/guide/app.mjs?mount=${encodeURIComponent(search)}`);
+  for (let i = 0; i < 8; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  const chip = (id) => el('guide-categories').children.find((item) => item.dataset.category === id);
+  return {
+    el,
+    replaced,
+    chip,
+    currentCategory: () => el('guide-categories').children
+      .filter((item) => item.attributes['aria-current'] === 'true')
+      .map((item) => item.dataset.category),
+    restore() {
+      globalThis.document = previous.document;
+      globalThis.location = previous.location;
+      globalThis.history = previous.history;
+      globalThis.fetch = previous.fetch;
+    },
+  };
+}
+
+test('clicking a category chip writes the category into the URL', async () => {
+  const page = await mountGuide('');
+  try {
+    page.chip('calls').handlers.click();
+    assert.equal(page.replaced.length, 1, 'clicking a category chip never updated the URL');
+    assert.equal(page.replaced[0][2], '/guide?category=calls',
+      'the category chip did not put ?category= into the URL');
+    assert.deepEqual(page.currentCategory(), ['calls']);
+  } finally {
+    page.restore();
+  }
+});
+
+test('clicking a category chip keeps the keyword in the URL too', async () => {
+  const page = await mountGuide('?q=%E5%A4%96%E8%A7%82');
+  try {
+    assert.equal(page.el('guide-search').value, '外观');
+    page.chip('settings').handlers.click();
+    assert.equal(page.replaced.length, 1, 'clicking a category chip never updated the URL');
+    assert.equal(page.replaced[0][2], '/guide?category=settings&q=%E5%A4%96%E8%A7%82',
+      'the chip click dropped the keyword or the category from the URL');
+    assert.deepEqual(page.currentCategory(), ['settings']);
+  } finally {
+    page.restore();
+  }
+});
+
+function textOf(node) {
+  if (!node.children || node.children.length === 0) return node.textContent || '';
+  return node.children.map(textOf).join('');
+}
+
+function marksIn(node, found = []) {
+  for (const child of node.children || []) {
+    if (child.tagName === 'MARK') found.push(child.textContent);
+    marksIn(child, found);
+  }
+  return found;
+}
+
+test('highlightSegments marks only the matched run and keeps the text intact', () => {
+  const {highlightSegments} = guideModule;
+  assert.equal(typeof highlightSegments, 'function',
+    'typing a keyword never marks which part of a guide row matched it');
+  assert.deepEqual(highlightSegments('打开聊天', '聊天'), [
+    {text: '打开', match: false},
+    {text: '聊天', match: true},
+  ]);
+  assert.deepEqual(highlightSegments('OpenTeamily 下载', 'openteam'), [
+    {text: 'OpenTeam', match: true},
+    {text: 'ily 下载', match: false},
+  ]);
+  assert.deepEqual(highlightSegments('收起目录也可以收起', '收起'), [
+    {text: '收起', match: true},
+    {text: '目录也可以', match: false},
+    {text: '收起', match: true},
+  ]);
+  const noHit = highlightSegments('打开聊天', 'xyz-not-a-feature');
+  assert.deepEqual(noHit, [{text: '打开聊天', match: false}]);
+  assert.deepEqual(highlightSegments('打开聊天', '   '), [{text: '打开聊天', match: false}]);
+  assert.deepEqual(highlightSegments('', '聊天'), []);
+  for (const query of ['聊天', 'xyz', '   ']) {
+    assert.equal(highlightSegments('打开聊天', query).map((part) => part.text).join(''), '打开聊天',
+      `highlighting "${query}" changed the text the reader sees`);
+  }
+});
+
+test('a searched guide row marks the keyword inside its title', async () => {
+  const page = await mountGuide('?q=%E6%99%BA%E8%83%BD%E4%BD%93');
+  try {
+    const rows = [];
+    for (const section of page.el('guide-list').children) {
+      for (const child of section.children) {
+        if (child.className === 'guide-item') rows.push(child);
+      }
+    }
+    assert.ok(rows.length, 'the search returned no rows to mark');
+    const row = rows.find((entry) => CATALOG
+      .find((item) => item.id === entry.dataset.itemId).title.includes('智能体'));
+    assert.ok(row, 'the search returned no row whose title contains the keyword');
+    const title = row.children[1];
+    assert.ok(marksIn(title).length,
+      'the matched keyword is not marked in the guide row title');
+    assert.ok(marksIn(title).every((text) => text === '智能体'));
+    assert.ok(textOf(title).includes('智能体'), 'the title still has to read as the full title');
+    assert.equal(textOf(title), CATALOG.find((item) => item.id === row.dataset.itemId).title,
+      'marking the keyword must not change the title text');
+    for (const row of rows) {
+      const rowTitle = row.children[1];
+      assert.equal(textOf(rowTitle), CATALOG.find((item) => item.id === row.dataset.itemId).title,
+        'marking the keyword must not change the title text');
+    }
+  } finally {
+    page.restore();
+  }
+});
+
+test('the opened guide dialog marks the keyword in its title and body', async () => {
+  const page = await mountGuide('?q=%E6%97%A5%E5%87%BA%E6%97%A5%E8%90%BD');
+  try {
+    let target = null;
+    for (const section of page.el('guide-list').children) {
+      for (const child of section.children) {
+        if (child.className === 'guide-item' && child.dataset.itemId === 'settings-appearance') target = child;
+      }
+    }
+    assert.ok(target, 'the body match was not listed');
+    target.handlers.click();
+    const body = page.el('guide-dialog-body');
+    assert.ok(marksIn(body).includes('日出日落'),
+      'the opened guide body does not mark the keyword that matched it');
+    const item = CATALOG.find((entry) => entry.id === 'settings-appearance');
+    assert.equal(textOf(body), item.body, 'marking must keep the dialog body text intact');
+    const title = page.el('guide-dialog-title');
+    assert.equal(textOf(title), item.title);
+    assert.deepEqual(marksIn(title), [], 'a keyword that is not in the title must not mark anything');
+  } finally {
+    page.restore();
+  }
+});
+
+test('a fruitless search says there is no match and how to clear it', async () => {
+  const page = await mountGuide('?q=xyz-not-a-feature');
+  try {
+    const empty = page.el('guide-empty');
+    assert.equal(empty.hidden, false);
+    assert.equal(empty.textContent, '没有匹配的条目。换个词，或按 Esc 清空搜索。');
+  } finally {
+    page.restore();
   }
 });

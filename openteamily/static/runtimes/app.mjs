@@ -48,6 +48,64 @@ export function summarizeConnections(items) {
   return {kind: 'empty', label: '尚未连接本机或远程设备', items: [], preview: []};
 }
 
+const TASK_STATUS_TEXT = {
+  queued: '排队中',
+  claimed: '已领取',
+  succeeded: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
+  timeout: '超时',
+};
+
+const TASK_PROMPT_LIMIT = 80;
+const TASKS_EMPTY_TEXT = '还没有发到运行时的任务。发一个测试任务后会出现在这里。';
+
+export function taskStatusText(task) {
+  return TASK_STATUS_TEXT[task && task.status] || '未知';
+}
+
+export function taskPromptText(task) {
+  const text = String((task && task.prompt) || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '（无内容）';
+  return text.length > TASK_PROMPT_LIMIT ? text.slice(0, TASK_PROMPT_LIMIT) + '…' : text;
+}
+
+export function taskActions(task) {
+  const status = task && task.status;
+  return status === 'queued' || status === 'claimed' ? ['cancel'] : [];
+}
+
+function taskKindText(task) {
+  if (task && task.kind === 'infer') return '推理';
+  if (task && task.kind === 'echo') return '测试';
+  return '任务';
+}
+
+function taskBadgeClass(task) {
+  return task && task.status === 'succeeded' ? 'is-online' : 'is-pending';
+}
+
+export function lastSeenText(lastSeen, now) {
+  const seen = Number(lastSeen);
+  const at = Number(now);
+  if (lastSeen === null || lastSeen === undefined || !Number.isFinite(seen) || !Number.isFinite(at)) return '未知';
+  const seconds = Math.max(0, Math.floor(at - seen));
+  if (seconds < 60) return '刚刚';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${Math.floor(hours / 24)} 天前`;
+}
+
+export function connectionText(item, now) {
+  const online = Boolean(item) && item.status === 'online';
+  const when = lastSeenText(item && item.last_seen, now);
+  if (when === '未知') return online ? '已连接（最后活跃时间未知）' : '在线时间未知';
+  if (online) return when === '刚刚' ? '已连接（刚刚有活动）' : `已连接（最后活跃 ${when}）`;
+  return when === '刚刚' ? '刚刚离线' : `最后在线 ${when}`;
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
@@ -176,17 +234,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
     await loadKeys();
   }
 
+  function connectionRow(item, now) {
+    const row = document.createElement('li');
+    const name = document.createElement('span');
+    name.textContent = item.hostname || 'flybot';
+    const state = document.createElement('span');
+    const online = item.status === 'online';
+    state.className = 'runtime-badge ' + (online ? 'is-online' : 'is-offline');
+    state.textContent = online ? '在线' : '离线';
+    const seen = document.createElement('span');
+    seen.textContent = connectionText(item, now);
+    row.appendChild(name);
+    row.appendChild(state);
+    row.appendChild(seen);
+    return row;
+  }
+
   function renderConnections(items) {
     const list = document.getElementById('connection-list');
     const empty = document.getElementById('connections-empty');
     if (!list) return;
+    const now = Math.floor(Date.now() / 1000);
     list.textContent = '';
     if (empty) empty.hidden = items.length > 0;
-    for (const item of items) {
-      const row = document.createElement('li');
-      row.textContent = `${item.hostname || 'flybot'} · ${item.status === 'online' ? '在线' : '离线'}`;
-      list.appendChild(row);
-    }
+    for (const item of items) list.appendChild(connectionRow(item, now));
     renderDetected(items);
     renderLocalStatus(items);
   }
@@ -195,20 +266,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
     const list = document.getElementById('detected-list');
     const empty = document.getElementById('detected-empty');
     if (!list) return;
+    const now = Math.floor(Date.now() / 1000);
     list.textContent = '';
     if (empty) empty.hidden = items.length > 0;
-    for (const item of items) {
-      const row = document.createElement('li');
-      const name = document.createElement('span');
-      name.textContent = item.hostname || 'flybot';
-      const state = document.createElement('span');
-      const online = item.status === 'online';
-      state.className = 'runtime-badge ' + (online ? 'is-online' : 'is-offline');
-      state.textContent = online ? '在线' : '离线';
-      row.appendChild(name);
-      row.appendChild(state);
-      list.appendChild(row);
-    }
+    for (const item of items) list.appendChild(connectionRow(item, now));
   }
 
   function renderLocalStatus(items) {
@@ -232,6 +293,55 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
     detail.textContent = summary.kind === 'online'
       ? `${names} 已连接。任务会发到这些机器。`
       : `${names} 已登记但不在线。请确认守护进程仍在运行。`;
+  }
+
+  function renderTasks(items) {
+    const list = document.getElementById('task-list');
+    const empty = document.getElementById('tasks-empty');
+    if (!list) return;
+    const rows = Array.isArray(items) ? items.filter(Boolean) : [];
+    list.textContent = '';
+    if (empty) {
+      empty.hidden = rows.length > 0;
+      empty.textContent = TASKS_EMPTY_TEXT;
+    }
+    for (const item of rows) {
+      const row = document.createElement('li');
+      const prompt = document.createElement('span');
+      prompt.textContent = taskPromptText(item);
+      const meta = document.createElement('span');
+      meta.className = 'runtime-badge ' + taskBadgeClass(item);
+      meta.textContent = `${taskKindText(item)} · ${taskStatusText(item)}`;
+      row.appendChild(prompt);
+      row.appendChild(meta);
+      if (taskActions(item).includes('cancel')) {
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.textContent = '取消';
+        cancel.addEventListener('click', () => cancelTask(item));
+        row.appendChild(cancel);
+      }
+      list.appendChild(row);
+    }
+  }
+
+  async function loadTasks() {
+    const listed = await request('GET', '/v1/runtime/tasks');
+    if (listed.status !== 200) {
+      show('error', messageFor(listed.body.error, '无法读取运行时任务。'));
+      return;
+    }
+    renderTasks(listed.body.items || []);
+  }
+
+  async function cancelTask(item) {
+    const result = await request('POST', `/v1/runtime/tasks/${item.id}/cancel`);
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, result.status === 409 ? '这个任务已经不能再取消。' : '无法取消任务。'));
+      return;
+    }
+    show('ok', '已取消任务。');
+    await loadTasks();
   }
 
   async function detectRuntimes() {
@@ -280,6 +390,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
     mainPanel.hidden = false;
     document.getElementById('whoami').textContent = currentUser.username;
     await loadKeys();
+    await loadTasks();
   }
 
   document.getElementById('login-form').addEventListener('submit', async event => {
@@ -303,6 +414,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
   const detectButton = document.getElementById('detect-runtimes');
   if (detectButton) {
     detectButton.addEventListener('click', () => detectRuntimes());
+  }
+  const refreshTasks = document.getElementById('refresh-tasks');
+  if (refreshTasks) {
+    refreshTasks.addEventListener('click', () => loadTasks());
   }
 
   function syncGenerateButton() {
@@ -413,10 +528,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
       }
       const box = document.getElementById('task-result');
       box.hidden = false;
-      box.textContent = '已排队，等待这台机器上的守护进程回传结果。刷新连接列表可查看状态。';
+      box.textContent = '已排队，等待这台机器上的守护进程回传结果。下方「最近任务」会显示状态。';
       show('ok', '已发送测试任务。');
       event.currentTarget.reset();
-      await loadKeys();
+      await loadTasks();
     });
   }
 

@@ -47,6 +47,10 @@ CREATE TABLE IF NOT EXISTS agent_messages (
 CREATE INDEX IF NOT EXISTS agent_message_list ON agent_messages(conversation_id, seq, id);
 CREATE UNIQUE INDEX IF NOT EXISTS agent_message_idempotency
  ON agent_messages(conversation_id, key_hash) WHERE key_hash IS NOT NULL;
+CREATE TABLE IF NOT EXISTS agent_conversation_reads (
+ conversation_id TEXT PRIMARY KEY REFERENCES agent_conversations(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ read_seq INTEGER NOT NULL DEFAULT 0 CHECK(read_seq >= 0));
 '''
 
 TITLE_MAX = 80
@@ -265,3 +269,21 @@ def apply_task(db, message, task, now):
             (now, message['conversation_id']),
         )
     return load_message(db, message['conversation_id'], message['id'])
+
+
+def unread_count(db, conversation_id, user_id):
+    """Finished assistant replies the conversation owner has not acknowledged."""
+    return db.execute(
+        "SELECT COUNT(*) FROM agent_messages WHERE conversation_id=? AND role='assistant' AND status='succeeded' "
+        'AND seq>COALESCE((SELECT read_seq FROM agent_conversation_reads WHERE conversation_id=? AND user_id=?),0)',
+        (conversation_id, conversation_id, user_id)).fetchone()[0]
+
+
+def mark_read(db, conversation_id, user_id, message_id):
+    row = db.execute('SELECT seq FROM agent_messages WHERE conversation_id=? AND id=?',
+                     (conversation_id, message_id)).fetchone()
+    if row is None:
+        return False
+    db.execute('INSERT INTO agent_conversation_reads VALUES(?,?,?) ON CONFLICT(conversation_id) '
+               'DO UPDATE SET read_seq=MAX(read_seq, excluded.read_seq)', (conversation_id, user_id, row['seq']))
+    return True

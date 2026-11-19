@@ -1,5 +1,6 @@
 """Runtimes / connection page serving tests. In-process WSGI only; not browser E2E."""
 from pathlib import Path
+import re
 import tempfile
 import unittest
 
@@ -68,8 +69,13 @@ class RuntimesPageTests(unittest.TestCase):
         self.assertIn('/install/flybot.pyz', html)
         self.assertIn('id="copy-install"', html)
         self.assertIn('id="copy-install-feedback"', html)
-        self.assertIn('aria-live="polite"', html)
-        self.assertIn('role="status"', html)
+        # Anchor the live-region attributes to the feedback span itself: the page-level
+        # #status also carries role="status", so a bare assertIn would pass even if the
+        # span lost its own semantics.
+        feedback_tag = re.search(r'<span[^>]*id="copy-install-feedback"[^>]*>', html)
+        self.assertIsNotNone(feedback_tag, 'the copy feedback span is served')
+        self.assertIn('role="status"', feedback_tag.group(0))
+        self.assertIn('aria-live="polite"', feedback_tag.group(0))
         self.assertNotIn('curl -fsSL', html)
         self.assertNotIn('install.ps1', html.lower())
         self.assertNotIn('teamily-releases', html.lower())

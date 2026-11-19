@@ -82,8 +82,31 @@ export function filterCatalog(items, {category = 'all', query = ''} = {}) {
 // looking at, and say nothing when there is something to list.
 export function emptyGuideMessage(items, query) {
   if (items.length > 0) return '';
-  return normalize(query) ? '没有匹配的指引。' : '这一类还没有指引。';
+  return normalize(query) ? '没有匹配的条目。换个词，或按 Esc 清空搜索。' : '这一类还没有指引。';
 }
+
+// Split guide text into the runs that match the keyword so the page can mark
+// them. Case-insensitive and length-preserving: joining the segments always
+// gives the original text back, and an unknown keyword marks nothing.
+export function highlightSegments(text, query) {
+  const source = String(text || '');
+  const needle = normalize(query);
+  if (!source) return [];
+  if (!needle) return [{text: source, match: false}];
+  const haystack = source.toLowerCase();
+  const segments = [];
+  let start = 0;
+  let hit = haystack.indexOf(needle);
+  while (hit !== -1) {
+    if (hit > start) segments.push({text: source.slice(start, hit), match: false});
+    segments.push({text: source.slice(hit, hit + needle.length), match: true});
+    start = hit + needle.length;
+    hit = haystack.indexOf(needle, start);
+  }
+  if (start < source.length) segments.push({text: source.slice(start), match: false});
+  return segments;
+}
+
 
 export function groupCatalog(items) {
   const groups = [];
@@ -201,11 +224,29 @@ function mount() {
     }
   }
 
+  // Mark the searched runs with <mark> elements and plain text nodes; the page
+  // never writes markup into the document, so a keyword can only ever be text.
+  function fillHighlighted(node, text, query) {
+    const parts = [];
+    for (const segment of highlightSegments(text, query)) {
+      if (!segment.text) continue;
+      if (segment.match) {
+        const mark = document.createElement('mark');
+        mark.textContent = segment.text;
+        parts.push(mark);
+      } else {
+        parts.push(document.createTextNode(segment.text));
+      }
+    }
+    node.replaceChildren(...parts);
+  }
+
   function openDialog(item) {
     if (!dialog || !dialogTitle || !dialogBody || !dialogPath) return;
+    const query = searchEl ? searchEl.value : '';
     currentItemId = item.id;
-    dialogTitle.textContent = item.title;
-    dialogBody.textContent = item.body;
+    fillHighlighted(dialogTitle, item.title, query);
+    fillHighlighted(dialogBody, item.body, query);
     dialogPath.textContent = formatPath(item.path);
     dialog.hidden = false;
     if (dialogClose) dialogClose.focus();
@@ -270,7 +311,7 @@ function mount() {
         icon.className = 'item-icon';
         icon.append(iconNode());
         const title = document.createElement('span');
-        title.textContent = item.title;
+        fillHighlighted(title, item.title, query);
         button.append(icon, title);
         button.addEventListener('click', () => openDialog(item));
         section.append(button);

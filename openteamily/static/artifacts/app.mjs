@@ -1,3 +1,17 @@
+import { bindDocumentEditor } from '../shell/rich-editor.mjs';
+import { renderThumb } from '../shell/thumb.mjs';
+
+// `/space?new=<kind>` opens the matching 新建 editor once the page has loaded
+// (used by the chat composer's 创建 grid). Unknown values are ignored.
+const NEW_KIND_BUTTONS = {document: 'new-artifact', website: 'new-website', slides: 'new-slides', dashboard: 'new-dashboard', whiteboard: 'new-board'};
+export function newKindFromSearch(search) {
+  const value = new URLSearchParams(search || '').get('new') || '';
+  return Object.prototype.hasOwnProperty.call(NEW_KIND_BUTTONS, value) ? value : '';
+}
+export function newKindButtonId(kind) {
+  return NEW_KIND_BUTTONS[kind] || '';
+}
+
 export function csrfCookie(raw) {
   const parts = String(raw || '').split(';');
   for (const part of parts) {
@@ -52,8 +66,9 @@ export function visibleArtifacts(items, options = {}) {
   const creators = options.creators || [];
   const sessions = options.sessions || [];
   const now = options.now == null ? Date.now() : options.now;
-  if (kind === 'meetings' || scope === 'favorites') return [];
+  if (kind === 'meetings') return [];
   let rows = [...(items || [])];
+  if (scope === 'favorites') rows = rows.filter(item => item.favorited);
   if (scope === 'mine' && username) {
     rows = rows.filter((item) => item.created_by === username);
   }
@@ -107,6 +122,16 @@ export function queryForView(kind, scope) {
   return '';
 }
 
+export function artifactDeletePrompt(artifact) {
+  const title = artifact && typeof artifact.title === 'string' ? artifact.title.trim() : '';
+  return {
+    question: title ? `删除「${title}」？` : '删除这个作品？',
+    detail: '删除后不能恢复。',
+    cancelLabel: '取消',
+    confirmLabel: '确认',
+  };
+}
+
 export function applyDirectoryCollapsed(root, collapsed) {
   const next = Boolean(collapsed);
   const dir = root.getElementById('artifact-dir');
@@ -133,6 +158,49 @@ function idempotencyKey() {
   return globalThis.btoa(text).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
+export function suggestedDiscoverSlug(title) {
+  const slug = String(title || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 30)
+    .replace(/-+$/g, '');
+  return /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(slug) ? slug : '';
+}
+
+export function kindBadge(kind) {
+  return ({document: 'DOC', website: 'WEB', slides: 'PPT', dashboard: 'DASH', whiteboard: 'BOARD', media: 'MEDIA', image: 'IMG', audio: 'AUDIO', video: 'VIDEO'}[kind] || 'FILE');
+}
+
+export function artifactTime(seconds, now = Date.now()) {
+  if (!seconds) return '';
+  const when = new Date(Number(seconds) * 1000);
+  if (Number.isNaN(when.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  const today = new Date(now);
+  const sameDay = when.toDateString() === today.toDateString();
+  return sameDay ? `今天 ${pad(when.getHours())}:${pad(when.getMinutes())}`
+    : `${when.getMonth() + 1}月${when.getDate()}日 ${pad(when.getHours())}:${pad(when.getMinutes())}`;
+}
+
+export function applyArtifactLayout(list, layout) {
+  list.dataset.layout = layout === 'list' ? 'list' : 'grid';
+  return list.dataset.layout;
+}
+
+export function canSendArtifactToChat(item) {
+  return Boolean(item && item.id && item.kind === 'media');
+}
+
+export function conversationLabel(item) {
+  if (!item) return '未命名会话';
+  const title = (item.title || '').trim();
+  if (title) return title;
+  const names = (item.members || []).map(row => row.username).filter(Boolean);
+  if (names.length) return names.join('、');
+  return item.kind === 'dm' ? '单聊' : '群聊';
+}
+
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
@@ -154,6 +222,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let filterCreators = [];
   let filterSessions = [];
   let allItems = [];
+  // A delete question is bound to the workspace and artifact it was asked about;
+  // leaving that workspace retires it instead of letting the answer land elsewhere.
+  let pendingDeleteCancel = null;
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -429,10 +500,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (add) add.disabled = dashboardState.widgets.length >= 20;
   }
 
+  const richDocument = bindDocumentEditor(document, form);
+
   function fillEditor(item) {
     form.elements.title.value = item && item.title ? item.title : '';
     form.elements.body.value = item && typeof item.body === 'string' ? item.body : '';
     const kind = (item && item.kind) || draftKind;
+    richDocument.load(form.elements.body.value, kind === 'document');
     const meta = document.getElementById('editor-meta');
     const labels = {website: '新网站', media: '新媒体', whiteboard: '新白板', slides: '新幻灯片', dashboard: '新看板', document: '新文档'};
     if (item && item.id) {
@@ -440,7 +514,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else {
       meta.textContent = labels[kind] || '新文档';
     }
-    document.getElementById('body-label').hidden = kind === 'media' || kind === 'whiteboard' || kind === 'slides' || kind === 'dashboard';
+    document.getElementById('body-label').hidden = kind !== 'website';
     document.getElementById('media-editor').hidden = kind !== 'media';
     document.getElementById('board-editor').hidden = kind !== 'whiteboard';
     document.getElementById('slides-editor').hidden = kind !== 'slides';
@@ -649,13 +723,191 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+  const sendDialog = document.getElementById('send-to-chat-dialog');
+  const sendList = document.getElementById('send-to-chat-list');
+  const sendEmpty = document.getElementById('send-to-chat-empty');
+  const sendError = document.getElementById('send-to-chat-error');
+  const sendLead = document.getElementById('send-to-chat-lead');
+  let sendingArtifact = null;
+
+  function closeSendDialog() {
+    if (!sendDialog) return;
+    sendDialog.hidden = true;
+    sendingArtifact = null;
+  }
+
+  async function openSendDialog(item) {
+    if (!sendDialog || !workspaceId() || !canSendArtifactToChat(item)) return;
+    sendingArtifact = item;
+    sendDialog.hidden = false;
+    if (sendLead) sendLead.textContent = '将「' + item.title + '」发送到：';
+    if (sendError) { sendError.hidden = true; sendError.textContent = ''; }
+    if (sendList) sendList.textContent = '';
+    if (sendEmpty) {
+      sendEmpty.hidden = false;
+      sendEmpty.textContent = '正在读取会话…';
+    }
+    const listed = await request('GET', `/v1/workspaces/${workspaceId()}/social/conversations?limit=100`);
+    if (sendingArtifact !== item) return;
+    if (listed.status !== 200) {
+      if (sendEmpty) {
+        sendEmpty.hidden = false;
+        sendEmpty.textContent = messageFor(listed.body.error, '无法读取会话列表。');
+      }
+      return;
+    }
+    const items = listed.body.items || [];
+    if (sendList) sendList.textContent = '';
+    if (sendEmpty) {
+      sendEmpty.hidden = items.length > 0;
+      sendEmpty.textContent = '这个工作区还没有可发送的群或单聊。';
+    }
+    for (const conversation of items) {
+      const row = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = conversationLabel(conversation);
+      button.addEventListener('click', () => sendArtifactToConversation(item, conversation));
+      row.appendChild(button);
+      sendList.appendChild(row);
+    }
+  }
+
+  async function sendArtifactToConversation(item, conversation) {
+    if (!workspaceId() || !item || !conversation || !conversation.id) return;
+    const result = await request(
+      'POST',
+      `/v1/workspaces/${workspaceId()}/social/conversations/${conversation.id}/messages`,
+      {body: '', artifact_id: item.id},
+      {'Idempotency-Key': idempotencyKey()},
+    );
+    if (result.status !== 200 && result.status !== 201) {
+      if (sendError) {
+        sendError.hidden = false;
+        sendError.textContent = messageFor(result.body.error, '发送失败。');
+      }
+      show('error', messageFor(result.body.error, '发送到聊天失败。'));
+      return;
+    }
+    closeSendDialog();
+    show('ok', '已发送到「' + conversationLabel(conversation) + '」。');
+  }
+
+  if (document.getElementById('send-to-chat-cancel')) {
+    document.getElementById('send-to-chat-cancel').addEventListener('click', closeSendDialog);
+  }
+  if (sendDialog) {
+    sendDialog.addEventListener('click', event => {
+      if (event.target === sendDialog) closeSendDialog();
+    });
+  }
+
+  let openItemMenu = null;
+  function closeItemMenu() {
+    if (!openItemMenu) return;
+    openItemMenu.menu.hidden = true;
+    openItemMenu.button.setAttribute('aria-expanded', 'false');
+    openItemMenu = null;
+  }
+  document.addEventListener('click', event => {
+    if (openItemMenu && !openItemMenu.menu.contains(event.target) && event.target !== openItemMenu.button) closeItemMenu();
+  });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') closeItemMenu(); });
+
+  function itemMenu(item, onOpen) {
+    const wrap = document.createElement('span');
+    wrap.className = 'artifact-more-wrap';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'artifact-more';
+    button.setAttribute('aria-haspopup', 'menu');
+    button.setAttribute('aria-expanded', 'false');
+    button.setAttribute('aria-label', item.title + '：更多操作');
+    button.textContent = '⋯';
+    const menu = document.createElement('div');
+    menu.className = 'artifact-item-menu';
+    menu.setAttribute('role', 'menu');
+    menu.hidden = true;
+    const send = document.createElement('button');
+    send.type = 'button';
+    send.setAttribute('role', 'menuitem');
+    send.className = 'artifact-menu-send';
+    send.textContent = '发送到聊天';
+    if (canSendArtifactToChat(item)) {
+      send.disabled = false;
+      send.title = '把这件媒体作品发到一个群或单聊';
+      send.addEventListener('click', () => {
+        closeItemMenu();
+        openSendDialog(item);
+      });
+    } else {
+      send.disabled = true;
+      send.title = '未接通：社交会话附件目前只接受媒体作品，文档和其他类型还不能发送';
+    }
+    const rename = document.createElement('button');
+    rename.type = 'button';
+    rename.setAttribute('role', 'menuitem');
+    rename.textContent = '重命名';
+    rename.title = '打开文档并编辑标题';
+    rename.addEventListener('click', async () => {
+      closeItemMenu();
+      await onOpen(item);
+      const title = form.elements.title;
+      if (title) { title.focus(); title.select(); }
+    });
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.setAttribute('role', 'menuitem');
+    remove.className = 'artifact-menu-danger';
+    remove.textContent = '删除';
+    remove.addEventListener('click', async () => {
+      closeItemMenu();
+      if (!workspaceId() || !item.id) return;
+      if (typeof globalThis.confirm === 'function' && !globalThis.confirm('删除「' + item.title + '」？')) return;
+      const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${item.id}/remove`, {});
+      if (result.status !== 200) {
+        show('error', messageFor(result.body.error, '删除失败。'));
+        return;
+      }
+      show('ok', '已删除。');
+      await loadList();
+    });
+    menu.append(send, rename, remove);
+    button.addEventListener('click', event => {
+      event.stopPropagation();
+      const wasOpen = openItemMenu && openItemMenu.menu === menu;
+      closeItemMenu();
+      if (wasOpen) return;
+      menu.hidden = false;
+      button.setAttribute('aria-expanded', 'true');
+      openItemMenu = {menu, button};
+    });
+    wrap.append(button, menu);
+    return wrap;
+  }
+
   function renderList(items, onOpen) {
     const list = document.getElementById('artifact-list');
     const empty = document.getElementById('list-empty');
     list.textContent = '';
+    closeItemMenu();
+    applyArtifactLayout(list, catalogLayout);
     if (empty) empty.hidden = items.length > 0;
+    if (items.length) {
+      const head = document.createElement('li');
+      head.className = 'artifact-list-head';
+      head.setAttribute('aria-hidden', 'true');
+      for (const label of ['名称', '来源', '创建时间', '最近动态']) {
+        const cell = document.createElement('span');
+        cell.textContent = label;
+        head.append(cell);
+      }
+      list.appendChild(head);
+    }
     for (const item of items) {
       const row = document.createElement('li');
+      row.className = 'artifact-item';
+      row.dataset.kind = item.kind || '';
       const open = document.createElement('button');
       open.type = 'button';
       open.className = 'link';
@@ -667,11 +919,65 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       meta.textContent = `${kindLabel(item.kind)} · ${item.created_by || ''}${source}`;
       row.appendChild(open);
       row.appendChild(meta);
+      const cover = document.createElement('span');
+      cover.className = 'artifact-cover';
+      cover.setAttribute('aria-hidden', 'true');
+      const mime = item.media && item.media.mime ? String(item.media.mime) : '';
+      const thumb = item.preview ? renderThumb(document, item.preview) : null;
+      if (thumb) {
+        cover.classList.add('has-thumb');
+        cover.append(thumb);
+      } else if (item.kind === 'media' && /^image\//.test(mime) && item.id && workspaceId()) {
+        const img = document.createElement('img');
+        img.className = 'artifact-cover-img';
+        img.alt = '';
+        img.loading = 'lazy';
+        img.src = `/v1/workspaces/${workspaceId()}/artifacts/${item.id}/file`;
+        cover.classList.add('has-thumb');
+        cover.append(img);
+      } else {
+        cover.textContent = kindLabel(item.kind);
+      }
+      row.appendChild(cover);
+      const badge = document.createElement('span');
+      badge.className = 'artifact-kind';
+      badge.setAttribute('aria-hidden', 'true');
+      badge.textContent = kindBadge(item.kind);
+      row.appendChild(badge);
+      const bookmark = document.createElement('button');
+      bookmark.type = 'button';
+      bookmark.className = 'artifact-bookmark';
+      bookmark.title = item.favorited ? '取消收藏' : '收藏';
+      bookmark.setAttribute('aria-label', bookmark.title);
+      bookmark.setAttribute('aria-pressed', String(!!item.favorited));
+      bookmark.addEventListener('click', async event => {
+        event.stopPropagation();
+        const wid = workspaceId();
+        bookmark.disabled = true;
+        try {
+          const result = await request('POST', `/v1/workspaces/${wid}/artifacts/${item.id}/favorite`, {enabled: !item.favorited});
+          if (workspaceId() !== wid) return;
+          if (result.status !== 200) { show('error', messageFor(result.body.error, '收藏未保存。')); return; }
+          item.favorited = result.body.favorited;
+          renderCatalog();
+        } catch { show('error', '网络错误，收藏未保存。'); }
+        finally { bookmark.disabled = false; }
+      });
+      bookmark.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h10v16l-5-3-5 3V4Z"/></svg>';
+      row.appendChild(bookmark);
+      const created = document.createElement('span');
+      created.className = 'artifact-created';
+      created.textContent = artifactTime(item.created);
+      const updated = document.createElement('span');
+      updated.className = 'artifact-updated';
+      updated.textContent = item.updated ? '编辑于 ' + artifactTime(item.updated) : '';
+      row.append(created, updated, itemMenu(item, onOpen));
       list.appendChild(row);
     }
   }
 
   async function openEditor(item) {
+    if (pendingDeleteCancel) pendingDeleteCancel();
     closeNewMenu();
     current = item;
     listPanel.hidden = true;
@@ -692,12 +998,43 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('share-once').textContent = '';
     const versionPanel = document.getElementById('version-panel');
     versionPanel.hidden = !current || !current.id;
+    const discoverPanel = document.getElementById('discover-panel');
+    if (discoverPanel) discoverPanel.hidden = !current || !current.id;
     if (current && current.id) {
       await loadShares();
       await loadVersions();
+      await loadDiscover();
     } else {
       document.getElementById('share-list').textContent = '';
       document.getElementById('version-list').textContent = '';
+    }
+  }
+
+  async function loadDiscover() {
+    const panel = document.getElementById('discover-panel');
+    const status = document.getElementById('discover-status');
+    const slugInput = document.getElementById('discover-slug');
+    const revoke = document.getElementById('revoke-discover');
+    if (!panel) return;
+    if (!current || !current.id || !workspaceId()) {
+      panel.hidden = true;
+      return;
+    }
+    panel.hidden = false;
+    const listed = await request('GET', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/discover`);
+    if (listed.status !== 200) {
+      if (status) {
+        status.hidden = false;
+        status.textContent = '无法读取公开状态。';
+      }
+      return;
+    }
+    const row = listed.body.discover || {};
+    if (slugInput) slugInput.value = row.slug || suggestedDiscoverSlug(current.title);
+    if (revoke) revoke.hidden = !row.listed;
+    if (status) {
+      status.hidden = false;
+      status.textContent = row.listed ? ('已公开：/w/' + row.slug) : '尚未公开到发现页。';
     }
   }
 
@@ -791,10 +1128,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+  let listGeneration = 0;
   async function loadList() {
+    const generation = ++listGeneration;
     const id = workspaceId();
     if (!id) return;
     const listed = await request('GET', `/v1/workspaces/${id}/artifacts${listQuery(search.value)}`);
+    // An old workspace/search response must never replace the current list.
+    if (generation !== listGeneration || workspaceId() !== id) return;
     if (listed.status !== 200) {
       show('error', messageFor(listed.body.error, '无法读取作品库。'));
       return;
@@ -869,7 +1210,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
-  workspaceSelect.addEventListener('change', () => loadList());
+  workspaceSelect.addEventListener('change', () => {
+    if (pendingDeleteCancel) pendingDeleteCancel();
+    loadList();
+  });
   search.addEventListener('input', () => loadList());
 
   document.getElementById('new-artifact').addEventListener('click', () => {
@@ -1035,6 +1379,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   document.getElementById('cancel-editor').addEventListener('click', async () => {
+    if (pendingDeleteCancel) pendingDeleteCancel();
     current = null;
     form.hidden = true;
     listPanel.hidden = false;
@@ -1069,13 +1414,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return {status: response.status, body: parsed};
   }
 
+  let savingArtifact = false;
   form.addEventListener('submit', async event => {
     event.preventDefault();
+    if (savingArtifact) return;
+    savingArtifact = true;
+    const saveButtons = ['save-artifact', 'document-save'].map(id => document.getElementById(id)).filter(Boolean);
+    for (const button of saveButtons) button.disabled = true;
+    try {
     if (!workspaceId()) {
       show('error', '先选择一个工作区。');
       return;
     }
     const title = form.elements.title.value.trim();
+    richDocument.flush();
     const body = form.elements.body.value;
     const kind = (current && current.kind) || draftKind;
     if (!title) {
@@ -1165,13 +1517,75 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     fillEditor(current);
     document.getElementById('remove-artifact').hidden = false;
     document.getElementById('share-panel').hidden = false;
+    const discoverPanel = document.getElementById('discover-panel');
+    if (discoverPanel) discoverPanel.hidden = false;
     show('ok', '已保存。');
     await loadShares();
+    await loadDiscover();
+    } catch { show('error', '网络错误，未能确认保存结果。请重新打开作品检查后再重试。'); }
+    finally { savingArtifact = false; for (const button of saveButtons) button.disabled = false; }
   });
+
+  function askDeleteConfirmation() {
+    const trigger = document.getElementById('remove-artifact');
+    const target = {workspace: workspaceId(), id: current && current.id};
+    const prompt = artifactDeletePrompt(current);
+    const box = document.createElement('div');
+    box.className = 'inline-confirm';
+    box.setAttribute('role', 'alertdialog');
+    box.setAttribute('aria-labelledby', 'remove-artifact-question');
+    const question = document.createElement('span');
+    question.id = 'remove-artifact-question';
+    question.textContent = prompt.question;
+    const detail = document.createElement('span');
+    detail.className = 'note';
+    detail.textContent = prompt.detail;
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = prompt.cancelLabel;
+    const confirm = document.createElement('button');
+    confirm.type = 'button';
+    confirm.textContent = prompt.confirmLabel;
+    box.appendChild(question);
+    box.appendChild(detail);
+    box.appendChild(cancel);
+    box.appendChild(confirm);
+    trigger.hidden = true;
+    const parent = trigger.parentNode;
+    if (parent && typeof parent.insertBefore === 'function') parent.insertBefore(box, trigger.nextSibling || null);
+    else form.appendChild(box);
+    if (typeof cancel.focus === 'function') cancel.focus();
+
+    return new Promise(resolve => {
+      let settled = false;
+      const finish = answer => {
+        if (settled) return;
+        settled = true;
+        pendingDeleteCancel = null;
+        document.removeEventListener('keydown', onKey);
+        box.remove();
+        trigger.hidden = false;
+        if (!answer && typeof trigger.focus === 'function') trigger.focus();
+        resolve(answer ? target : null);
+      };
+      const onKey = event => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          finish(false);
+        }
+      };
+      pendingDeleteCancel = () => finish(false);
+      cancel.addEventListener('click', () => finish(false));
+      confirm.addEventListener('click', () => finish(true));
+      document.addEventListener('keydown', onKey);
+    });
+  }
 
   document.getElementById('remove-artifact').addEventListener('click', async () => {
     if (!current || !current.id || !workspaceId()) return;
-    const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/remove`, {});
+    const target = await askDeleteConfirmation();
+    if (!target) return;
+    const result = await request('POST', `/v1/workspaces/${target.workspace}/artifacts/${target.id}/remove`, {});
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '删除失败。'));
       return;
@@ -1237,6 +1651,50 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     drawBoard();
   });
 
+  // The publish controls live inside #editor-form; a nested <form> would be
+  // dropped by the HTML parser and close the editor form early, so this is a
+  // plain group with a button handler (Enter in the slug field publishes too).
+  const publishDiscover = document.getElementById('publish-discover');
+  const discoverSlug = document.getElementById('discover-slug');
+  if (publishDiscover) {
+    if (discoverSlug) discoverSlug.addEventListener('keydown', event => {
+      if (event.key === 'Enter') { event.preventDefault(); publishDiscover.click(); }
+    });
+    publishDiscover.addEventListener('click', async event => {
+      event.preventDefault();
+      if (!current || !current.id || !workspaceId()) {
+        show('error', '请先保存作品，再发布到发现页。');
+        return;
+      }
+      const slug = (document.getElementById('discover-slug').value || '').trim();
+      const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/discover`, {slug});
+      if (result.status !== 200 && result.status !== 201) {
+        const messages = {
+          forbidden: '只有所有者或管理员可以把作品公开到发现页。',
+          conflict: '这个短地址已经在用。',
+          invalid: '请输入可用的公开短地址。',
+        };
+        show('error', messages[result.body.error] || messageFor(result.body.error, '无法发布到发现页。'));
+        return;
+      }
+      show('ok', '已公开到发现页。');
+      await loadDiscover();
+    });
+  }
+  const revokeDiscover = document.getElementById('revoke-discover');
+  if (revokeDiscover) {
+    revokeDiscover.addEventListener('click', async () => {
+      if (!current || !current.id || !workspaceId()) return;
+      const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/discover/revoke`, {});
+      if (result.status !== 200) {
+        show('error', messageFor(result.body.error, '无法从发现页撤回。'));
+        return;
+      }
+      show('ok', '已从发现页撤回。');
+      await loadDiscover();
+    });
+  }
+
   document.getElementById('create-share').addEventListener('click', async () => {
     if (!current || !current.id || !workspaceId()) {
       show('error', '请先保存作品，再创建分享链接。');
@@ -1283,7 +1741,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       applyView(next.kind, next.scope, {sync: false});
     });
   }
-  return load();
+  return load().then(() => {
+    const kind = newKindFromSearch(view && view.location && view.location.search);
+    if (!kind || mainPanel.hidden || !workspaceId()) return;
+    const button = document.getElementById(newKindButtonId(kind));
+    if (button) button.click();
+    if (view && view.history && view.location) {
+      const params = new URLSearchParams(view.location.search);
+      params.delete('new');
+      const rest = params.toString();
+      view.history.replaceState(null, '', view.location.pathname + (rest ? '?' + rest : '') + view.location.hash);
+    }
+  });
 }
 
 if (globalThis.document && globalThis.document.getElementById('editor-form')) {

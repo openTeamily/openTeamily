@@ -22,6 +22,8 @@ class SettingsPage:
         '/settings/channels': ('settings', 'index.html', 'text/html; charset=utf-8'),
         '/settings/agent-access': ('settings', 'index.html', 'text/html; charset=utf-8'),
         '/settings/connectors': ('settings', 'index.html', 'text/html; charset=utf-8'),
+        '/settings/skill-configuration': ('settings', 'index.html', 'text/html; charset=utf-8'),
+        '/settings/connected-tools.mjs': ('settings', 'connected-tools.mjs', 'text/javascript; charset=utf-8'),
         '/settings/app.mjs': ('settings', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/settings/app.css': ('settings', 'app.css', 'text/css; charset=utf-8'),
         '/automations': ('automations', 'index.html', 'text/html; charset=utf-8'),
@@ -46,11 +48,14 @@ class SettingsPage:
         '/agents/app.css': ('agents', 'app.css', 'text/css; charset=utf-8'),
         '/memory': ('memory', 'index.html', 'text/html; charset=utf-8'),
         '/memory/app.mjs': ('memory', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/memory/rich.mjs': ('memory', 'rich.mjs', 'text/javascript; charset=utf-8'),
         '/memory/app.css': ('memory', 'app.css', 'text/css; charset=utf-8'),
         '/install/flybot.sh': ('install', 'flybot.sh', 'text/plain; charset=utf-8'),
         '/install/flybot.ps1': ('install', 'flybot.ps1', 'text/plain; charset=utf-8'),
         '/shell/app.css': ('shell', 'app.css', 'text/css; charset=utf-8'),
         '/shell/app.mjs': ('shell', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/rich-editor.mjs': ('shell', 'rich-editor.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/thumb.mjs': ('shell', 'thumb.mjs', 'text/javascript; charset=utf-8'),
         '/chat': ('chat', 'index.html', 'text/html; charset=utf-8'),
         '/chat/app.mjs': ('chat', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.css': ('chat', 'app.css', 'text/css; charset=utf-8'),
@@ -60,7 +65,11 @@ class SettingsPage:
         '/discover': ('discover', 'index.html', 'text/html; charset=utf-8'),
         '/discover/app.mjs': ('discover', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/discover/app.css': ('discover', 'app.css', 'text/css; charset=utf-8'),
+        '/meetings': ('meetings', 'index.html', 'text/html; charset=utf-8'),
+        '/meetings/app.mjs': ('meetings', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/meetings/app.css': ('meetings', 'app.css', 'text/css; charset=utf-8'),
         '/profile': ('profile', 'index.html', 'text/html; charset=utf-8'),
+        '/profile/edit': ('profile', 'index.html', 'text/html; charset=utf-8'),
         '/profile/app.mjs': ('profile', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/onboarding': ('onboarding', 'index.html', 'text/html; charset=utf-8'),
         '/onboarding/app.mjs': ('onboarding', 'app.mjs', 'text/javascript; charset=utf-8'),
@@ -71,8 +80,15 @@ class SettingsPage:
         '/guide': ('guide', 'index.html', 'text/html; charset=utf-8'),
         '/guide/app.mjs': ('guide', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/guide/app.css': ('guide', 'app.css', 'text/css; charset=utf-8'),
+        '/about': ('about', 'index.html', 'text/html; charset=utf-8'),
+        '/about/app.css': ('about', 'app.css', 'text/css; charset=utf-8'),
+        '/look/app.mjs': ('look', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/look/app.css': ('look', 'app.css', 'text/css; charset=utf-8'),
+        '/skills': ('skills', 'index.html', 'text/html; charset=utf-8'),
+        '/skills/app.mjs': ('skills', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/skills/app.css': ('skills', 'app.css', 'text/css; charset=utf-8'),
     }
-    PREFIXES = ('/settings', '/automations', '/team', '/new', '/members', '/runtimes', '/artifacts', '/space', '/agents', '/memory', '/install', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/download', '/guide')
+    PREFIXES = ('/settings', '/automations', '/team', '/new', '/members', '/runtimes', '/artifacts', '/space', '/agents', '/memory', '/install', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/meetings', '/download', '/guide', '/about', '/skills')
     CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
            "img-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'self'; "
            "frame-ancestors 'none'; object-src 'none'")
@@ -150,7 +166,15 @@ class SettingsPage:
         if not query:
             return True
         if path in ('/space', '/artifacts'):
-            return query in ('view=created', 'view=starred', 'view=memory', 'view=meetings')
+            # new=<kind> opens that 新建 editor (chat composer 创建 grid).
+            return query in ('view=created', 'view=starred', 'view=memory', 'view=meetings',
+                             'new=document', 'new=website', 'new=slides', 'new=dashboard',
+                             'new=whiteboard')
+        if path == '/automations':
+            # template=<id> opens the editor prefilled from a known template.
+            from .automations import TEMPLATES
+            template = query[len('template='):] if query.startswith('template=') else ''
+            return template in TEMPLATES and template != 'custom'
         if path == '/discover':
             return query in ('tab=agents', 'tab=agents&section=groups')
         if path == '/agents':

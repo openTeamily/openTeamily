@@ -294,3 +294,98 @@ body.app-workspace #connect-panel {
 #device-id {
   width: 100%;
 }
+
+/* Page parity follow-up: recorded settings/runtimes column, underline tabs, white cards. */
+body.app-workspace:has(#runtimes-panel) > main { background: var(--ot-surface-2); }
+body.app-workspace #main-panel { padding: 0.75rem 1.25rem 3rem; box-sizing: border-box; }
+.runtime-head { margin: 0 0 0.85rem; padding: 0; border: 0; background: transparent; box-shadow: none; min-height: 0; }
+.runtime-back {
+  width: auto; height: auto; padding: 0.15rem 0; font-size: 0.9375rem; font-weight: 650;
+  color: var(--ot-ink); border-radius: 0;
+}
+.runtime-tabs {
+  display: flex; gap: 1.1rem; margin: 0 0 1.15rem; border-bottom: 1px solid var(--ot-line);
+  background: transparent; padding: 0;
+}
+.runtime-tabs [role="tab"],
+.tabs.runtime-tabs button {
+  appearance: none; border: 0; background: transparent; color: var(--ot-muted);
+  font: inherit; font-size: 0.875rem; font-weight: 500; padding: 0.4rem 0 0.55rem;
+  border-bottom: 2px solid transparent; border-radius: 0; width: auto; box-shadow: none;
+}
+.runtime-tabs [role="tab"][aria-selected="true"],
+.tabs.runtime-tabs button[aria-selected="true"] {
+  color: var(--ot-ink); font-weight: 650; border-bottom-color: var(--ot-accent);
+  background: transparent;
+}
+.runtime-section h2 { font-size: 0.875rem; font-weight: 650; }
+.runtime-section > .note { margin: 0.25rem 0 0.65rem; font-size: 0.75rem; }
+.runtime-card, .runtime-row {
+  display: flex; align-items: center; gap: 0.75rem; width: 100%;
+  padding: 0.85rem 1rem; border-radius: 0.95rem;
+  background: var(--ot-surface); box-shadow: 0 0 0 1px var(--ot-line);
+  border: 0;
+}
+.runtime-card.is-unavailable { background: var(--ot-surface); color: var(--ot-ink); }
+.runtime-card-copy { min-width: 0; flex: 1; display: grid; gap: 0.15rem; justify-items: start; }
+.runtime-row button, .runtime-card button { width: auto; margin-left: auto; flex: none; }
+.runtime-glyph {
+  display: grid; place-items: center; width: 2.25rem; height: 2.25rem; border-radius: 0.75rem; flex: none;
+}
+.runtime-glyph-cloud { background: var(--ot-accent-soft); color: var(--ot-accent); }
+.runtime-glyph-computer { background: #e8f4f4; color: #2d6b6e; }
+.runtime-glyph-local { background: #f8edd9; color: #8a5a16; }
+#local-status-card[data-state="online"] .runtime-glyph-local { background: var(--ot-accent-soft); color: var(--ot-accent); }
+.runtime-local-card {
+  padding: 1rem 1.05rem 1.15rem; border-radius: 1rem;
+  background: var(--ot-surface); box-shadow: 0 0 0 1px var(--ot-line);
+  gap: 0.95rem;
+}
+.runtime-status { display: flex; align-items: flex-start; gap: 0.75rem; }
+.setup-steps-head, .runtime-downloads-head, .detected-bar {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem;
+}
+.setup-steps ol { gap: 0.55rem; }
+.setup-steps li {
+  display: flex; gap: 0.55rem; align-items: flex-start;
+  padding: 0.7rem 0.75rem; border-radius: 0.75rem; background: var(--ot-surface-2); border: 0;
+  box-shadow: 0 0 0 1px var(--ot-line);
+}
+.setup-index {
+  display: grid; place-items: center; width: 1.35rem; height: 1.35rem; flex: none;
+  border-radius: 50%; background: var(--ot-accent); color: #fff; font-size: 0.75rem; font-weight: 700;
+}
+.setup-steps h4 { font-size: 0.8125rem; }
+.setup-steps p, .setup-steps pre { font-size: 0.75rem; color: var(--ot-muted); }
+.runtime-download-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+.runtime-download-tile {
+  display: flex; align-items: center; gap: 0.7rem; padding: 0.75rem 0.85rem;
+  border-radius: 0.85rem; background: var(--ot-surface); box-shadow: 0 0 0 1px var(--ot-line);
+  color: var(--ot-ink); text-decoration: none;
+}
+.runtime-download-tile:hover { background: var(--ot-bg-accent); }
+.runtime-download-mark { display: grid; place-items: center; width: 2rem; height: 2rem; flex: none; color: var(--ot-ink); }
+.runtime-download-copy { display: grid; gap: 0.1rem; min-width: 0; }
+.runtime-download-copy strong { font-size: 0.8125rem; }
+.runtime-download-copy span { font-size: 0.75rem; color: var(--ot-muted); }
+.runtime-download-arrow { margin-left: auto; color: var(--ot-muted); }
+.detected-panel { display: grid; gap: 0.35rem; }
+.detected-bar button { width: auto; }
+#detected-list li {
+  border: 0; box-shadow: 0 0 0 1px var(--ot-line); border-radius: 0; padding: 0.75rem 0.15rem;
+  background: transparent;
+}
+#detected-list li + li { border-top: 0; }
+@media (max-width: 44rem) {
+  .runtime-download-grid { grid-template-columns: 1fr; }
+}
+
+#main-panel .runtime-head, .runtime-head {
+  justify-content: flex-start; text-align: left; width: 100%;
+}
+#main-panel .runtime-back { justify-content: flex-start; }
+.setup-steps ol, .setup-steps li { min-width: 0; overflow: hidden; }
+.setup-steps pre {
+  max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-all;
+  background: var(--ot-bg-accent); padding: 0.35rem 0.45rem; border-radius: 0.4rem;
+}

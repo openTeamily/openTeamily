@@ -1,27 +1,27 @@
 /* Shared FlyBot management shell. Self-written; no Teamily assets.
    Pages keep their own forms, IDs, and APIs. This file only styles chrome. */
 :root {
-  --ot-bg: #f6f7f9;
-  --ot-bg-accent: #eceff3;
+  --ot-bg: #eef2ef;
+  --ot-bg-accent: #e9eeea;
   --ot-surface: #ffffff;
-  --ot-surface-2: #fbfcfe;
-  --ot-ink: #0f172a;
-  --ot-muted: #5b6675;
-  --ot-line: #e2e6ec;
-  --ot-line-strong: #cfd6e0;
-  --ot-accent: #4f46e5;
-  --ot-accent-hover: #4338ca;
-  --ot-accent-soft: #eef1ff;
+  --ot-surface-2: #fbfcfb;
+  --ot-ink: #1f2a24;
+  --ot-muted: #5a6861;
+  --ot-line: #e3e9e5;
+  --ot-line-strong: #cbd6cf;
+  --ot-accent: #097845;
+  --ot-accent-hover: #076a3d;
+  --ot-accent-soft: #e0f3e7;
   --ot-ok: #0f766e;
   --ot-ok-bg: #ccfbf1;
   --ot-danger: #be123c;
   --ot-danger-bg: #ffe4e6;
   --ot-warn-bg: #fff7ed;
-  --ot-focus: #6366f1;
+  --ot-focus: #097845;
   --ot-shadow-sm: 0 1px 2px rgb(15 23 42 / 6%);
   --ot-shadow: 0 1px 2px rgb(15 23 42 / 6%), 0 12px 32px rgb(15 23 42 / 8%);
   --ot-shadow-lg: 0 18px 48px rgb(15 23 42 / 14%);
-  --ot-rail-bg: #0f172a;
+  --ot-rail-bg: #20382d;
   --ot-rail-ink: #e2e8f0;
   --ot-radius-sm: 0.55rem;
   --ot-radius: 0.9rem;
@@ -31,85 +31,81 @@
   --ot-mono: ui-monospace, "SFMono-Regular", "Cascadia Code", "Noto Sans Mono", monospace;
   --ot-measure: 46rem;
   color-scheme: light;
-}
-
-@media (prefers-color-scheme: dark) {
-  html:not([data-theme-resolved="light"]) {
-    --ot-bg: #0b1120;
-    --ot-bg-accent: #0f172a;
-    --ot-surface: #111a2e;
-    --ot-surface-2: #0e1626;
-    --ot-ink: #e5e9f2;
-    --ot-muted: #94a3b8;
-    --ot-line: #1f2a3d;
-    --ot-line-strong: #2a3850;
-    --ot-accent: #818cf8;
-    --ot-accent-hover: #a5b4fc;
-    --ot-accent-soft: #1e1b4b;
-    --ot-ok: #5eead4;
-    --ot-ok-bg: #134e4a;
-    --ot-danger: #fda4af;
-    --ot-danger-bg: #4c0519;
-    --ot-warn-bg: #2a2113;
-    --ot-focus: #a5b4fc;
-    --ot-shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
-    --ot-shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 12px 32px rgb(0 0 0 / 30%);
-    --ot-shadow-lg: 0 18px 48px rgb(0 0 0 / 45%);
-    --ot-rail-bg: #070c17;
-    --ot-rail-ink: #e2e8f0;
-    color-scheme: dark;
-  }
+  --ot-surface-solid: #ffffff;
+  --ot-accent-2: #097845;
+  --ot-on-accent: #ffffff;
+  --ot-grad: #097845;
+  --ot-grad-soft: #e0f3e7;
+  --ot-glow: none;
+  --ot-blur: none;
+  --ot-radius-xl: 1.6rem;
+  --ot-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 html[data-theme-resolved="light"] {
-  --ot-bg: #f6f7f9;
-  --ot-bg-accent: #eceff3;
+  --ot-bg: #eef2ef;
   --ot-surface: #ffffff;
-  --ot-surface-2: #fbfcfe;
-  --ot-ink: #0f172a;
-  --ot-muted: #5b6675;
-  --ot-line: #e2e6ec;
-  --ot-line-strong: #cfd6e0;
-  --ot-accent: #4f46e5;
-  --ot-accent-hover: #4338ca;
-  --ot-accent-soft: #eef1ff;
-  --ot-ok: #0f766e;
-  --ot-ok-bg: #ccfbf1;
-  --ot-danger: #be123c;
-  --ot-danger-bg: #ffe4e6;
-  --ot-warn-bg: #fff7ed;
-  --ot-focus: #6366f1;
-  --ot-shadow-sm: 0 1px 2px rgb(15 23 42 / 6%);
-  --ot-shadow: 0 1px 2px rgb(15 23 42 / 6%), 0 12px 32px rgb(15 23 42 / 8%);
-  --ot-shadow-lg: 0 18px 48px rgb(15 23 42 / 14%);
-  --ot-rail-bg: #0f172a;
-  --ot-rail-ink: #e2e8f0;
+  --ot-surface-2: #fbfcfb;
+  --ot-accent-soft: #e0f3e7;
+  --ot-accent: #097845;
+  --ot-accent-hover: #076a3d;
+  --ot-ink: #1f2a24;
+  --ot-muted: #5a6861;
+  --ot-line: #e3e9e5;
+  --ot-line-strong: #cbd6cf;
+  --ot-focus: #097845;
+  --ot-on-accent: #ffffff;
   color-scheme: light;
 }
 
 html[data-theme-resolved="dark"] {
-  --ot-bg: #0b1120;
-  --ot-bg-accent: #0f172a;
-  --ot-surface: #111a2e;
-  --ot-surface-2: #0e1626;
-  --ot-ink: #e5e9f2;
-  --ot-muted: #94a3b8;
-  --ot-line: #1f2a3d;
-  --ot-line-strong: #2a3850;
-  --ot-accent: #818cf8;
-  --ot-accent-hover: #a5b4fc;
-  --ot-accent-soft: #1e1b4b;
+  --ot-bg: #121c17;
+  --ot-bg-accent: #20382d;
+  --ot-surface: #1b2821;
+  --ot-surface-2: #17231c;
+  --ot-ink: #e5eee8;
+  --ot-muted: #a9bbb0;
+  --ot-line: #34473b;
+  --ot-line-strong: #4a6252;
+  --ot-accent: #89d5b5;
+  --ot-accent-hover: #a4e3c5;
+  --ot-accent-soft: #233e30;
+  --ot-bg: #050812;
+  --ot-bg-accent: #0a1020;
+  --ot-surface: rgba(17,25,45,0.66);
+  --ot-surface-solid: #101a2e;
+  --ot-surface-2: #0c1426;
+  --ot-ink: #eef2ff;
+  --ot-muted: #98a6c3;
+  --ot-line: rgba(255,255,255,0.10);
+  --ot-line-strong: rgba(255,255,255,0.20);
+  --ot-accent: #8b7cff;
+  --ot-accent-2: #2ee6e9;
+  --ot-accent-hover: #a094ff;
+  --ot-accent-soft: rgba(139,124,255,0.18);
+  --ot-on-accent: #ffffff;
   --ot-ok: #5eead4;
-  --ot-ok-bg: #134e4a;
+  --ot-ok-bg: rgba(46,230,233,0.14);
   --ot-danger: #fda4af;
   --ot-danger-bg: #4c0519;
   --ot-warn-bg: #2a2113;
-  --ot-focus: #a5b4fc;
+  --ot-focus: #a4e3c5;
   --ot-shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
   --ot-shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 12px 32px rgb(0 0 0 / 30%);
   --ot-shadow-lg: 0 18px 48px rgb(0 0 0 / 45%);
-  --ot-rail-bg: #070c17;
+  --ot-rail-bg: #131e17;
   --ot-rail-ink: #e2e8f0;
+  --ot-danger-bg: rgba(253,164,175,0.14);
+  --ot-warn-bg: rgba(245,158,11,0.14);
+  --ot-focus: #a094ff;
+  --ot-grad: linear-gradient(135deg, #8b7cff 0%, #b388ff 45%, #2ee6e9 100%);
+  --ot-grad-soft: linear-gradient(135deg, rgba(139,124,255,0.22), rgba(46,230,233,0.16));
+  --ot-glow: 0 30px 90px rgba(139,124,255,0.35);
+  --ot-shadow-sm: 0 1px 2px rgba(0,0,0,0.40);
+  --ot-shadow: 0 1px 2px rgba(0,0,0,0.40), 0 24px 60px rgba(0,0,0,0.36);
+  --ot-shadow-lg: 0 36px 90px rgba(0,0,0,0.50);
+  --ot-rail-bg: rgba(4,7,15,0.92);
+  --ot-rail-ink: #eaf0ff;
   color-scheme: dark;
 }
 
@@ -528,6 +524,9 @@ button.link {
 #artifact-list,
 #member-list,
 #invite-list,
+#join-request-list,
+#directory-results,
+#api-key-list,
 #key-list,
 #connection-list,
 #conversation-list,
@@ -544,6 +543,9 @@ button.link {
 #artifact-list li,
 #member-list li,
 #invite-list li,
+#join-request-list li,
+#directory-results li,
+#api-key-list li,
 #key-list li,
 #connection-list li,
 #conversation-list li,
@@ -921,10 +923,10 @@ body.app-workspace .account-sub > button {
 ------------------------------------------------------------------- */
 :root { --ot-on-accent: #ffffff; }
 @media (prefers-color-scheme: dark) {
-  html:not([data-theme-resolved="light"]) { --ot-on-accent: #0b1120; }
+  html:not([data-theme-resolved="light"]) { --ot-on-accent: #121c17; }
 }
 html[data-theme-resolved="light"] { --ot-on-accent: #ffffff; }
-html[data-theme-resolved="dark"] { --ot-on-accent: #0b1120; }
+html[data-theme-resolved="dark"] { --ot-on-accent: #121c17; }
 
 body {
   font-size: 15px;
@@ -1031,24 +1033,171 @@ fieldset, .step {
   box-shadow: var(--ot-shadow-sm);
 }
 
-/* Dark rail in both themes; the previous rail reused --ot-ink and flipped
-   to a light bar in dark mode. */
-body.app-workspace > .app-rail {
-  background: var(--ot-rail-bg);
-  color: var(--ot-rail-ink);
-  width: 4.75rem;
-  box-shadow: inset -1px 0 rgb(255 255 255 / 6%);
-}
-body.app-workspace { grid-template-columns: 4.75rem minmax(0, 1fr); }
+/* Evidence-led shared workspace repair: quiet icon rail and inset app canvas.
+   Existing light/dark preferences remain the only theme authority. */
+:root { --ot-rail-width: 3.5rem; --ot-session-width: 18rem; --ot-space: .5rem; }
+body.app-workspace { grid-template-columns: var(--ot-rail-width) minmax(0, 1fr); height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; }
+body.app-workspace > .app-rail { width: auto; padding: .55rem .25rem; gap: .35rem; background: var(--ot-bg-accent); color: var(--ot-muted); box-shadow: none; }
 body.app-workspace > .app-rail > a,
 body.app-workspace > .app-rail > .rail-link,
-body.app-workspace > .app-rail .account-trigger {
-  color: var(--ot-rail-ink);
-  border-radius: 0.7rem;
-  font-weight: 560;
-  transition: background-color .16s ease, color .16s ease, transform .08s ease;
-}
+body.app-workspace > .app-rail .account-trigger { width: 2.6rem; min-height: 2.6rem; padding: .35rem; border: 0; border-radius: 50%; color: var(--ot-muted); box-shadow: none; }
 body.app-workspace > .app-rail > a:hover,
+body.app-workspace > .app-rail .account-trigger:hover { background: var(--ot-surface); }
+body.app-workspace > .app-rail > a[aria-current="page"] { background: var(--ot-accent-soft); color: var(--ot-accent-hover); }
+body.app-workspace > .app-rail .brand-mark { width: 2.25rem; min-height: 2.25rem; height: 2.25rem; background: var(--ot-accent); color: var(--ot-on-accent); font-size: .75rem; box-shadow: none; }
+.rail-label, .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+body.app-workspace > main { grid-row: 2; min-width: 0; overflow: auto; margin: 0 .4rem .4rem 0; border: 1px solid var(--ot-line); border-radius: .8rem; background: var(--ot-surface-2); }
+body.app-workspace > #status { grid-row: 1; }
+body.app-workspace > #status:empty { display: none; margin: 0; }
+body.app-workspace.chat-open { grid-template-columns: var(--ot-rail-width) var(--ot-session-width) minmax(0, 1fr); }
+body.app-workspace.chat-open > main { overflow: hidden; }
+body.app-workspace .page-top { border: 0; box-shadow: none; background: transparent; padding: .4rem 0 .85rem; }
+body.app-workspace .page-top h1 { font-size: 1.1rem; font-weight: 650; }
+body.app-workspace .account-menu { left: 2.6rem; background: var(--ot-surface); color: var(--ot-ink); border: 1px solid var(--ot-line); box-shadow: var(--ot-shadow-lg); }
+body.app-workspace button, body.app-workspace input, body.app-workspace select { accent-color: var(--ot-accent); }
+body.app-workspace input::placeholder, body.app-workspace textarea::placeholder { color: var(--ot-muted); opacity: 1; }
+body.app-workspace :focus-visible { outline: 2px solid var(--ot-focus); outline-offset: 3px; }
+body.app-workspace :is(h1,h2,h3,p,a,button,label) { overflow-wrap: anywhere; }
+@media (pointer: coarse) { body.app-workspace > .app-rail > a, body.app-workspace > .app-rail > .rail-link { min-height: 44px; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
+/* Keep foreground/background pairs together in hover/expanded states. */
+nav a[aria-current="page"], nav a[aria-current="page"]:hover { background: var(--ot-accent); color: var(--ot-on-accent); }
+body.app-workspace > .app-rail > a.brand-mark:hover { background: var(--ot-accent-hover); color: var(--ot-on-accent); }
+body.app-workspace > .app-rail .account-trigger[aria-expanded="true"],
+body.app-workspace > .app-rail .account-trigger[aria-expanded="true"]:hover { background: var(--ot-accent); color: var(--ot-on-accent); }
+.skip-link:hover, .skip-link:focus-visible { background: var(--ot-accent); color: var(--ot-on-accent); }
+body.app-workspace .account-menu { width: min(18rem, calc(100vw - 5rem)); max-height: calc(100dvh - 1rem); overflow-y: auto; }
+body.app-workspace #login-panel { width: min(24rem, calc(100% - 2rem)); box-sizing: border-box; }
+
+/* ------------------------------------------------------------------
+   Page parity layer (2026-11-19). Original CSS recreating the spatial
+   rhythm seen in private read-only Teamily captures: quiet page ground,
+   one white rounded canvas, 14px UI type, soft pill controls. No Teamily
+   pixels, icons, fonts or logos are used. */
+body.app-workspace { font-size: .875rem; line-height: 1.5; }
+body.app-workspace > main {
+  margin: .375rem .375rem .375rem 0;
+  border: 0;
+  border-radius: .875rem;
+  background: var(--ot-surface);
+  box-shadow: none;
+  outline: 1px solid var(--ot-line);
+}
+body.app-workspace :is(input[type="text"], input[type="search"], input[type="password"], input[type="url"], input[type="number"], select, textarea) {
+  font: inherit;
+  font-size: .875rem;
+  border-color: var(--ot-line-strong);
+  border-radius: .55rem;
+}
+body.app-workspace :is(button, .button) { font: inherit; font-size: .8125rem; }
+body.app-workspace h1 { font-size: 1.125rem; font-weight: 650; letter-spacing: 0; }
+body.app-workspace h2 { font-size: .95rem; font-weight: 600; letter-spacing: 0; }
+body.app-workspace .note { color: var(--ot-muted); font-size: .8125rem; }
+body.app-workspace details.gap-note > summary { color: var(--ot-muted); font-size: .75rem; cursor: pointer; }
+body.app-workspace > .app-rail { gap: .25rem; padding: .625rem .25rem; }
+body.app-workspace > .app-rail > a,
+body.app-workspace > .app-rail > .rail-link { width: 2.375rem; min-height: 2.375rem; border-radius: .7rem; }
+body.app-workspace > .app-rail > a svg { width: 19px; height: 19px; }
+body.app-workspace > .app-rail .brand-mark { border-radius: .7rem; margin-bottom: .625rem; }
+body.app-workspace > .app-rail #appearance-toggle { font-size: .6875rem; }
+/* Shared avatar tones (original pastel pairs). */
+.avatar[data-tone="1"], #conversation-list .avatar[data-tone="1"] { background: #e3f1fb; color: #1d5c86; }
+.avatar[data-tone="2"], #conversation-list .avatar[data-tone="2"] { background: #fdecd8; color: #8a4b12; }
+.avatar[data-tone="3"], #conversation-list .avatar[data-tone="3"] { background: #e5f5ea; color: #1f6b3f; }
+.avatar[data-tone="4"], #conversation-list .avatar[data-tone="4"] { background: #efe8fb; color: #5b3c91; }
+.avatar[data-tone="5"], #conversation-list .avatar[data-tone="5"] { background: #fde7ef; color: #8f2c52; }
+.avatar[data-tone="6"], #conversation-list .avatar[data-tone="6"] { background: #e6f3f4; color: #1f6168; }
+html[data-theme-resolved="dark"] .avatar[data-tone], html[data-theme-resolved="dark"] #conversation-list .avatar[data-tone] { background: var(--ot-accent-soft); color: var(--ot-ink); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+
+/* OpenTeamily original mark (not a Teamily or vendor logo).
+   An open ring with a companion node, used on the rail at the
+   same size and top alignment as the captured shell mark. */
+body.app-workspace > .app-rail .brand-mark {
+  width: 2.15rem;
+  min-width: 2.15rem;
+  min-height: 2.15rem;
+  height: 2.15rem;
+  margin: 0 0 0.7rem;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--ot-accent);
+  color: var(--ot-on-accent);
+  box-shadow: none;
+  overflow: hidden;
+}
+body.app-workspace > .app-rail .brand-mark .brand-glyph {
+  display: block;
+  width: 1.35rem;
+  height: 1.35rem;
+}
+html[data-theme-resolved="dark"] body.app-workspace > .app-rail > a.brand-mark:hover {
+  background: #1f6b4a;
+  color: #ffffff;
+}
+body.app-workspace > .app-rail > a.brand-mark:hover {
+  background: var(--ot-accent);
+  color: var(--ot-on-accent);
+}
+.brand-wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: inherit;
+  text-decoration: none;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+.brand-wordmark .brand-mark,
+.about-wordmark .about-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 50%;
+  background: #097845;
+  color: #ffffff;
+}
+.brand-wordmark-text { font-size: 1rem; font-weight: 700; letter-spacing: -0.03em; }
+
+/* Work thumbnails (shell/thumb.mjs): a scaled-down page drawn from the work's
+   own text, slides, board strokes or dashboard widgets. Original CSS only. */
+.has-thumb { position: relative; overflow: hidden; font-size: 0; color: transparent; }
+.has-thumb > .thumb, .has-thumb > .artifact-cover-img { position: absolute; inset: 0; }
+.artifact-cover-img { width: 100%; height: 100%; object-fit: cover; }
+.thumb { letter-spacing: normal; font-weight: 400; display: flex; align-items: flex-start; justify-content: center; padding: 10% 9% 0; color: #2b3530; font-size: 10px; line-height: 1.45; text-align: left; pointer-events: none; }
+.thumb p { margin: 0; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.thumb-page { width: 100%; height: 100%; padding: 9% 9% 0; background: #fff; border-radius: 6px 6px 0 0; box-shadow: 0 1px 2px rgb(15 23 42 / 8%), 0 6px 18px rgb(15 23 42 / 8%); overflow: hidden; }
+.thumb-heading { font-size: 12px; font-weight: 700; color: #1f2a24; margin-bottom: 5px !important; }
+.thumb-line { color: #4b5852; margin-bottom: 3px !important; }
+.thumb-browser { display: flex; gap: 3px; margin: -4% 0 7%; }
+.thumb-browser i { width: 5px; height: 5px; border-radius: 50%; background: #cfd8d3; }
+.thumb-slides { align-items: center; padding: 8%; }
+.thumb-slide { width: 100%; aspect-ratio: 16 / 9; padding: 7% 8%; background: #fff; border-radius: 6px; box-shadow: 0 1px 2px rgb(15 23 42 / 8%), 0 6px 18px rgb(15 23 42 / 10%); overflow: hidden; }
+.thumb-slide-title { font-size: 12px; font-weight: 700; color: #1f2a24; margin-bottom: 4px !important; -webkit-line-clamp: 1 !important; }
+.thumb-slide-bullets { margin: 0; padding-left: 12px; color: #4b5852; }
+.thumb-slide-bullets li { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.thumb-count { position: absolute; right: 8px; bottom: 6px; padding: 1px 6px; border-radius: 999px; background: rgb(31 42 36 / 72%); color: #fff; font-size: 10px; }
+.thumb-board { align-items: center; padding: 6%; background: #f7f9f8; background-image: radial-gradient(circle, #dfe6e2 1px, transparent 1.2px); background-size: 12px 12px; }
+.thumb-board-svg { width: 100%; height: 100%; }
+.thumb-dashboard { padding: 7%; }
+.thumb-dash { width: 100%; height: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.thumb-widget { min-width: 0; padding: 6px 7px; background: #fff; border-radius: 6px; box-shadow: 0 1px 2px rgb(15 23 42 / 8%); overflow: hidden; }
+.thumb-widget-title { font-size: 9px; color: #5a6861; -webkit-line-clamp: 1 !important; }
+.thumb-widget-value { font-size: 15px; font-weight: 700; color: #1f2a24; -webkit-line-clamp: 1 !important; }
+.thumb-bars { display: flex; align-items: flex-end; gap: 2px; height: 26px; margin-top: 3px; }
+.thumb-bars i { flex: 1; min-height: 2px; background: #3f9c6f; border-radius: 2px 2px 0 0; height: 10%; }
+.thumb-bars i[data-h="0"] { height: 4%; } .thumb-bars i[data-h="20"] { height: 20%; } .thumb-bars i[data-h="30"] { height: 30%; }
+.thumb-bars i[data-h="40"] { height: 40%; } .thumb-bars i[data-h="50"] { height: 50%; } .thumb-bars i[data-h="60"] { height: 60%; }
+.thumb-bars i[data-h="70"] { height: 70%; } .thumb-bars i[data-h="80"] { height: 80%; } .thumb-bars i[data-h="90"] { height: 90%; }
+.thumb-bars i[data-h="100"] { height: 100%; }
+.thumb-table-head { display: flex; gap: 4px; margin-top: 4px; font-size: 8px; font-weight: 650; color: #4b5852; }
+.thumb-table-head span { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.thumb-table-rows { display: grid; gap: 4px; margin-top: 4px; }
+.thumb-table-rows i { display: block; height: 2px; border-radius: 1px; background: #e3e9e5; }
+.thumb-empty { align-items: center; }
+.thumb-empty-label { font-size: 11px; color: #5a6861; }
 body.app-workspace > .app-rail .account-trigger:hover {
   background: rgb(255 255 255 / 9%);
 }
@@ -1070,6 +1219,196 @@ body.app-workspace .account-menu {
   box-shadow: var(--ot-shadow-lg);
 }
 
-body.app-workspace.chat-open {
-  grid-template-columns: 4.75rem 22rem minmax(0, 1fr);
+/* ------------------------------------------------------------------
+html[data-theme-resolved="dark"] Aurora Glass: a deeper visual layer over the neutral token system.
+   Self-written; no external fonts, html[data-theme-resolved="dark"] images or brand assets.
+------------------------------------------------------------------- */
+@keyframes ot-aurora{
+  0%   { transform: translate3d(-3%, -2%, 0) scale(1); }
+  50%  { transform: translate3d(2%, 3%, 0) scale(1.08); }
+  100% { transform: translate3d(4%, -1%, 0) scale(1.03); }
 }
+@keyframes ot-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}html[data-theme-resolved="dark"] body{
+  position: relative;
+  isolation: isolate;
+  font-size: 15px;
+  line-height: 1.6;
+  letter-spacing: 0.002em;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  background: var(--ot-bg);
+}html[data-theme-resolved="dark"] body::before{
+  content: '';
+  position: fixed;
+  inset: -18%;
+  z-index: -2;
+  pointer-events: none;
+  background:
+    radial-gradient(38% 42% at 12% 8%, rgba(109, 92, 255, 0.30), transparent 62%),
+    radial-gradient(34% 36% at 88% 12%, rgba(20, 200, 212, 0.24), transparent 62%),
+    radial-gradient(46% 46% at 72% 92%, rgba(255, 107, 213, 0.16), transparent 65%);
+  filter: blur(28px);
+  animation: ot-aurora 24s ease-in-out infinite alternate;
+}html[data-theme-resolved="dark"] body::before, html[data-theme-resolved="dark"] body.app-workspace::before{
+  background:
+    radial-gradient(42% 46% at 10% 6%, rgba(139, 124, 255, 0.38), transparent 62%),
+    radial-gradient(36% 38% at 90% 10%, rgba(46, 230, 233, 0.26), transparent 62%),
+    radial-gradient(50% 50% at 70% 94%, rgba(179, 136, 255, 0.24), transparent 65%);
+}
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme-resolved="light"]) body::before {
+    background:
+      radial-gradient(42% 46% at 10% 6%, rgba(139, 124, 255, 0.38), transparent 62%),
+      radial-gradient(36% 38% at 90% 10%, rgba(46, 230, 233, 0.26), transparent 62%),
+      radial-gradient(50% 50% at 70% 94%, rgba(179, 136, 255, 0.24), transparent 65%);
+  }
+}html[data-theme-resolved="dark"] body::after{
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: radial-gradient(var(--ot-line-strong) 1px, transparent 1px);
+  background-size: 24px 24px;
+  opacity: 0.30;
+  mask-image: radial-gradient(circle at 50% 10%, #000 0%, transparent 78%);
+  -webkit-mask-image: radial-gradient(circle at 50% 10%, #000 0%, transparent 78%);
+}html[data-theme-resolved="dark"] h1, html[data-theme-resolved="dark"] h2, html[data-theme-resolved="dark"] h3{ letter-spacing: -0.015em; }html[data-theme-resolved="dark"] body.app-workspace .page-top h1, html[data-theme-resolved="dark"] #login-panel h2{
+  background: var(--ot-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}html[data-theme-resolved="dark"] #login-panel h2::before{
+  content: '';
+  display: block;
+  width: 2.6rem;
+  height: 2.6rem;
+  margin-bottom: 0.9rem;
+  border-radius: 0.9rem;
+  background: var(--ot-grad);
+  box-shadow: var(--ot-glow);
+}html[data-theme-resolved="dark"] a{ color: var(--ot-accent); }html[data-theme-resolved="dark"] ::selection{ background: rgba(109, 92, 255, 0.28); }html[data-theme-resolved="dark"] *{
+  scrollbar-width: thin;
+  scrollbar-color: var(--ot-line-strong) transparent;
+}html[data-theme-resolved="dark"] *::-webkit-scrollbar{ width: 10px; height: 10px; }html[data-theme-resolved="dark"] *::-webkit-scrollbar-thumb{
+  background: var(--ot-line-strong);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}html[data-theme-resolved="dark"] *::-webkit-scrollbar-thumb:hover{ background: var(--ot-accent); background-clip: padding-box; }html[data-theme-resolved="dark"] button{
+  border-radius: var(--ot-radius-sm);
+  border: 1px solid var(--ot-line);
+  background: var(--ot-surface-solid);
+  color: var(--ot-ink);
+  box-shadow: var(--ot-shadow-sm);
+  transition: transform .18s var(--ot-ease), box-shadow .18s var(--ot-ease),
+              background-color .18s var(--ot-ease), border-color .18s var(--ot-ease);
+}html[data-theme-resolved="dark"] button:hover{
+  transform: translateY(-1px);
+  box-shadow: var(--ot-shadow);
+  background: var(--ot-surface-2);
+  filter: none;
+}html[data-theme-resolved="dark"] button:active{ transform: translateY(0) scale(0.995); }html[data-theme-resolved="dark"] button[type="submit"], html[data-theme-resolved="dark"] button.primary{
+  background: var(--ot-grad);
+  border-color: transparent;
+  color: var(--ot-on-accent);
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--ot-accent) 35%, transparent);
+}html[data-theme-resolved="dark"] button[type="submit"]:hover, html[data-theme-resolved="dark"] button.primary:hover{
+  background: var(--ot-grad);
+  box-shadow: 0 16px 40px color-mix(in srgb, var(--ot-accent) 48%, transparent);
+}html[data-theme-resolved="dark"] button.link{ background: none; border: 0; box-shadow: none; color: var(--ot-accent); }html[data-theme-resolved="dark"] button.link:hover{ background: none; box-shadow: none; transform: none; }html[data-theme-resolved="dark"] button.secondary{
+  background: var(--ot-surface);
+  border-color: var(--ot-line);
+  color: var(--ot-ink);
+  box-shadow: var(--ot-shadow-sm);
+}html[data-theme-resolved="dark"] input[type="text"], html[data-theme-resolved="dark"] input[type="password"], html[data-theme-resolved="dark"] input[type="date"], html[data-theme-resolved="dark"] input[type="time"], html[data-theme-resolved="dark"] input[type="number"], html[data-theme-resolved="dark"] input[type="email"], html[data-theme-resolved="dark"] input[type="search"], html[data-theme-resolved="dark"] input[type="url"], html[data-theme-resolved="dark"] input[type="datetime-local"], html[data-theme-resolved="dark"] select, html[data-theme-resolved="dark"] textarea{
+  background: var(--ot-surface-solid);
+  border-color: var(--ot-line);
+  border-radius: var(--ot-radius-sm);
+  padding: 0.55rem 0.75rem;
+  transition: border-color .18s var(--ot-ease), box-shadow .18s var(--ot-ease);
+}html[data-theme-resolved="dark"] input:hover, html[data-theme-resolved="dark"] select:hover, html[data-theme-resolved="dark"] textarea:hover{ border-color: var(--ot-line-strong); }html[data-theme-resolved="dark"] input:focus-visible, html[data-theme-resolved="dark"] select:focus-visible, html[data-theme-resolved="dark"] textarea:focus-visible{
+  outline: none;
+  border-color: var(--ot-accent);
+  box-shadow: 0 0 0 4px var(--ot-accent-soft), 0 8px 28px color-mix(in srgb, var(--ot-accent) 18%, transparent);
+}html[data-theme-resolved="dark"] button:focus-visible, html[data-theme-resolved="dark"] a:focus-visible, html[data-theme-resolved="dark"] .skip-link:focus-visible{
+  outline: 2px solid var(--ot-focus);
+  outline-offset: 3px;
+  border-radius: var(--ot-radius-sm);
+}html[data-theme-resolved="dark"] fieldset, html[data-theme-resolved="dark"] .step, html[data-theme-resolved="dark"] .profile-card, html[data-theme-resolved="dark"] .onboarding-card, html[data-theme-resolved="dark"] .meeting-card, html[data-theme-resolved="dark"] .chat-top, html[data-theme-resolved="dark"] .composer, html[data-theme-resolved="dark"] .app-rail .account-menu, html[data-theme-resolved="dark"] #settings-panel > section, html[data-theme-resolved="dark"] .memory-dir, html[data-theme-resolved="dark"] .overview-panel, html[data-theme-resolved="dark"] .actions-panel, html[data-theme-resolved="dark"] #filter-panel, html[data-theme-resolved="dark"] .slide-card, html[data-theme-resolved="dark"] .catalog article, html[data-theme-resolved="dark"] .artifact-row, html[data-theme-resolved="dark"] #artifact-list li{
+  background: var(--ot-surface);
+  border-color: var(--ot-line);
+  border-radius: var(--ot-radius-lg);
+  box-shadow: var(--ot-shadow-sm);
+  -webkit-backdrop-filter: var(--ot-blur);
+  backdrop-filter: var(--ot-blur);
+}html[data-theme-resolved="dark"] .note, html[data-theme-resolved="dark"] p.note:not(header > .note){ color: var(--ot-muted); }html[data-theme-resolved="dark"] [id$="-empty"]:not([hidden]){
+  color: var(--ot-muted);
+  background: var(--ot-grad-soft);
+  border: 1px dashed var(--ot-line-strong);
+  border-radius: var(--ot-radius-lg);
+  padding: 1rem;
+}html[data-theme-resolved="dark"] #status:not(:empty){
+  border-radius: 999px;
+  border: 1px solid var(--ot-line);
+  background: var(--ot-surface);
+  box-shadow: var(--ot-shadow-sm);
+  -webkit-backdrop-filter: var(--ot-blur);
+  backdrop-filter: var(--ot-blur);
+}html[data-theme-resolved="dark"] body.app-workspace > .app-rail .brand-mark{
+  background: var(--ot-grad);
+  color: #ffffff;
+  border-radius: 0.85rem;
+  box-shadow: var(--ot-glow);
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}html[data-theme-resolved="dark"] body.app-workspace > .app-rail > a, html[data-theme-resolved="dark"] body.app-workspace > .app-rail > .rail-link, html[data-theme-resolved="dark"] body.app-workspace > .app-rail .account-trigger{
+  color: var(--ot-rail-ink);
+  border-radius: 0.8rem;
+  font-weight: 560;
+  transition: background-color .18s var(--ot-ease), color .18s var(--ot-ease),
+              transform .18s var(--ot-ease);
+}html[data-theme-resolved="dark"] body.app-workspace > .app-rail > a:hover, html[data-theme-resolved="dark"] body.app-workspace > .app-rail .account-trigger:hover{
+  background: rgba(255, 255, 255, 0.09);
+  transform: translateY(-1px);
+}html[data-theme-resolved="dark"] body.app-workspace > .app-rail > a[aria-current="page"]{
+  background: var(--ot-grad);
+  color: #ffffff;
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--ot-accent) 55%, transparent);
+}html[data-theme-resolved="dark"] #login-panel, html[data-theme-resolved="dark"] body.app-workspace #login-panel{
+  margin: clamp(2rem, 9vh, 5rem) auto;
+  max-width: 26rem;
+  padding: 2rem 2rem 2.2rem;
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius-xl);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--ot-surface-solid) 82%, transparent), var(--ot-surface));
+  box-shadow: var(--ot-shadow-lg), var(--ot-glow);
+  -webkit-backdrop-filter: var(--ot-blur);
+  backdrop-filter: var(--ot-blur);
+  animation: ot-rise .5s var(--ot-ease) both;
+}html[data-theme-resolved="dark"] #login-panel h2{ font-size: 1.7rem; margin: 0 0 1.1rem; }html[data-theme-resolved="dark"] #login-panel form{ gap: 0.9rem; }html[data-theme-resolved="dark"] #login-panel input{ width: 100%; }html[data-theme-resolved="dark"] #login-panel button[type="submit"]{ width: 100%; padding: 0.7rem 1rem; border-radius: var(--ot-radius-sm); }html[data-theme-resolved="dark"] .app-rail .account-menu{
+  border-radius: var(--ot-radius-lg);
+  box-shadow: var(--ot-shadow-lg);
+  background: var(--ot-surface-solid);
+}
+
+@media (prefers-reduced-motion: reduce) {html[data-theme-resolved="dark"] body::before{ animation: none; }html[data-theme-resolved="dark"] *, html[data-theme-resolved="dark"] *::before, html[data-theme-resolved="dark"] *::after{
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}
+
+/* Content-derived document thumbnail structure, not invented website screenshots. */
+.thumb-document .thumb-page { font-family: inherit; }
+.thumb-block { margin: 0 0 .4rem; font-size: .55rem; line-height: 1.55; overflow-wrap: anywhere; }
+.thumb-block-heading { margin-top: .35rem; font-size: .7rem; line-height: 1.35; font-weight: 700; }
+.thumb-block-list { padding-left: .65rem; position: relative; }
+.thumb-block-list::before { content: '•'; position: absolute; left: .1rem; }
+.thumb-block-code { padding: .25rem .35rem; background: #f0f3f1; border-radius: .2rem; font-family: monospace; }
+.thumb-block-quote { padding: .25rem .35rem; background: #edf6f1; border-radius: .2rem; color: #40574b; }
+.artifact-bookmark[aria-pressed="true"] { color: var(--ot-accent); background: var(--ot-accent-soft); }
+.artifact-bookmark[aria-pressed="true"] svg { fill: currentColor; }

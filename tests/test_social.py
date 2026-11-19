@@ -225,3 +225,46 @@ class SocialMessengerTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+    def test_unread_is_per_user_and_read_ack_is_snapshot_bounded(self):
+        created = self.create(self.alice, 'dm', [self.bob_id])
+        cid = created['body']['conversation']['id']
+        base = self.base() + '/' + cid
+        def send(client, key):
+            return client.call('POST', base + '/messages', {'body': key},
+                               {'HTTP_IDEMPOTENCY_KEY': key})['body']['message']['id']
+        def unread(client):
+            return client.call('GET', self.base())['body']['items'][0]['unread_count']
+        first = send(self.alice, 'unread-message-0001')
+        self.assertEqual(unread(self.alice), 0)
+        self.assertEqual(unread(self.bob), 1)
+        # Reading a snapshot is read-only and does not acknowledge it.
+        self.assertEqual(self.bob.call('GET', base)['body']['conversation']['unread_count'], 1)
+        self.assertEqual(unread(self.bob), 1)
+        second = send(self.alice, 'unread-message-0002')
+        ack = self.bob.call('POST', base + '/read', {'message_id': first})
+        self.assertEqual(ack['status'], 200, ack)
+        self.assertEqual(ack['body']['unread_count'], 1)
+        self.assertEqual(self.bob.call('POST', base + '/read', {'message_id': second})['body']['unread_count'], 0)
+        # Older acknowledgements cannot move the cursor backwards.
+        self.assertEqual(self.bob.call('POST', base + '/read', {'message_id': first})['body']['unread_count'], 0)
+        send(self.bob, 'unread-message-0003')
+        self.assertEqual(unread(self.alice), 1)
+        self.assertEqual(unread(self.bob), 0)
+        # Cursor persists across a new App with the same private SQLite store.
+        self.bob.app = App(self.app.store, Config(ORIGIN, allow_registration=True), clock=lambda: self.now)
+        self.assertEqual(unread(self.bob), 0)
+
+    def test_read_ack_permissions_csrf_and_cross_conversation_ids(self):
+        cid = self.create(self.alice, 'dm', [self.bob_id])['body']['conversation']['id']
+        base = self.base() + '/' + cid
+        sent = self.alice.call('POST', base + '/messages', {'body': 'private'},
+                               {'HTTP_IDEMPOTENCY_KEY': 'unread-private-0001'})['body']['message']['id']
+        for client in (self.eve, self.carol):
+            self.assertEqual(client.call('POST', base + '/read', {'message_id': sent})['status'], 404)
+        self.assertEqual(self.bob.call('POST', base + '/read', {'message_id': sent}, csrf=False)['status'], 403)
+        self.assertEqual(self.bob.call('POST', base + '/read', {'message_id': sent}, origin='https://evil.test')['status'], 403)
+        self.assertEqual(self.bob.call('POST', base + '/read', {'message_id': 'bad'})['status'], 400)
+        other = self.create(self.alice, 'dm', [self.carol_id], key='unread-other-create')['body']['conversation']['id']
+        self.assertEqual(self.alice.call('POST', self.base() + '/' + other + '/read', {'message_id': sent})['status'], 404)

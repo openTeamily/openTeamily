@@ -7,42 +7,45 @@
   <title>聊天 · OpenTeamily</title>
   <link rel="stylesheet" href="/shell/app.css">
   <link rel="stylesheet" href="/chat/app.css">
+  <link rel="stylesheet" href="/look/app.css">
   <script type="module" src="/shell/app.mjs"></script>
   <script type="module" src="/chat/app.mjs"></script>
 </head>
 <body class="app-workspace chat-open">
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
-    <a class="brand-mark" href="/chat" title="OpenTeamily / FlyBot">FB</a>
-    <a href="/chat" title="聊天">聊天</a>
-    <a href="/agents" title="智能体">智能体</a>
-    <a href="/automations" title="自动化">自动化</a>
-    <a href="/memory" title="记忆">记忆</a>
-    <a href="/space" title="作品">作品</a>
-    <a href="/discover" title="发现">发现</a>
+    <a class="brand-mark" href="/chat" title="OpenTeamily" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
+    <a href="/chat" title="聊天" aria-label="聊天"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H9l-5 4V4Z"/></svg><span class="rail-label">聊天</span></a>
+    <a href="/agents" title="智能体" aria-label="智能体"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14v12H5z M9 3h6 M12 3v4 M8 12h1 M15 12h1 M9 16h6"/></svg><span class="rail-label">智能体</span></a>
+        <a href="/skills" title="技能" aria-label="技能"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Z M8.5 10.5h7 M8.5 14h4.5"/></svg><span class="rail-label">技能</span></a>
+<a href="/automations" title="自动化" aria-label="自动化"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg><span class="rail-label">自动化</span></a>
+    <a href="/memory" title="记忆" aria-label="记忆"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4a4 4 0 0 0-4 4v8a4 4 0 0 0 4 4 M16 4a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4 M8 8h8 M8 12h8 M8 16h8 M12 4v16"/></svg><span class="rail-label">记忆</span></a>
+    <a href="/space" title="作品" aria-label="作品"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg><span class="rail-label">作品</span></a>
+    <a href="/meetings" title="会议" aria-label="会议"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v14H4z M8 3v4 M16 3v4 M4 10h16"/></svg><span class="rail-label">会议</span></a>
+    <a href="/discover" title="发现" aria-label="发现"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg><span class="rail-label">发现</span></a>
     <span class="rail-spacer"></span>
-    <a href="/profile" class="rail-signed-in" hidden title="我的资料">我</a>
+    <a href="/profile" class="rail-signed-in" hidden title="我的资料" aria-label="我"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7a4 4 0 1 0 8 0 4 4 0 0 0-8 0 M4 21v-2a8 8 0 0 1 16 0v2"/></svg><span class="rail-label">我</span></a>
     <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换浅色或深色。会写入已有外观设置；按钮在深色下显示「深色」。点击后的标签变化未经 Teamily 核实。">浅色</button>
-    <a href="/download" title="下载">下载</a>
+    <a href="/download" title="下载" aria-label="下载"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12 m-5-5 5 5 5-5 M4 16v5h16v-5"/></svg><span class="rail-label">下载</span></a>
     <div class="account-slot" hidden>
       <button type="button" id="account-menu-button" class="account-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="账户菜单">账户</button>
       <div id="account-menu" class="account-menu" role="menu" hidden>
         <p id="account-identity" class="account-identity"></p>
-        <a href="/profile" role="menuitem">查看我的资料</a>
+        <a href="/profile" role="menuitem" aria-label="查看我的资料">查看我的资料</a>
         <a href="/team" role="menuitem">创建团队</a>
         <div class="account-sub">
           <button type="button" id="help-menu-button" aria-expanded="false" aria-controls="help-menu">帮助</button>
           <div id="help-menu" hidden>
             <button type="button" disabled title="未实现：还没有 OpenTeamily 帮助中心页">帮助中心</button>
             <a href="/guide" role="menuitem">功能指引</a>
-            <a href="/download" role="menuitem">下载</a>
+            <a href="/download" role="menuitem" aria-label="下载">下载</a>
             <a href="/settings#send-shortcut" role="menuitem">快捷键</a>
             <button type="button" disabled title="未实现：还没有 OpenTeamily 服务条款页">服务条款</button>
             <button type="button" disabled title="未实现：还没有 OpenTeamily 隐私政策页">隐私政策</button>
             <a href="https://github.com/openTeamily/openTeamily/issues" rel="noreferrer" target="_blank" role="menuitem" title="指向本仓库的 issue 列表，不是 Teamily 的联系邮箱">报告问题</a>
           </div>
         </div>
-        <a href="/settings" role="menuitem">所有设置</a>
+        <a href="/settings" role="menuitem" aria-label="所有设置">所有设置</a>
         <form id="logout-form" method="post" action="/v1/auth/logout">
           <button type="submit">退出登录</button>
         </form>
@@ -52,9 +55,13 @@
   <section id="session-pane" class="session-pane">
     <div class="session-toolbar">
       <button type="button" id="search-close" hidden title="关闭搜索">‹</button>
-      <button type="button" id="session-filter" class="toolbar-icon" disabled title="未实现：会话筛选（全部/群聊/单聊/已读/未读）" aria-label="筛选">
+      <button type="button" id="session-filter" class="toolbar-icon" title="会话筛选" aria-label="筛选">
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 6h16v2H4V6zm3 5h10v2H7v-2zm3 5h4v2h-4v-2z"/></svg>
-      </button>
+      </button><button type="button" id="notifications-toggle" class="toolbar-icon" aria-expanded="false" aria-controls="notifications-panel" title="通知：在群聊或单聊里被 @ 提及" aria-label="通知">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3a6 6 0 0 0-6 6v3.6L4.3 16h15.4L18 12.6V9a6 6 0 0 0-6-6zm-2.2 15a2.3 2.3 0 0 0 4.4 0H9.8z"/></svg>
+        <span id="notification-count" class="unread-badge" hidden></span>
+      </button><label id="session-filter-label" hidden>会话类型
+      <select id="session-filter-value"><option value="all">全部</option><option value="group">群聊</option><option value="dm">单聊</option><option value="unread">未读</option><option value="read">已读</option><option value="pinned">已置顶（单聊/群聊）</option></select></label>
       <label class="session-search">
         <span class="visually-hidden">搜索</span>
         <span class="search-icon" aria-hidden="true">
@@ -65,14 +72,14 @@
       <div class="compose-menu">
         <button type="button" id="new-conversation" class="toolbar-add" aria-haspopup="menu" aria-expanded="false" aria-controls="compose-menu" title="创建" aria-label="创建">+</button>
         <div id="compose-menu" role="menu" hidden>
-          <a href="/agents" role="menuitem">创建智能体</a>
-          <button type="button" role="menuitem" id="compose-new-group">新建群组</button>
-          <button type="button" role="menuitem" id="compose-add-contact">添加联系人</button>
-          <a href="/space" role="menuitem">创建 Artifacts</a>
-          <a href="/automations" role="menuitem">创建自动化</a>
-          <button type="button" role="menuitem" disabled title="未实现：还没有第三方智能体接入">创建第三方智能体</button>
-          <button type="button" role="menuitem" disabled title="未实现：还没有视频会议">发起视频会议</button>
-          <button type="button" role="menuitem" disabled title="未实现：还没有视频会议">加入视频会议</button>
+          <a href="/agents" role="menuitem"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 14 10 M14 4v2 M18 8h2 M17 5l1-1 M10 6l1 1 M17 11l1 1"/></svg>创建智能体</a>
+          <button type="button" role="menuitem" id="compose-new-group"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6 M16 4.5a3.5 3.5 0 0 1 0 7 M18 14c2 .8 3 2.8 3 6"/></svg>新建群组</button>
+          <button type="button" role="menuitem" id="compose-add-contact"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 4.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z M3 20c0-3.3 3-6 7-6 1.5 0 2.8.4 4 1 M18 14v6 M15 17h6"/></svg>添加联系人</button>
+          <a href="/space" role="menuitem"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h6.5v6.5H4z M13.5 4H20v6.5h-6.5z M4 13.5h6.5V20H4z M13.5 13.5H20V20h-6.5z"/></svg>创建 Artifacts</a>
+          <a href="/automations" role="menuitem"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h3 M4 12h3 M4 18h3 M11 6h9 M11 12h9 M11 18h9"/></svg>创建自动化</a>
+          <button type="button" role="menuitem" disabled title="未实现：还没有第三方智能体接入"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h14v11H5z M9 4h6 M12 4v4 M9 13h1 M14 13h1"/></svg>创建第三方智能体</button>
+          <button type="button" role="menuitem" disabled title="未实现：还没有视频会议"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h13v12H3z M16 10l5-3v10l-5-3"/></svg>发起视频会议</button>
+          <button type="button" role="menuitem" disabled title="未实现：还没有视频会议"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h13v12H3z M16 10l5-3v10l-5-3"/></svg>加入视频会议</button>
         </div>
       </div>
     </div>
@@ -80,6 +87,15 @@
       <select id="workspace"></select>
     </label>
     <p id="whoami"></p>
+    <section id="notifications-panel" class="notifications-panel" hidden aria-labelledby="notifications-heading">
+      <div class="notifications-head">
+        <h2 id="notifications-heading">通知</h2>
+        <button type="button" id="notifications-read-all" disabled>全部已读</button>
+      </div>
+      <p class="note">包含会话里对你的 @ 提及，以及你在群里请求的智能体任务完成情况；每 30 秒刷新一次。智能体单聊未读和服务器推送尚未接通。</p>
+      <ul id="notification-list"></ul>
+      <p id="notifications-empty" class="note" hidden>暂无通知（@提及和智能体任务完成）。</p>
+    </section>
     <section id="search-panel" hidden>
       <div class="search-tabs" role="tablist" aria-label="搜索范围">
         <button type="button" role="tab" data-search-tab="all" aria-selected="true">全部</button>
@@ -96,6 +112,7 @@
       <p id="search-source-note" class="note">以下是当前工作区里已有的内容，不是站外推荐。</p>
       <div id="search-results"></div>
       <p id="search-empty" class="note" hidden></p>
+      <button type="button" id="search-more" class="search-more" hidden>加载更多</button>
     </section>
     <section class="session-group" id="pinned-group" hidden>
       <h2>置顶</h2>
@@ -120,7 +137,12 @@
             AI 智能体团队
           </button>
         </div>
-        <p id="compose-team-note" class="note" hidden>未接通：还没有智能体团队模板或创建接口，不能在这个模式下创建群组。</p>
+        <p id="compose-team-note" class="note" hidden>选择一个团队模板：会在当前工作区新建（同名则复用）三个智能体，并和你一起组成群组。智能体只在你明确请求时回复；需要所有者或管理员权限。</p>
+        <fieldset id="compose-team-templates" hidden>
+          <legend>团队模板</legend>
+          <div id="team-template-choices" class="member-choices"></div>
+          <p id="team-templates-empty" class="note" hidden>无法读取团队模板。</p>
+        </fieldset>
         <label id="compose-title-label">群组名称 <input id="compose-title" maxlength="80" autocomplete="off" placeholder="输入群组名称（可选）"></label>
         <div id="compose-member-picker">
           <div id="compose-member-tools" class="compose-member-tools">
@@ -157,20 +179,108 @@
   <section id="main-panel" hidden>
     <header class="chat-top">
       <div class="chat-identity">
+        <span id="chat-avatar-stack" class="chat-avatar-stack" hidden></span>
         <span id="chat-avatar" class="avatar" hidden></span>
-        <h1 id="chat-title">聊天</h1>
+        <span class="chat-identity-text"><h1 id="chat-title">聊天</h1><span id="chat-subtitle" class="chat-subtitle" hidden></span></span>
       </div>
       <div class="chat-actions">
-        <button type="button" disabled title="未实现：邀请">邀请</button>
-        <button type="button" disabled title="未实现：语音或视频通话">通话</button>
-        <button type="button" id="message-search" title="搜索消息">搜索</button>
+        <button type="button" id="chat-back" title="返回会话列表" aria-label="返回会话列表">‹</button>
+        <button type="button" id="chat-invite-unavailable" disabled title="未实现：邀请">邀请</button>
+        <button type="button" id="chat-invite" hidden aria-expanded="false" aria-controls="chat-invite-panel" title="为当前工作区生成邀请链接（所有者或管理员）">邀请</button>
+        <button type="button" id="multi-select-toggle" hidden aria-pressed="false" title="选择多条消息后转发">多选</button>
+        <button type="button" disabled title="未实现：语音或视频通话" aria-label="通话（尚未实现）"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h3l2 5-3 2a14 14 0 0 0 6 6l2-3 5 2v3a3 3 0 0 1-3 3C9 20 4 15 3 6a3 3 0 0 1 3-3Z"/></svg><span class="sr-only">通话</span></button>
+        <button type="button" id="pin-conversation" hidden>置顶会话</button>
+        <button type="button" id="conversation-search-open" class="icon-action" title="搜索当前会话" aria-label="搜索当前会话"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 10a6 6 0 1 0-12 0 6 6 0 0 0 12 0Z m-1 5 6 6"/></svg><span class="sr-only">会话内搜索</span></button>
+        <button type="button" id="message-search" class="icon-action" title="在侧栏搜索消息" aria-label="在侧栏搜索消息"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18v16H3z M9 4v16 M13 9h5 M13 13h4"/></svg><span class="sr-only">搜索</span></button>
+        <button type="button" id="group-info-toggle" class="icon-action" hidden aria-expanded="false" aria-controls="group-info-panel" title="群信息" aria-label="群信息"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z M15 5v14"/></svg><span class="sr-only">群信息</span></button>
         <a id="open-agent-dir" href="/agents">资料</a>
       </div>
     </header>
-    <p id="social-agent-members" class="gap-note" hidden></p>
+    <aside id="group-info-panel" class="group-info" hidden aria-labelledby="group-info-title">
+      <button type="button" id="group-info-close" class="group-info-close" aria-label="关闭群信息">×</button>
+      <div class="group-info-head">
+        <span id="group-info-avatar" class="group-info-avatar" aria-hidden="true"></span>
+        <h2 id="group-info-title">群信息</h2>
+        <p id="group-info-count" class="group-info-count"></p>
+      </div>
+      <button type="button" id="group-info-search" class="group-info-row group-info-search">搜索聊天记录</button>
+      <section class="group-info-card" aria-labelledby="group-info-notice-heading">
+        <div class="group-info-card-head"><h3 id="group-info-notice-heading">群公告</h3><button type="button" class="group-info-link" disabled title="未接通：还没有群公告接口">发布</button></div>
+        <p class="group-info-sub">暂无群公告。</p>
+      </section>
+      <section class="group-info-card group-info-list" aria-label="通话">
+        <button type="button" class="group-info-row" disabled title="未接通：还没有视频通话">视频通话<span class="group-info-tag">未接通</span></button>
+        <button type="button" class="group-info-row" disabled title="未接通：还没有语音通话">语音通话<span class="group-info-tag">未接通</span></button>
+      </section>
+      <section class="group-info-card group-info-list" aria-label="群设置">
+        <div class="group-info-toggle-row"><span><strong>Agent 主动性</strong><small>未接通：群内自动回复尚未实现，只能明确请求一次回复。</small></span><button type="button" role="switch" aria-checked="false" disabled class="group-info-switch" aria-label="Agent 主动性（未接通）"></button></div>
+        <div class="group-info-toggle-row"><span><strong>自动翻译</strong><small>未接通：没有翻译服务。</small></span><button type="button" role="switch" aria-checked="false" disabled class="group-info-switch" aria-label="自动翻译（未接通）"></button></div>
+        <div class="group-info-toggle-row"><span><strong>消息免打扰</strong><small>未接通。</small></span><button type="button" role="switch" aria-checked="false" disabled class="group-info-switch" aria-label="消息免打扰（未接通）"></button></div>
+        <div class="group-info-toggle-row"><span><strong>置顶聊天</strong></span><button type="button" role="switch" aria-checked="false" id="group-info-pin" class="group-info-switch" aria-label="置顶聊天"></button></div>
+      </section>
+      <section class="group-info-card" aria-label="成员">
+        <div class="group-info-tabs" role="tablist">
+          <button type="button" role="tab" id="group-info-tab-agents" aria-selected="true" aria-controls="group-info-agents"></button>
+          <button type="button" role="tab" id="group-info-tab-people" aria-selected="false" aria-controls="group-info-people"></button>
+        </div>
+        <ul id="group-info-agents" class="group-info-members" role="tabpanel" aria-labelledby="group-info-tab-agents"></ul>
+        <ul id="group-info-people" class="group-info-members" role="tabpanel" aria-labelledby="group-info-tab-people" hidden></ul>
+      </section>
+    </aside>
+    <div id="message-context-menu" class="message-menu" role="menu" aria-label="消息操作" hidden>
+      <div class="message-menu-reactions" id="message-menu-reactions"></div>
+      <button type="button" role="menuitem" data-menu="reply">回复</button>
+      <button type="button" role="menuitem" data-menu="save">保存到资料空间</button>
+      <button type="button" role="menuitem" data-menu="translate" disabled title="未接通：没有翻译服务">翻译</button>
+      <button type="button" role="menuitem" data-menu="copy">复制</button>
+      <button type="button" role="menuitem" data-menu="forward">转发</button>
+      <button type="button" role="menuitem" data-menu="pin">置顶</button>
+      <button type="button" role="menuitem" data-menu="select">选择消息</button>
+      <hr>
+      <button type="button" role="menuitem" data-menu="edit">编辑</button>
+      <button type="button" role="menuitem" data-menu="retract">撤回</button>
+      <button type="button" role="menuitem" data-menu="delete" class="message-menu-danger" disabled title="未接通：还没有删除消息接口">删除</button>
+    </div>
+    <section id="conversation-search-panel" hidden aria-label="会话内搜索">
+      <form id="conversation-search-form"><label><span class="sr-only">搜索当前会话</span><input id="conversation-search-query" type="search" maxlength="80" placeholder="搜索当前会话" autocomplete="off"></label><button type="submit">搜索</button><button type="button" id="conversation-search-close" aria-label="关闭搜索">×</button></form>
+      <p class="conversation-search-scope">消息 <span class="conversation-search-scope-note">· 资料、照片和文件搜索尚未接通</span></p>
+      <p id="conversation-search-status" role="status"></p><ul id="conversation-search-results"></ul><button type="button" id="conversation-search-more" hidden>加载更多</button>
+    </section>
+    <p id="social-agent-members" class="gap-note group-agent-note" hidden></p>
+    <section id="pinned-messages" class="chat-strip" hidden aria-labelledby="pinned-messages-heading">
+      <h2 id="pinned-messages-heading">置顶消息</h2>
+      <ul id="pinned-message-list"></ul>
+    </section>
+    <section id="chat-invite-panel" class="chat-strip" hidden aria-labelledby="chat-invite-heading">
+      <h2 id="chat-invite-heading">邀请加入工作区</h2>
+      <form id="chat-invite-form">
+        <label class="check-row"><input type="checkbox" id="chat-invite-approval" checked> 加入前需要审批</label>
+        <button type="submit">生成邀请令牌</button>
+        <button type="button" id="chat-invite-close">关闭</button>
+      </form>
+      <p id="chat-invite-result" class="note" role="status"></p>
+      <p class="note">令牌只显示一次；对方在「成员」页接受。审批在「成员」页处理。不会发送任何外部消息。</p>
+    </section>
+    <section id="forward-bar" class="chat-strip" hidden aria-label="转发所选消息">
+      <span id="forward-count">已选 0 条</span>
+      <label>转发到 <select id="forward-target"></select></label>
+      <button type="button" id="forward-submit" disabled>转发</button>
+      <button type="button" id="forward-cancel">取消</button>
+    </section>
+    <dialog id="save-message-dialog" aria-labelledby="save-message-heading">
+      <form id="save-message-form">
+        <h2 id="save-message-heading">保存到资料空间</h2>
+        <p>这会把消息文字复制为当前工作区的文档。<strong>工作区内所有成员都可以读取副本</strong>，之后撤回原消息不会删除副本。附件不会被复制。重复保存会沿用既有副本，不会同步后续编辑。</p>
+        <label>文档标题 <input id="save-message-title" maxlength="80" required></label>
+        <p id="save-message-error" role="alert" hidden></p>
+        <div class="actions"><button type="button" id="save-message-cancel">取消</button><button type="submit" id="save-message-submit">确认保存</button></div>
+      </form>
+    </dialog>
     <p id="onboarding-banner" class="note" hidden>完善<strong>工作背景</strong>，让自动化推荐更贴合你。<a href="/onboarding">去设置</a></p>
-    <section id="group-agent-action" class="gap-note" hidden>
-      <h2>群内智能体</h2>
+    <section id="group-agent-action" class="gap-note group-agent-panel" hidden>
+      <details class="group-agent-sheet">
+      <summary>群内智能体</summary>
+      <h2 class="visually-hidden">群内智能体</h2>
       <p class="note">原创补充，未经对照。名册编辑只影响本群；请求只发送本次输入，不附带群历史，不会自动回复或互相委派。</p>
       <div id="group-agent-roster">
         <ul id="group-agent-chips" class="agent-chips"></ul>
@@ -188,11 +298,8 @@
         <button id="group-agent-submit" type="submit">请求回复</button>
       </form>
       <ul id="group-agent-requests" aria-live="polite"></ul>
+      </details>
     </section>
-    <details class="gap-note">
-      <summary>对照说明</summary>
-      <p class="note">聊天页同时列出当前工作区的智能体会话和人↔人单聊、群聊。会话置顶还没有接口，所以没有置顶分组。技能、连接器、会议、语音、第三方智能体、邀请和通话尚未实现，对应按钮已禁用，不能使用。非空消息气泡和移动端布局是原创补充，未经 Teamily 对照。还不能写成已经功能对等。</p>
-    </details>
     <div id="message-scroller">
       <div id="chat-empty" class="note">
         <p>选择左侧的对话，或从这里开始。</p>
@@ -206,22 +313,69 @@
     <form id="chat-form" method="post" action="/v1/workspaces">
       <div class="composer">
         <div class="composer-row">
-          <button type="button" class="icon" disabled title="未实现：上传、创作与上下文菜单">+</button>
+          <details class="composer-plus">
+            <summary title="添加" aria-label="添加">+</summary>
+            <div class="composer-plus-sheet" aria-label="添加与创建">
+              <section class="plus-section" aria-labelledby="plus-common">
+                <h3 class="plus-heading" id="plus-common">常用操作</h3>
+                <div class="plus-row">
+                  <button type="button" id="composer-upload-trigger" data-plus-attach="any" title="上传到工作区作品库并作为附件发送（单聊/群聊）"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m8 12 7-7a4 4 0 0 1 6 6l-9 9a6 6 0 0 1-8-8l9-9 M7 14l8-8a1 1 0 0 1 3 3l-8 8"/></svg>上传</button>
+                  <button type="button" data-plus-attach="image" title="选择照片，上传并作为附件发送（单聊/群聊）"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z M4 16l4.5-4.5 3.5 3.5 2.5-2.5L20 18 M15.5 9.5h.01"/></svg>照片</button>
+                  <button type="button" data-plus-attach="video" title="选择视频，上传并作为附件发送（单聊/群聊）"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z M8 5v14 M16 5v14 M4 9.5h4 M4 14.5h4 M16 9.5h4 M16 14.5h4"/></svg>视频</button>
+                </div>
+                <p class="plus-hint" id="plus-attach-hint" hidden>智能体私聊还不能发附件（未接通），请在单聊或群聊里上传。</p>
+              </section>
+              <section class="plus-section" aria-labelledby="plus-create">
+                <div class="plus-section-head"><h3 class="plus-heading" id="plus-create">创建</h3><a class="plus-more" href="/space">探索更多<svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg></a></div>
+                <div class="plus-create">
+                  <a href="/space?new=website" data-tone="web" title="在资料空间新建网站"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M3 12h18 M12 3c2.6 2.5 4 5.6 4 9s-1.4 6.5-4 9c-2.6-2.5-4-5.6-4-9s1.4-6.5 4-9Z"/></svg><span>网站</span></a>
+                  <a href="/space?new=document" data-tone="doc" title="在资料空间新建云文档"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l5 5v13H7z M14 3v5h5 M9.5 12.5h7 M9.5 16h7"/></svg><span>文档</span></a>
+                  <a href="/space?new=slides" data-tone="slides" title="在资料空间新建幻灯片"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18 M5 4v10h14V4 M12 14v3 M8.5 21l3.5-4 3.5 4"/></svg><span>幻灯片</span></a>
+                  <a href="/space?new=dashboard" data-tone="table" title="新建看板（含表格组件），不是完整电子表格"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z M4 9.5h16 M4 15h16 M10 4v16"/></svg><span>表格</span></a>
+                  <button type="button" disabled data-tone="image" title="未接通：还没有在输入区直接生成图片的接口。"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z M4 16l5-5 4 4 2-2 5 5 M15 8.5h.01"/></svg><span>图片</span><span class="plus-tag">未接通</span></button>
+                  <button type="button" disabled data-tone="camera" title="未接通：还没有在输入区直接生成视频的接口。"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z M12 16.5a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"/></svg><span>视频</span><span class="plus-tag">未接通</span></button>
+                  <button type="button" disabled data-tone="music" title="未接通：还没有在输入区直接生成音乐的接口。"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V6l11-2v12 M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z M20 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/></svg><span>音乐</span><span class="plus-tag">未接通</span></button>
+                  <button type="button" disabled data-tone="cube" title="未接通：还没有在输入区直接生成 3D 的接口。"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9Z M4 7.5l8 4.5 8-4.5 M12 12v9"/></svg><span>3D 模型</span><span class="plus-tag">未接通</span></button>
+                </div>
+              </section>
+              <section class="plus-section" aria-labelledby="plus-auto">
+                <div class="plus-section-head"><h3 class="plus-heading" id="plus-auto">自动化</h3><a class="plus-more" href="/automations">全部自动化<svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg></a></div>
+                <div class="plus-auto">
+                  <a href="/automations?template=meeting_prep"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15Z M10 20.5h4"/></svg>会议提醒和准备</a>
+                  <a href="/automations?template=daily_brief"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h11l3 3v13H5z M8 9h8 M8 12.5h8 M8 16h5"/></svg>每日工作简报</a>
+                  <a href="/automations?template=expert_research"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6 M10 3v6l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3 M7.5 15h9"/></svg>专家团队研究</a>
+                  <a href="/automations?template=advance_goals"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10Z M12 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z"/></svg>推进目标</a>
+                </div>
+              </section>
+              <section class="plus-section" aria-labelledby="plus-context">
+                <h3 class="plus-heading" id="plus-context">上下文</h3>
+                <div class="plus-row">
+                  <a href="/memory"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5a2 2 0 0 1 2-2h5v17H6a2 2 0 0 0-2 2z M20 5a2 2 0 0 0-2-2h-5v17h5a2 2 0 0 1 2 2z"/></svg>记忆</a>
+                  <button type="button" disabled title="未接通：还没有从输入区调取资料的接口。"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 9 9 M12 7v5l3 2 M21 3v6h-6"/></svg>调取<span class="plus-tag">未接通</span></button>
+                </div>
+              </section>
+            </div>
+          </details>
           <textarea id="chat-body" name="body" maxlength="4000" required placeholder="输入消息" rows="1"></textarea>
-          <button type="submit">发送</button>
         </div>
-        <div class="composer-tools" aria-label="尚未实现的输入工具">
-          <button type="button" disabled title="未实现：技能">技能</button>
-          <button type="button" disabled title="未实现：连接器">连接器</button>
+        <div class="composer-tools" aria-label="输入工具（禁用项尚未实现）">
+          <details class="attachment-menu"><summary title="发送媒体附件（单聊或群聊）" aria-label="发送媒体附件"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m8 12 7-7a4 4 0 0 1 6 6l-9 9a6 6 0 0 1-8-8l9-9 M7 14l8-8a1 1 0 0 1 3 3l-8 8"/></svg></summary><div class="attachment-sheet"><label>上传到工作区作品库并发送附件（单聊/群聊；工作区成员可在作品库查看）<input type="file" id="chat-attachment" accept="image/png,image/jpeg,image/gif,image/webp,audio/mpeg,audio/wav,video/mp4,video/webm"></label></div></details>
+          <button type="button" disabled title="未实现：技能"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3Z"/></svg><span class="sr-only">技能</span></button>
+          <button type="button" disabled title="未实现：连接器"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v5 M16 3v5 M5 8h14 M7 8v5a5 5 0 0 0 10 0V8 M12 18v4"/></svg><span class="sr-only">连接器</span></button>
           <button type="button" disabled title="未实现：Auto / Instant / Agentic 模式">Instant</button>
-          <button type="button" disabled title="未实现：用记忆强化提示">记忆</button>
-          <button type="button" disabled title="未实现：会议纪要">会议</button>
-          <button type="button" disabled title="未实现：格式工具">格式</button>
-          <button type="button" disabled title="未实现：表情">表情</button>
-          <button type="button" disabled title="未实现：语音消息">语音</button>
+          <button type="button" disabled title="未实现：用记忆强化提示"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4a4 4 0 0 0-4 4v8a4 4 0 0 0 4 4 M16 4a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4 M8 8h8 M8 12h8 M8 16h8 M12 4v16"/></svg><span class="sr-only">记忆</span></button>
+          <button type="button" disabled title="未实现：会议纪要"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h13v14H3z m13 5 5-3v10l-5-3"/></svg><span class="sr-only">会议</span></button>
+          <button type="button" disabled title="未实现：格式工具"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16 M12 5v15 M8 20h8"/></svg><span class="sr-only">格式</span></button>
+          <button type="button" disabled title="未实现：表情"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M8 9h1 M15 9h1 M7 14a6 6 0 0 0 10 0"/></svg><span class="sr-only">表情</span></button>
+          <button type="button" disabled title="未实现：语音消息"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0V6Z M5 11v2a7 7 0 0 0 14 0v-2 M12 20v3"/></svg><span class="sr-only">语音</span></button>
+          <button type="submit" class="composer-send" aria-label="发送" title="发送"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14 M13 6l6 6-6 6"/></svg></button>
         </div>
       </div>
     </form>
+    <details class="gap-note">
+      <summary>对照说明</summary>
+      <p class="note">聊天页同时列出当前工作区的智能体会话和人↔人单聊、群聊。单聊和群聊支持个人置顶、未读和筛选；智能体私聊未读仍未接通。技能、连接器、会议、语音、第三方智能体、邀请和通话尚未实现，对应按钮已禁用，不能使用。非空消息气泡和移动端布局是原创补充，未经 Teamily 对照。还不能写成已经功能对等。</p>
+    </details>
     <p id="role-note" class="note" hidden></p>
     <section id="chat-panel">
       <p id="chat-note" class="note" hidden></p>

@@ -52,6 +52,13 @@ Additive `personal_agents` and `builtin_agents` tables (`CREATE TABLE IF NOT EXI
 keyed by `user_id`; the roster is keyed by `(workspace_id, builtin_key)` so a rerun cannot duplicate
 records.
 
+## Personal Agent look
+
+If the user saved onboarding step 4, `GET`/`POST /v1/personal-agent` also returns
+`personal_agent.look` and the owner's Personal Agent card/session renders it as an
+original CSS avatar. It is owner-only, decorative and not a generated image or a
+Teamily art match. See [PERSONAL_LOOK.md](PERSONAL_LOOK.md).
+
 ## Explicitly not in this slice
 
 - The observed 4-step onboarding (industry/role and later steps). Only the personal-agent/roster

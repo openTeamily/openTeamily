@@ -22,6 +22,26 @@ async function request(method, path, body) {
   return { status: response.status, body: payload };
 }
 
+const LOOK_LABELS = {color: '颜色', expression: '表情', headwear: '头饰', glasses: '眼镜', hand: '手持'};
+
+
+const TILE_TONES = 6;
+
+export function tileTone(text) {
+  let hash = 0;
+  for (const ch of String(text || '')) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
+  return String((hash % TILE_TONES) + 1);
+}
+
+export function stepLabel(step) {
+  return `第 ${step} 步，共 4 步`;
+}
+
+export function lookSummary(look) {
+  if (!look) return '还没有选择形象。';
+  return Object.keys(LOOK_LABELS).map(name => `${LOOK_LABELS[name]}：${look[name]}`).join(' · ');
+}
+
 function mount() {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
@@ -55,12 +75,67 @@ function mount() {
       option.textContent = row.name;
       select.append(option);
     }
+    renderIndustryCards();
+  }
+
+  function renderIndustryCards() {
+    const holder = document.getElementById('industry-cards');
+    if (!holder) return;
+    holder.replaceChildren();
+    for (const row of industries) {
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'choice-card';
+      card.setAttribute('role', 'radio');
+      card.dataset.value = row.name;
+      card.setAttribute('aria-checked', String(select.value === row.name));
+      const tile = document.createElement('span');
+      tile.className = 'choice-tile';
+      tile.dataset.tone = tileTone(row.name);
+      tile.setAttribute('aria-hidden', 'true');
+      tile.textContent = Array.from(row.name)[0] || '?';
+      const name = document.createElement('span');
+      name.className = 'choice-name';
+      name.textContent = row.name;
+      card.append(tile, name);
+      card.addEventListener('click', () => {
+        select.value = row.name;
+        select.dispatchEvent(new Event('change'));
+      });
+      holder.append(card);
+    }
+  }
+
+  function syncIndustryCards() {
+    for (const card of document.querySelectorAll('#industry-cards .choice-card')) {
+      card.setAttribute('aria-checked', String(card.dataset.value === select.value));
+    }
+  }
+
+  let step = 1;
+  function goStep(next) {
+    step = next;
+    form.hidden = next !== 1;
+    const section = document.getElementById('onboarding-steps');
+    if (section) section.hidden = next === 1;
+    for (const part of document.querySelectorAll('#onboarding-steps .onboarding-step')) {
+      part.hidden = Number(part.dataset.step) !== next;
+    }
+    const label = document.getElementById('onboarding-step-label');
+    if (label) label.textContent = stepLabel(next);
+    for (const bar of document.querySelectorAll('.onboarding-progress li')) {
+      bar.dataset.done = String(Number(bar.dataset.bar) <= next);
+    }
+  }
+  for (const button of document.querySelectorAll('#onboarding-steps [data-go]')) {
+    button.addEventListener('click', () => goStep(Number(button.dataset.go)));
   }
 
   function renderRoles() {
     const name = select.value;
     const row = industries.find(item => item.name === name);
     roleChoices.replaceChildren();
+    syncIndustryCards();
     customIndustryLabel.hidden = name !== '其他';
     customRoleLabel.hidden = true;
     roleLocked.hidden = Boolean(name);
@@ -77,7 +152,16 @@ function mount() {
         customRoleLabel.hidden = radio.value !== '其他';
         if (radio.value === '其他') customRole.focus();
       });
-      label.append(radio, document.createTextNode(role));
+      const tile = document.createElement('span');
+      tile.className = 'choice-tile';
+      tile.dataset.tone = tileTone(role);
+      tile.setAttribute('aria-hidden', 'true');
+      tile.textContent = Array.from(role)[0] || '?';
+      const name = document.createElement('span');
+      name.className = 'choice-name';
+      name.textContent = role;
+      label.className = 'choice-card';
+      label.append(radio, tile, name);
       roleChoices.append(label);
     }
     if (!roles.length) {
@@ -143,7 +227,139 @@ function mount() {
     industries = result.body.industries || [];
     populateIndustries();
     fill(result.body.onboarding);
+    renderSteps(result.body.steps, result.body.onboarding);
+    const ready = document.getElementById('onboarding-ready-name');
+    if (ready) ready.textContent = session.body.user.username + '，';
+    goStep(step);
   }
+
+  function renderSteps(steps, state) {
+    const section = document.getElementById('onboarding-steps');
+    if (!section) return;
+    if (!steps) return;
+    const apps = document.getElementById('onboarding-apps');
+    apps.textContent = '';
+    for (const app of steps.apps || []) {
+      const li = document.createElement('li');
+      const tile = document.createElement('span');
+      tile.className = 'choice-tile';
+      tile.dataset.tone = tileTone(app.name);
+      tile.setAttribute('aria-hidden', 'true');
+      tile.textContent = Array.from(app.name)[0] || '?';
+      const copy = document.createElement('span');
+      copy.className = 'app-copy';
+      const name = document.createElement('strong');
+      name.textContent = app.name;
+      const state = document.createElement('span');
+      state.className = 'app-state';
+      state.textContent = ' · 未连接';
+      copy.append(name, state);
+      const connect = document.createElement('button');
+      connect.type = 'button';
+      connect.disabled = true;
+      connect.className = 'app-connect';
+      connect.textContent = '+ 连接';
+      connect.title = '未接通：OpenTeamily 还没有第三方授权';
+      connect.setAttribute('aria-label', app.name + '：连接未接通');
+      li.append(tile, copy, connect);
+      apps.appendChild(li);
+    }
+    const picks = document.getElementById('onboarding-picks');
+    picks.textContent = '';
+    const groups = {task: ['一次性任务'], routine: ['例行任务']};
+    const lists = {};
+    for (const [kind, [title]] of Object.entries(groups)) {
+      const group = document.createElement('div');
+      group.className = 'pick-group';
+      const head = document.createElement('h3');
+      head.className = 'onboarding-group';
+      head.textContent = title;
+      const list = document.createElement('div');
+      list.className = 'pick-list';
+      group.append(head, list);
+      picks.append(group);
+      lists[kind] = list;
+    }
+    for (const item of steps.recommendations || []) {
+      const label = document.createElement('label');
+      label.className = 'pick-card';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.name = 'pick';
+      box.value = item.key;
+      box.checked = (steps.picks || []).includes(item.key);
+      const copy = document.createElement('span');
+      copy.className = 'pick-copy';
+      const title = document.createElement('strong');
+      title.textContent = ` ${item.title}（${item.kind === 'routine' ? '例行' : '一次性'}）`;
+      const summary = document.createElement('span');
+      summary.className = 'pick-summary';
+      summary.textContent = item.summary;
+      copy.append(title, summary);
+      label.append(box, copy);
+      label.title = item.summary;
+      (lists[item.kind] || lists.task).appendChild(label);
+    }
+    const look = document.getElementById('onboarding-look');
+    look.textContent = '';
+    for (const [name, options] of Object.entries(steps.look_options || {})) {
+      const label = document.createElement('label');
+      const choice = document.createElement('select');
+      choice.name = name;
+      for (const value of options) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value;
+        choice.appendChild(option);
+      }
+      if (steps.look && steps.look[name]) choice.value = steps.look[name];
+      choice.addEventListener('change', paintLook);
+      label.className = 'look-option';
+      const caption = document.createElement('span');
+      caption.textContent = `${LOOK_LABELS[name] || name} `;
+      label.append(caption, choice);
+      look.appendChild(label);
+    }
+    paintLook();
+    document.getElementById('onboarding-look-preview').textContent = lookSummary(steps.look);
+    document.getElementById('onboarding-steps-meta').textContent =
+      `已选 ${(steps.picks || []).length} 项 · ` + (steps.look ? '形象已保存' : '形象未保存');
+  }
+
+  function paintLook() {
+    const avatar = document.getElementById('look-avatar');
+    if (!avatar) return;
+    for (const choice of document.querySelectorAll('#onboarding-look select')) {
+      avatar.dataset[choice.name] = choice.value;
+    }
+  }
+
+  async function saveStep(path, body, okText, next) {
+    const result = await request('POST', path, body);
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, '保存失败。'));
+      return;
+    }
+    renderSteps(result.body.steps, current || {completed: true});
+    show('ok', okText);
+    if (next) goStep(next);
+  }
+
+  const picksForm = document.getElementById('onboarding-picks-form');
+  if (picksForm) picksForm.addEventListener('submit', event => {
+    event.preventDefault();
+    const chosen = [...document.getElementById('onboarding-picks').querySelectorAll('input[name="pick"]')]
+      .filter(box => box.checked).map(box => box.value);
+    saveStep('/v1/onboarding/picks', {picks: chosen}, '已保存选择（不会自动创建例行任务）。', 4);
+  });
+
+  const lookForm = document.getElementById('onboarding-look-form');
+  if (lookForm) lookForm.addEventListener('submit', event => {
+    event.preventDefault();
+    const look = {};
+    for (const choice of document.getElementById('onboarding-look').querySelectorAll('select')) look[choice.name] = choice.value;
+    saveStep('/v1/onboarding/look', {look}, '已保存 Agent 形象。');
+  });
 
   select.addEventListener('change', () => {
     current = null;
@@ -169,7 +385,8 @@ function mount() {
       show('error', messageFor(result.body.error, '保存失败。'));
       return;
     }
-    globalThis.location.assign('/chat');
+    step = 2;
+    await load();
   });
 
   document.getElementById('onboarding-skip').addEventListener('click', async () => {

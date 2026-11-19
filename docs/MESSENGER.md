@@ -2,7 +2,7 @@
 
 Related: [#86](https://github.com/openTeamily/openTeamily/issues/86), [#1](https://github.com/openTeamily/openTeamily/issues/1), [#7](https://github.com/openTeamily/openTeamily/issues/7).
 
-This is a first **human-to-human** messaging slice in the management plane, written for OpenTeamily. It adds workspace-scoped direct messages and named group chats next to the existing user↔agent conversations ([AGENT_CONVERSATIONS.md](AGENT_CONVERSATIONS.md)). It is **not** Teamily messenger parity: unread counts, notifications, attachments, reactions, message edits, retractions, typing indicators and cross-workspace delivery are not implemented. Stored agent participants and one-shot explicit runtime replies are described below. Those remain the follow-up issues noted below.
+This is a first **human-to-human** messaging slice in the management plane, written for OpenTeamily. It adds workspace-scoped direct messages and named group chats next to the existing user↔agent conversations ([AGENT_CONVERSATIONS.md](AGENT_CONVERSATIONS.md)). It is **not** Teamily messenger parity: notifications, reactions, typing indicators and cross-workspace delivery remain pending. Social unread counts, media attachments, edits, retractions and personal conversation pins are implemented as documented below. Stored agent participants and one-shot explicit runtime replies are described below. Those remain the follow-up issues noted below.
 
 The management process only stores messages. It does not call a model provider or a runtime.
 
@@ -37,13 +37,13 @@ Additive `social_conversations`, `social_members` and `social_messages` tables (
 
 ## Page
 
-The management UI for these conversations lives on the unified `/chat` page, together with user↔agent conversations. `/messenger` redirects to `/chat`. The recorded list toolbar is 筛选, then 搜索, then +. 筛选 stays visible and disabled because there is no session-filter API. The main header shows a letter avatar from the current conversation or agent name; there is no verified-badge field. Starting a direct message uses「添加联系人」; starting a group uses「新建群组」. The first group screen shows the intro 「添加名称，然后邀请好友并添加 AI 智能体。」, a 「自定义群组」 / 「AI 智能体团队」 switch (custom is the default), an optional 「群组名称」 field, a member search with a 「已选」 count, and Create disabled until at least one member is selected. 「AI 智能体团队」 stays visible but unconnected: there is no template list, no invented members, and create in that mode is disabled. Paid-team options are not shown. An omitted custom-group title still uses the existing create API, which defaults the stored title to「群聊」. It is not browser E2E evidence, and it is not Teamily messenger parity.
+The management UI for these conversations lives on the unified `/chat` page, together with user↔agent conversations. `/messenger` redirects to `/chat`. The recorded list toolbar is 筛选, then 搜索, then +. 筛选 opens real local all/group/DM/social read/unread/pinned filters over the loaded conversation list. The main header shows a letter avatar from the current conversation or agent name; there is no verified-badge field. Starting a direct message uses「添加联系人」; starting a group uses「新建群组」. The first group screen shows the intro 「添加名称，然后邀请好友并添加 AI 智能体。」, a 「自定义群组」 / 「AI 智能体团队」 switch (custom is the default), an optional 「群组名称」 field, a member search with a 「已选」 count, and Create disabled until at least one member is selected. 「AI 智能体团队」 stays visible but unconnected: there is no template list, no invented members, and create in that mode is disabled. Paid-team options are not shown. An omitted custom-group title still uses the existing create API, which defaults the stored title to「群聊」. It is not browser E2E evidence, and it is not Teamily messenger parity.
 
 ## Explicitly not in this slice
 
 - `@Agent` mentions, automatic agent replies and task delegation in a group ([#89](https://github.com/openTeamily/openTeamily/issues/89)).
 - Workspace-wide authorized message search ([#88](https://github.com/openTeamily/openTeamily/issues/88)).
-- Unread counts, read receipts, notifications, attachments, reactions, editing, retraction, typing indicators.
+- Notification center, recipient read receipts, reactions, typing indicators and user-agent unread state; see the implemented social capabilities below.
 - Cross-workspace or federated delivery, Bot Social transport, and any Teamily comparison.
 - Browser acceptance. Tests are in-process WSGI with a temporary SQLite file and are not a live server or vendor run.
 
@@ -164,3 +164,49 @@ local fake provider in a separate process, and verifies persisted reply/history
 through removal and re-addition. This is not a real-vendor/container or
 Teamily/Impeccable acceptance. Existing CI screenshots only show the unchanged
 UI baseline; they are not evidence of a new membership-edit UI.
+
+
+## Per-user unread state
+
+Social DM/group list and snapshot responses include `unread_count`, counting incoming human
+messages and successful runtime agent replies after this user's durable read cursor. Own
+human sends do not count. GET never acknowledges messages. A member can POST
+`/{conversation_id}/read` with `{message_id}` (Origin + CSRF required); the cursor advances
+monotonically only through that message in that conversation. Cross-conversation ids and
+non-members are rejected. The visible chat acknowledges only the last message actually
+rendered; newer messages beyond the snapshot remain unread. Hidden tabs do not acknowledge.
+The session list shows a numeric badge and only clears it after a successful acknowledgement.
+
+This is not a notification center, @mention/push/email notification, another member's read
+receipt, unread user-agent conversations, or live background delivery. Refresh/reopen loads
+updated counts. The additive `social_reads` table retains state across restarts without a
+schema version change. Teamily + Impeccable acceptance remains pending.
+
+The same chat slice fixes pending message-search queries across tab switches and prevents
+stale search responses replacing newer queries (the CI chat_search_messages race).
+
+## Consolidated functional delivery
+
+- Social conversation rows include per-user `unread_count` and `pinned`. Existing snapshot-bounded
+  read acknowledgement never marks unseen newer messages read; GET does not acknowledge anything.
+- `POST /{id}/preferences {pinned:boolean}` stores a private per-user pin. Pins sort before recency in
+  the loaded list. UI filters all/groups/DMs/social-unread/social-read/pinned honestly omit unsupported
+  agent unread state. Pins/filtering cover loaded pages, not an invented global total or group model.
+- `POST /{id}/messages/{message_id}/edit {revision,body}` and `/retract {revision}` are author-only
+  human-message operations. Group membership is required before author checks; stale revisions or
+  already-retracted messages return 409. Retraction clears stored message text and hides its
+  attachment from message projection; it does not delete an independently uploaded library work.
+  Message search no longer returns the old body. There is no model regeneration or automatic reply.
+- `POST /{id}/messages` additionally accepts optional `artifact_id` referencing existing same-workspace
+  media. The browser uploads through the existing MIME-sniffed/size-bounded artifact API, then sends
+  the reference with normal idempotency. Image/audio/video only, not arbitrary documents. Downloads
+  reuse authenticated artifact `/file`; the UI warns that uploaded media belongs to the WORKSPACE
+  library, not a DM-private vault. Failed send may leave an uploaded library item and says so.
+- The header's **会话内搜索** opens a separate paged panel using the existing authorized
+  conversation-scoped message API. Sidebar search remains independent; switching workspace or
+  conversation clears stale panel state. No duplicate backend message corpus or new reply protocol.
+
+Mounted Node tests exercise pins/filters, independent scoped search pagination, author edit and
+confirmed retraction; temporary-DB HTTP tests verify permissions, revisions, search erasure and media
+upload/reference/download. This is not Teamily + Impeccable acceptance or real-vendor inference.
+See [FUNCTIONAL_COMPLETION.md](FUNCTIONAL_COMPLETION.md) for the full remaining-work matrix.

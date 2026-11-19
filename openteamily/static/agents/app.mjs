@@ -1,3 +1,20 @@
+import { createLookAvatar } from '../look/app.mjs';
+
+// Two-letter card monogram ("Slides Assistant" -> "SA"; CJK names keep one glyph).
+export function agentMonogram(name) {
+  const text = String(name || '').replace(/^\s*\[[^\]]*\]\s*/, '');
+  const words = text.match(/[\p{L}\p{N}]+/gu) || [];
+  if (!words.length) return '?';
+  if (/^\p{Script=Han}/u.test(words[0])) return words[0].slice(0, 1);
+  return words.slice(0, 2).map((word) => word[0].toUpperCase()).join('');
+}
+
+export function agentTone(name) {
+  let hash = 0;
+  for (const ch of String(name || '')) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
+  return String((hash % 6) + 1);
+}
+
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
@@ -138,6 +155,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let actor = null;
   let workspaces = [];
   let currentAgent = null;
+  let personalAgentId = '';
+  let personalLook = null;
   let currentConversation = null;
   let pollTimer = 0;
   let directoryLoaded = false;
@@ -222,6 +241,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentUser = session.body.user;
     loginPanel.hidden = true;
     mainPanel.hidden = false;
+    // The saved Personal Agent look is an optional identity detail. Never let
+    // this auxiliary read break the directory if an older server lacks it.
+    try {
+      const personal = await request('GET', '/v1/personal-agent');
+      const found = personal.status === 200 && personal.body.personal_agent;
+      personalAgentId = found && found.agent ? found.agent.id : '';
+      personalLook = found ? found.look || null : null;
+    } catch (error) {
+      personalAgentId = '';
+      personalLook = null;
+    }
     const whoami = document.getElementById('whoami');
     whoami.dataset.username = currentUser.username;
     whoami.textContent = '已登录为 ' + currentUser.username;
@@ -281,9 +311,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       shown += 1;
       const li = document.createElement('li');
       li.className = 'agent-card';
-      const avatar = document.createElement('span');
-      avatar.className = 'avatar';
-      avatar.textContent = (item.name || '?').slice(0, 1);
+      const lookAvatar = item.id === personalAgentId ? createLookAvatar(personalLook, document) : null;
+      const avatar = lookAvatar || document.createElement('span');
+      if (!lookAvatar) {
+        avatar.className = 'avatar';
+        avatar.textContent = agentMonogram(item.name);
+        avatar.dataset.tone = agentTone(item.name);
+      }
       const copy = document.createElement('div');
       copy.className = 'copy';
       const button = document.createElement('button');
@@ -323,6 +357,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (count) count.textContent = '显示 ' + shown + ' 个智能体';
   }
+
+  const apiKeyForm = document.getElementById('api-key-form');
+  if (apiKeyForm) apiKeyForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!currentAgent) return;
+    const agent = currentAgent, wid = workspaceId();
+    const result = await request('POST', `/v1/workspaces/${wid}/agents/${agent.id}/api-keys`, {
+      name: document.getElementById('api-key-name').value,
+      rate_per_minute: Number(document.getElementById('api-key-rate').value) || 10,
+    });
+    if (result.status !== 201) { show('error', messageFor(result.body.error, '无法生成密钥。')); return; }
+    const out = document.getElementById('api-key-token');
+    out.hidden = false;
+    out.textContent = `密钥只显示一次：${result.body.token}`;
+    document.getElementById('api-key-name').value = '';
+    loadApiKeys(agent, true);
+  });
 
   async function loadWorkspace() {
     const id = workspaceId();
@@ -392,6 +443,44 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     renderHomepage(agent, writable);
     if (runtimePanel) loadRuntime();
+    loadApiKeys(agent, writable);
+  }
+
+  async function loadApiKeys(agent, writable) {
+    const panel = document.getElementById('api-key-panel');
+    if (!panel) return;
+    panel.hidden = !writable || Boolean(agent.archived);
+    document.getElementById('api-key-token').hidden = true;
+    if (panel.hidden) return;
+    const wid = workspaceId();
+    let listed;
+    try {
+      listed = await request('GET', `/v1/workspaces/${wid}/agents/${agent.id}/api-keys`);
+    } catch (error) {
+      return;  // optional panel; never break the editor
+    }
+    if (workspaceId() !== wid || !currentAgent || currentAgent.id !== agent.id) return;
+    const list = document.getElementById('api-key-list');
+    list.replaceChildren(...(listed.status === 200 ? listed.body.items : []).map(key => {
+      const li = document.createElement('li');
+      const meta = document.createElement('span');
+      meta.textContent = `${key.name} · ${key.rate_per_minute} 次/分钟 · ${key.revoked ? '已撤销' : '有效'}`
+        + (key.last_used ? ' · 用过' : ' · 未使用');
+      li.append(meta);
+      if (!key.revoked) {
+        const revoke = document.createElement('button');
+        revoke.type = 'button';
+        revoke.textContent = '撤销';
+        revoke.addEventListener('click', async () => {
+          const result = await request('POST', `/v1/workspaces/${wid}/agents/${agent.id}/api-keys/${key.id}/revoke`, {});
+          if (result.status !== 200) { show('error', messageFor(result.body.error, '无法撤销密钥。')); return; }
+          show('ok', '已撤销密钥。');
+          loadApiKeys(agent, writable);
+        });
+        li.append(revoke);
+      }
+      return li;
+    }));
   }
 
   function renderHomepage(agent, writable, tokenPath) {

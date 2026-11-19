@@ -66,6 +66,12 @@ CREATE TABLE IF NOT EXISTS memory_links (
  UNIQUE(workspace_id, key_hash),
  CHECK(left_id < right_id));
 CREATE INDEX IF NOT EXISTS memory_link_workspace ON memory_links(workspace_id, id);
+CREATE TABLE IF NOT EXISTS memory_profiles (
+ workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ professional TEXT NOT NULL, work_style TEXT NOT NULL, communication TEXT NOT NULL,
+ revision INTEGER NOT NULL, updated INTEGER NOT NULL,
+ PRIMARY KEY(workspace_id,user_id));
 """
 
 TITLE_MAX = 80

@@ -98,6 +98,7 @@ const PATH_VIEWS = {
   '/settings/channels': 'channels',
   '/settings/agent-access': 'agent-access',
   '/settings/connectors': 'connectors',
+  '/settings/skill-configuration': 'skill-configuration',
 };
 
 const HASH_VIEWS = {
@@ -110,7 +111,7 @@ const HASH_VIEWS = {
   'send-shortcut': 'shortcuts',
   shortcuts: 'shortcuts',
   'model-api': 'model-api',
-  'skill-secrets': 'skill-secrets',
+  'skill-secrets': 'skill-configuration',
 };
 
 export function settingsViewFromLocation(pathname, hash) {
@@ -222,6 +223,92 @@ export function applyConnectorSearch(document, query) {
   return visible;
 }
 
+// Composio connections. Each user enters their own Composio API key; there is
+// no platform key. States come only from the management API, never guessed.
+export function pickConnection(items, toolkit) {
+  const rank = {connected: 3, connecting: 2, inactive: 1, failed: 0};
+  let best = null;
+  for (const item of items || []) {
+    if (!item || item.toolkit !== toolkit || item.status === 'DELETED') continue;
+    if (!best || (rank[item.state] ?? -1) > (rank[best.state] ?? -1)
+        || ((rank[item.state] ?? -1) === (rank[best.state] ?? -1) && item.created_at >= best.created_at)) {
+      best = item;
+    }
+  }
+  return best;
+}
+
+export function composioRowState(row, configured, connection) {
+  if (!row || !row.toolkit) {
+    return {state: 'unavailable', status: '未接通', button: '+ 连接', disabled: true, action: '',
+            title: '未接通：Composio 没有这个应用，暂时不能连接。'};
+  }
+  if (!configured) {
+    return {state: 'unconfigured', status: '未配置 Composio', button: '+ 连接', disabled: true, action: '',
+            title: '未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。'};
+  }
+  if (connection && connection.state === 'connected') {
+    return {state: 'connected', status: '已连接', button: '断开', disabled: false, action: 'disconnect',
+            title: '断开会删除你 Composio 项目里的这个连接。'};
+  }
+  if (connection && connection.state === 'connecting') {
+    return {state: 'connecting', status: '连接中…', button: '取消', disabled: false, action: 'disconnect',
+            title: '正在等待你在 Composio 授权页完成授权。'};
+  }
+  if (row.managed === 'own') {
+    return {state: 'needs-auth-config', status: '需自建 auth config', button: '+ 连接', disabled: true, action: '',
+            title: '未接通：Composio 没有为这个应用托管 OAuth 应用，需要先在你的 Composio 项目里建 auth config；本页暂不支持。'};
+  }
+  if (connection && (connection.state === 'failed' || connection.state === 'inactive')) {
+    const label = connection.state === 'inactive' ? '未激活' : '连接失败';
+    const reason = connection.status_reason ? '：' + connection.status_reason : '';
+    return {state: connection.state, status: label, button: '重试', disabled: false, action: 'connect',
+            title: label + reason};
+  }
+  return {state: 'idle', status: '未连接', button: '+ 连接', disabled: false, action: 'connect',
+          title: '通过你的 Composio 项目授权连接。'};
+}
+
+export function applyComposioRows(document, configured, items) {
+  const list = document.getElementById('connectors-catalog');
+  if (!list) return [];
+  const applied = [];
+  for (const node of list.querySelectorAll('[data-connector-id]')) {
+    const row = {toolkit: node.getAttribute('data-composio-toolkit'), managed: node.getAttribute('data-composio-managed')};
+    const connection = row.toolkit ? pickConnection(items, row.toolkit) : null;
+    const view = composioRowState(row, configured, connection);
+    const status = node.querySelector('.connector-status');
+    const button = node.querySelector('button');
+    if (status) {
+      status.textContent = view.status;
+      status.setAttribute('data-state', view.state);
+    }
+    if (button) {
+      button.textContent = view.button;
+      button.disabled = view.disabled;
+      button.title = view.title;
+      button.setAttribute('data-composio-action', view.action);
+      if (connection) button.setAttribute('data-connection-id', connection.id);
+      else button.removeAttribute('data-connection-id');
+    }
+    applied.push({id: node.getAttribute('data-connector-id'), ...view});
+  }
+  return applied;
+}
+
+const COMPOSIO_ERRORS = {
+  composio_not_configured: '未配置 Composio：先填入你自己的 Composio API key。',
+  composio_key_rejected: 'Composio 拒绝了这个 API key，请检查后重新保存。',
+  composio_unreachable: '暂时连不上 Composio，请稍后再试。',
+  composio_rate_limited: 'Composio 请求太频繁，请稍后再试。',
+  composio_not_found: 'Composio 里找不到这个连接。',
+  composio_failed: 'Composio 请求失败。',
+};
+
+export function composioMessage(error, fallback) {
+  return (error && COMPOSIO_ERRORS[error.code]) || fallback;
+}
+
 export function syncAppearanceExtras(document, values) {
   const scheduleCard = document.getElementById('appearance-schedule-card');
   const customFields = document.getElementById('custom-period-fields');
@@ -316,6 +403,11 @@ export function syncPrivacySaveButton(document, current, next) {
   button.disabled = Object.keys(privacyChanges(current, next)).length === 0;
 }
 
+export function removeSecretPrompt(item) {
+  const name = String((item && item.name) || '');
+  return {question: `删除技能密钥「${name}」？`, confirmLabel: '确认删除'};
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
@@ -331,6 +423,56 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let revision = 0;
   let current = null;
   let modelRevision = 0;
+  let pendingSecretConfirm = null;
+  let secretConfirmSeq = 0;
+
+  function closeSecretConfirm(restoreFocus) {
+    if (!pendingSecretConfirm) return false;
+    const {box, trigger} = pendingSecretConfirm;
+    pendingSecretConfirm = null;
+    if (typeof box.remove === 'function') box.remove();
+    trigger.hidden = false;
+    if (restoreFocus && typeof trigger.focus === 'function') trigger.focus();
+    return true;
+  }
+
+  function askSecretConfirmation(row, trigger, item) {
+    closeSecretConfirm(false);
+    const {question, confirmLabel} = removeSecretPrompt(item);
+    const box = document.createElement('span');
+    box.className = 'skill-secret-confirm';
+    box.setAttribute('role', 'alertdialog');
+    secretConfirmSeq += 1;
+    const questionNode = document.createElement('span');
+    questionNode.id = 'skill-secret-confirm-' + secretConfirmSeq;
+    questionNode.textContent = question;
+    box.setAttribute('aria-labelledby', questionNode.id);
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = '取消';
+    cancel.addEventListener('click', () => closeSecretConfirm(true));
+    const confirm = document.createElement('button');
+    confirm.type = 'button';
+    confirm.textContent = confirmLabel;
+    confirm.addEventListener('click', async () => {
+      const target = {name: item.name};
+      closeSecretConfirm(false);
+      const result = await request('POST', '/v1/skill-secrets', {name: target.name, action: 'delete'});
+      if (result.status !== 200) {
+        show('error', messageFor(result.body.error, '无法删除技能密钥。'));
+        return;
+      }
+      await renderSkillSecrets();
+      show('ok', `已删除技能密钥「${target.name}」。`);
+    });
+    box.appendChild(questionNode);
+    box.appendChild(cancel);
+    box.appendChild(confirm);
+    row.appendChild(box);
+    trigger.hidden = true;
+    pendingSecretConfirm = {box, trigger};
+    if (typeof cancel.focus === 'function') cancel.focus();
+  }
 
   function renderView() {
     const location = globalThis.location || {};
@@ -417,6 +559,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
     }
     await renderSkillSecrets();
+    await syncComposio();
   }
 
   async function renderProviders() {
@@ -535,30 +678,45 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function renderSkillSecrets() {
     const list = document.getElementById('skill-secret-list');
     const skillForm = document.getElementById('skill-secrets-form');
+    const empty = document.getElementById('skill-empty');
     if (!list || !skillForm) return;
+    closeSecretConfirm(false);
     list.textContent = '';
     const listed = await request('GET', '/v1/skill-secrets');
     if (listed.status !== 200) return;
-    for (const item of listed.body.items) {
+    const items = listed.body.items || [];
+    for (const item of items) {
       const row = document.createElement('li');
-      row.textContent = item.name + ' ';
+      const name = document.createElement('span');
+      name.textContent = item.name;
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.textContent = '删除';
-      remove.addEventListener('click', async () => {
-        const result = await request('POST', '/v1/skill-secrets', {name: item.name, action: 'delete'});
-        if (result.status !== 200) {
-          show('error', messageFor(result.body.error, '无法删除技能密钥。'));
-          return;
-        }
-        await renderSkillSecrets();
-      });
+      remove.addEventListener('click', () => askSecretConfirmation(row, remove, item));
+      row.appendChild(name);
       row.appendChild(remove);
       list.appendChild(row);
     }
+    if (empty) empty.hidden = items.length > 0;
+    list.hidden = items.length === 0;
   }
 
   const skillForm = document.getElementById('skill-secrets-form');
+  const skillAddOpen = document.getElementById('skill-add-open');
+  const skillAddCancel = document.getElementById('skill-add-cancel');
+  if (skillAddOpen && skillForm) {
+    skillAddOpen.addEventListener('click', () => {
+      skillForm.hidden = false;
+      const name = skillForm.elements.name;
+      if (name) name.focus();
+    });
+  }
+  if (skillAddCancel && skillForm) {
+    skillAddCancel.addEventListener('click', () => {
+      skillForm.hidden = true;
+      skillForm.elements.value.value = '';
+    });
+  }
   if (skillForm) {
     skillForm.addEventListener('submit', async event => {
       event.preventDefault();
@@ -571,6 +729,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         return;
       }
       show('ok', '技能密钥已保存。');
+      skillForm.hidden = true;
       await renderSkillSecrets();
     });
   }
@@ -611,6 +770,158 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
+  const composioCard = document.getElementById('composio-key-card');
+  let composioConfigured = false;
+  let composioItems = [];
+  let composioPoll = null;
+
+  function composioNote(kind, text) {
+    const node = document.getElementById('composio-key-message');
+    if (!node) return;
+    node.dataset.kind = kind;
+    node.textContent = text;
+  }
+
+  function renderComposio(view) {
+    composioConfigured = Boolean(view && view.configured);
+    const badge = document.getElementById('composio-key-state');
+    const input = document.getElementById('composio-key-input');
+    const remove = document.getElementById('composio-key-remove');
+    if (badge) {
+      badge.textContent = composioConfigured ? '已保存 ' + (view.key_hint || '') : '未配置 Composio';
+      badge.setAttribute('data-state', composioConfigured ? 'configured' : 'unconfigured');
+    }
+    if (input) input.placeholder = composioConfigured ? '输入新 key 替换（原文不会显示）' : '粘贴你的 Composio API key';
+    if (remove) remove.hidden = !composioConfigured;
+    applyComposioRows(document, composioConfigured, composioItems);
+  }
+
+  async function syncComposio() {
+    if (!composioCard) return;
+    try {
+      const view = await request('GET', '/v1/composio');
+      if (view.status !== 200) return;
+      composioItems = [];
+      if (view.body.composio.configured) {
+        const listed = await request('GET', '/v1/composio/connections');
+        if (listed.status === 200) {
+          composioItems = listed.body.items || [];
+          if (listed.body.sync === 'failed') composioNote('error', '暂时读不到 Composio 上的最新状态，显示的是本地记录。');
+        } else {
+          composioNote('error', composioMessage(listed.body.error, '无法读取连接状态。'));
+        }
+      }
+      renderComposio(view.body.composio);
+      if (composioItems.some(item => item.state === 'connecting')) startComposioPoll();
+    } catch (error) {
+      composioNote('error', '无法读取 Composio 配置。');
+    }
+  }
+
+  function startComposioPoll() {
+    if (composioPoll || typeof globalThis.setInterval !== 'function') return;
+    let rounds = 0;
+    composioPoll = globalThis.setInterval(async () => {
+      rounds += 1;
+      const pending = composioItems.filter(item => item.state === 'connecting');
+      if (!pending.length || rounds > 100) {
+        globalThis.clearInterval(composioPoll);
+        composioPoll = null;
+        return;
+      }
+      for (const item of pending) {
+        const result = await request('GET', '/v1/composio/connections/' + item.id);
+        if (result.status === 200) {
+          composioItems = composioItems.map(old => old.id === item.id ? result.body.connection : old);
+        } else if (result.status === 404) {
+          composioItems = composioItems.filter(old => old.id !== item.id);
+        }
+      }
+      applyComposioRows(document, composioConfigured, composioItems);
+    }, 3000);
+  }
+
+  const composioForm = document.getElementById('composio-key-form');
+  if (composioForm) {
+    composioForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const input = document.getElementById('composio-key-input');
+      const value = input ? String(input.value || '').trim() : '';
+      if (!value) {
+        composioNote('error', '请先粘贴你的 Composio API key。');
+        return;
+      }
+      const result = await request('POST', '/v1/composio/key', {api_key: value});
+      if (input) input.value = '';
+      if (result.status !== 200) {
+        composioNote('error', messageFor(result.body.error, '无法保存 Composio API key。'));
+        return;
+      }
+      composioNote('ok', '已保存你的 Composio API key（原文不会再显示）。');
+      await syncComposio();
+    });
+  }
+  const composioRemove = document.getElementById('composio-key-remove');
+  if (composioRemove) {
+    composioRemove.addEventListener('click', async () => {
+      const result = await request('POST', '/v1/composio/key', {api_key: null});
+      if (result.status !== 200) {
+        composioNote('error', messageFor(result.body.error, '无法移除 Composio API key。'));
+        return;
+      }
+      composioNote('ok', '已移除 Composio API key。本地连接记录已清除，Composio 项目里的账号不会被删除。');
+      await syncComposio();
+    });
+  }
+  const composioList = document.getElementById('connectors-catalog');
+  if (composioList && composioCard) {
+    composioList.addEventListener('click', async event => {
+      const button = event.target && typeof event.target.closest === 'function'
+        ? event.target.closest('button[data-composio-action]') : null;
+      if (!button || button.disabled) return;
+      const action = button.getAttribute('data-composio-action');
+      const row = button.closest('[data-connector-id]');
+      const toolkit = row ? row.getAttribute('data-composio-toolkit') : '';
+      if (action === 'connect' && toolkit) {
+        const popup = typeof globalThis.open === 'function' ? globalThis.open('', '_blank') : null;
+        button.disabled = true;
+        const result = await request('POST', '/v1/composio/connections', {toolkit});
+        if (result.status !== 201) {
+          if (popup) popup.close();
+          composioNote('error', composioMessage(result.body.error, '无法开始连接。'));
+          applyComposioRows(document, composioConfigured, composioItems);
+          return;
+        }
+        composioItems = composioItems.concat([result.body.connection]);
+        applyComposioRows(document, composioConfigured, composioItems);
+        composioNote('ok', '已打开 Composio 授权页。完成授权后这里会自动更新状态。');
+        if (popup) {
+          popup.opener = null;
+          popup.location.href = result.body.redirect_url;
+        } else if (globalThis.location && typeof globalThis.location.assign === 'function') {
+          globalThis.location.assign(result.body.redirect_url);
+        }
+        startComposioPoll();
+      } else if (action === 'disconnect') {
+        const id = button.getAttribute('data-connection-id');
+        if (!id) return;
+        button.disabled = true;
+        const result = await request('POST', '/v1/composio/connections/' + id + '/disconnect', {});
+        if (result.status !== 200 && result.status !== 404) {
+          composioNote('error', composioMessage(result.body.error, '无法断开连接。'));
+          applyComposioRows(document, composioConfigured, composioItems);
+          return;
+        }
+        composioItems = composioItems.filter(item => item.id !== id);
+        applyComposioRows(document, composioConfigured, composioItems);
+        composioNote('ok', '已断开。');
+      }
+    });
+    if (typeof globalThis.addEventListener === 'function') {
+      globalThis.addEventListener('focus', () => { if (composioConfigured) syncComposio(); });
+    }
+  }
+
   const connectorSearch = document.getElementById('connector-search');
   if (connectorSearch) {
     const applySearch = () => applyConnectorSearch(document, connectorSearch.value);
@@ -630,9 +941,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape') return;
     const dialog = document.getElementById('mcp-dialog');
-    if (!dialog || dialog.hidden) return;
-    event.preventDefault();
-    syncMcpDialog(document, false);
+    if (dialog && !dialog.hidden) {
+      event.preventDefault();
+      syncMcpDialog(document, false);
+      return;
+    }
+    if (pendingSecretConfirm) {
+      event.preventDefault();
+      closeSecretConfirm(true);
+    }
   });
 
   globalThis.addEventListener('hashchange', renderView);

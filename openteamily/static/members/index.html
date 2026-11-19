@@ -13,36 +13,38 @@
 <body class="app-workspace">
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
-    <a class="brand-mark" href="/chat" title="OpenTeamily / FlyBot">FB</a>
-    <a href="/chat" title="聊天">聊天</a>
-    <a href="/agents" title="智能体">智能体</a>
-    <a href="/automations" title="自动化">自动化</a>
-    <a href="/memory" title="记忆">记忆</a>
-    <a href="/space" title="作品">作品</a>
-    <a href="/discover" title="发现">发现</a>
+    <a class="brand-mark" href="/chat" title="OpenTeamily" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
+    <a href="/chat" title="聊天" aria-label="聊天"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H9l-5 4V4Z"/></svg><span class="rail-label">聊天</span></a>
+    <a href="/agents" title="智能体" aria-label="智能体"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14v12H5z M9 3h6 M12 3v4 M8 12h1 M15 12h1 M9 16h6"/></svg><span class="rail-label">智能体</span></a>
+        <a href="/skills" title="技能" aria-label="技能"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Z M8.5 10.5h7 M8.5 14h4.5"/></svg><span class="rail-label">技能</span></a>
+<a href="/automations" title="自动化" aria-label="自动化"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg><span class="rail-label">自动化</span></a>
+    <a href="/memory" title="记忆" aria-label="记忆"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4a4 4 0 0 0-4 4v8a4 4 0 0 0 4 4 M16 4a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4 M8 8h8 M8 12h8 M8 16h8 M12 4v16"/></svg><span class="rail-label">记忆</span></a>
+    <a href="/space" title="作品" aria-label="作品"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg><span class="rail-label">作品</span></a>
+    <a href="/meetings" title="会议" aria-label="会议"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v14H4z M8 3v4 M16 3v4 M4 10h16"/></svg><span class="rail-label">会议</span></a>
+    <a href="/discover" title="发现" aria-label="发现"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg><span class="rail-label">发现</span></a>
     <span class="rail-spacer"></span>
-    <a href="/profile" class="rail-signed-in" hidden title="我的资料">我</a>
+    <a href="/profile" class="rail-signed-in" hidden title="我的资料" aria-label="我"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7a4 4 0 1 0 8 0 4 4 0 0 0-8 0 M4 21v-2a8 8 0 0 1 16 0v2"/></svg><span class="rail-label">我</span></a>
     <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换浅色或深色。会写入已有外观设置；按钮在深色下显示「深色」。点击后的标签变化未经 Teamily 核实。">浅色</button>
-    <a href="/download" title="下载">下载</a>
+    <a href="/download" title="下载" aria-label="下载"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12 m-5-5 5 5 5-5 M4 16v5h16v-5"/></svg><span class="rail-label">下载</span></a>
     <div class="account-slot" hidden>
       <button type="button" id="account-menu-button" class="account-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="账户菜单">账户</button>
       <div id="account-menu" class="account-menu" role="menu" hidden>
         <p id="account-identity" class="account-identity"></p>
-        <a href="/profile" role="menuitem">查看我的资料</a>
+        <a href="/profile" role="menuitem" aria-label="查看我的资料">查看我的资料</a>
         <a href="/team" role="menuitem">创建团队</a>
         <div class="account-sub">
           <button type="button" id="help-menu-button" aria-expanded="false" aria-controls="help-menu">帮助</button>
           <div id="help-menu" hidden>
             <button type="button" disabled title="未实现：还没有 OpenTeamily 帮助中心页">帮助中心</button>
             <a href="/guide" role="menuitem">功能指引</a>
-            <a href="/download" role="menuitem">下载</a>
+            <a href="/download" role="menuitem" aria-label="下载">下载</a>
             <a href="/settings#send-shortcut" role="menuitem">快捷键</a>
             <button type="button" disabled title="未实现：还没有 OpenTeamily 服务条款页">服务条款</button>
             <button type="button" disabled title="未实现：还没有 OpenTeamily 隐私政策页">隐私政策</button>
             <a href="https://github.com/openTeamily/openTeamily/issues" rel="noreferrer" target="_blank" role="menuitem" title="指向本仓库的 issue 列表，不是 Teamily 的联系邮箱">报告问题</a>
           </div>
         </div>
-        <a href="/settings" role="menuitem">所有设置</a>
+        <a href="/settings" role="menuitem" aria-label="所有设置">所有设置</a>
         <form id="logout-form" method="post" action="/v1/auth/logout">
           <button type="submit">退出登录</button>
         </form>
@@ -62,18 +64,25 @@
   </section>
   <section id="main-panel" hidden>
     <header class="page-top">
-      <h1>成员</h1>
-      <p class="note">按已注册用户名添加成员，或生成邀请链接让已登录账号加入。角色和邀请还没有和 Teamily 对照过，不能写成已经功能对等。没有对照过的默认值：邀请默认单次使用、7 天过期，不会发邮件。</p>
+      <div class="page-heading">
+        <h1>成员</h1>
+      </div>
+      <details class="gap-note">
+        <summary>对照说明</summary>
+        <p class="note">按已注册用户名添加成员，或生成邀请链接让已登录账号加入。角色和邀请还没有和 Teamily 对照过，不能写成已经功能对等。没有对照过的默认值：邀请默认单次使用、7 天过期，不会发邮件。</p>
+      </details>
     </header>
-    <p id="whoami"></p>
-    <label>工作区
-      <select id="workspace"></select>
-    </label>
-    <p id="role-note" class="note"></p>
+    <p id="whoami" class="visually-hidden"></p>
+    <div class="page-toolbar">
+      <label class="workspace-field">工作区
+        <select id="workspace"></select>
+      </label>
+      <p id="role-note" class="note"></p>
+    </div>
     <section id="members-panel">
       <h2>成员列表</h2>
       <ul id="member-list"></ul>
-      <p id="members-empty" class="note" hidden>这个工作区还没有可显示的成员。</p>
+      <p id="members-empty" class="empty-state" hidden>这个工作区还没有可显示的成员。</p>
     </section>
     <form id="add-form" method="post" action="/v1/workspaces" hidden>
       <fieldset>
@@ -99,6 +108,7 @@
         </label>
         <label>有效天数 <input type="number" name="expires_days" min="1" max="30" value="7"></label>
         <label>最多使用次数 <input type="number" name="max_uses" min="1" max="50" value="1"></label>
+        <label class="check-row"><input type="checkbox" name="requires_approval"> 加入前需要所有者或管理员审批</label>
         <button type="submit">生成</button>
         <p id="issued-token" class="note" hidden></p>
       </fieldset>
@@ -106,7 +116,32 @@
     <section id="invites-panel" hidden>
       <h2>已发出的邀请</h2>
       <ul id="invite-list"></ul>
-      <p id="invites-empty" class="note" hidden>还没有有效或已记录的邀请。</p>
+      <p id="invites-empty" class="empty-state" hidden>还没有有效或已记录的邀请。</p>
+    </section>
+    <section id="join-requests-panel" hidden>
+      <h2>待审批的加入申请</h2>
+      <ul id="join-request-list"></ul>
+      <p id="join-requests-empty" class="empty-state" hidden>没有待审批的申请。</p>
+    </section>
+    <form id="directory-listing-form" hidden>
+      <fieldset>
+        <legend>团队目录</legend>
+        <p class="note">列入目录后，本实例上已登录的用户可以搜索到团队名称、简介和人数，并提交加入申请；申请要由所有者或管理员审批。未登录访客看不到目录。</p>
+        <label><input type="checkbox" id="directory-listed"> 在团队目录中公开</label>
+        <label class="stack">简介 <input type="text" id="directory-summary" maxlength="200" autocomplete="off"></label>
+        <button type="submit">保存目录设置</button>
+      </fieldset>
+    </form>
+    <section id="team-directory-panel">
+      <h2>发现团队</h2>
+      <form id="directory-search-form" role="search" class="directory-toolbar">
+        <label class="pill-search"><span class="visually-hidden">搜索团队</span>
+          <input type="search" id="directory-query" maxlength="60" autocomplete="off" placeholder="名称或简介">
+        </label>
+        <button type="submit">搜索</button>
+      </form>
+      <ul id="directory-results"></ul>
+      <p id="directory-empty" class="empty-state" hidden>没有找到公开的团队。</p>
     </section>
     <form id="accept-form" method="post" action="/v1/invites/accept">
       <fieldset>
