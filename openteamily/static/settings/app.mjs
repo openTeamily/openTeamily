@@ -559,7 +559,92 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
     }
     await renderSkillSecrets();
+    await renderGatewayOverview();
     await syncComposio();
+  }
+
+  async function loadGatewayOverview() {
+    const select = document.getElementById('gateway-workspace');
+    const keyList = document.getElementById('gateway-key-list');
+    const invocationList = document.getElementById('gateway-invocation-list');
+    if (!select || !keyList || !invocationList) return;
+    keyList.textContent = '';
+    invocationList.textContent = '';
+    if (!select.value) return;
+    const result = await request('GET', `/v1/workspaces/${select.value}/gateway/overview?limit=50`);
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, '无法读取 Agent API 审计。'));
+      return;
+    }
+    const keys = result.body.keys || [];
+    const invocations = result.body.invocations || [];
+    document.getElementById('gateway-keys-empty').hidden = keys.length > 0;
+    document.getElementById('gateway-invocations-empty').hidden = invocations.length > 0;
+    const format = value => value ? new Date(Number(value) * 1000).toLocaleString('zh-CN') : '从未';
+    for (const key of keys) {
+      const row = document.createElement('li');
+      row.className = 'gateway-row';
+      const title = document.createElement('span');
+      title.className = 'name';
+      title.textContent = key.agent_name + ' · ' + key.name + (key.revoked ? '（已撤销）' : '');
+      const meta = document.createElement('span');
+      meta.className = 'meta';
+      meta.textContent = 'scope ' + key.scope + ' · ' + key.rate_per_minute + ' 次/分 · 创建 ' +
+        format(key.created) + ' · 最近使用 ' + format(key.last_used);
+      row.append(title, meta);
+      if (!key.revoked) {
+        const actions = document.createElement('div');
+        actions.className = 'actions';
+        const revoke = document.createElement('button');
+        revoke.type = 'button';
+        revoke.textContent = '撤销';
+        revoke.addEventListener('click', async () => {
+          const done = await request('POST',
+            `/v1/workspaces/${select.value}/agents/${key.agent_id}/api-keys/${key.id}/revoke`, {});
+          if (done.status !== 200) {
+            show('error', messageFor(done.body.error, '无法撤销密钥。'));
+            return;
+          }
+          show('ok', '密钥已撤销。');
+          await loadGatewayOverview();
+        });
+        actions.appendChild(revoke);
+        row.appendChild(actions);
+      }
+      keyList.appendChild(row);
+    }
+    for (const item of invocations) {
+      const row = document.createElement('li');
+      row.className = 'gateway-row';
+      const title = document.createElement('span');
+      title.className = 'name';
+      title.textContent = item.agent_name + ' · ' + item.status + (item.error_code ? '（' + item.error_code + '）' : '');
+      const meta = document.createElement('span');
+      meta.className = 'meta';
+      meta.textContent = format(item.created) + (item.reply ? ' · ' + item.reply.slice(0, 160) : '');
+      row.append(title, meta);
+      invocationList.appendChild(row);
+    }
+  }
+
+  async function renderGatewayOverview() {
+    const select = document.getElementById('gateway-workspace');
+    if (!select) return;
+    const listed = await request('GET', '/v1/workspaces?limit=100');
+    const spaces = listed.status === 200 ? (listed.body.items || []) : [];
+    const previous = select.value;
+    select.replaceChildren();
+    for (const space of spaces) {
+      const option = document.createElement('option');
+      option.value = space.id;
+      option.textContent = space.name;
+      select.append(option);
+    }
+    if (previous && [...select.options].some(option => option.value === previous)) {
+      select.value = previous;
+    }
+    select.onchange = loadGatewayOverview;
+    await loadGatewayOverview();
   }
 
   async function renderProviders() {

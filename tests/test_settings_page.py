@@ -210,6 +210,9 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('disabled', html)
         self.assertNotIn('Teamily Agent', html)
         agent = self.raw.call('GET', '/settings/agent-access')['body'].decode()
+        for ident in ('gateway-workspace', 'gateway-key-list', 'gateway-invocation-list',
+                      'gateway-keys-empty', 'gateway-invocations-empty'):
+            self.assertIn('id="%s"' % ident, agent)
         self.assertIn('你的 agent 还没有向本实例之外开放。', agent)
         self.assertIn('没有已授权的 AI 客户端。', agent)
         self.assertIn('Claude Code', agent)

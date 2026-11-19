@@ -935,6 +935,9 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/agents(?:/([0-9a-f]{32})(?:/(archive))?)?', path)
             if agent_path:
                 return self.workspace_agent_dispatch(db, session, method, query, now, env, *agent_path.groups())
+            gateway_overview = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/gateway/overview', path)
+            if gateway_overview:
+                return self.gateway_overview(db, session, method, query, gateway_overview.group(1))
             meeting_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/meetings(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
             if meeting_path:
@@ -967,6 +970,38 @@ class App:
         if key is None:
             refuse(401, 'unauthorized', runtime_connect.KEY_AUTH)
         return key
+
+    def gateway_overview(self, db, session, method, query, workspace_id):
+        if method != 'GET':
+            refuse(405, 'method', 'Only GET is supported')
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        if not agents.can_manage(members.role_of(db, workspace, session['user_id'])):
+            refuse(403, 'forbidden', 'Only workspace owners and admins can read gateway audit')
+        try:
+            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=1) if query else {}
+            if set(args) - {'limit'} or any(len(v) != 1 for v in args.values()):
+                raise ValueError()
+            limit = args.get('limit', ['50'])[0]
+            if not re.fullmatch(r'[0-9]{1,3}', limit) or not 1 <= int(limit) <= 100:
+                raise ValueError()
+        except ValueError:
+            refuse(400, 'invalid', 'Invalid overview parameters')
+        keys = db.execute(
+            'SELECT k.*, a.name AS agent_name FROM agent_api_keys k '
+            'JOIN workspace_agents a ON a.id=k.agent_id '
+            'WHERE k.workspace_id=? ORDER BY k.created, k.id', (workspace['id'],)).fetchall()
+        invocations = db.execute(
+            'SELECT i.*, a.name AS agent_name FROM agent_api_invocations i '
+            'JOIN workspace_agents a ON a.id=i.agent_id '
+            'WHERE i.workspace_id=? ORDER BY i.created DESC, i.id DESC LIMIT ?',
+            (workspace['id'], int(limit))).fetchall()
+        return 200, {
+            'keys': [dict(gateway.key_view(row), agent_name=row['agent_name']) for row in keys],
+            'invocations': [dict(gateway.invocation_view(row), agent_name=row['agent_name'])
+                            for row in invocations],
+        }, []
 
     def gateway_dispatch(self, env, method, path, query, now):
         # Bearer-only machine API: browser credentials are refused so a page can never ride a session.

@@ -757,6 +757,13 @@ body.app-workspace > main > #settings-panel { max-width: 32rem; padding: .875rem
 #settings-panel .skill-form-actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .6rem; }
 #settings-panel .skill-empty { border: 0; box-shadow: none; background: var(--ot-surface-2, #f4f7f5); }
 
+/* Gateway overview */
+.gateway-list { list-style: none; padding: 0.6rem 0.8rem; display: grid; gap: 0.5rem; }
+.gateway-row { display: grid; gap: 0.15rem; padding: 0.5rem 0.6rem; border: 1px solid var(--ot-line); border-radius: var(--ot-radius); }
+.gateway-row .name { font-weight: 650; }
+.gateway-row .meta { color: var(--ot-muted); font-size: 0.8rem; }
+.gateway-row .actions { display: flex; justify-content: flex-end; }
+
 /* Original geometric connector marks. These are not vendor trademarks
    and were not traced from Teamily, Google, or GitHub assets. */
 .connector-mark {

@@ -28,7 +28,21 @@ Requests carrying a Cookie or Origin header are refused with `401`; the gateway 
 
 The agents page has an 「外部 API 访问」 panel for owners/admins to create, list and revoke keys.
 
+## Workspace audit overview (session + Origin + CSRF, owner/admin)
+
+`GET /v1/workspaces/{wid}/gateway/overview?limit=1..100` (default 50) returns:
+
+- `keys`: every per-agent gateway key in the workspace with `agent_name`, name, scope, rate, created,
+  creator, last_used and revoked. Tokens and prefixes are never returned.
+- `invocations`: recent gateway invocations (newest first) with `agent_name`, status, fixed
+  `error_code`, created/updated and the succeeded `reply` text. Prompts are not returned.
+
+The Settings → Agent API page shows this read-only audit for the selected workspace and can revoke a
+key in place. Key creation remains on the agents page.
+
+Screenshot: `docs/screenshots/gateway-audit/gateway-audit.png` (synthetic).
+
 ## Not in this slice
 
-Streaming, per-call audit views, broader scopes and any production deployment. CI with the fake runtime is
+Streaming, broader scopes and any production deployment. CI with the fake runtime is
 not vendor or Teamily acceptance.

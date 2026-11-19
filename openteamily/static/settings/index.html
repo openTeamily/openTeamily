@@ -458,13 +458,20 @@
         <header class="settings-subhead">
           <a href="/settings" class="settings-back" aria-label="返回设置">‹ Agent API</a>
         </header>
-        <p class="settings-lead">你的 agent 可以从本实例之外被使用。要修改某一种方式，请到该 agent 的 Agent API。开发者文档还没有独立页面。</p>
-        <h2 class="settings-section-title">Agents</h2>
-        <p class="settings-card settings-empty">你的 agent 还没有向本实例之外开放。</p>
+        <p class="settings-lead">你的 agent 可以从本实例之外被调用。这里按工作区汇总调用密钥和最近调用；创建/撤销单把密钥仍在<a href="/agents">智能体</a>页的「API 密钥」里。</p>
+        <label class="settings-field">工作区
+          <select id="gateway-workspace"></select>
+        </label>
+        <h2 class="settings-section-title">调用密钥</h2>
+        <p id="gateway-keys-empty" class="settings-card settings-empty">你的 agent 还没有向本实例之外开放。</p>
+        <ul id="gateway-key-list" class="settings-card gateway-list"></ul>
+        <h2 class="settings-section-title">最近调用</h2>
+        <p id="gateway-invocations-empty" class="settings-card settings-empty">还没有外部调用。</p>
+        <ul id="gateway-invocation-list" class="settings-card gateway-list"></ul>
+        <p class="note">只读审计：不显示密钥 token 或模型密钥；撤销密钥会立即生效。</p>
         <h2 class="settings-section-title">已授权的 AI 客户端</h2>
-        <p class="settings-lead">那些被授权使用你的 agent 的客户端，例如 Claude Code，撤销后立即失效。</p>
+        <p class="settings-lead">那些被授权使用你的 agent 的客户端，例如 Claude Code。本切片只提供 Bearer API key；OAuth 客户端授权不在本切片。</p>
         <p class="settings-card settings-empty">没有已授权的 AI 客户端。</p>
-        <p class="note">按智能体的 Agent API 调用密钥在<a href="/agents">智能体</a>页的「API 密钥」里生成和撤销；这里还不会汇总列出，也还没有 AI 客户端授权接口。</p>
     </div>
     <div data-settings-page="connectors" hidden>
         <header class="settings-subhead">

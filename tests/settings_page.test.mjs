@@ -364,6 +364,9 @@ test('settings connectors markup lists the catalog as disconnected without leaki
 
 // --- skill-secret delete confirmation (page only) ---
 
+const WORKSPACE_A = 'a'.repeat(32);
+const WORKSPACE_B = 'b'.repeat(32);
+
 const SETTINGS_VALUES = {
   appearance: 'light', appearance_schedule: 'sunset_sunrise', appearance_start: '20:00',
   appearance_end: '07:00', language: 'zh-CN', chat_language: '', auto_translate: false,
@@ -406,15 +409,25 @@ class SettingsNode {
   appendChild(child) {
     child.parentElement = this;
     this.children.push(child);
+    // A real <select> selects its first option, so reading .value after the
+    // first append gives that option's value without any explicit assignment.
+    if (this.tagName === 'select' && !this.value) this.value = child.value;
     return child;
   }
+  append(...nodes) { for (const node of nodes) this.appendChild(node); }
+  get options() { return this.tagName === 'select' ? this.children : []; }
   remove() {
     if (!this.parentElement) return;
     const index = this.parentElement.children.indexOf(this);
     if (index >= 0) this.parentElement.children.splice(index, 1);
     this.parentElement = null;
   }
-  replaceChildren(...nodes) { this.children = []; for (const node of nodes) this.appendChild(node); }
+  replaceChildren(...nodes) {
+    this.children = [];
+    // Emptying a <select> clears its selection until an option is appended again.
+    if (this.tagName === 'select') this.value = '';
+    for (const node of nodes) this.appendChild(node);
+  }
   focus() { if (this._doc) this._doc.activeElement = this; }
   querySelector(selector) {
     if (this.tagName === 'form' && /select\[name="language"\]/.test(selector)) {
@@ -437,7 +450,8 @@ function settingsDocument() {
     handlers: {},
     getElementById(id) {
       if (!elements.has(id)) {
-        const tag = id.endsWith('-form') ? 'form' : id === 'skill-secret-list' ? 'ul' : 'div';
+        const tag = id.endsWith('-form') ? 'form' : id === 'skill-secret-list' ? 'ul'
+          : id === 'gateway-workspace' ? 'select' : 'div';
         const node = new SettingsNode(tag, doc);
         node.id = id;
         node.elements = new Proxy({}, {
@@ -493,6 +507,12 @@ function makeSettingsApi({secrets = ['GITHUB_TOKEN', 'OPENAI_KEY']}) {
         items.push({name: body.name});
         return settingsJson(200, {saved: body.name});
       }
+    }
+    if (path === '/v1/workspaces?limit=100' && method === 'GET') {
+      return settingsJson(200, {items: [{id: WORKSPACE_A, name: 'Alpha'}, {id: WORKSPACE_B, name: 'Beta'}], cursor: null});
+    }
+    if (path === `/v1/workspaces/${WORKSPACE_A}/gateway/overview?limit=50` && method === 'GET') {
+      return settingsJson(200, {keys: [], invocations: []});
     }
     throw new Error('unexpected request ' + method + ' ' + path);
   }
@@ -742,7 +762,15 @@ test('applyComposioRows updates status, button and connection id from server dat
   assert.equal(github.button.disabled, true);
   assert.equal(github.button.attrs['data-connection-id'], undefined);
 });
-
+test('the gateway section lists the workspaces it may read and opens the first one', async () => {
+  const {doc, calls} = await mountSettingsPage({});
+  const select = doc.getElementById('gateway-workspace');
+  assert.deepEqual(select.options.map(option => [option.value, option.textContent]),
+                   [[WORKSPACE_A, 'Alpha'], [WORKSPACE_B, 'Beta']]);
+  const reads = calls.filter(call => call.path.includes('/gateway/overview'));
+  assert.equal(reads.length, 1, 'one overview read for the workspace selected by default');
+  assert.equal(reads[0].path, `/v1/workspaces/${WORKSPACE_A}/gateway/overview?limit=50`);
+});
 
 test('connected-tool approvals do not imply a connected account before key setup', () => {
   const source = readFileSync(fileURLToPath(new URL('../openteamily/static/settings/connected-tools.mjs', import.meta.url)), 'utf8');
