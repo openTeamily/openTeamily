@@ -223,6 +223,10 @@ class SettingsPage:
                     return False
             return bool(seen)
         if path == '/agents':
+            # The AI team entry deep-links from the public directory: tab=teams
+            # selects the teams tab, new=1 also opens its create surface.
+            if query in ('tab=teams', 'tab=teams&new=1'):
+                return True
             slug = query[len('category='):] if query.startswith('category=') else ''
             return slug in discover.AGENT_CATEGORY_SLUGS
         if path == '/memory':

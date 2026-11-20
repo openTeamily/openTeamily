@@ -2143,7 +2143,7 @@ async function main() {
           && teamsChrome.includes('Research')
           && teamsChrome.includes('+ 创建我的 AI 团队')
           && (await page.locator('#catalog-query').getAttribute('placeholder') || '').includes('搜索 AI 团队')
-          && await page.locator('#catalog-create-team').isDisabled()
+          && (await page.locator('#catalog-create-team').getAttribute('href')) === '/agents?tab=teams&new=1'
           && await page.locator('#teams-note').isVisible()
           && teamsChrome.includes('公开 AI 团队目录还没有接口')
           && await page.locator('#discover-list article').count() === 0

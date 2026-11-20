@@ -333,7 +333,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const createAgent = document.getElementById('catalog-create-agent');
     const createTeam = document.getElementById('catalog-create-team');
     if (createAgent) createAgent.hidden = !agentsView;
-    if (createTeam) createTeam.hidden = !teamsView;
+    // The team entry is a real link to /agents?tab=teams&new=1, so it stays visible in both views.
+    if (createTeam) createTeam.hidden = false;
     const query = document.getElementById('catalog-query');
     if (query) query.placeholder = teamsView ? TEAMS_SEARCH_PLACEHOLDER : '搜索智能体…';
     if (typeof document.querySelector === 'function') {

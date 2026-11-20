@@ -59,6 +59,40 @@ export function searchWithCategory(search, slug) {
   return next ? '?' + next : '';
 }
 
+export function directoryTabFromSearch(search) {
+  const params = new URLSearchParams((search || '').replace(/^\?/, ''));
+  return params.get('tab') === 'teams' ? 'teams' : 'agents';
+}
+
+export function wantsTeamCreate(search) {
+  if (directoryTabFromSearch(search) !== 'teams') return false;
+  const flag = new URLSearchParams((search || '').replace(/^\?/, '')).get('new');
+  return flag === '1' || flag === 'true';
+}
+
+export function selectDirectoryTab(document, search) {
+  const tab = directoryTabFromSearch(search);
+  if (tab !== 'teams') return tab;
+  const tabAgents = document.getElementById('tab-agents');
+  const tabTeams = document.getElementById('tab-teams');
+  const listPanel = document.getElementById('list-panel');
+  const teamsPanel = document.getElementById('teams-panel');
+  if (tabAgents) tabAgents.setAttribute('aria-selected', 'false');
+  if (tabTeams) tabTeams.setAttribute('aria-selected', 'true');
+  if (listPanel) listPanel.hidden = true;
+  if (teamsPanel) teamsPanel.hidden = false;
+  if (wantsTeamCreate(search) && teamsPanel) {
+    const create = typeof teamsPanel.querySelector === 'function'
+      ? teamsPanel.querySelector('[data-team-create]') : null;
+    if (create && typeof create.click === 'function') create.click();
+    else {
+      teamsPanel.setAttribute('tabindex', '-1');
+      if (typeof teamsPanel.focus === 'function') teamsPanel.focus();
+    }
+  }
+  return tab;
+}
+
 export function readAgentForm(form) {
   const data = new FormData(form);
   return {
@@ -1009,6 +1043,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       await loadTeamTemplates();
     });
   }
+  selectDirectoryTab(document,
+    (globalThis.location && globalThis.location.search) || '');
 
   return load();
 }

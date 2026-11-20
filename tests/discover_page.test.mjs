@@ -116,7 +116,7 @@ test('recorded team categories stay in the captured order', () => {
 test('teams filter chrome is present, disabled, and does not copy Teamily branding', () => {
   const html = readFileSync(new URL('../openteamily/static/discover/index.html', import.meta.url), 'utf8');
   assert.match(html, /id="catalog-tab-teams" href="\/discover\?tab=agents&amp;section=groups">AI 团队</);
-  assert.match(html, /id="catalog-create-team"[^>]*disabled[^>]*>\+ 创建我的 AI 团队</);
+  assert.match(html, /id="catalog-create-team" href="\/agents\?tab=teams&amp;new=1">\+ 创建我的 AI 团队</);
   assert.equal(/AI 团队（未接通）/.test(html), false);
   const block = html.split('id="teams-filters"')[1].split('id="catalog-creator"')[0];
   assert.match(block, /aria-current="true"[^>]*>All</);
