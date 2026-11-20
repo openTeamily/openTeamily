@@ -98,6 +98,12 @@ CREATE TABLE IF NOT EXISTS social_preferences (
  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
  pinned INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN(0,1)),
  PRIMARY KEY(conversation_id,user_id));
+CREATE TABLE IF NOT EXISTS social_mutes (
+ conversation_id TEXT NOT NULL REFERENCES social_conversations(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ muted INTEGER NOT NULL DEFAULT 0 CHECK(muted IN(0,1)),
+ updated INTEGER NOT NULL,
+ PRIMARY KEY(conversation_id,user_id));
 CREATE TABLE IF NOT EXISTS social_attachments (
  message_id TEXT PRIMARY KEY REFERENCES social_messages(id) ON DELETE CASCADE,
  artifact_id TEXT REFERENCES artifacts(id) ON DELETE SET NULL);
@@ -381,7 +387,20 @@ def username(db, user_id):
     return None if row is None else row['username']
 
 
+def is_muted(db, conversation_id, user_id):
+    """Per-user mute: the unread badge and mention list hide the conversation.
+
+    Muting never advances read_seq, so turning it back off restores the count for
+    messages that arrived while it was on.
+    """
+    return db.execute(
+        'SELECT 1 FROM social_mutes WHERE conversation_id=? AND user_id=? AND muted=1',
+        (conversation_id, user_id)).fetchone() is not None
+
+
 def unread_count(db, conversation_id, user_id):
+    if is_muted(db, conversation_id, user_id):
+        return 0
     return db.execute(
         f"""SELECT COUNT(*) FROM ({MESSAGE_ROWS}) msg
         WHERE msg.conversation_id=? AND msg.retracted=0 AND (msg.user_id IS NULL OR msg.user_id<>?)
@@ -404,7 +423,9 @@ def mark_read(db, conversation_id, user_id, message_id):
 def preference(db, conversation_id, user_id):
     row = db.execute('SELECT pinned FROM social_preferences WHERE conversation_id=? AND user_id=?',
                      (conversation_id, user_id)).fetchone()
-    return {'pinned': bool(row and row['pinned'])}
+    mute = db.execute('SELECT muted FROM social_mutes WHERE conversation_id=? AND user_id=?',
+                      (conversation_id, user_id)).fetchone()
+    return {'pinned': bool(row and row['pinned']), 'muted': bool(mute and mute['muted'])}
 
 
 def reactions_for(db, message_ids, user_id):

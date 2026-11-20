@@ -4447,11 +4447,22 @@ class App:
             return self.edit_group_agents(db, workspace, session, row, action, now, env)
         self.reconcile_group_replies(db, row, now)
         if action == 'preferences' and method == 'POST' and not query:
-            pinned = self.body(env, ['pinned']).get('pinned')
-            if type(pinned) is not bool:
+            body = self.body(env, ['pinned', 'muted'])
+            pinned, muted = body.get('pinned'), body.get('muted')
+            if pinned is None and muted is None:
+                refuse(400, 'invalid', 'Provide pinned or muted as a boolean')
+            if pinned is not None and type(pinned) is not bool:
                 refuse(400, 'invalid', 'Provide pinned as a boolean')
-            db.execute('INSERT INTO social_preferences VALUES(?,?,?) ON CONFLICT(conversation_id,user_id) '
-                       'DO UPDATE SET pinned=excluded.pinned', (row['id'], session['user_id'], int(pinned)))
+            if muted is not None and type(muted) is not bool:
+                refuse(400, 'invalid', 'Provide muted as a boolean')
+            if pinned is not None:
+                db.execute('INSERT INTO social_preferences(conversation_id,user_id,pinned) VALUES(?,?,?) '
+                           'ON CONFLICT(conversation_id,user_id) DO UPDATE SET pinned=excluded.pinned',
+                           (row['id'], session['user_id'], int(pinned)))
+            if muted is not None:
+                db.execute('INSERT INTO social_mutes(conversation_id,user_id,muted,updated) VALUES(?,?,?,?) '
+                           'ON CONFLICT(conversation_id,user_id) DO UPDATE SET muted=excluded.muted, '
+                           'updated=excluded.updated', (row['id'], session['user_id'], int(muted), now))
             return 200, social.preference(db, row['id'], session['user_id']), []
         if action and action.endswith('/pin') and method == 'POST' and not query:
             return self.pin_social_message(db, session, row, action.split('/')[1], now, env)
@@ -4504,6 +4515,7 @@ class App:
             items = social.messages(db, row['id'], '', 101, session['user_id']) or []
             conversation = social.conversation_item(db, row, user_id=session['user_id'])
             conversation['unread_count'] = social.unread_count(db, row['id'], session['user_id'])
+            conversation.update(social.preference(db, row['id'], session['user_id']))
             return 200, {'conversation': conversation,
                          'agent_replies': [social.reply_view(item) for item in social.reply_requests(db, row['id'])],
                          'pinned_messages': social.pinned_messages(db, row['id'], session['user_id']),

@@ -44,6 +44,7 @@ export function mergeSessions(agentRows, socialRows, currentUserId) {
       id: row.id,
       unread_count: Number(row.unread_count) || 0,
       pinned: Boolean(row.pinned),
+      muted: Boolean(row.muted),
       kind: row.kind,
       members: row.members,
       title: conversationLabel(row, currentUserId),
@@ -314,6 +315,12 @@ export function groupAgentSummary(conversation) {
   const list = conversation && conversation.agent_members || [];
   return list.length ? '群内智能体：' + list.map(agent => agent.name).join('、')
     + '。可明确请求一次回复。未接通：群内自动回复、@Agent 和任务委派。' : '';
+}
+
+export function muteNote(muted) {
+  return muted
+    ? '已开启：该会话不计入未读角标和通知列表；会话内消息照常可见。'
+    : '开启后该会话不计入未读角标和通知列表；会话内消息照常可见。';
 }
 
 // Personal-runtime states from server-side auto-provisioning (operator opt-in).
@@ -1496,6 +1503,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       memberRow(member.username, currentUser && member.user_id === currentUser.id ? '你' : '工作区成员', 'person')));
     const pinned = sessions.some(item => item.source === 'social' && item.id === conversation.id && item.pinned);
     document.getElementById('group-info-pin').setAttribute('aria-checked', String(pinned));
+    const muteSwitch = document.getElementById('group-info-mute');
+    if (muteSwitch) {
+      muteSwitch.setAttribute('aria-checked', String(Boolean(conversation.muted)));
+      document.getElementById('group-info-mute-note').textContent = muteNote(Boolean(conversation.muted));
+    }
   }
 
   function setGroupInfoOpen(open) {
@@ -1580,6 +1592,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     setSessionsOpen(false);
     const pin = document.getElementById('pin-conversation');
     if (pin) { pin.hidden = false; pin.textContent = sessions.find(item => item.id === conversationId && item.pinned) ? '取消置顶' : '置顶会话'; }
+    const muteButton = document.getElementById('mute-conversation');
+    if (muteButton) {
+      muteButton.hidden = currentConversation.kind !== 'dm';
+      muteButton.textContent = currentConversation.muted ? '取消免打扰' : '免打扰';
+      muteButton.title = currentConversation.muted ? '恢复计入未读和通知' : '该会话不计入未读和通知';
+    }
     const agentNote = document.getElementById('social-agent-members');
     agentNote.textContent = groupAgentSummary(currentConversation);
     agentNote.hidden = !agentNote.textContent;
@@ -2497,6 +2515,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const result = await request('POST', `${socialBase()}/${id}/preferences`, {pinned: !pinned});
     if (result.status !== 200) { show('error', '置顶未保存。'); return; }
     await loadSessions(); await openSocialConversation(id);
+  });
+  async function saveMute(muted) {
+    if (currentSource !== 'social' || !currentConversation) return;
+    const id = currentConversation.id;
+    const result = await request('POST', `${socialBase()}/${id}/preferences`, {muted});
+    if (result.status !== 200) { show('error', '免打扰设置未保存。'); return; }
+    await loadSessions(); await openSocialConversation(id);
+  }
+  const muteButton = document.getElementById('mute-conversation');
+  if (muteButton) muteButton.addEventListener('click', () => {
+    saveMute(!(currentConversation && currentConversation.muted));
+  });
+  const muteSwitch = document.getElementById('group-info-mute');
+  if (muteSwitch) muteSwitch.addEventListener('click', () => {
+    saveMute(!(currentConversation && currentConversation.muted));
   });
   document.getElementById('search-close').addEventListener('click', closeSearchPanel);
   document.getElementById('chat-back').addEventListener('click', () => setSessionsOpen(true));

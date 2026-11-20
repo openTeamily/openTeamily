@@ -123,7 +123,9 @@ VISIBLE = '''
  JOIN social_conversations c ON c.id=n.conversation_id
  JOIN users a ON a.id=n.actor_id
  LEFT JOIN social_message_state st ON st.message_id=n.message_id
+ LEFT JOIN social_mutes mu ON mu.conversation_id=n.conversation_id AND mu.user_id=n.user_id
  WHERE n.workspace_id=? AND n.user_id=? AND COALESCE(st.retracted,0)=0
+   AND COALESCE(mu.muted,0)=0
 '''
 
 
@@ -211,7 +213,9 @@ REPLIES = '''
  JOIN social_members sm ON sm.conversation_id=r.conversation_id AND sm.user_id=r.requested_by
  JOIN social_conversations c ON c.id=r.conversation_id
  LEFT JOIN social_reply_notification_reads rr ON rr.reply_id=r.id AND rr.user_id=r.requested_by
+ LEFT JOIN social_mutes mu ON mu.conversation_id=r.conversation_id AND mu.user_id=r.requested_by
  WHERE r.workspace_id=? AND r.requested_by=? AND r.status IN ('succeeded','failed','cancelled')
+   AND COALESCE(mu.muted,0)=0
 '''
 REPLY_STATUS = {'succeeded': '已回复', 'failed': '未能完成', 'cancelled': '已取消'}
 
