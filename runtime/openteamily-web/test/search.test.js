@@ -104,6 +104,64 @@ test('global search merges private history and Bot Social results without skippi
   assert.equal((await call('&kind=social')).status, 503)
 })
 
+test('saving an authorized chat message creates one private versioned document with provenance', async (t) => {
+  const bot = await boot()
+  const local = seedChat(bot)
+  const foreign = seedChat(bot, 'b'.repeat(32), 'b')
+  const saveAgent = `/v1/workspaces/${WS}/agents/${local.agent}/conversations/${local.conversation}/messages/`
+  assert.equal((await bot.call('agents', 'POST', saveAgent + foreign.ids[1] + '/artifact', {})).status, 404)
+  const first = await bot.call('agents', 'POST', saveAgent + local.ids[1] + '/artifact', {title: 'Private note'})
+  assert.equal(first.status, 201, JSON.stringify(first.body))
+  const privateArtifact = first.body.artifact
+  assert.equal(privateArtifact.body, '好的，周报草稿见 https://example.com/report。')
+  assert.equal(privateArtifact.source.agent_id, local.agent)
+  assert.equal(privateArtifact.source.conversation_id, local.conversation)
+  const snapshot = await bot.call('artifacts', 'GET', `/v1/workspaces/${WS}/artifacts/${privateArtifact.id}/versions/1`)
+  assert.equal(snapshot.body.version.body, privateArtifact.body)
+  const duplicate = await bot.call('agents', 'POST', saveAgent + local.ids[1] + '/artifact', {title: 'Renamed retry'})
+  assert.equal(duplicate.status, 200)
+  assert.equal(duplicate.body.artifact.id, privateArtifact.id)
+  assert.equal(duplicate.body.artifact.title, 'Private note')
+
+  const sharedId = 'otm_history_1', oldId = 'otm_old_copy', sharedConversation = 'otc_product'
+  let revision = 2
+  let text = 'Historical shared message'
+  const old = await bot.endpoint('artifacts/create', {workspace_id: WS, kind: 'document',
+    title: 'Existing copy title', body: 'Older saved text', idempotency_key: 'msg-save-' + oldId})
+  assert.equal(old.ok, true)
+  setSharedBotSocial({async request(method, path) {
+    assert.equal(method, 'GET')
+    if (path.endsWith('/' + oldId)) return {body: 'Older saved text', revision: 1, title: 'Product team'}
+    assert.equal(path, `/v1/ot/workspaces/${WS}/conversations/${sharedConversation}/messages/${sharedId}`)
+    return {body: text, revision, title: 'Product team'}
+  }})
+  t.after(() => setSharedBotSocial(undefined))
+  const saveShared = `/v1/workspaces/${WS}/social/conversations/${sharedConversation}/messages/${sharedId}/save`
+  const save = (title, revision) => bot.call('messenger', 'POST', saveShared, {title, revision})
+  assert.equal((await save('Shared note', 1)).status, 409)
+  const shared = await save('Shared note', 2)
+  assert.equal(shared.status, 201, JSON.stringify(shared.body))
+  assert.deepEqual(shared.body.artifact.source, {
+    kind: 'agent_message', id: sharedId, conversation_id: sharedConversation, conversation_title: 'Product team',
+  })
+  revision += 1
+  text = 'Edited shared message'
+  const again = await save('Edited title', revision)
+  assert.equal(again.status, 200)
+  assert.equal(again.body.artifact.id, shared.body.artifact.id)
+  assert.equal(again.body.artifact.body, 'Historical shared message')
+  const reused = await bot.call('messenger', 'POST', saveShared.replace(sharedId, oldId), {
+    title: 'Different title after upgrade', revision: 1,
+  })
+  assert.equal(reused.status, 200)
+  assert.equal(reused.body.artifact.id, old.value.artifact.id)
+  assert.equal(reused.body.artifact.source.id, oldId)
+  const other = await boot()
+  const docs = `/v1/workspaces/${WS}/artifacts`
+  assert.equal((await bot.call('artifacts', 'GET', docs)).body.items.length, 3)
+  assert.equal((await other.call('artifacts', 'GET', docs + '/' + privateArtifact.id)).status, 404)
+})
+
 test('search/all spans memory and meetings in this DS-Bot', async () => {
   const bot = await boot()
   await bot.call('memory', 'POST', `/v1/workspaces/${WS}/memory`, { title: '季度目标', body: '增长 20%' }, key())

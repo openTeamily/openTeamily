@@ -34,7 +34,13 @@ const publicMessage = (row, workspaceId, agentId) => {
 export function agentsV1({ endpoints, log }) {
   const call = (name, payload) => endpoints[name](payload)
   const routes = [
-    { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/messages/${HEX}/artifact$`), handle: wrap(async () => { throw new FeatureError(503, 'unavailable', 'Saving a message to the works library is not in this DS-Bot yet') }) },
+    { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/messages/${HEX}/artifact$`), handle: wrap(async (req, workspaceId, id, conversationId, messageId) => {
+      if (req.method !== 'POST') throw new FeatureError(405, 'method', 'Only POST is supported')
+      const body = await req.json()
+      const {status, artifact} = await call('saveMessage', {workspace_id: workspaceId, id,
+        conversation_id: conversationId, message_id: messageId, title: body.title})
+      return {status, body: {artifact}}
+    }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/messages$`), handle: wrap(async (req, workspaceId, id, conversationId) => {
       if (req.method !== 'POST') throw new FeatureError(400, 'invalid', 'Invalid conversation request')
       const body = await req.json()

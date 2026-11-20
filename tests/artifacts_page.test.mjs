@@ -874,6 +874,7 @@ test('saveable messages require real text and reject retracted or unfinished row
   assert.equal(saveableSocialMessage({body: '你好', revision: 1}), true);
   assert.equal(saveableSocialMessage({body: '  ', revision: 1}), false);
   assert.equal(saveableSocialMessage({body: '你好', retracted: 1}), false);
+  assert.equal(saveableSocialMessage({body: '语音消息', revision: 1, voice: {mime: 'audio/webm'}}), false);
   assert.equal(saveableAgentMessage({body: '完成稿', status: 'succeeded'}), true);
   assert.equal(saveableAgentMessage({body: '完成稿', status: 'queued'}), false);
   assert.equal(defaultSaveTitle('  第一段内容  '), '第一段内容');

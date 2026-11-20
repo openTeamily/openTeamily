@@ -4,7 +4,7 @@
 // dashboards, history, export and authenticated share records are served here;
 // public /share/<token> pages are rendered by Bot Social (snapshot published here).
 import { defineFeature } from '../../featurekit/feature.js'
-import { HEX32, refuse } from '../../featurekit/http.js'
+import { HEX32, digest, refuse } from '../../featurekit/http.js'
 import { createArtifact, listFiles, PER_WORKSPACE, search } from './library.js'
 import { IMPORT_TABLES, MIGRATIONS } from './schema.js'
 import { routes } from './routes.js'
@@ -27,6 +27,16 @@ export default defineFeature({
       const input = payload ?? {}
       const result = createArtifact(ctx, input.workspace_id, input, input.idempotency_key)
       return { artifact: result.body.artifact }
+    },
+    async saveChatMessage(input, call) {
+      if (!call?.internal) refuse(403, 'forbidden', 'Save chat messages from their conversation')
+      const { workspace_id: workspace, conversation_id, message_id, agent_id, conversation_title, body } = input
+      const title = input.title ?? (body.replace(/\s+/g, ' ').trim().slice(0, 60) || '消息记录')
+      const source = {kind: 'agent_message', id: message_id, conversation_id, agent_id, conversation_title}
+      const key = agent_id ? 'msg-save-' + digest(message_id).slice(0, 48)
+        : ('msg-save-' + message_id).replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 64)
+      const result = createArtifact(ctx, workspace, {kind: 'document', title, body, source}, key, {reuseChatSource: true})
+      return {status: result.status, artifact: result.body.artifact}
     },
     async files(payload) {
       const workspaceId = payload?.workspace_id

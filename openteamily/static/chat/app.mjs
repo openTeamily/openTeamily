@@ -7,6 +7,7 @@ import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/ap
 import { conversationLabel, memberChoices, validMessage } from '../messenger/app.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 import { dsbotServed, dsbotRoute, dsbotRequest } from './dsbot.mjs';
+import { agentSavePath, defaultSaveTitle, saveableAgentMessage, saveableSocialMessage, socialSavePath, spaceHref } from '../shell/thumb.mjs';
 
 export const SEARCH_TABS = [
   ['all', '全部'],
@@ -1041,12 +1042,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       } else {
         li.append(role, body);
       }
-      if (item.role === 'assistant' && item.status === 'succeeded' && item.body) {
-        const save = document.createElement('button');
-        save.type = 'button';
-        save.dataset.save = item.id;
-        save.textContent = '保存到作品库';
-        li.append(save);
+      if (item.role === 'assistant' && saveableAgentMessage(item)) {
+        li.append(saveMessageButton(item, currentAgent.id));
       }
       list.append(li);
       if (waiting) pending = true;
@@ -1201,7 +1198,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function openMessageMenu(item, li, mine, x, y) {
     const menu = document.getElementById('message-context-menu');
     if (!menu) return;
-    messageMenuTarget = {item, li, mine};
+    const scroller = document.getElementById('message-scroller');
+    messageMenuTarget = {item, li, mine, scrollTop: scroller?.scrollTop};
     const reactions = document.getElementById('message-menu-reactions');
     reactions.replaceChildren(...MESSAGE_REACTIONS.map(emoji => {
       const button = document.createElement('button');
@@ -1219,6 +1217,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const edit = menu.querySelector('[data-menu="edit"]');
     if (edit) edit.hidden = !mine;
     menu.querySelector('[data-menu="forward"]').disabled = forwardTargets(socialConversations, currentConversation && currentConversation.id).length === 0;
+    menu.querySelector('[data-menu="save"]').hidden = !saveableSocialMessage(item);
     menu.hidden = false;
     const width = menu.offsetWidth || 200, height = menu.offsetHeight || 360;
     const left = Math.max(8, Math.min(x, globalThis.innerWidth - width - 8));
@@ -1226,7 +1225,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     menu.style.setProperty('left', left + 'px');
     menu.style.setProperty('top', top + 'px');
     const first = menu.querySelector('button:not(:disabled)');
-    if (first) first.focus();
+    if (first) first.focus({preventScroll: true});
   }
 
   const messageMenu = document.getElementById('message-context-menu');
@@ -1286,7 +1285,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.addEventListener('keydown', event => { if (event.key === 'Escape' && !messageMenu.hidden) closeMessageMenu(); });
     globalThis.addEventListener('resize', closeMessageMenu);
     const scroller = document.getElementById('message-scroller');
-    if (scroller) scroller.addEventListener('scroll', closeMessageMenu, {passive: true});
+    if (scroller) scroller.addEventListener('scroll', () => {
+      if (messageMenuTarget && scroller.scrollTop !== messageMenuTarget.scrollTop) closeMessageMenu();
+    }, {passive: true});
   }
 
   let saveMessageTarget = null;
@@ -1311,33 +1312,60 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       reminderNotice(result.status, result.body));
   }
 
-  function openSaveMessage(item) {
-    saveMessageTarget = {item, workspace: workspaceId(), conversation: currentConversation.id};
-    document.getElementById('save-message-title').value = String(item.body || '').replace(/\s+/g, ' ').trim().slice(0, 60) || '消息记录';
+  function openSaveMessage(item, agentId) {
+    if (!currentConversation) return;
+    const workspace = workspaceId(), conversation = currentConversation.id;
+    const path = agentId ? agentSavePath(workspace, agentId, conversation, item.id)
+      : socialSavePath(workspace, conversation, item.id);
+    saveMessageTarget = {workspace, path, revision: agentId ? null : item.revision || 1};
+    document.getElementById('save-message-title').value = defaultSaveTitle(item.body);
     document.getElementById('save-message-error').hidden = true;
     saveMessageDialog.showModal();
     document.getElementById('save-message-title').focus();
   }
+
+  function saveMessageButton(item, agentId) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.save = item.id;
+    button.textContent = '保存到资料空间';
+    button.addEventListener('click', () => openSaveMessage(item, agentId));
+    return button;
+  }
+  saveMessageDialog?.addEventListener('close', () => { saveMessageTarget = null; });
   const saveMessageCancel = document.getElementById('save-message-cancel');
   if (saveMessageCancel) saveMessageCancel.addEventListener('click', () => { saveMessageDialog.close(); saveMessageTarget = null; });
   const saveMessageForm = document.getElementById('save-message-form');
   if (saveMessageForm) saveMessageForm.addEventListener('submit', async event => {
     event.preventDefault();
     if (!saveMessageTarget) return;
-    const {item, workspace, conversation} = saveMessageTarget;
+    const target = saveMessageTarget;
     const button = document.getElementById('save-message-submit');
     const error = document.getElementById('save-message-error');
     if (button.disabled) return;
     button.disabled = true; error.hidden = true;
     try {
-      const result = await request('POST', `/v1/workspaces/${workspace}/social/conversations/${conversation}/messages/${item.id}/save`,
-        {title: document.getElementById('save-message-title').value, revision: item.revision || 1});
+      const body = {title: document.getElementById('save-message-title').value.trim()};
+      if (target.revision !== null) body.revision = target.revision;
+      const result = await request('POST', target.path, body);
+      if (saveMessageTarget !== target || workspaceId() !== target.workspace) return;
       if (result.status !== 200 && result.status !== 201) {
         error.textContent = messageFor(result.body.error, '消息未保存，请重新打开消息后重试。'); error.hidden = false; return;
       }
       saveMessageDialog.close(); saveMessageTarget = null;
-      show('ok', result.status === 201 ? `已保存到工作区资料空间：${result.body.artifact.title}` : `已存在工作区资料空间中（未同步后续编辑）：${result.body.artifact.title}`);
-    } catch { error.textContent = '网络错误，无法确认保存结果。可以重试，不会产生重复副本。'; error.hidden = false; }
+      const artifact = result.body.artifact;
+      show('ok', result.status === 201 ? '已保存到资料空间。' : '资料空间里已有这条消息的副本。');
+      if (artifact?.id) {
+        const link = document.createElement('a');
+        link.href = spaceHref(target.workspace, artifact.id);
+        link.textContent = '打开文档';
+        status.append(document.createTextNode(' '), link);
+      }
+    } catch {
+      if (saveMessageTarget !== target) return;
+      error.textContent = '无法确认保存结果，请重试。';
+      error.hidden = false;
+    }
     finally { button.disabled = false; }
   });
 
@@ -1512,6 +1540,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         });
         li.append(edit, retract, controls);
       }
+      if (item.role === 'agent' && saveableSocialMessage(item)) li.append(saveMessageButton(item));
       if (item.role !== 'agent' && !item.retracted) li.append(messageTools(item));
       if (item.role !== 'agent' && !item.retracted) li.append(reactionBar(item));
       if (item.role !== 'agent' && !item.retracted) {
@@ -3369,21 +3398,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('chat-form').addEventListener('submit', event => {
     event.preventDefault();
     sendCurrentMessage();
-  });
-
-  document.getElementById('message-list').addEventListener('click', async event => {
-    const button = event.target.closest('button[data-save]');
-    if (!button || !currentConversation || !currentAgent) return;
-    const result = await request(
-      'POST',
-      `${agentBase()}/conversations/${currentConversation.id}/messages/${button.dataset.save}/artifact`,
-      {},
-    );
-    if (result.status !== 201 && result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法保存到作品库。'));
-      return;
-    }
-    show('ok', '已保存到作品库。');
   });
 
   document.getElementById('logout-form').addEventListener('submit', async event => {

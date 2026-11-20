@@ -12,7 +12,7 @@ import { bindDocumentEditor } from '../shell/rich-editor.mjs';
 import {
   renderThumb,
   websiteTitle, websiteStub, websitePrompt, saveableSocialMessage, saveableAgentMessage,
-  socialSavePath, agentSavePath, defaultSaveTitle, describeWebsiteDispatch,
+  socialSavePath, agentSavePath, defaultSaveTitle, describeWebsiteDispatch, conversationChatHref,
 } from '../shell/thumb.mjs';
 
 // `/space?new=<kind>` opens the matching 新建 editor once the page has loaded
@@ -633,7 +633,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       drawBoard();
     }
     const source = document.getElementById('editor-source');
-    if (item && item.source) {
+    if (item?.source?.kind === 'agent_message' && item.source.conversation_id) {
+      const {conversation_id: id, agent_id, conversation_title} = item.source;
+      const link = document.createElement('a');
+      link.href = conversationChatHref(workspaceId(), {source: agent_id ? 'agent' : 'social', id, agent_id});
+      link.textContent = conversation_title || '打开会话';
+      source.hidden = false;
+      source.textContent = '来源会话：';
+      source.append(link);
+    } else if (item && item.source) {
       source.hidden = false;
       const from = item.source.kind === 'agent_message' ? '对话消息'
         : item.source.kind === 'agent_task' ? '代理任务' : '自动化运行';
@@ -1920,92 +1928,111 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openSaveMessageDialog() {
-    if (!workspaceId()) { show('error', '先选择一个工作区。'); return; }
+    const workspace = workspaceId();
+    if (!workspace) { show('error', '先选择一个工作区。'); return; }
     const ui = openSpaceDialog('save-message-dialog', '保存聊天中的消息');
+    const current = () => spaceActionDialog === ui.dialog && workspaceId() === workspace;
+    const feedback = text => {
+      ui.note.hidden = !text;
+      ui.note.textContent = text;
+    };
+    ui.note.setAttribute('role', 'status');
+
+    const label = document.createElement('label');
+    label.textContent = '会话';
+    const select = document.createElement('select');
+    select.id = 'save-message-conversation';
+    select.disabled = true;
+    const prompt = document.createElement('option');
+    prompt.value = '';
+    prompt.textContent = '选择要查看的会话';
+    select.append(prompt);
+    label.append(select);
     const list = document.createElement('ul');
     list.id = 'save-message-list';
     const close = document.createElement('button');
     close.type = 'button';
     close.textContent = '关闭';
-    close.addEventListener('click', () => closeSpaceActionDialog());
-    ui.card.append(list, close);
-    const candidates = [];
-    const social = await request('GET', `/v1/workspaces/${workspaceId()}/social/conversations?limit=20`);
-    if (social.status === 200) {
-      for (const conversation of social.body.items || []) {
-        const messages = await request('GET', `/v1/workspaces/${workspaceId()}/social/conversations/${conversation.id}/messages?limit=20`);
-        if (messages.status !== 200) continue;
-        for (const item of messages.body.items || []) {
-          if (saveableSocialMessage(item)) {
-            candidates.push({
-              label: (conversation.title || '会话') + ' · ' + defaultSaveTitle(item.body),
-              path: socialSavePath(workspaceId(), conversation.id, item.id),
-              title: defaultSaveTitle(item.body),
-              revision: item.revision || 1,
-              social: true,
-            });
+    close.addEventListener('click', closeSpaceActionDialog);
+    ui.card.append(label, list, close);
+    feedback('正在加载会话…');
+
+    const base = `/v1/workspaces/${workspace}`;
+    const get = suffix => request('GET', base + suffix).catch(() => ({status: 0, body: {}}));
+    const [social, agents] = await Promise.all([
+      get('/social/conversations?limit=100'),
+      get('/agents?limit=100&include=conversations'),
+    ]);
+    if (!current()) return;
+    const agentById = new Map((agents.body.items || []).map(agent => [agent.id, agent]));
+    const conversations = [
+      ...(social.body.items || []).map(row => ({...row, label: conversationLabel(row), social: true})),
+      ...(agents.body.conversations || []).filter(row => agentById.has(row.agent_id)).map(row => ({
+        ...row, label: agentById.get(row.agent_id).name + ' · ' + row.title,
+      })),
+    ].sort((a, b) => (b.updated || 0) - (a.updated || 0));
+    const incomplete = social.status !== 200 || agents.status !== 200 || !Array.isArray(agents.body.conversations);
+    feedback(incomplete ? '部分会话无法加载。' : (conversations.length ? '' : '这个工作区还没有会话。'));
+    if (!conversations.length) return;
+    conversations.forEach((row, index) => {
+      const option = document.createElement('option');
+      option.value = String(index);
+      option.textContent = row.label;
+      select.append(option);
+    });
+    select.disabled = false;
+    select.focus();
+
+    let search = 0;
+    select.addEventListener('change', async () => {
+      const selected = ++search;
+      list.replaceChildren();
+      const conversation = conversations[select.value === '' ? -1 : Number(select.value)];
+      if (!conversation) { feedback(''); return; }
+      feedback('正在加载消息…');
+      const path = conversation.social ? `/social/conversations/${conversation.id}/messages?limit=20`
+        : `/agents/${conversation.agent_id}/conversations/${conversation.id}`;
+      const result = await get(path);
+      if (!current() || selected !== search) return;
+      if (result.status !== 200) { feedback('无法加载消息，请重试。'); return; }
+      const items = (result.body.items || []).filter(conversation.social ? saveableSocialMessage : saveableAgentMessage);
+      feedback(items.length ? '' : '这段会话还没有可保存的文字消息。');
+      for (const item of items.slice(-20).reverse()) {
+        const row = document.createElement('li');
+        const preview = document.createElement('span');
+        preview.textContent = defaultSaveTitle(item.body);
+        const save = document.createElement('button');
+        save.type = 'button';
+        save.textContent = '保存';
+        save.addEventListener('click', async () => {
+          const endpoint = conversation.social ? socialSavePath(workspace, conversation.id, item.id)
+            : agentSavePath(workspace, conversation.agent_id, conversation.id, item.id);
+          const body = {title: preview.textContent};
+          if (conversation.social) body.revision = item.revision || 1;
+          save.disabled = true;
+          feedback('');
+          try {
+            const saved = await request('POST', endpoint, body);
+            if (!current() || selected !== search) return;
+            if (saved.status !== 200 && saved.status !== 201) {
+              feedback(messageFor(saved.body.error, '保存失败，请重试。'));
+              return;
+            }
+            closeSpaceActionDialog();
+            show('ok', saved.status === 201 ? '已保存为文档。' : '已打开已有副本。');
+            if (catalogScope !== 'all') { catalogScope = 'all'; syncViewUrl(); }
+            await loadList();
+            if (workspaceId() === workspace && saved.body.artifact) openEditor(saved.body.artifact);
+          } catch {
+            if (current() && selected === search) feedback('无法确认保存结果，请重试。');
+          } finally {
+            save.disabled = false;
           }
-        }
+        });
+        row.append(preview, save);
+        list.append(row);
       }
-    }
-    const agents = await request('GET', `/v1/workspaces/${workspaceId()}/agents?limit=100`);
-    const agentItems = agents.status === 200 ? (agents.body.items || []) : [];
-    const personal = await request('GET', '/v1/personal-agent');
-    const personalSave = personal.status === 200 ? personal.body.personal_agent : null;
-    if (personalSave && personalSave.agent && personalSave.workspace && personalSave.workspace.id === workspaceId()) {
-      const agent = personalSave.agent;
-      if (!agentItems.some((row) => row.id === agent.id)) agentItems.unshift(agent);
-    }
-    for (const agent of agentItems) {
-      const conversations = await request('GET', `/v1/workspaces/${workspaceId()}/agents/${agent.id}/conversations?limit=20`);
-      if (conversations.status !== 200) continue;
-      for (const conversation of conversations.body.items || []) {
-        const messages = await request('GET', `/v1/workspaces/${workspaceId()}/agents/${agent.id}/conversations/${conversation.id}/messages?limit=20`);
-        if (messages.status !== 200) continue;
-        for (const item of messages.body.items || []) {
-          if (saveableAgentMessage(item)) {
-            candidates.push({
-              label: (agent.name || '智能体') + ' · ' + defaultSaveTitle(item.body),
-              path: agentSavePath(workspaceId(), agent.id, conversation.id, item.id),
-              title: defaultSaveTitle(item.body),
-              social: false,
-            });
-          }
-        }
-      }
-    }
-    if (!candidates.length) {
-      ui.note.hidden = false;
-      ui.note.textContent = '这个工作区还没有可保存的已完成消息。';
-      return;
-    }
-    for (const candidate of candidates.slice(0, 40)) {
-      const row = document.createElement('li');
-      const label = document.createElement('span');
-      label.textContent = candidate.label;
-      const save = document.createElement('button');
-      save.type = 'button';
-      save.textContent = '保存';
-      save.addEventListener('click', async () => {
-        save.disabled = true;
-        const body = {title: candidate.title};
-        if (candidate.social) body.revision = candidate.revision;
-        const saved = await request('POST', candidate.path, body);
-        if (saved.status === 200 || saved.status === 201) {
-          closeSpaceActionDialog();
-          show('ok', '已保存为云文档。');
-          if (catalogScope !== 'all') { catalogScope = 'all'; syncViewUrl(); }
-          await loadList();
-          if (saved.body.artifact) openEditor(saved.body.artifact);
-          return;
-        }
-        save.disabled = false;
-        ui.note.hidden = false;
-        ui.note.textContent = messageFor(saved.body.error, '保存失败。');
-      });
-      row.append(label, save);
-      list.append(row);
-    }
+    });
   }
 
 
