@@ -185,10 +185,28 @@
           <a href="/settings" class="profile-private-link">在设置中管理</a>
         </div>
         <p class="profile-delete-wrap">
-          <button type="button" id="profile-delete-account" class="profile-delete" disabled title="未接通：还没有删除账户接口">删除账户 ›</button>
+          <button type="button" id="profile-delete-account" class="profile-delete" title="删除前要输入你自己的用户名确认；仍拥有工作区的账户会被拒绝并说明原因">删除账户 ›</button>
         </p>
       </section>
     </form>
+    <div id="delete-account-dialog" class="profile-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="delete-account-title">
+      <div class="profile-dialog-card">
+        <header class="profile-dialog-head">
+          <h2 id="delete-account-title">删除账户</h2>
+          <button type="button" id="delete-account-cancel" aria-label="取消">×</button>
+        </header>
+        <p class="note">删除后：这个账户的会话立即失效，用户名释放、可以重新注册；资料、设置、通知、密钥和成员关系一并清除，没有回收站。</p>
+        <p class="note">仍拥有工作区、或在工作区里创建过别人还在用的内容的账户，当前版本会拒绝删除并说明原因——那些内容属于工作区，不是单个账户能一起删掉的。</p>
+        <label class="profile-field">输入你的用户名 <strong id="delete-account-expected"></strong> 以确认
+          <input id="delete-account-confirm" autocomplete="off" maxlength="64">
+        </label>
+        <p id="delete-account-note" class="note"></p>
+        <div class="profile-actions">
+          <button type="button" id="delete-account-back" class="secondary">取消</button>
+          <button type="button" id="delete-account-submit" class="profile-delete">确认删除</button>
+        </div>
+      </div>
+    </div>
     </div>
     <div id="followers-dialog" class="profile-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="followers-dialog-title">
       <div class="profile-dialog-card">

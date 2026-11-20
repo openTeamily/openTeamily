@@ -31,7 +31,7 @@ export const CATALOG = [
   {id: 'space-library', category: 'artifacts', title: '资料空间', body: '「作品」打开资料空间，可按类型和范围浏览。空态文案和筛选已按记录摆出；有作品时的网格还没有对照实图。', path: ['应用栏', '作品']},
   {id: 'space-filters', category: 'artifacts', title: '筛选作品', body: '打开筛选面板，查看文件类型、修改时间、创建人和来源会话。来源会话会列出已有会话标题。', path: ['资料空间', '筛选']},
   {id: 'space-dir-collapse', category: 'artifacts', title: '收起资料目录', body: '在「资料空间」标题旁可以收起或展开左侧目录。收起只对当前会话有效。', path: ['资料空间', '收起侧边栏']},
-  {id: 'open-profile', category: 'me', title: '查看我的资料', body: '「我」打开当前账户页，目前只显示用户名。更换头像、简介、标签和删除账户仍标明未实现。', path: ['应用栏', '我']},
+  {id: 'open-profile', category: 'me', title: '查看我的资料', body: '「我」打开当前账户页，目前只显示用户名。更换头像、简介、标签仍标明未实现；删除账户在「私密信息」里，要输入自己的用户名确认。', path: ['应用栏', '我']},
   {id: 'settings-hub', category: 'settings', title: '所有设置', body: '打开设置总览，进入语言、外观、渠道、运行时和偏好等已有页面。用量、升级和积分按产品决定不做。', path: ['账户菜单', '所有设置']},
   {id: 'settings-appearance', category: 'settings', title: '外观', body: '选择浅色、深色、自动或跟随系统。自动切换的真实日出日落时刻仍明确未计算。', path: ['设置', '外观']},
   {id: 'settings-language', category: 'settings', title: '语言', body: '设置系统语言、聊天语言，以及是否自动翻译消息。', path: ['设置', '语言']},

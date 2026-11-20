@@ -63,5 +63,8 @@ test('terms and privacy state where a self-hosted instance keeps its data', () =
   assert.ok(privacy.includes('management.sqlite3'), 'privacy must name the real database file');
   assert.ok(privacy.includes('artifact_media'), 'privacy must name where media blobs live');
   assert.ok(privacy.includes('/artifacts/&lt;id&gt;/export'), 'privacy must cite the real export route');
-  assert.ok(privacy.includes('删除账户'), 'privacy must say account deletion is not self-service');
+  assert.ok(privacy.includes('删除账户'), 'privacy must describe account deletion');
+  assert.ok(privacy.includes('/v1/account/delete'),
+    'privacy must cite the real deletion route it now offers');
+  assert.ok(privacy.includes('用户名'), 'privacy must say deletion needs the account username');
 });

@@ -30,6 +30,15 @@ export function parseTags(text) {
   return tags;
 }
 
+export function deleteConfirmation(typed, username) {
+  const candidate = String(typed == null ? '' : typed).trim();
+  if (!candidate) return {ok: false, message: '请输入你的用户名以确认删除。'};
+  if (candidate.toLowerCase() !== String(username || '').toLowerCase()) {
+    return {ok: false, message: '输入的账户名与你登录的账户不一致，没有删除任何内容。'};
+  }
+  return {ok: true, message: ''};
+}
+
 export function avatarTone(name) {
   let hash = 0;
   for (const ch of String(name || '')) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
@@ -452,6 +461,78 @@ function mount() {
     fill(result.body.profile, username);
     applyAvatar(result.body.avatar);
     if (hasHome()) await loadAgents();
+  }
+
+    const deleteButton = document.getElementById('profile-delete-account');
+  const deleteDialog = document.getElementById('delete-account-dialog');
+  const deleteNote = document.getElementById('delete-account-note');
+  const deleteInput = document.getElementById('delete-account-confirm');
+  const deleteSubmit = document.getElementById('delete-account-submit');
+  let deleting = false;
+
+  function closeDeleteDialog() {
+    if (deleteDialog) deleteDialog.hidden = true;
+    if (deleteNote) deleteNote.textContent = '';
+    if (deleteInput) deleteInput.value = '';
+  }
+
+  if (deleteButton && deleteDialog) {
+    deleteButton.addEventListener('click', () => {
+      deleteDialog.hidden = false;
+      if (deleteNote) deleteNote.textContent = '';
+      const expected = document.getElementById('delete-account-expected');
+      if (expected) expected.textContent = currentUsername;
+      if (deleteInput) {
+        deleteInput.value = '';
+        if (typeof deleteInput.focus === 'function') deleteInput.focus();
+      }
+    });
+    for (const id of ['delete-account-cancel', 'delete-account-back']) {
+      const button = document.getElementById(id);
+      if (button) button.addEventListener('click', closeDeleteDialog);
+    }
+    if (typeof document.addEventListener === 'function') {
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') closeDeleteDialog();
+      });
+    }
+  }
+
+  if (deleteSubmit) {
+    deleteSubmit.addEventListener('click', async () => {
+      if (deleting) return;
+      const typed = deleteInput ? deleteInput.value : '';
+      const verdict = deleteConfirmation(typed, currentUsername);
+      if (!verdict.ok) {
+        if (deleteNote) deleteNote.textContent = verdict.message;
+        return;
+      }
+      deleting = true;
+      deleteSubmit.disabled = true;
+      try {
+        const result = await request('POST', '/v1/account/delete', {username: String(typed).trim()});
+        if (result.status === 204) {
+          closeDeleteDialog();
+          mainPanel.hidden = true;
+          loginPanel.hidden = false;
+          show('ok', '账户已删除，用户名已释放，现在可以重新注册。');
+          return;
+        }
+        if (result.status === 400) {
+          if (deleteNote) deleteNote.textContent = '输入的账户名与你登录的账户不一致，没有删除任何内容。';
+          return;
+        }
+        if (result.status === 409) {
+          show('error', '这个账户还有共享内容（工作区或其中别人也在用的记录），当前版本不能自助删除。');
+          if (deleteNote) deleteNote.textContent = '先删除你创建的工作区，或联系实例运行者处理这些内容。';
+          return;
+        }
+        show('error', messageFor(result.body && result.body.error, '删除失败，账户没有变化。'));
+      } finally {
+        deleting = false;
+        deleteSubmit.disabled = false;
+      }
+    });
   }
 
   const changeAvatar = document.getElementById('profile-change-avatar');

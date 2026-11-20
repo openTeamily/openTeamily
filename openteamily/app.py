@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import custom_mcp, skill_packages, agent_runtime, agents, artifacts, automations, bot_social, composio, composio_principals, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_autoprovision, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams, skill_installs
+from . import custom_mcp, skill_packages, agent_runtime, agents, artifacts, automations, bot_social, composio, composio_principals, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_autoprovision, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams, skill_installs, account_deletion
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -148,7 +148,10 @@ class App:
             except BaseException:
                 body.close();raise
             return body
-        if isinstance(body, (bytes, bytearray)):
+        if status == 204:
+            data = b''
+            body = None
+        elif isinstance(body, (bytes, bytearray)):
             data = bytes(body)
             if not any(key.lower() == 'content-type' for key, _value in headers):
                 headers.insert(0, ('Content-Type', 'text/plain; charset=utf-8'))
@@ -693,6 +696,18 @@ class App:
                 if method == 'POST' and not query:
                     return self.save_profile(db, session, now, env)
                 refuse(400, 'invalid', 'Invalid profile request')
+            if path == '/v1/account/delete':
+                if method != 'POST' or query:
+                    refuse(400, 'invalid', 'Invalid account deletion request')
+                body = self.body(env, ['username'])
+                typed = body.get('username')
+                if not isinstance(typed, str) or typed.strip().lower() != session['username'].lower():
+                    refuse(400, 'confirmation_mismatch', 'Type your own username to confirm deletion')
+                found = account_deletion.delete(db, session['user_id'])
+                if found:
+                    refuse(409, 'account_in_use',
+                           'This account still owns shared content; delete or hand it over first')
+                return 204, None, self.session_headers('', '', expires=True)
             if path == '/v1/onboarding/recommendations' and method == 'GET' and not query:
                 row = onboarding.load(db, session['user_id'])
                 role = row['role'] if row is not None else ''

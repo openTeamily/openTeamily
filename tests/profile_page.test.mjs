@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { sanitizeHandle, parseTags } from '../openteamily/static/profile/app.mjs';
+import { sanitizeHandle, parseTags, deleteConfirmation } from '../openteamily/static/profile/app.mjs';
+import { readFileSync } from 'node:fs';
 
 test('sanitizeHandle derives a lowercase dotted handle', () => {
   assert.equal(sanitizeHandle('Alice'), 'alice');
@@ -129,10 +130,16 @@ async function mountProfile(options = {}) {
   const profileCalls = () => calls.filter(([path]) => path === '/v1/profile').length;
   const postCalls = () => calls.filter(([path, method]) => path === '/v1/profile' && method === 'POST').length;
   const fetcher = async (path, init) => {
-    calls.push([path, init && init.method]);
+    calls.push([path, init && init.method, init && init.body]);
     if (path === '/v1/auth/session') {
       if (options.session401) return {status: 401, json: async () => ({error: {message: 'not signed in'}})};
       return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    }
+    if (path === '/v1/account/delete') {
+      if (init && init.method !== 'POST') throw new Error('unexpected ' + init.method + ' ' + path);
+      const status = options.deleteStatus === undefined ? 204 : options.deleteStatus;
+      const body = options.deleteBody || (status === 204 ? {} : {error: {code: 'x', message: 'server text'}});
+      return {status, json: async () => body};
     }
     if (path !== '/v1/profile') throw new Error('unexpected ' + path);
     if (init && init.method === 'POST') {
@@ -355,6 +362,111 @@ test('资料首次加载用用户名兜底显示名和 handle，并给出对应�
     assert.equal(doc.getElementById('profile-public').href, '/p/alice.smith',
       'a saved handle must link to the public profile page');
   } finally { saved.restore(); }
+});
+
+function deleteButton(doc) {
+  const button = doc.getElementById('profile-delete-account');
+  assert.ok(Array.isArray(button.handlers.click) && button.handlers.click.length === 1,
+    'the 删除账户 button has no click handler, so the confirmation dialog never opens');
+  return button;
+}
+
+function deleteCalls(calls) {
+  return calls.filter(([path]) => path === '/v1/account/delete');
+}
+
+test('删除账户 only proceeds when the typed username matches the signed-in one', async () => {
+  assert.deepEqual(deleteConfirmation('', 'alice'), {ok: false, message: '请输入你的用户名以确认删除。'});
+  assert.deepEqual(deleteConfirmation('   ', 'alice'), {ok: false, message: '请输入你的用户名以确认删除。'});
+  assert.deepEqual(deleteConfirmation('bob', 'alice'),
+    {ok: false, message: '输入的账户名与你登录的账户不一致，没有删除任何内容。'});
+  assert.deepEqual(deleteConfirmation('alice', 'alice'), {ok: true, message: ''});
+  assert.deepEqual(deleteConfirmation(' ALICE ', 'alice'), {ok: true, message: ''},
+    'the username confirmation is case-insensitive, like the login form');
+});
+
+test('the profile page ships an enabled 删除账户 button and a typed-username dialog', () => {
+  const html = readFileSync(new URL('../openteamily/static/profile/index.html', import.meta.url), 'utf8');
+  const button = /<button[^>]*id="profile-delete-account"[^>]*>/.exec(html);
+  assert.ok(button, 'the profile page lost its 删除账户 button');
+  assert.ok(!/\sdisabled(?:\s|>|=)/.test(button[0]),
+    'the 删除账户 button is still disabled, so the route it claims cannot be reached');
+  assert.ok(!html.includes('未接通：还没有删除账户接口'),
+    'the page still claims there is no account deletion route');
+  assert.ok(/id="delete-account-dialog"/.test(html), 'the page has no delete confirmation dialog');
+  assert.ok(/id="delete-account-confirm"/.test(html), 'the dialog has no username confirmation input');
+  assert.ok(/id="delete-account-submit"/.test(html), 'the dialog has no confirm button');
+  assert.ok(/id="delete-account-cancel"/.test(html), 'the dialog has no cancel button');
+  assert.ok(/id="delete-account-note"/.test(html), 'the dialog has no note line for refusals');
+});
+
+test('删除账户 opens the dialog, refuses a wrong name locally, then posts the typed name', async () => {
+  const {doc, calls, restore} = await mountProfile({tag: 'delete-flow'});
+  try {
+    const dialog = doc.getElementById('delete-account-dialog');
+    assert.equal(dialog.hidden, true, 'the confirmation dialog must start hidden');
+    await deleteButton(doc).handlers.click[0]({preventDefault() {}});
+    assert.equal(dialog.hidden, false, 'clicking 删除账户 must open the confirmation dialog');
+    assert.equal(doc.getElementById('delete-account-expected').textContent, 'alice');
+
+    doc.getElementById('delete-account-confirm').value = 'bob';
+    await doc.getElementById('delete-account-submit').handlers.click[0]({preventDefault() {}});
+    assert.equal(deleteCalls(calls).length, 0,
+      'a wrong username must be refused locally, before any POST /v1/account/delete');
+    assert.equal(doc.getElementById('delete-account-note').textContent,
+      '输入的账户名与你登录的账户不一致，没有删除任何内容。');
+
+    doc.getElementById('delete-account-confirm').value = 'alice';
+    await doc.getElementById('delete-account-submit').handlers.click[0]({preventDefault() {}});
+    const sent = deleteCalls(calls);
+    assert.equal(sent.length, 1, 'a matching username must send exactly one POST /v1/account/delete');
+    assert.equal(sent[0][1], 'POST');
+    assert.equal(sent[0][2], '{"username":"alice"}',
+      'the request must carry the typed username so the server can check it too');
+    assert.equal(dialog.hidden, true, 'the dialog closes after the server deletes the account');
+    assert.equal(doc.getElementById('main-panel').hidden, true,
+      'a deleted account must not leave the profile form on screen');
+    assert.equal(doc.getElementById('login-panel').hidden, false,
+      'a deleted account must fall back to the signed-out panel');
+    assert.equal(doc.getElementById('status').dataset.kind, 'ok');
+    assert.equal(doc.getElementById('status').textContent,
+      '账户已删除，用户名已释放，现在可以重新注册。');
+  } finally { restore(); }
+});
+
+test('a 400 from the server keeps the account and shows the mismatch', async () => {
+  const {doc, restore} = await mountProfile({
+    tag: 'delete-400', deleteStatus: 400, deleteBody: {error: {code: 'confirmation_mismatch', message: 'Type your own username'}},
+  });
+  try {
+    await deleteButton(doc).handlers.click[0]({preventDefault() {}});
+    doc.getElementById('delete-account-confirm').value = 'alice';
+    await doc.getElementById('delete-account-submit').handlers.click[0]({preventDefault() {}});
+    assert.equal(doc.getElementById('main-panel').hidden, false,
+      'a refused 400 must keep the signed-in profile on screen');
+    assert.equal(doc.getElementById('delete-account-dialog').hidden, false,
+      'a refused 400 must keep the dialog open so the name can be retyped');
+    assert.equal(doc.getElementById('delete-account-note').textContent,
+      '输入的账户名与你登录的账户不一致，没有删除任何内容。');
+    assert.notEqual(doc.getElementById('status').dataset.kind, 'ok',
+      'a refused 400 must never report a successful deletion');
+  } finally { restore(); }
+});
+
+test('a 409 names the shared content that blocks the deletion instead of claiming it worked', async () => {
+  const {doc, restore} = await mountProfile({
+    tag: 'delete-409', deleteStatus: 409, deleteBody: {error: {code: 'account_in_use', message: 'Account still owns data'}},
+  });
+  try {
+    await deleteButton(doc).handlers.click[0]({preventDefault() {}});
+    doc.getElementById('delete-account-confirm').value = 'alice';
+    await doc.getElementById('delete-account-submit').handlers.click[0]({preventDefault() {}});
+    assert.equal(doc.getElementById('main-panel').hidden, false,
+      'a blocked 409 must keep the account and the profile on screen');
+    assert.equal(doc.getElementById('status').dataset.kind, 'error');
+    assert.equal(doc.getElementById('status').textContent,
+      '这个账户还有共享内容（工作区或其中别人也在用的记录），当前版本不能自助删除。');
+  } finally { restore(); }
 });
 
 function shareHandler(doc) {
