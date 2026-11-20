@@ -1849,3 +1849,25 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
 .voice-draft-actions button, .voice-message button { font-size: .8125rem; }
 .voice-message { margin-top: .375rem; }
 .voice-draft-panel audio, .voice-message audio { max-width: 100%; }
+
+.chat-history-toolbar {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .5rem;
+}
+.chat-history-toolbar:has(button:not([hidden])), .chat-history-toolbar:has(span:not(:empty)) {
+  margin: .5rem 0;
+}
+.chat-history-toolbar button, #chat-back-to-latest {
+  font-size: .8125rem;
+}
+#chat-back-to-latest:not([hidden]) {
+  display: block;
+  position: sticky;
+  inset-block-end: .5rem;
+  z-index: 2;
+  margin: .5rem auto 1rem;
+  background: var(--ot-surface);
+}

@@ -174,3 +174,32 @@ test("voice messages are idempotent and only current conversation members can pl
   assert.equal((await B.call("GET",audioPath)).status,404);
   assert.equal((await B.ok("GET",root)).messages[0].voice,undefined);
 });
+
+test("members can page, search and anchor shared history inside their conversation", async () => {
+  const A = await home(S.base,"history-a");
+  const B = await home(S.base,"history-b");
+  const C = await home(S.base,"history-c");
+  await teamOf(A,B,C);
+  const group = await A.ok("POST","/v1/ot/conversations",{kind:"group",title:"History",members:[B.handle]});
+  const path=`/v1/ot/conversations/${group.id}/messages`;
+  const messages=[];
+  for(let seq=1;seq<=6;seq++) messages.push(await A.ok("POST",path,{body:seq%2 ? "Planning " + seq : "Other " + seq}));
+  const latest=await B.ok("GET",path+"?limit=2");
+  assert.deepEqual(latest.messages.map((message:any)=>message.seq),[5,6]);
+  assert.equal(latest.next_before,5);
+  assert.equal(latest.has_newer,false);
+  const older=await B.ok("GET",path+"?limit=2&before="+latest.next_before);
+  assert.deepEqual(older.messages.map((message:any)=>message.seq),[3,4]);
+  assert.equal(older.has_newer,true);
+  const anchored=await B.ok("GET",path+"?limit=3&around="+messages[1].id);
+  assert.deepEqual(anchored.messages.map((message:any)=>message.seq),[1,2,3]);
+  assert.equal(anchored.next_before,null);
+  await A.ok("DELETE",`/v1/ot/messages/${messages[2].id}`);
+  const hits=await B.ok("GET",path+"?q=planning&limit=1");
+  assert.deepEqual(hits.messages.map((message:any)=>message.seq),[5]);
+  const next=await B.ok("GET",path+"?q=planning&limit=1&before="+hits.next_before);
+  assert.deepEqual(next.messages.map((message:any)=>message.seq),[1]);
+  assert.equal(next.next_before,null);
+  assert.equal((await C.call("GET",path+"?around="+messages[1].id)).status,404);
+  assert.equal((await C.call("GET",path+"?q=planning")).status,404);
+});
