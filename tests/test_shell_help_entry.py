@@ -18,7 +18,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 PAGES = sorted(
     path for path in (ROOT / 'openteamily' / 'static').glob('*/index.html')
-    if path.parent.name != 'about'
+    if path.parent.name not in ('about', 'set-password')
 )
 MENU = (
     ('帮助中心', '/help'),

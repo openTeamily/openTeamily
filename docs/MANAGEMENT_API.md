@@ -30,6 +30,8 @@ All responses are JSON and no-store. There is no CORS support. Errors are `{erro
 | Method | Path | Behavior |
 |---|---|---|
 | POST | `/v1/auth/register` | `{username,password}`; creates a salted password hash and a new session, if registration is enabled |
+| POST | `/v1/auth/password/request`, `/v1/auth/password/complete` | Email set-password link and password completion; see [EMAIL_AUTH.md](EMAIL_AUTH.md) |
+| POST | `/v1/auth/email/login/start`, `/v1/auth/email/login/verify` | Six-digit email login code for an existing linked email; never creates an account |
 | POST | `/v1/auth/login` | Same fields; new session, generic refusal for nonexistent/wrong credentials |
 | GET | `/v1/auth/providers` | Enabled third-party login providers (no secrets); see [OIDC.md](OIDC.md) |
 | GET/POST | `/v1/auth/oidc/*` | OAuth/OIDC start, callback and account linking; see [OIDC.md](OIDC.md) |

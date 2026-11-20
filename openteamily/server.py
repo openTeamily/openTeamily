@@ -1,5 +1,6 @@
 """Loopback-only development WSGI runner, not an internet-facing production server."""
 import argparse
+import os
 import socketserver
 from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 
@@ -38,6 +39,14 @@ def main():
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--insecure-local', action='store_true')
     parser.add_argument('--open-registration', action='store_true')
+    parser.add_argument('--email-registration', action='store_true',
+                        help='Enable email password setup and email-code login; SMTP settings are required')
+    parser.add_argument('--smtp-host')
+    parser.add_argument('--smtp-port', type=int, default=465)
+    parser.add_argument('--smtp-user')
+    parser.add_argument('--mail-from')
+    parser.add_argument('--terms-url')
+    parser.add_argument('--privacy-url')
     parser.add_argument('--simulation', action='store_true', help='Enable explicitly labelled simulation lifecycle APIs; never runs Docker')
     parser.add_argument('--compose-image', help='Explicit Compose execution profile; operator-supplied image@sha256 digest, never pulled by Web')
     parser.add_argument('--manager-grants', help='Operator-owned private JSON file containing manager credential digests and explicit instance grants')
@@ -48,6 +57,9 @@ def main():
     parser.add_argument('--no-automation-worker', action='store_true',
                         help='Do not start the background automation worker; explicit tick still works')
     args = parser.parse_args()
+    smtp_password = os.environ.get('OPENTEAMILY_SMTP_PASSWORD', '')
+    if args.email_registration and not (args.smtp_host and args.smtp_user and smtp_password and args.mail_from):
+        parser.error('Email registration requires --smtp-host, --smtp-user, --mail-from and OPENTEAMILY_SMTP_PASSWORD')
     if args.simulation and args.compose_image:
         parser.error('Choose simulation OR explicit Compose execution')
     if args.manager_grants and not (args.simulation or args.compose_image):
@@ -66,7 +78,16 @@ def main():
         http_policy = load_model_http_policy(args.model_http_policy) if args.model_http_policy else None
         auto_provision = load_auto_provision(args.auto_provision) if args.auto_provision else None
         app = App(store, Config(origin=args.origin, insecure_local=args.insecure_local,
-                                allow_registration=args.open_registration), lifecycle=lifecycle, manager_auth=manager_auth, operator_admin=operator_admin, oidc_registry=oidc_registry, model_http_policy=http_policy, auto_provision=auto_provision)
+                                allow_registration=args.open_registration,
+                                email_registration=args.email_registration,
+                                smtp_host=args.smtp_host or '',
+                                smtp_port=args.smtp_port,
+                                smtp_user=args.smtp_user or '',
+                                smtp_password=smtp_password,
+                                mail_from=args.mail_from or '',
+                                terms_url=args.terms_url or '',
+                                privacy_url=args.privacy_url or ''),
+                  lifecycle=lifecycle, manager_auth=manager_auth, operator_admin=operator_admin, oidc_registry=oidc_registry, model_http_policy=http_policy, auto_provision=auto_provision)
     except (OSError, ValueError, TypeError):
         parser.error('Cannot initialize private storage or origin configuration')
     page = SettingsPage(app)

@@ -61,7 +61,7 @@
   <section id="login-panel" hidden>
     <h2>登录</h2>
     <form id="login-form" method="post" action="/v1/auth/login">
-      <label>用户名 <input type="text" id="username" name="username" required autocomplete="username" maxlength="64"></label>
+      <label>用户名或邮箱 <input type="text" id="username" name="username" required autocomplete="username" maxlength="254"></label>
       <label>密码 <input id="password" name="password" type="password" required autocomplete="current-password" minlength="12" maxlength="256"></label>
       <button type="submit">登录</button>
     </form>

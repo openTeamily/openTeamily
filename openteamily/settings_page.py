@@ -17,6 +17,9 @@ class SettingsPage:
         '/register': ('register', 'index.html', 'text/html; charset=utf-8'),
         '/register/app.mjs': ('register', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/register/app.css': ('register', 'app.css', 'text/css; charset=utf-8'),
+        '/set-password': ('set-password', 'index.html', 'text/html; charset=utf-8'),
+        '/set-password/app.mjs': ('set-password', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/set-password/app.css': ('set-password', 'app.css', 'text/css; charset=utf-8'),
         '/settings': ('settings', 'index.html', 'text/html; charset=utf-8'),
         '/settings/appearance': ('settings', 'index.html', 'text/html; charset=utf-8'),
         '/settings/language': ('settings', 'index.html', 'text/html; charset=utf-8'),
@@ -106,7 +109,7 @@ class SettingsPage:
         '/home/app.mjs': ('home', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/home/app.css': ('home', 'app.css', 'text/css; charset=utf-8'),
     }
-    PREFIXES = ('/register', '/settings', '/automations', '/team', '/new', '/members', '/runtimes', '/artifacts', '/space', '/agents', '/memory', '/install', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/meetings', '/download', '/guide', '/about', '/skills', '/home', '/help', '/terms', '/privacy', '/docs')
+    PREFIXES = ('/register', '/set-password', '/settings', '/automations', '/team', '/new', '/members', '/runtimes', '/artifacts', '/space', '/agents', '/memory', '/install', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/meetings', '/download', '/guide', '/about', '/skills', '/home', '/help', '/terms', '/privacy', '/docs')
     CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
            "img-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'self'; "
            "frame-ancestors 'none'; object-src 'none'")
@@ -203,6 +206,10 @@ class SettingsPage:
             from .automations import TEMPLATES
             template = query[len('template='):] if query.startswith('template=') else ''
             return template in TEMPLATES and template != 'custom'
+        if path == '/set-password':
+            pairs = parse_qsl(query, keep_blank_values=True)
+            return (len(pairs) == 1 and pairs[0][0] == 'token'
+                    and re.fullmatch(r'[A-Za-z0-9_-]{43}', pairs[0][1]) is not None)
         if path == '/discover':
             if query in ('tab=agents', 'tab=agents&section=groups'):
                 return True

@@ -13,6 +13,31 @@
   <p class="brand">OpenTeamily</p>
   <h1>创建账户</h1>
   <p id="register-policy" role="status">正在读取本实例注册策略…</p><p>创建本实例的账户。仅在管理员开放注册时可用；第三方服务密钥稍后在设置中填写。</p>
+  <section class="email-auth" aria-labelledby="email-register-title">
+    <h2 id="email-register-title">用邮箱注册 / 设置密码</h2>
+    <p>我们会发送一封<strong>设置密码链接</strong>邮件，不会发送验证码。设置完成后可用邮箱和密码登录。</p>
+    <form id="email-register-form">
+      <label for="email-register-address">邮箱</label>
+      <input id="email-register-address" name="email" type="email" autocomplete="email" required maxlength="254" placeholder="you@example.com">
+      <label class="terms-row"><input id="email-register-terms" type="checkbox" required> 我同意服务条款和隐私政策，并接收账号安全邮件。</label>
+      <button id="email-register-send" type="button">发送设置密码链接</button>
+      <p id="email-register-status" role="status" aria-live="polite"></p>
+    </form>
+  </section>
+  <section class="email-auth" aria-labelledby="email-login-title">
+    <h2 id="email-login-title">邮箱验证码登录</h2>
+    <p>只用于已有账户。验证码只用于登录，不会创建账户。</p>
+    <form id="email-login-form">
+      <label for="email-login-address">邮箱</label>
+      <input id="email-login-address" name="email" type="email" autocomplete="email" required maxlength="254" placeholder="you@example.com">
+      <button id="email-login-send" type="button">发送登录验证码</button>
+      <label for="email-login-code">验证码</label>
+      <input id="email-login-code" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autocomplete="one-time-code">
+      <button id="email-login-submit" type="submit">登录</button>
+      <p id="email-login-status" role="status" aria-live="polite"></p>
+    </form>
+  </section>
+  <h2 class="direct-register-title">用用户名和密码注册</h2>
   <form id="register-form" method="post" action="/v1/auth/register">
     <label for="register-username">用户名</label>
     <input type="text" id="register-username" name="username" autocomplete="username" required minlength="3" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{2,63}" aria-describedby="username-help">

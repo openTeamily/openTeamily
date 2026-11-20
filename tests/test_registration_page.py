@@ -36,6 +36,24 @@ class RegistrationPageTests(unittest.TestCase):
             self.assertEqual(self.raw.call('GET', path)['status'], 200)
         self.assertEqual(self.raw.call('GET', '/register/missing')['status'], 404)
 
+    def test_email_registration_and_set_password_pages(self):
+        html = self.raw.call('GET', '/register')['body'].decode()
+        for marker in ('id="email-register-form"', 'id="email-login-form"',
+                       '发送设置密码链接', '邮箱验证码登录', 'id="email-register-terms"'):
+            self.assertIn(marker, html)
+        token = 'A' * 43
+        page = self.raw.call('GET', '/set-password', query='token=' + token)
+        self.assertEqual(page['status'], 200)
+        page_html = page['body'].decode()
+        self.assertIn('id="set-password-form"', page_html)
+        self.assertIn('保存密码并登录', page_html)
+        self.assertEqual(self.raw.call('GET', '/set-password/app.mjs')['status'], 200)
+        self.assertEqual(self.raw.call('GET', '/set-password/app.css')['status'], 200)
+        self.assertEqual(self.raw.call('GET', '/set-password', query='token=short')['status'], 400)
+        self.assertEqual(self.raw.call('GET', '/set-password', query='x=1')['status'], 400)
+        self.assertEqual(self.raw.call('GET', '/set-password', origin='https://evil.test')['status'], 403)
+        self.assertEqual(self.raw.call('POST', '/set-password')['status'], 405)
+
     def test_page_policy_not_weakened(self):
         self.assertEqual(self.raw.call('GET', '/register', origin='https://evil.test')['status'], 403)
         self.assertEqual(self.raw.call('GET', '/register', host='evil.test')['status'], 403)
@@ -62,6 +80,7 @@ class RegistrationPageTests(unittest.TestCase):
         self.api.config=replace(self.api.config,allow_registration=False)
         policy=self.client.call('GET','/v1/auth/policy')
         self.assertEqual(policy['status'],200);self.assertFalse(policy['body']['registration_open'])
+        self.assertFalse(policy['body']['email_registration'])
         self.assertTrue(policy['body']['session_requires_https'])
         self.assertNotIn('user_count',policy['body']);self.assertNotIn('first_user',policy['body'])
         for path in ('/v1/auth/policy?registration_open=true','/v1/auth/policy?next=/'):

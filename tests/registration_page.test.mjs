@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {registerAccount, mountRegistration} from '../openteamily/static/register/app.mjs';
+import {registerAccount, mountRegistration, requestPasswordSetup, requestEmailLoginCode, loginWithEmailCode} from '../openteamily/static/register/app.mjs';
+import {readToken, validatePasswords} from '../openteamily/static/set-password/app.mjs';
 
 const synthetic = 'synthetic fixture only';
 test('registration posts JSON only to same-origin existing API', async () => {
@@ -62,4 +63,45 @@ test('201 without actual session is not claimed as a successful login',async()=>
   const result=await registerAccount('synthetic',synthetic,async url=>url==='/v1/auth/register'?{status:201}:response);
   assert.equal(result.ok,false);assert.equal(result.created,true);assert.ok(!JSON.stringify(result).includes(synthetic));
  }
+});
+
+
+test('email password setup posts only email and terms and returns generic copy', async () => {
+  const result = await requestPasswordSetup('admin@example.com', async (url, options) => {
+    assert.equal(url, '/v1/auth/password/request');
+    assert.equal(options.method, 'POST');
+    assert.deepEqual(JSON.parse(options.body), {email: 'admin@example.com', accept_terms: true});
+    return {status: 200, json: async () => ({ok: true})};
+  });
+  assert.equal(result.ok, true);
+  assert.match(result.message, /设置密码链接/);
+  const denied = await requestPasswordSetup('x@example.com', async () => ({status: 403, json: async () => ({error: {code: 'registration_closed'}})}));
+  assert.equal(denied.ok, false);
+  assert.match(denied.message, /尚未开放/);
+});
+
+test('email login code is separate from password setup', async () => {
+  const started = await requestEmailLoginCode('admin@example.com', async (url, options) => {
+    assert.equal(url, '/v1/auth/email/login/start');
+    assert.deepEqual(JSON.parse(options.body), {email: 'admin@example.com'});
+    return {status: 200, json: async () => ({ok: true})};
+  });
+  assert.equal(started.ok, true);
+  const verified = await loginWithEmailCode('admin@example.com', '123456', async (url, options) => {
+    assert.equal(url, '/v1/auth/email/login/verify');
+    assert.deepEqual(JSON.parse(options.body), {email: 'admin@example.com', code: '123456'});
+    return {status: 200, json: async () => ({user: {id: 'fixture'}})};
+  });
+  assert.deepEqual(verified, {ok: true});
+  const wrong = await loginWithEmailCode('admin@example.com', '000000', async () => ({status: 400, json: async () => ({error: {code: 'invalid_code'}})}));
+  assert.equal(wrong.ok, false);
+  assert.match(wrong.message, /验证码/);
+});
+
+test('set-password token and confirmation validation stay local', () => {
+  assert.equal(readToken('?token=' + 'A'.repeat(43)), 'A'.repeat(43));
+  assert.equal(readToken('?x=1'), '');
+  assert.equal(validatePasswords('short', 'short'), '密码需要 12–256 个字符。');
+  assert.equal(validatePasswords('a'.repeat(13), 'a'.repeat(12)), '两次输入的密码不一致。');
+  assert.equal(validatePasswords('a'.repeat(13), 'a'.repeat(13)), '');
 });

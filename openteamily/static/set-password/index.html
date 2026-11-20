@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>设置密码 · OpenTeamily</title>
+  <link rel="stylesheet" href="/set-password/app.css">
+  <script type="module" src="/set-password/app.mjs"></script>
+</head>
+<body>
+<main>
+  <p class="brand">OpenTeamily</p>
+  <h1>设置密码</h1>
+  <p id="set-password-lead">正在验证链接…</p>
+  <form id="set-password-form" hidden>
+    <label for="set-password-value">新密码</label>
+    <input id="set-password-value" name="password" type="password" autocomplete="new-password" required minlength="12" maxlength="256" aria-describedby="password-help">
+    <p id="password-help" class="hint">12–256 个字符。建议使用密码管理器生成并保存。</p>
+    <label for="set-password-confirm">再次输入</label>
+    <input id="set-password-confirm" name="confirm" type="password" autocomplete="new-password" required minlength="12" maxlength="256">
+    <button id="set-password-submit" type="submit">保存密码并登录</button>
+    <p id="set-password-status" role="status" aria-live="polite"></p>
+  </form>
+  <noscript>请启用 JavaScript 后继续；密码只通过同源 POST 提交。</noscript>
+  <p class="hint"><a href="/register">返回登录 / 注册</a></p>
+</main>
+</body>
+</html>

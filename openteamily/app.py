@@ -1,5 +1,5 @@
 """WSGI management API. No Docker, subprocess, host mounts, or runtime credentials."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http.cookies import CookieError, SimpleCookie
 import hashlib
 import hmac
@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import custom_mcp, skill_packages, agent_runtime, agents, artifacts, automations, bot_social, composio, composio_principals, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_autoprovision, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams, skill_installs
+from . import custom_mcp, skill_packages, agent_runtime, agents, artifacts, automations, bot_social, composio, composio_principals, connected_tools, conversations, discover, email_auth, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_autoprovision, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams, skill_installs
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -30,6 +30,20 @@ class Config:
     origin: str
     insecure_local: bool = False
     allow_registration: bool = False
+    email_registration: bool = False
+    smtp_host: str = ''
+    smtp_port: int = 465
+    smtp_user: str = ''
+    smtp_password: str = field(default='', repr=False)
+    mail_from: str = ''
+    terms_url: str = ''
+    privacy_url: str = ''
+    password_setup_ttl: int = 1800
+    email_code_ttl: int = 600
+    email_code_attempts: int = 5
+    email_resend_seconds: int = 60
+    email_per_hour: int = 5
+    email_ip_per_hour: int = 20
     session_seconds: int = 43200
     max_users: int = 1000
     max_sessions_per_user: int = 8
@@ -73,11 +87,16 @@ class Config:
             raise ValueError('HTTP is allowed only for explicit insecure loopback or private-address development')
         if self.insecure_local and (parsed.scheme != 'http' or not model_api.insecure_http_allowed(parsed.hostname)):
             raise ValueError('Insecure cookies are restricted to HTTP loopback or private-address development')
+        string_fields = ('smtp_host', 'smtp_user', 'smtp_password', 'mail_from', 'terms_url', 'privacy_url')
         for name in self.__dataclass_fields__:
-            if name not in ('origin', 'insecure_local', 'allow_registration'):
+            if name not in ('origin', 'insecure_local', 'allow_registration', 'email_registration') + string_fields:
                 value = getattr(self, name)
                 if type(value) is not int or not 1 <= value <= (604800 if name == 'session_seconds' else 100000):
                     raise ValueError('Limits must be bounded positive integers')
+        if type(self.email_registration) is not bool:
+            raise ValueError('Email registration must be a boolean')
+        if type(self.smtp_port) is not int or not 1 <= self.smtp_port <= 65535:
+            raise ValueError('SMTP port must be a valid port')
         if self.session_seconds > 604800:
             raise ValueError('Session lifetime cannot exceed seven days')
 
@@ -97,7 +116,7 @@ def object_only(pairs):
 
 
 class App:
-    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, automation_backend=None, operator_admin=None, oidc_registry=None, composio_transport=None, model_http_policy=None, auto_provision=None, mcp_transport=None):
+    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, automation_backend=None, operator_admin=None, oidc_registry=None, composio_transport=None, model_http_policy=None, auto_provision=None, mcp_transport=None, mailer=None):
         from .model_http_policy import ModelHttpPolicy
         if model_http_policy is not None and not isinstance(model_http_policy, ModelHttpPolicy):
             raise ValueError("Invalid operator model HTTP policy")
@@ -117,6 +136,7 @@ class App:
         self.automation_backend = composio_principals.ScheduledToolBackend(inner_backend)
         self.operator_admin = operator_admin
         self.oidc_registry = oidc_registry
+        self.email_auth = email_auth.EmailAuth(self, mailer)
         self._automation_worker = None
         from .events import Limits
         self.event_limits = Limits()
@@ -535,12 +555,43 @@ class App:
             if method!='GET' or query:
                 refuse(400,'invalid','Authentication policy requires GET without query parameters')
             return 200,{'registration_open':self.config.allow_registration,
+                        'email_registration':self.config.email_registration,
                         'password_min_length':12,'password_max_length':256,
                         'username_min_length':3,'username_max_length':64,
                         'session_requires_https':not self.config.insecure_local},[]
+        if path in ('/v1/auth/password/request', '/v1/auth/password/complete',
+                    '/v1/auth/email/login/start', '/v1/auth/email/login/verify') and method == 'POST' and not query:
+            self.origin_check(env)
+            if path.endswith('/request'):
+                return self.email_auth.request_password(env, now, self.body(env, ['email', 'accept_terms']))
+            if path.endswith('/complete'):
+                return self.email_auth.complete_password(env, now, self.body(env, ['token', 'password']))
+            if path.endswith('/start'):
+                return self.email_auth.start_login(env, now, self.body(env, ['email']))
+            return self.email_auth.verify_login(env, now, self.body(env, ['email', 'code']))
         if path in ('/v1/auth/register', '/v1/auth/login') and method == 'POST':
             self.origin_check(env)  # Login/registration CSRF protection before a session exists.
             body = self.body(env, ['username', 'password'])
+            raw_username = body.get('username')
+            if (not path.endswith('register') and isinstance(raw_username, str)
+                    and '@' in raw_username):
+                email = raw_username.strip().lower()
+                password = body.get('password')
+                if not oidc.valid_email(email) or not email_auth.valid_password(password):
+                    refuse(400, 'invalid', 'Use a valid email and a 12–256 character password')
+                self.rate_limit(env, 'email-login:' + email, now)
+                with self.store.connect() as db:
+                    user = db.execute(
+                        'SELECT u.* FROM users u JOIN user_emails e ON e.user_id=u.id WHERE e.email=?',
+                        (email,)).fetchone()
+                if user is None:
+                    dummy_verify(password)
+                    refuse(401, 'unauthorized', 'Invalid email or password')
+                if not password_matches(password, user['password_hash']):
+                    refuse(401, 'unauthorized', 'Invalid email or password')
+                with self.store.transaction() as db:
+                    headers = self.new_session(db, user['id'], now)
+                return 200, {'user': {'id': user['id'], 'username': user['username']}}, headers
             username, password = self.credentials(body)
             self.rate_limit(env, username, now)  # Separate committed transaction: failures count too.
             if path.endswith('register'):
