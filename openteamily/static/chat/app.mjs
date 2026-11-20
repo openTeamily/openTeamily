@@ -773,6 +773,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       } else {
         li.append(role, body);
       }
+      if (item.role === 'assistant' && item.memory && item.memory.length) {
+        const refs = document.createElement('p');
+        refs.className = 'memory-refs';
+        refs.textContent = '参考了团队记忆：' + item.memory.map(ref => `[${ref.marker}] ${ref.title}` +
+          (ref.state === 'removed' ? '（已删除）' : ref.state === 'changed' ? '（之后有修改）' : '')).join('；');
+        li.append(refs);
+      }
       if (item.role === 'assistant' && item.status === 'succeeded' && item.body) {
         const save = document.createElement('button');
         save.type = 'button';
