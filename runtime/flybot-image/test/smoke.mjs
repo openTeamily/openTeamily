@@ -40,6 +40,8 @@ try {
     'run', '--detach', '--name', server, '--network', 'none',
     '--user', '1000:1000',
     '--read-only',
+    '--memory', '1536m',
+    '--cpus', '1',
     '--tmpfs', '/tmp:rw,noexec,nosuid,size=67108864',
     '--mount', `type=volume,src=${data},dst=/data`,
     '-e', 'DSH_TELEMETRY_DISABLED=1',
@@ -129,8 +131,14 @@ try {
       assert.ok(response.ok && body.ok, endpoint + ': ' + JSON.stringify(body.error))
       return body.value
     }
+    const speech = await call('/api/openteamily', 'meetings/v1', {
+      method: 'GET', path: '/v1/workspaces/' + 'a'.repeat(32) + '/meetings/speech',
+    })
+    assert.equal(speech.status, 200)
+    assert.ok(['checking', 'unprepared'].includes(speech.body?.phase), JSON.stringify(speech.body))
+    assert.equal(speech.body.ready, false, 'a fresh offline volume must wait for model preparation')
     const slug = 'deploy-accept-00000000'
-    const content = '# CI native skill\nRead these instructions.'
+    const content = ${JSON.stringify('# CI native skill\nRead these instructions.')}
     const saved = await call('/api/openteamily', 'skills/save', { name: slug, content })
     assert.equal(saved.attached, true)
     assert.ok(saved.name.length <= 32)

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply, name, inject } from '../index.js'
 import { resolvePagePath, PAGE_PATH, SERVED_BY_HEADER } from '../src/pages.js'
-import { API_PATH } from '../src/dispatch.js'
+import { API_PATH, GATEWAY_PATH, LEGACY_PATH } from '../src/dispatch.js'
 import { loadIdentity } from '../src/identity.js'
 
 function fakeCtx() {
@@ -49,9 +49,11 @@ test('registers exact authenticated routes on the shared /api channel', () => {
   const { pages, data } = fixture()
   const ctx = fakeCtx()
   apply(ctx, { pagesDir: pages, dataDir: data })
-  assert.deepEqual([...ctx.routes.keys()].sort(), [API_PATH, PAGE_PATH].sort())
+  assert.deepEqual([...ctx.routes.keys()].sort(), [API_PATH, GATEWAY_PATH, LEGACY_PATH, PAGE_PATH].sort())
   assert.deepEqual(ctx.routes.get(PAGE_PATH).methods, ['GET'])
   assert.deepEqual(ctx.routes.get(API_PATH).methods, ['POST'])
+  assert.deepEqual(ctx.routes.get(GATEWAY_PATH).methods, ['GET', 'POST'])
+  assert.deepEqual(ctx.routes.get(LEGACY_PATH).methods, ['GET', 'POST', 'PUT', 'DELETE'])
   for (const path of ctx.routes.keys()) assert.ok(path.startsWith('/api/'), 'DSH authenticates /api only')
 })
 

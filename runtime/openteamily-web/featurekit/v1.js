@@ -36,7 +36,7 @@ const errorBody = (error) => {
 }
 
 export function createV1Endpoint({ feature, routes, context }) {
-  return async (payload) => {
+  return async (payload, call) => {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       throw Object.assign(new Error('payload object required'), { code: `${feature}/invalid` })
     }
@@ -56,6 +56,7 @@ export function createV1Endpoint({ feature, routes, context }) {
       queryString: target.query.toString(),
       headers,
       params: found.params,
+      signal: call?.request?.signal,
       now: Math.floor(Date.now() / 1000),
       async json(limit = BODY_LIMIT) {
         if (raw === undefined || raw === null) return {}

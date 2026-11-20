@@ -71,6 +71,7 @@ class SettingsPage:
         '/discover/app.css': ('discover', 'app.css', 'text/css; charset=utf-8'),
         '/meetings': ('meetings', 'index.html', 'text/html; charset=utf-8'),
         '/meetings/app.mjs': ('meetings', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/meetings/audio.mjs': ('meetings', 'audio.mjs', 'text/javascript; charset=utf-8'),
         '/meetings/app.css': ('meetings', 'app.css', 'text/css; charset=utf-8'),
         '/profile': ('profile', 'index.html', 'text/html; charset=utf-8'),
         '/profile/edit': ('profile', 'index.html', 'text/html; charset=utf-8'),
@@ -218,10 +219,13 @@ class SettingsPage:
                                                  ('Content-Length', '9')])
                 return [] if env.get('REQUEST_METHOD') == 'HEAD' else [b'Not found']
             return self.api(env, start_response)
+        meeting_audio = path == '/meetings'
+        csp = self.CSP + "; media-src 'self' blob:" if meeting_audio else self.CSP
+        microphone = '(self)' if meeting_audio else '()'
         headers = [('Cache-Control', 'no-store'), ('X-Content-Type-Options', 'nosniff'),
-                   ('Content-Security-Policy', self.CSP), ('Referrer-Policy', 'no-referrer'),
+                   ('Content-Security-Policy', csp), ('Referrer-Policy', 'no-referrer'),
                    ('Cross-Origin-Resource-Policy', 'same-origin'),
-                   ('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')]
+                   ('Permissions-Policy', f'camera=(), microphone={microphone}, geolocation=()')]
         content_type = 'text/plain; charset=utf-8'
         status, data = '404 Not Found', b'Not found'
         origin = self.api.config.origin

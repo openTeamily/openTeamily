@@ -49,9 +49,8 @@ class ManagerWorker:
                     require(before['present'] and (before['stopped'] or before['process_ref'] is not None), 'restart_requires_container')
                 if action == 'create':
                     require(before['stopped'], 'create_requires_stopped')
-                # A container from a previous compose file may be missing new
-                # allowlisted secret binds. Recreate the container only; never
-                # pass -v or delete the named volume.
+                # Apply a supported Compose upgrade by recreating the container.
+                # The same named volume is mounted again.
                 if action == 'create' and before.get('needs_recreate'):
                     action = 'create-recreate'
                 elif action in ('start', 'restart') and before.get('needs_recreate'):
