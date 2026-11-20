@@ -52,6 +52,7 @@ jobs:
       - run: node --test tests/memory_search.test.mjs
       - run: node --test tests/memory_graph_empty.test.mjs
       - run: node --test tests/discover_page.test.mjs
+      - run: node --test tests/discover_team_directory.test.mjs
       - run: node --test tests/profile_page.test.mjs
       - run: node --test tests/download_page.test.mjs
       - run: node --test tests/profile_avatar.test.mjs

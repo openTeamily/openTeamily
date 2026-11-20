@@ -188,7 +188,8 @@ class DiscoverCatalogPageTests(unittest.TestCase):
             self.assertIn('aria-current="true"', team_filters.split('>All<', 1)[0].rsplit('<button', 1)[1])
             self.assertIn('+ 创建我的 AI 团队', teams_text)
             self.assertIn('data-teams-placeholder="搜索 AI 团队......"', teams_text)
-            self.assertIn('公开 AI 团队目录还没有接口', teams_text)
+            self.assertIn('以下是本实例里公开登记的 AI 团队，按成员数排序。', teams_text)
+            self.assertNotIn('公开 AI 团队目录还没有接口', teams_text)
             self.assertNotRegex(teams_text, r'(?i)Teamily AI|Full-Stack Delivery Guild|积分|credits')
             self.assertIn('hidden', teams_text.split('id="teams-filters"', 1)[1].split('>', 1)[0])
             for query in ('tab=teams', 'tab=agents&x=1', 'tab=agents&tab=agents',

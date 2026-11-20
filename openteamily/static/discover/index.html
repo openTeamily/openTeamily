@@ -157,20 +157,20 @@
     </div>
     <div id="teams-filters" class="catalog-filters" hidden aria-label="分类" aria-describedby="teams-filter-note">
       <div class="catalog-filter-scroll">
-      <button type="button" class="catalog-filter-all" aria-current="true" disabled title="这是未筛选的完整目录。分类筛选未接通：没有公共 AI 团队目录接口。">All</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Marketing</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Engineering</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">IT &amp; Security</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Content Creation</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Operations</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Product</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Data Analysis</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Design</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Research</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Investment</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Education</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Life</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Sales</button>
+      <button type="button" class="catalog-filter-all" aria-current="true" disabled title="这是未筛选的完整目录。公共团队目录没有分类字段。">All</button>
+      <button type="button" disabled title="公共团队目录没有分类字段。">Marketing</button>
+      <button type="button" disabled title="公共团队目录没有分类字段。">Engineering</button>
+      <button type="button" disabled title="公共团队目录没有分类字段。">IT &amp; Security</button>
+      <button type="button" disabled title="公共团队目录没有分类字段。">Content Creation</button>
+      <button type="button" disabled title="公共团队目录没有分类字段。">Operations</button>
+      <button type="button" disabled title="公共团队目录没有分类字段。">Product</button>
+      <button type="button" disabled title="公共团队目录没有分类字段。">Data Analysis</button>
+      <button type="button" disabled title="公共团队目录没有分类字段。">Design</button>
+      <button type="button" disabled title="公共团队目录没有分类字段。">Research</button>
+      <button type="button" disabled title="公共团队目录没有分类字段。">Investment</button>
+      <button type="button" disabled title="公共团队目录没有分类字段。">Education</button>
+      <button type="button" disabled title="公共团队目录没有分类字段。">Life</button>
+      <button type="button" disabled title="公共团队目录没有分类字段。">Sales</button>
       </div>
       <button type="button" id="teams-filter-more" class="catalog-filter-more" disabled aria-label="更多分类" title="对照里未展开其余分类，所以这里不发明更多分类。">›</button>
     </div>
@@ -178,14 +178,14 @@
       <button type="button" id="catalog-creator" class="catalog-creator" disabled aria-haspopup="listbox" title="未接通：公共目录没有创建者字段。">创建者 <span aria-hidden="true">▾</span></button>
     </div>
     <p id="catalog-filter-note" class="visually-hidden">分类和创建者筛选未接通：公共目录没有对应字段。</p>
-    <p id="teams-filter-note" class="visually-hidden">分类和创建者筛选未接通：没有公共 AI 团队目录接口，对照里的创建者品牌也没有复制。</p>
+    <p id="teams-filter-note" class="visually-hidden">分类和创建者筛选没有接通：公共团队目录只有名称、简介、成员数和加入状态。</p>
     <section aria-label="公共目录" id="catalog-panel">
       <h2 id="catalog-heading" class="visually-hidden">公共智能体</h2>
       <p id="catalog-count" role="status" aria-live="polite"></p>
       <p id="catalog-error" role="alert" hidden></p>
       <p id="discover-empty" class="note" hidden>暂无公开智能体。</p>
-      <p id="teams-note" class="note" hidden>公开 AI 团队目录还没有接口，所以这里不会列出模板卡片。也不会复制对照里的团队名称或创建者品牌。</p>
-      <p id="teams-search-note" class="note" hidden>搜索 AI 团队尚未接通：没有对应的公开接口。</p>
+      <p id="teams-note" class="note">以下是本实例里公开登记的 AI 团队，按成员数排序。</p>
+      <p id="teams-search-note" class="note" hidden>没有匹配的公开 AI 团队，换一个关键词或清空搜索。</p>
       <ul id="discover-list" class="catalog"></ul>
       <button type="button" id="catalog-more" hidden>加载更多</button>
     </section>
