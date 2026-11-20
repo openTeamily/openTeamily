@@ -203,3 +203,51 @@ test("members can page, search and anchor shared history inside their conversati
   assert.equal((await C.call("GET",path+"?around="+messages[1].id)).status,404);
   assert.equal((await C.call("GET",path+"?q=planning")).status,404);
 });
+
+test("workspace message search requires active workspace and conversation membership", async () => {
+  const A = await home(S.base, "search-a");
+  const B = await home(S.base, "search-b");
+  const C = await home(S.base, "search-c");
+  const primary = await A.ok("POST", "/v1/ot/workspaces", {name: "Search", idempotency_key: "workspace-search-primary"});
+  const other = await A.ok("POST", "/v1/ot/workspaces", {name: "Other", idempotency_key: "workspace-search-secondary"});
+  for (const [team, person] of [[primary, B], [other, C]] as const) {
+    const {code} = await A.ok("POST", `/v1/ot/teams/${team.id}/invites`, {});
+    await person.ok("POST", "/v1/ot/invites/accept", {code});
+  }
+  const group = async (owner: typeof A, team_id: string, title: string, members: string[]) =>
+    owner.ok("POST", "/v1/ot/conversations", {kind: "group", title, team_id, members});
+  const send = (owner: typeof A, id: string, body: string) =>
+    owner.ok("POST", `/v1/ot/conversations/${id}/messages`, {body});
+  const current = await group(A, primary.id, "Current", [B.handle]);
+  const outside = await group(A, other.id, "Outside", [C.handle]);
+  const hidden = await group(B, primary.id, "Hidden", []);
+  const dm = await A.ok("POST", "/v1/ot/conversations", {kind: "dm", peer: B.handle});
+  const outsideDm = await A.ok("POST", "/v1/ot/conversations", {kind: "dm", peer: C.handle});
+  const oldest = await send(A, current.id, "Schedule% for the meeting");
+  await send(A, outside.id, "Schedule% other workspace");
+  await send(B, hidden.id, "Schedule% in another group");
+  await send(A, outsideDm.id, "Schedule% for an outside teammate");
+  const direct = await send(B, dm.id, "Schedule% direct reply");
+  const removed = await send(A, current.id, "Schedule% retracted");
+  await A.ok("DELETE", `/v1/ot/messages/${removed.id}`);
+  await send(A, current.id, "schedule but without a percentage sign");
+  const newest = await send(A, current.id, "SCHEDULE% approved");
+
+  const search = `/v1/ot/workspaces/${primary.workspace_id}/messages/search?q=schedule%25&limit=2`;
+  const first = await A.ok("GET", search);
+  assert.deepEqual(first.items.map((row: any) => row.message_id), [newest.id, direct.id]);
+  assert.equal(first.items[0].title, "Current");
+  assert.equal(first.items[1].conversation_id, dm.id);
+  assert.equal(first.more, true);
+  const next = await A.ok("GET", search + "&before=" + first.items[1].cursor);
+  assert.deepEqual(next.items.map((row: any) => row.message_id), [oldest.id]);
+  assert.equal(next.more, false);
+  assert.deepEqual((await A.ok("GET", search + "&conversation_id=" + outside.id)).items, []);
+  assert.equal((await A.call("GET", search + "&before=invalid")).status, 400);
+  assert.equal((await C.call("GET", search)).status, 404);
+  await A.ok("DELETE", `/v1/ot/conversations/${current.id}/members/${B.handle}`);
+  assert.deepEqual((await B.ok("GET", search + "&conversation_id=" + current.id)).items, []);
+  await A.ok("PATCH", `/v1/ot/teams/${primary.id}/members/${B.handle}`, {suspended: true});
+  assert.equal((await B.call("GET", search)).status, 404);
+  assert.deepEqual((await A.ok("GET", search + "&conversation_id=" + dm.id)).items, []);
+});

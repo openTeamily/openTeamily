@@ -1,17 +1,20 @@
 // Search feature (stream B3): message and resource search over this owner's
 // own data, executed inside the user's DS-Bot (legacy search.py and
 // app.py search_messages/search_resources). Agent-conversation messages come
-// from the chat feature, files from the artifacts feature, and notes from the
+// from the agents feature, files from the artifacts feature, and notes from the
 // memory/meetings/artifacts '<name>/search' endpoints, all via host.call; a
 // feature that is not present contributes nothing. Shared (social) messages
 // live in Bot Social and are searched there (stream C).
 import { CONTROL, HEX32, refuse } from '../../featurekit/http.js'
 import { defineFeature } from '../../featurekit/feature.js'
+import { qs, sharedBotSocial } from '../../lib/c/bot-social.js'
 
 export const QUERY_MAX = 80
 export const KINDS = ['all', 'agent', 'social']
 const SNIPPET_MAX = 160
-const MAX_CONVERSATIONS = 200
+const SHARED_ID = /^[A-Za-z0-9._-]{1,80}$/
+const SEARCH_CURSOR = /^s1\.[A-Za-z0-9_-]{1,220}$/
+const SHARED_CURSOR = /^[0-9]{1,16}:[0-9]{1,16}$/
 const casefold = (v) => String(v).toLocaleLowerCase('en-US')
 export const snippet = (body) => { const t = String(body ?? '').split(/\s+/).filter(Boolean).join(' '); return t.length <= SNIPPET_MAX ? t : t.slice(0, SNIPPET_MAX) + '…' }
 const validQuery = (v) => typeof v === 'string' && v.trim().length >= 1 && v.trim().length <= QUERY_MAX && !CONTROL.test(v)
@@ -23,26 +26,13 @@ async function optional(host, endpoint, payload) {
   }
 }
 
-// All of this owner's agent-conversation messages as legacy search rows.
-export async function agentMessages(host) {
-  const listed = await optional(host, 'chat/conversations', {})
-  const conversations = (listed?.items ?? []).slice(0, MAX_CONVERSATIONS)
-  const rows = []
-  for (const convo of conversations) {
-    const messages = await optional(host, 'chat/messages', { conversation_id: convo.id })
-    for (const message of messages?.items ?? []) {
-      rows.push({ id: message.id, conversation_id: convo.id, title: convo.title, body: message.text ?? '',
-        created: Math.floor(Number(message.created ?? 0) / (Number(message.created) > 1e12 ? 1000 : 1)) })
-    }
+async function privateHits(host, workspace, options) {
+  try {
+    return (await host.call('agents/searchMessages', {workspace_id: workspace, ...options})).items
+  } catch (error) {
+    if (error?.status === 400) refuse(400, 'invalid', 'Invalid search parameters')
+    throw error
   }
-  return rows.sort((a, b) => a.created - b.created || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-}
-
-const after = (rows, cursor) => {
-  if (!cursor) return rows
-  const index = rows.findIndex((row) => row.id === cursor)
-  if (index < 0) refuse(400, 'invalid', 'Invalid search parameters')
-  return rows.slice(index + 1)
 }
 
 export function parseMessageQuery(query) {
@@ -54,21 +44,98 @@ export function parseMessageQuery(query) {
   const conversationId = query.get('conversation_id')
   const cursor = query.get('cursor') ?? ''
   if (!validQuery(text) || !KINDS.includes(kind) || !/^[0-9]{1,3}$/.test(limit) || Number(limit) < 1 || Number(limit) > 50
-      || (conversationId !== null && !HEX32.test(conversationId)) || (cursor && !HEX32.test(cursor))) refuse(400, 'invalid', 'Invalid search parameters')
+      || (conversationId !== null && !(kind === 'social' ? SHARED_ID : HEX32).test(conversationId))
+      || (cursor && !((kind !== 'social' && HEX32.test(cursor))
+        || (kind !== 'agent' && (kind === 'social' || !conversationId) && SEARCH_CURSOR.test(cursor))))) {
+    refuse(400, 'invalid', 'Invalid search parameters')
+  }
   return { text: text.trim(), kind, limit: Number(limit), conversationId, cursor }
 }
 
-async function messages(req) {
+function decodeSearchCursor(cursor) {
+  if (!cursor) return {local: null, shared: null}
+  try {
+    const value = JSON.parse(Buffer.from(cursor.slice(3), 'base64url').toString('utf8'))
+    if (Array.isArray(value) && value.length === 2) {
+      const [local, shared] = value
+      const validLocal = local === null || (Array.isArray(local) && local.length === 2
+        && Number.isSafeInteger(local[0]) && local[0] >= 0 && typeof local[1] === 'string' && HEX32.test(local[1]))
+      if (validLocal && (shared === null || (typeof shared === 'string' && SHARED_CURSOR.test(shared)
+        && shared.split(':').every(part => Number.isSafeInteger(Number(part)))))) return {local, shared}
+    }
+  } catch {}
+  refuse(400, 'invalid', 'Invalid search cursor')
+}
+
+function searchSnippet(body, query) {
+  const plain = String(body ?? '').replace(/\s+/g, ' ').trim()
+  const match = casefold(plain).indexOf(casefold(query))
+  const offset = Math.max(0, match - 48)
+  return (offset ? '…' : '') + snippet(plain.slice(offset))
+}
+
+function privateHit(row, text) {
+  return {kind: 'agent', agent_id: row.agent_id, conversation_id: row.conversation_id, message_id: row.id,
+    title: row.title || '对话', snippet: searchSnippet(row.body, text), created: row.created}
+}
+
+async function sharedHits(host, workspace, {text, limit, conversationId}, before) {
+  const page = await sharedBotSocial(host).get(`/v1/ot/workspaces/${workspace}/messages/search` + qs({
+    q: text, limit: limit + 1, before, conversation_id: conversationId,
+  }))
+  if (!Array.isArray(page?.items)) throw new Error('Invalid Bot Social search response')
+  return page.items
+}
+
+async function messages(req, workspace) {
   if (req.method !== 'GET') refuse(405, 'method', 'Only GET is supported')
-  const { text, kind, limit, conversationId, cursor } = parseMessageQuery(req.query)
-  let rows = kind === 'social' ? [] : await agentMessages(req.host)
-  if (conversationId) rows = rows.filter((row) => row.conversation_id === conversationId)
-  const needle = casefold(text)
-  rows = after(rows, cursor).filter((row) => casefold(row.body).includes(needle))
-  const page = rows.slice(0, limit + 1)
-  const items = page.slice(0, limit).map((row) => ({ kind: 'agent', conversation_id: row.conversation_id, message_id: row.id,
-    title: row.title || '对话', snippet: snippet(row.body), created: row.created }))
-  return { body: { items, cursor: page.length > limit ? page[limit - 1].id : null } }
+  const options = parseMessageQuery(req.query)
+  const {text, kind, limit, conversationId, cursor} = options
+  if (kind === 'agent' || (conversationId && kind !== 'social') || (cursor && HEX32.test(cursor) && kind === 'all')) {
+    const page = await privateHits(req.host, workspace, {
+      q: text, limit: limit + 1, cursor, conversation_id: conversationId, ascending: true,
+    })
+    return {body: {items: page.slice(0, limit).map(row => privateHit(row, text)), cursor: page.length > limit ? page[limit - 1].id : null}}
+  }
+
+  const position = decodeSearchCursor(cursor)
+  const local = kind === 'social' ? Promise.resolve([]) : privateHits(req.host, workspace, {
+    q: text, limit: limit + 1, position: position.local,
+  })
+  const [privateResult, sharedResult] = await Promise.allSettled([
+    local,
+    sharedHits(req.host, workspace, options, position.shared),
+  ])
+  if (sharedResult.status === 'rejected' && (kind === 'social' || privateResult.status === 'rejected')) {
+    const status = sharedResult.reason?.status
+    refuse(status === 404 ? 404 : 503, 'unavailable', '当前无法搜索会话消息。')
+  }
+  const privateRows = privateResult.status === 'fulfilled' ? privateResult.value : []
+  const sharedRows = sharedResult.status === 'fulfilled' ? sharedResult.value : []
+  const privateCandidates = privateRows.map(row => ({
+    time: row.created * 1000, local: [row.created, row.id], item: privateHit(row, text),
+  }))
+  const sharedCandidates = sharedRows.map(row => ({
+    time: row.created_ms, shared: row.cursor,
+    item: {kind: 'social', conversation_id: row.conversation_id, message_id: row.message_id,
+      title: row.title, snippet: searchSnippet(row.body, text), created: Math.floor(row.created_ms / 1000)},
+  }))
+  const candidates = [...privateCandidates, ...sharedCandidates].sort((a, b) => b.time - a.time)
+  const items = candidates.slice(0, limit)
+  for (const candidate of items) {
+    if (candidate.local) position.local = candidate.local
+    if (candidate.shared) position.shared = candidate.shared
+  }
+  const more = candidates.length > limit
+  const warning = sharedResult.status === 'rejected' ? '会话消息搜索暂不可用。'
+    : privateResult.status === 'rejected' ? '智能体消息搜索暂不可用。' : ''
+  return {
+    body: {
+      items: items.map(candidate => candidate.item),
+      cursor: more ? 's1.' + Buffer.from(JSON.stringify([position.local, position.shared])).toString('base64url') : null,
+      ...(warning ? { warning } : {}),
+    },
+  }
 }
 
 const URL_RE = /https?:\/\/[^\s<>"']+/
@@ -92,8 +159,7 @@ async function resources(req, workspaceId) {
     const rows = files?.items ?? []
     return { body: { items: rows.slice(0, n), cursor: rows.length > n ? rows[n - 1].id : null } }
   }
-  const needle = casefold(text || 'http')
-  const rows = after(await agentMessages(req.host), cursor).filter((row) => casefold(row.body).includes(needle))
+  const rows = await privateHits(req.host, workspaceId, {q: text || 'http', cursor, limit: n + 1, ascending: true, links: true})
   const page = rows.slice(0, n)
   const items = []
   for (const row of page) {
