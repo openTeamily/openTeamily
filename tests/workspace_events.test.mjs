@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mountWorkspaceEvents} from '../openteamily/static/shell/workspace-events.mjs';
+import {eventsEndpoint,isDsBotPage,mountWorkspaceEvents} from '../openteamily/static/shell/workspace-events.mjs';
 function fixture(){
  const elements={'workspace-events-status':{textContent:''},'workspace-events-retry':{addEventListener(_n,fn){this.click=fn},removeEventListener(){}}};
  const listeners={},instances=[];
@@ -55,4 +55,19 @@ test('a closed non-200 handshake gets bounded recovery; stale timers and close c
  f.instances.at(-1).readyState=2;f.instances.at(-1).emit('error');assert.equal(timers.size,0);assert.match(f.elements['workspace-events-status'].textContent,/请点重连/);
  f.elements['workspace-events-retry'].click();f.instances.at(-1).readyState=2;f.instances.at(-1).emit('error');
  const stale=[...timers.values()][0].fn;mount.close();assert.equal(timers.size,0);const count=f.instances.length;stale();assert.equal(f.instances.length,count);
+});
+
+test('a page served by DS-Bot streams from its own plugin endpoint; platform pages keep /v1',()=>{
+ const wid='1'.repeat(32);
+ const platform=fixture();
+ mountWorkspaceEvents(platform.document,{EventSource:platform.FakeSource}).start(wid);
+ assert.equal(platform.instances[0].url,'/v1/workspaces/'+wid+'/events');
+ assert.equal(isDsBotPage(platform.document),false);
+ const moved=fixture();
+ moved.document.querySelector=selector=>selector.includes('openteamily-served-by')?{content:'ds-bot'}:null;
+ assert.equal(isDsBotPage(moved.document),true);
+ mountWorkspaceEvents(moved.document,{EventSource:moved.FakeSource}).start(wid);
+ assert.equal(moved.instances[0].url,'/b/api/openteamily/events?workspace='+wid);
+ assert.equal(eventsEndpoint(wid,{dsbot:true}),'/b/api/openteamily/events?workspace='+wid);
+ assert.equal(eventsEndpoint(wid),'/v1/workspaces/'+wid+'/events');
 });

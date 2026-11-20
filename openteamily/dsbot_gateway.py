@@ -30,6 +30,8 @@ UPSTREAM_PATH = re.compile(r'/v1/internal/instances/([0-9a-f]{32})/dsbot-upstrea
 KEY_HEADER = 'HTTP_X_OT_GATEWAY_KEY'
 PAGE_ROUTE = '/api/openteamily/page'
 API_ROUTE = '/api/openteamily'
+EVENTS_ROUTE = '/api/openteamily/events'
+EVENTS_API = re.compile(r'^/v1/workspaces/([0-9a-f]{32})/events$')
 GATEWAY_PREFIX = '/v1/gateway/'
 GATEWAY_TOKEN = re.compile(r'^ota_([0-9a-f]{32})_([A-Za-z0-9_-]{43})$')
 GATEWAY_INVOKE = re.compile(r'^/v1/gateway/agents/([0-9a-f]{32})/invocations$')
@@ -111,6 +113,7 @@ MOVED_API_LOCATIONS = (
     'location = /v1/join-requests { return 418; }',
     'location ~ ^/v1/skills/(?:scopes|readiness|runs)$ { return 418; }',
     'location ^~ /v1/runtime/ { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/events$ { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts/[0-9a-f]{32}/discover(?:/revoke)?$ { return 418; }',
     'location = /v1/workspaces { return 418; }',
     'location = /v1/agent-homepages/start { return 410; }',
@@ -238,6 +241,12 @@ def target_for(uri, routes):
         return uri
     if path.startswith(GATEWAY_PREFIX) and not query:
         return path  # authorize() rewrites this to /api/openteamily after the key is parsed
+    events = EVENTS_API.fullmatch(path)
+    if events and not query:
+        # Live updates are served by the owner's DS-Bot feed. The platform keeps
+        # App.dispatch's /v1/.../events as the legacy fallback for direct callers;
+        # this path is intentionally not in MOVED_APIS (which would make it 410).
+        return EVENTS_ROUTE + '?workspace=' + events[1]
     feature = moved_api(path)
     if feature is not None:
         # Plugin legacy surface; authorize() keeps the session cookie swap.

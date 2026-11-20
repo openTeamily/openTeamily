@@ -1,5 +1,13 @@
 // Server invalidations only: content remains behind the ordinary authenticated APIs.
-export function mountWorkspaceEvents(document,{onInvalidate=()=>{},EventSource=globalThis.EventSource,setTimer=globalThis.setTimeout,clearTimer=globalThis.clearTimeout}={}){
+export function isDsBotPage(document){
+  try{return Boolean(document?.querySelector?.('meta[name="openteamily-served-by"][content="ds-bot"]'));}catch{return false;}
+}
+// Moved pages are served by the user's own DS-Bot and must stream from it. The
+// legacy platform path stays the fallback for pages the platform still serves.
+export function eventsEndpoint(workspace,{dsbot=false,mount='/b'}={}){
+  return dsbot?`${mount}/api/openteamily/events?workspace=${encodeURIComponent(workspace)}`:'/v1/workspaces/'+workspace+'/events';
+}
+export function mountWorkspaceEvents(document,{onInvalidate=()=>{},EventSource=globalThis.EventSource,setTimer=globalThis.setTimeout,clearTimer=globalThis.clearTimeout,dsbot=isDsBotPage(document),mount='/b'}={}){
   let source=null,wid='',fingerprints={},closed=false,generation=0,retryTimer=null,retryAttempts=0;
   const status=document.getElementById('workspace-events-status');
   const show=text=>{if(status)status.textContent=text;};
@@ -9,7 +17,7 @@ export function mountWorkspaceEvents(document,{onInvalidate=()=>{},EventSource=g
     if(closed||!wid||document.visibilityState==='hidden')return;
     if(typeof EventSource!=='function'){show('此浏览器不支持实时更新；保留定时 / 手动刷新。');return;}
     const own=wid,ownGeneration=generation;
-    try{source=new EventSource('/v1/workspaces/'+wid+'/events',{withCredentials:true});}
+    try{source=new EventSource(eventsEndpoint(wid,{dsbot,mount}),{withCredentials:true});}
     catch{show('无法建立实时连接，保留定时 / 手动刷新。');return;}
     show('连接实时更新…');
     source.addEventListener('open',()=>{if(wid===own&&generation===ownGeneration){retryAttempts=0;show('实时更新已连接（非模型逐字推送）。');}});

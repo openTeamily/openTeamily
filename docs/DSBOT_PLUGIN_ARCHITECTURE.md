@@ -226,6 +226,21 @@ sequenced by the deploy owner).
   (forged headers, forged cookies, path tricks, instance ids in query/body, WebSocket upgrade) is denied.
 * No session → 401, cross-site Origin → 403, unprovisioned → 503.
 
+### 4.6 Workspace live updates (SSE)
+Moved pages stream from their own DS-Bot: the browser opens `GET /b/api/openteamily/events?workspace=<id>`
+(the plugin route is `GET /api/openteamily/events`), while platform-served pages keep the legacy
+`GET /v1/workspaces/<id>/events`. The edge also rewrites the legacy path to the owner's plugin for a ready
+owner, but that path is deliberately **not** in `MOVED_APIS`, so `App.dispatch` still serves the legacy
+stream for direct platform callers. An unavailable runtime answers `503 runtime-unavailable`; it never
+falls back silently.
+
+The plugin stream keeps the browser contract in `workspace-events.mjs` (`invalidate` with 64-hex version and
+domain fingerprints, bounded `renew` lease, heartbeats, no message/token replay) and is sourced from the
+DS-Bot feed (`revision`/`live`/`message`/`room`/`notice`; `stream` token deltas are ignored). Known gap:
+it is a coarse feed adapter, not a per-feature fingerprint snapshot, so writes made directly through a
+plugin feature (for example another tab saving an artifact) do not emit a DS-Bot feed event. Pages keep
+their periodic/manual refresh until features publish their own invalidation events or expose revisions.
+
 ## 5. Data migration (management.sqlite3 → per-user DS-Bot storage)
 
 * **Unit of migration:** one account. The platform builds an export bundle containing only rows owned by or

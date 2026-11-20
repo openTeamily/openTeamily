@@ -348,5 +348,23 @@ class ManagementTests(unittest.TestCase):
             self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 99)
 
 
+    def test_legacy_workspace_stream_still_served_by_the_platform(self):
+        registered = self.client.register()
+        user = registered['body']['user']['id']
+        workspace = {'id': 'a' * 32}
+        with self.store.transaction() as db:
+            db.execute('INSERT INTO workspaces VALUES(?,?,?,?,?,?)',
+                       (workspace['id'], user, 'w', self.now, 'k', 'r'))
+        def generated(_stream):
+            yield b'event: renew\ndata: {}\n\n'
+        with patch('openteamily.events.EventStream.generate', generated):
+            response = self.client.call('GET', f"/v1/workspaces/{workspace['id']}/events", parse='raw')
+        self.assertEqual(response['status'], 200)
+        headers = dict(response['headers'])
+        self.assertIn('text/event-stream', headers['Content-Type'])
+        self.assertEqual(headers['X-Accel-Buffering'], 'no')
+        self.assertIn(b'event: renew', response['body'])
+
+
 if __name__ == '__main__':
     unittest.main()

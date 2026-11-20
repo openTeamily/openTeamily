@@ -11,6 +11,7 @@ import { createPageHandler, PAGE_PATH } from './src/pages.js'
 import { createDispatch, API_PATH, createGatewayDispatch, GATEWAY_PATH, createLegacyDispatch, LEGACY_PATH } from './src/dispatch.js'
 import { loadIdentity } from './src/identity.js'
 import { loadFeatures } from './src/features.js'
+import { createEventsHandler, EVENTS_PATH } from './src/events.js'
 
 export const name = 'openteamily-web'
 export const inject = ['connection']
@@ -39,6 +40,13 @@ export function apply(ctx, config = {}) {
     requestBody: 'buffered',
     fetch: dispatch,
   }), 'openteamily-web: api route')
+  // Bounded live invalidations come from this DS-Bot's feed, not the platform.
+  ctx.effect(() => ctx.connection.fetch.register({
+    path: EVENTS_PATH,
+    methods: ['GET'],
+    requestBody: 'buffered',
+    fetch: createEventsHandler(),
+  }), 'openteamily-web: workspace events')
   // External Agent API: the platform forwards /v1/gateway/* here (cookie = this
   // DS-Bot's launch session; token = X-OT-Gateway-Token, already bound to this instance).
   ctx.effect(() => ctx.connection.fetch.register({

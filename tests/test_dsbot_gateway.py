@@ -201,7 +201,8 @@ class GatewayTest(unittest.TestCase):
         for line in ('location = /v1/platform/route { return 404; }', 'auth_request /_ot_authz;',
                      'proxy_set_header Cookie $ot_cookie;', 'proxy_hide_header Set-Cookie;',
                      'proxy_set_header X-OT-Gateway-Key $ot_gateway_key;', 'include /etc/nginx/ot-gateway-key.conf;', 'location ^~ /b/ { return 418; }',
-                     'location ^~ /api/ { return 418; }', 'proxy_set_header Upgrade $http_upgrade;'):
+                     'location ^~ /api/ { return 418; }', 'proxy_set_header Upgrade $http_upgrade;',
+                     'location ~ ^/v1/workspaces/[0-9a-f]{32}/events$ { return 418; }'):
             self.assertIn(line, conf)
         with self.assertRaises(ValueError):
             gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081)
@@ -333,6 +334,23 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('feature=automations', headers['X-OT-Upstream-Path'])
         # onboarding automations still stay on the platform (B2 page is /automations/, not this path)
         self.assertEqual(self.call(a, uri='/v1/onboarding/automations')[0], 404)
+
+    def test_workspace_events_are_served_by_the_owners_dsbot(self):
+        ws_a, ws_b = '0' * 32, '1' * 32
+        a = self.tokens['a' * 32]
+        status, headers = self.call(a, uri=f'/v1/workspaces/{ws_a}/events')
+        self.assertEqual(status, 204)
+        self.assertEqual(headers['X-OT-Instance'], '1' * 32)
+        self.assertEqual(headers['X-OT-Upstream-Path'], f'/api/openteamily/events?workspace={ws_a}')
+        status, headers = self.call(self.tokens['b' * 32], uri=f'/v1/workspaces/{ws_b}/events')
+        self.assertEqual(status, 204)
+        self.assertEqual(headers['X-OT-Instance'], '2' * 32)
+        self.assertEqual(headers['X-OT-Upstream-Path'], f'/api/openteamily/events?workspace={ws_b}')
+        # The platform keeps its legacy App.dispatch stream: events are not a moved /v1 API.
+        self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws_a}/events'))
+        # Query parameters are not part of the bounded stream contract.
+        self.assertEqual(self.call(a, uri=f'/v1/workspaces/{ws_a}/events?after=1')[0], 404)
+        self.assertEqual(self.call(None, uri=f'/v1/workspaces/{ws_a}/events')[0], 401)
 
     def test_nginx_forwards_moved_v1_apis_except_platform_exceptions(self):
         conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)
