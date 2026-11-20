@@ -1108,6 +1108,67 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   if (exportButton) exportButton.addEventListener('click', exportCurrentPage);
+  // 做梦 asks the server for one consolidation of this page. Accept is the only
+  // path that writes the page; ignore and an empty answer leave the text alone.
+  const dreamPanel = document.getElementById('dream-panel');
+  const dreamButton = document.getElementById('dream-page');
+  const dreamSummary = document.getElementById('dream-summary');
+  const dreamStatus = document.getElementById('dream-status');
+  let dreamSuggestion = null;
+
+  // Only the wording lives here: the suggestion itself must survive the update so
+  // 接受 / 忽略 still knows which row they are talking about.
+  function resetDream(summary = '', status = '') {
+    if (dreamSummary) dreamSummary.textContent = summary;
+    if (dreamStatus) dreamStatus.textContent = status;
+  }
+
+  async function dreamDecide(action) {
+    const pageId = currentPage && currentPage.id;
+    const wid = workspaceId();
+    if (!pageId || !wid || !dreamSuggestion) return;
+    const result = await request('POST', `/v1/workspaces/${wid}/memory/${pageId}/dream/${dreamSuggestion.id}`, {action});
+    if (result.status !== 200) {
+      if (dreamStatus) dreamStatus.textContent = messageFor(result.body.error, '整理建议没有保存成功。');
+      return;
+    }
+    if (action === 'accept' && result.body.page) {
+      currentPage = result.body.page;
+      editor.elements.body.value = currentPage.body || '';
+      loadRichBody(currentPage.body || '');
+      document.getElementById('editor-meta').textContent =
+        `修订 ${currentPage.revision} · 作者 ${currentPage.created_by} · 最近更新 ${currentPage.updated_by}`;
+      const applied = result.body.applied || {};
+      resetDream(applied.removed ? '已合并：删掉了一段重复正文。' : '接受时这一页已经没有重复段落，正文未改动。',
+                 '这次整理留在这一页的历史里。');
+      return;
+    }
+    resetDream('', '已忽略，原文没有改动。');
+  }
+
+  if (dreamButton) dreamButton.addEventListener('click', async () => {
+    const pageId = currentPage && currentPage.id;
+    const wid = workspaceId();
+    if (!pageId || !wid) return;
+    if (dreamPanel) dreamPanel.hidden = false;
+    const result = await request('POST', `/v1/workspaces/${wid}/memory/${pageId}/dream`, {});
+    if (result.status !== 200) {
+      if (dreamStatus) dreamStatus.textContent = messageFor(result.body.error, '这一页暂时不能整理。');
+      return;
+    }
+    if (!result.body.suggestion) {
+      dreamSuggestion = null;
+      resetDream(result.body.message || '这一页现在没有可以合并的重复段落。', '原文没有改动。');
+      return;
+    }
+    dreamSuggestion = result.body.suggestion;
+    resetDream(dreamSuggestion.summary, '接受会真的合并；忽略不会改动原文。');
+    dreamSuggestion = result.body.suggestion;
+  });
+  for (const [id, action] of [['dream-accept', 'accept'], ['dream-ignore', 'ignore']]) {
+    const button = document.getElementById(id);
+    if (button) button.addEventListener('click', () => dreamDecide(action));
+  }
 
   async function openPage(pageId) {
     closeDeleteConfirm({restoreFocus: false});
@@ -1122,6 +1183,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     currentPage = seen.body.page;
     currentAction = null;
+    if (dreamPanel) dreamPanel.hidden = true;
+    dreamSuggestion = null;
+    resetDream();
     showPageMode();
     if (actionEditor) actionEditor.hidden = true;
     editor.hidden = false;

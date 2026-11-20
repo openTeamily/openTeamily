@@ -251,3 +251,32 @@ body.app-workspace:not(.chat-open) > main > #main-panel:has(> .directory-top) { 
 .memory-preview label { flex: 1; }
 #memory-preview-list { margin: 0.5rem 0 0; padding-left: 1.25rem; font-size: 0.8125rem; }
 .header-link { font-size: 0.8125rem; align-self: center; }
+#team-template-list .team-template-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 0.9rem;
+  background: var(--ot-surface);
+}
+
+#team-template-list h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+#team-template-list .summary {
+  margin: 0;
+  color: var(--ot-muted);
+  font-size: 0.85rem;
+}
+
+#team-template-list .note {
+  margin: 0;
+}
+
+#team-template-list .primary {
+  margin-top: 0.35rem;
+  align-self: flex-start;
+}

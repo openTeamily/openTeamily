@@ -248,7 +248,12 @@
     </div>
     <section id="conversation-search-panel" hidden aria-label="会话内搜索">
       <form id="conversation-search-form"><label><span class="sr-only">搜索当前会话</span><input id="conversation-search-query" type="search" maxlength="80" placeholder="搜索当前会话" autocomplete="off"></label><button type="submit">搜索</button><button type="button" id="conversation-search-close" aria-label="关闭搜索">×</button></form>
-      <p class="conversation-search-scope">消息 <span class="conversation-search-scope-note">· 资料、照片和文件搜索尚未接通</span></p>
+      <div class="search-tabs" role="tablist" aria-label="会话内搜索范围">
+        <button type="button" role="tab" id="conversation-search-tab-messages" aria-selected="true">消息</button>
+        <button type="button" role="tab" id="conversation-search-tab-photos" aria-selected="false">照片</button>
+        <button type="button" role="tab" id="conversation-search-tab-files" aria-selected="false">文件</button>
+      </div>
+      <p class="conversation-search-scope">消息 <span id="conversation-search-scope-note" class="conversation-search-scope-note">· 搜索当前会话里你有权查看的消息。</span></p>
       <p id="conversation-search-status" role="status"></p><ul id="conversation-search-results"></ul><button type="button" id="conversation-search-more" hidden>加载更多</button>
     </section>
     <p id="social-agent-members" class="gap-note group-agent-note" hidden></p>

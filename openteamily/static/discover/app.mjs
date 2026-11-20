@@ -1,5 +1,5 @@
 import { csrfCookie } from '../agents/app.mjs';
-import { renderThumb } from '../shell/thumb.mjs';
+import { renderThumb, thumbModel } from '../shell/thumb.mjs';
 
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 
@@ -141,6 +141,50 @@ export function attachFeedThumb(document, cover, preview) {
 export function feedPreviewPath(item) {
   if (!item || item.kind === 'image' || !/^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(String(item.slug || ''))) return '';
   return '/w/' + item.slug + '/preview';
+}
+
+export const FEED_DETAIL_MORE = '详情';
+export const FEED_DETAIL_LESS = '收起';
+export const FEED_DETAIL_LOADING = '正在读取作品摘要…';
+// A refused preview is not an empty work: the detail says which one it is.
+export const FEED_DETAIL_UNREADABLE = '读不到作品摘要。';
+export const FEED_DETAIL_NO_TEXT = '这件作品没有文字摘要，打开原作品看内容。';
+export const FEED_DETAIL_EMPTY = '这件作品还没有内容。';
+export const FEED_DETAIL_OPEN = '打开原作品';
+
+// The detail repeats what the listing already knows plus the bounded, text-only
+// preview the public work page exposes. No body is read and stored HTML is
+// never interpreted: thumbModel normalises it and every line goes through
+// textContent.
+export function detailExcerpt(preview) {
+  const model = thumbModel(preview);
+  if (!model || model.empty) return [];
+  const lines = [];
+  if (model.type === 'document' || model.type === 'website') {
+    if (model.heading) lines.push(model.heading);
+    for (const line of model.lines || []) lines.push(line);
+    for (const block of model.blocks || []) lines.push(block.text);
+  } else if (model.type === 'slides') {
+    if (model.title) lines.push(model.title);
+    for (const bullet of model.bullets || []) lines.push(bullet);
+  } else if (model.type === 'dashboard') {
+    for (const widget of model.widgets || []) if (widget.title) lines.push(widget.title);
+  }
+  const kept = [];
+  for (const line of lines) {
+    const value = String(line == null ? '' : line).replace(/\s+/g, ' ').trim();
+    if (value && !kept.includes(value)) kept.push(value);
+    if (kept.length >= 4) break;
+  }
+  return kept;
+}
+
+export function detailMetaText(item) {
+  return [
+    item.kind_label || KIND_LABELS[item.kind] || item.kind || '',
+    item.author || '',
+    formatFeedTime(item.updated),
+  ].filter(Boolean).join(' · ');
 }
 
 export function renderFeedCard(document, item) {
@@ -397,20 +441,88 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   const previewCache = new Map();
-  function hydrateThumb(card, item) {
+  // One shape for both the cover thumb and the detail: a refused preview is
+  // marked so the detail can say "unreadable" instead of "empty".
+  function cachedPreview(item) {
     const path = feedPreviewPath(item);
-    if (!path || typeof fetcher !== 'function') return;
+    if (!path || typeof fetcher !== 'function') return Promise.resolve({ok: false, readable: false, preview: null});
     const key = path + '@' + (item.updated || '');
     if (!previewCache.has(key)) {
       previewCache.set(key, Promise.resolve()
         .then(() => fetcher(path, {method: 'GET', credentials: 'same-origin', headers: {Accept: 'application/json'}}))
-        .then(response => response && response.status === 200 ? response.json() : null)
-        .then(body => (body && body.preview) || null)
-        .catch(() => null));
+        .then(response => {
+          if (!response || response.status !== 200) return {ok: false, preview: null};
+          return Promise.resolve()
+            .then(() => response.json())
+            .then(body => ({ok: true, preview: (body && body.preview) || null}))
+            .catch(() => ({ok: false, preview: null}));
+        })
+        .catch(() => ({ok: false, preview: null})));
     }
-    const cover = typeof card.querySelector === 'function' ? card.querySelector('.work-cover') : null;
+    return previewCache.get(key);
+  }
+
+  function hydrateThumb(cover, item) {
     if (!cover) return;
-    previewCache.get(key).then(preview => attachFeedThumb(document, cover, preview)).catch(() => {});
+    cachedPreview(item).then(result => attachFeedThumb(document, cover, result.preview)).catch(() => {});
+  }
+
+  // The detail is opened in place: the card keeps its own link to the work
+  // page, and reading the summary never reloads the feed or the page.
+  function attachFeedDetail(entry, item) {
+    const panel = document.createElement('section');
+    panel.className = 'feed-detail';
+    panel.hidden = true;
+    if (item.slug) {
+      panel.id = 'feed-detail-' + item.slug;
+      panel.setAttribute('aria-label', (item.title || item.slug) + ' 的作品详情');
+    }
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'feed-detail-toggle';
+    toggle.textContent = FEED_DETAIL_MORE;
+    toggle.setAttribute('aria-expanded', 'false');
+    if (panel.id) toggle.setAttribute('aria-controls', panel.id);
+    let open = false;
+    let filled = false;
+    toggle.addEventListener('click', async () => {
+      open = !open;
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      toggle.textContent = open ? FEED_DETAIL_LESS : FEED_DETAIL_MORE;
+      panel.hidden = !open;
+      if (!open || filled) return;
+      filled = true;
+      const meta = document.createElement('p');
+      meta.className = 'feed-detail-meta';
+      meta.textContent = detailMetaText(item);
+      const summary = document.createElement('div');
+      summary.className = 'feed-detail-summary';
+      summary.textContent = FEED_DETAIL_LOADING;
+      const link = document.createElement('a');
+      link.className = 'feed-detail-open';
+      link.href = item.path || ('/w/' + (item.slug || ''));
+      link.textContent = FEED_DETAIL_OPEN;
+      panel.append(meta, summary, link);
+      if (!feedPreviewPath(item)) {
+        summary.textContent = FEED_DETAIL_NO_TEXT;
+        return;
+      }
+      const result = await cachedPreview(item);
+      if (!result.ok) { summary.textContent = FEED_DETAIL_UNREADABLE; return; }
+      if (!result.preview) { summary.textContent = FEED_DETAIL_NO_TEXT; return; }
+      const lines = detailExcerpt(result.preview);
+      if (!lines.length) { summary.textContent = FEED_DETAIL_EMPTY; return; }
+      summary.textContent = '';
+      const list = document.createElement('ul');
+      list.className = 'feed-detail-lines';
+      for (const line of lines) {
+        const row = document.createElement('li');
+        row.textContent = line;
+        list.append(row);
+      }
+      summary.append(list);
+    });
+    entry.append(toggle, panel);
   }
 
   function renderFeed() {
@@ -419,9 +531,12 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     grid.replaceChildren();
     for (const item of feedState.items) {
       const card = renderFeedCard(document, item);
-      hydrateThumb(card, item);
-      if (!currentUser) { grid.append(card); continue; }
-      const entry = document.createElement('article'); entry.append(card);
+      const cover = typeof card.querySelector === 'function' ? card.querySelector('.work-cover') : null;
+      hydrateThumb(cover, item);
+      const entry = document.createElement('article');
+      entry.className = 'feed-entry';
+      entry.append(card);
+      if (!currentUser) { grid.append(entry); attachFeedDetail(entry, item); continue; }
       const actions = document.createElement('div');
       for (const [action, flag, label] of [['like','liked','点赞'], ['collect','collected','收录'], ['follow','following','关注作者']]) {
         if (action === 'follow' && item.own_work) continue;
@@ -441,7 +556,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         });
         actions.append(button);
       }
-      entry.append(actions); grid.append(entry);
+      entry.append(actions);
+      attachFeedDetail(entry, item);
+      grid.append(entry);
     }
     grid.dataset.empty = feedState.items.length ? 'false' : 'true';
     const count = document.getElementById('feed-count');

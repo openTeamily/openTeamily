@@ -121,6 +121,15 @@
         <h2>我们能帮你分担些什么？</h2>
         <p class="note">选几件想交给 Agent 的事。建议按你的行业给出（OpenTeamily 自拟文案）；选择会被保存，但不会自动创建任务或例行任务。</p>
         <div id="onboarding-picks" class="pick-groups"></div>
+        <fieldset class="onboarding-automation-choices">
+          <legend>可选：创建暂停的自动化</legend>
+          <p class="note">以下是可创建的真实模板，与上方保存的偏好分开选择（默认不选）。只有点击“创建选中模板（暂停）”才会创建；保存、跳过和完成引导都不会创建。</p>
+          <div id="onboarding-automation-templates" class="pick-list"></div>
+          <p class="note">创建到你拥有的工作区；没有时新建个人空间。每日 09:00（北京时间），但默认暂停，需到自动化页检查并手动启用。不会连接应用或自动执行。</p>
+          <button type="button" id="create-onboarding-automations" class="secondary">创建选中模板（暂停）</button>
+          <p id="onboarding-automation-status" role="status" aria-live="polite"></p>
+          <a href="/automations">查看并配置自动化</a>
+        </fieldset>
         <div class="onboarding-actions">
           <button type="button" class="secondary" data-go="2">← 上一步</button>
           <button type="submit">保存并继续 <span aria-hidden="true">→</span></button>

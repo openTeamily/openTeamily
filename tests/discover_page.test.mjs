@@ -394,7 +394,11 @@ test('the activity feed renders opted-in work cards from the public API', async 
   const el = id => doc.getElementById(id);
   assert.equal(el('feed-grid').dataset.empty, 'false');
   assert.equal(el('feed-grid').children.length, 1);
-  const card = el('feed-grid').children[0];
+  const cell = el('feed-grid').children[0];
+  // The grid cell wraps the work link so the detail can sit beside it.
+  assert.equal(String(cell.tagName).toLowerCase(), 'article');
+  assert.equal(cell.className, 'feed-entry');
+  const card = cell.children[0];
   assert.equal(String(card.tagName).toLowerCase(), 'a');
   assert.equal(card.href, '/w/ci-fixture-doc');
   assert.equal(card.children[0].className, 'work-cover');
@@ -832,4 +836,138 @@ test('document thumbnails preserve only bounded semantic text blocks', () => {
   ]});
   assert.deepEqual(model.blocks.map(block=>block.type), ['heading','list','code','quote']);
   assert.equal(model.blocks[1].text,'item');
+});
+
+// A work card's detail is read in place: the feed keeps its tab, filter and
+// scroll position, and the work page stays one click away.
+function classHits(node, wanted, hits = []) {
+  if (String(node.className || '').split(/\s+/).includes(wanted)) hits.push(node);
+  for (const child of node.children || []) classHits(child, wanted, hits);
+  return hits;
+}
+
+function feedDocument() {
+  return fakeDocument();
+}
+
+function detailFixture(extra = {}) {
+  return Object.assign({
+    slug: 'ci-fixture-doc',
+    title: '[CI FIXTURE] Document',
+    kind: 'document',
+    kind_label: '文档',
+    author: 'alice',
+    updated: 1800000000,
+    path: '/w/ci-fixture-doc',
+  }, extra);
+}
+
+function detailFetcher(item, previewResult) {
+  const requests = [];
+  const fetcher = async path => {
+    requests.push(path);
+    if (path === '/v1/auth/session') return {status: 401, json: async () => ({})};
+    if (path.startsWith('/v1/discover/works')) {
+      return {status: 200, json: async () => ({items: [item], cursor: null})};
+    }
+    if (path === '/w/' + item.slug + '/preview') return previewResult(path);
+    throw new Error('unexpected ' + path);
+  };
+  return {fetcher, requests};
+}
+
+test('a work card opens a read-only detail in place without leaving the feed', async () => {
+  const app = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const {fetcher, requests} = detailFetcher(detailFixture(), () => ({status: 200, json: async () => ({preview: {
+    type: 'document', heading: '季报摘要', lines: ['第一行正文', '第二行正文', '第三行正文', '第四行不该出现'],
+  }})}));
+  const visited = [];
+  const location = {search: '', pathname: '/discover', assign: url => visited.push(url)};
+  await app.mount(doc, {fetcher, location});
+
+  const cell = doc.getElementById('feed-grid').children[0];
+  const toggles = classHits(cell, 'feed-detail-toggle');
+  assert.equal(toggles.length, 1, 'a feed card offers exactly one detail toggle');
+  const toggle = toggles[0];
+  assert.equal(toggle.tagName, 'button');
+  assert.equal(toggle.textContent, app.FEED_DETAIL_MORE);
+  assert.equal(toggle.attributes['aria-expanded'], 'false');
+  const panel = classHits(cell, 'feed-detail')[0];
+  assert.ok(panel, 'the detail region exists before it is opened');
+  assert.equal(panel.hidden, true);
+  assert.equal(toggle.attributes['aria-controls'], panel.id);
+  const listCallsBefore = requests.filter(path => path.startsWith('/v1/discover/works')).length;
+
+  await toggle.handlers.click();
+  await flush();
+
+  assert.equal(toggle.attributes['aria-expanded'], 'true');
+  assert.equal(toggle.textContent, app.FEED_DETAIL_LESS);
+  assert.equal(panel.hidden, false);
+  const text = JSON.stringify(panel);
+  assert.match(text, /文档/);
+  assert.match(text, /alice/);
+  assert.match(text, /2027/);
+  assert.match(text, /季报摘要/);
+  assert.match(text, /第三行正文/);
+  assert.equal(text.includes('第四行不该出现'), false, 'the excerpt stays bounded');
+  const open = classHits(panel, 'feed-detail-open')[0];
+  assert.equal(open.href, '/w/ci-fixture-doc');
+  assert.equal(open.textContent, app.FEED_DETAIL_OPEN);
+  assert.deepEqual(visited, [], 'reading the detail never navigates');
+  assert.equal(requests.filter(path => path.startsWith('/v1/discover/works')).length, listCallsBefore,
+    'reading the detail never reloads the listing');
+
+  await toggle.handlers.click();
+  assert.equal(toggle.attributes['aria-expanded'], 'false');
+  assert.equal(toggle.textContent, app.FEED_DETAIL_MORE);
+  assert.equal(panel.hidden, true);
+});
+
+test('a detail whose preview cannot be read says so instead of faking an empty summary', async () => {
+  const app = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const {fetcher} = detailFetcher(detailFixture(), () => ({status: 500, json: async () => ({})}));
+  await app.mount(doc, {fetcher, location: {search: '', pathname: '/discover'}});
+  const cell = doc.getElementById('feed-grid').children[0];
+  const toggle = classHits(cell, 'feed-detail-toggle')[0];
+  await toggle.handlers.click();
+  await flush();
+  const panel = classHits(cell, 'feed-detail')[0];
+  assert.match(JSON.stringify(panel), new RegExp(app.FEED_DETAIL_UNREADABLE));
+  assert.equal(JSON.stringify(panel).includes(app.FEED_DETAIL_EMPTY), false);
+  assert.equal(classHits(panel, 'feed-detail-open')[0].href, '/w/ci-fixture-doc');
+});
+
+test('an image work says it has no text summary instead of reading a preview it does not have', async () => {
+  const app = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const {fetcher, requests} = detailFetcher(detailFixture({kind: 'image', kind_label: '图片'}), () => {
+    throw new Error('an image work must not request a text preview');
+  });
+  await app.mount(doc, {fetcher, location: {search: '', pathname: '/discover'}});
+  const cell = doc.getElementById('feed-grid').children[0];
+  const toggle = classHits(cell, 'feed-detail-toggle')[0];
+  await toggle.handlers.click();
+  await flush();
+  const panel = classHits(cell, 'feed-detail')[0];
+  assert.match(JSON.stringify(panel), new RegExp(app.FEED_DETAIL_NO_TEXT));
+  assert.equal(requests.some(path => path.endsWith('/preview')), false);
+  assert.equal(classHits(panel, 'feed-detail-open')[0].href, '/w/ci-fixture-doc');
+});
+
+test('a work with an empty preview says it has no content yet', async () => {
+  const app = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const {fetcher} = detailFetcher(detailFixture(), () => ({status: 200, json: async () => ({preview: {
+    type: 'document', heading: '', lines: [],
+  }})}));
+  await app.mount(doc, {fetcher, location: {search: '', pathname: '/discover'}});
+  const cell = doc.getElementById('feed-grid').children[0];
+  await classHits(cell, 'feed-detail-toggle')[0].handlers.click();
+  await flush();
+  const panel = classHits(cell, 'feed-detail')[0];
+  assert.match(JSON.stringify(panel), new RegExp(app.FEED_DETAIL_EMPTY));
+  assert.equal(JSON.stringify(panel).includes(app.FEED_DETAIL_UNREADABLE), false);
 });

@@ -22,6 +22,66 @@ async function request(method, path, body) {
   return { status: response.status, body: payload };
 }
 
+// Creation is deliberately isolated from every save/skip/navigation handler.
+// The server deduplicates retries; the busy guard also prevents rapid clicks.
+export function mountAutomationCreation(doc, send = request) {
+  const button = doc.getElementById('create-onboarding-automations');
+  const list = doc.getElementById('onboarding-automation-templates');
+  const status = doc.getElementById('onboarding-automation-status');
+  let busy = false;
+  let choices = [];
+  if (!button || !list || !status) return {render() {}};
+  button.addEventListener('click', async () => {
+    if (busy) return;
+    const selected = choices.filter(box => box.checked).map(box => box.value);
+    if (!selected.length || selected.length > 6) {
+      status.textContent = '请明确选择 1–6 个模板；保存偏好不会创建自动化。';
+      return;
+    }
+    busy = true;
+    button.disabled = true;
+    status.textContent = '正在创建暂停的自动化…';
+    try {
+      const result = await send('POST', '/v1/onboarding/automations', {template_ids: selected});
+      if (result.status !== 200 && result.status !== 201) {
+        status.textContent = messageFor(result.body.error, '创建失败，请重试。');
+        return;
+      }
+      status.textContent = `已创建 ${result.body.created.length} 个（全部暂停），已存在 ${result.body.skipped.length} 个未重复创建。请到自动化页检查后手动启用。`;
+    } catch {
+      status.textContent = '连接中断，结果尚不确定。可重试，已创建的模板不会重复创建。';
+    } finally {
+      busy = false;
+      button.disabled = false;
+    }
+  });
+  return {render(items = []) {
+    list.textContent = '';
+    choices = [];
+    for (const item of items) {
+      const label = doc.createElement('label');
+      label.className = 'pick-card';
+      const box = doc.createElement('input');
+      box.type = 'checkbox';
+      box.name = 'automation_template';
+      box.value = item.template_id;
+      box.checked = false;
+      const copy = doc.createElement('span');
+      copy.className = 'pick-copy';
+      const title = doc.createElement('strong');
+      title.textContent = item.title;
+      const prompt = doc.createElement('span');
+      prompt.className = 'pick-summary';
+      prompt.textContent = item.prompt;
+      copy.append(title, prompt);
+      label.append(box, copy);
+      list.append(label);
+      choices.push(box);
+    }
+    button.disabled = !choices.length || busy;
+  }};
+}
+
 const LOOK_LABELS = {color: '颜色', expression: '表情', headwear: '头饰', glasses: '眼镜', hand: '手持'};
 
 // Composio toolkit slugs for the step-2 catalog in openteamily/onboarding.py.
@@ -105,6 +165,7 @@ function mount() {
   if (!status || !loginPanel || !mainPanel || !form) return;
   let industries = [];
   let current = null;
+  const automationCreation = mountAutomationCreation(document);
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -441,6 +502,7 @@ function mount() {
     populateIndustries();
     fill(result.body.onboarding);
     await renderSteps(result.body.steps, result.body.onboarding);
+    automationCreation.render(result.body.automation_templates || []);
     const ready = document.getElementById('onboarding-ready-name');
     if (ready) ready.textContent = session.body.user.username + '，';
     goStep(step);

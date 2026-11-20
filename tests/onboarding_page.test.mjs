@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {mountAutomationCreation} from '../openteamily/static/onboarding/app.mjs';
 
 class FakeElement {
   constructor(tag = 'div', id = '') {
@@ -244,4 +245,45 @@ test('a thrown workspace request still renders three honest unknown rows', async
   assert.doesNotMatch(text, /✓/, 'a thrown request rendered a tick');
   for (const row of rows) assert.match(row.text, /无法判断|失败|出错/, 'a row gives no reason after a thrown request: ' + row.text);
   assert.equal(doc.getElementById('onboarding-ready').hidden, true);
+});
+
+
+test('automation creation is opt-in, click-only and guarded against duplicate clicks', async () => {
+  const doc = fakeDocument();
+  const calls = [];
+  let finish;
+  const creation = mountAutomationCreation(doc, async (...args) => {
+    calls.push(args);
+    return new Promise(resolve => {finish = resolve;});
+  });
+  creation.render([{template_id: 'daily_brief', title: '每日工作简报', prompt: '真实模板'}]);
+  const button = doc.getElementById('create-onboarding-automations');
+  const box = doc.getElementById('onboarding-automation-templates').children[0].children[0];
+  assert.equal(box.checked, false);
+  assert.deepEqual(calls, [], 'rendering onboarding must not create anything');
+  const click = button.handlers.click[0];
+  await click();
+  assert.deepEqual(calls, [], 'an empty selection never creates anything');
+  box.checked = true;
+  assert.deepEqual(calls, [], 'selection alone must not create anything');
+  const pending = click();
+  await click();
+  assert.equal(calls.length, 1);
+  assert.equal(button.disabled, true);
+  assert.deepEqual(calls[0], ['POST', '/v1/onboarding/automations', {template_ids: ['daily_brief']}]);
+  finish({status: 201, body: {created: [{id: 'one'}], skipped: []}});
+  await pending;
+  assert.equal(button.disabled, false);
+  assert.match(doc.getElementById('onboarding-automation-status').textContent, /全部暂停/);
+});
+
+test('automation creation reports errors without advancing onboarding', async () => {
+  const doc = fakeDocument();
+  const creation = mountAutomationCreation(doc, async () => {throw new Error('offline');});
+  creation.render([{template_id: 'daily_brief', title: '每日工作简报', prompt: '真实模板'}]);
+  doc.getElementById('onboarding-automation-templates').children[0].children[0].checked = true;
+  const button = doc.getElementById('create-onboarding-automations');
+  await button.handlers.click[0]();
+  assert.equal(button.disabled, false);
+  assert.match(doc.getElementById('onboarding-automation-status').textContent, /结果尚不确定/);
 });

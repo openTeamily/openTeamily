@@ -1592,6 +1592,64 @@ test('new dialog and document-card surfaces use actual theme tokens, not undefin
 });
 
 
+test('conversation search lists this conversation photos and files from real attachment fields', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  const attachment = (id, title, kind, mime) => ({id: id.repeat(32), title, kind, mime, revision: 1,
+    path: '/v1/workspaces/ws-1/artifacts/' + id.repeat(32) + '/file'});
+  const rows = [
+    // Real uploads all land as kind 'media'; the mime is what separates photos.
+    {id: 'm-1', user_id: bob, body: '', created: '2026-01-01T00:00:00Z', attachment: attachment('a', 'pixel.png', 'media', 'image/png')},
+    {id: 'm-2', user_id: bob, body: '', created: '2026-01-01T00:01:00Z', attachment: attachment('b', 'plan.pdf', 'media', 'application/pdf')},
+  ];
+  try {
+    await mount(doc, {fetcher: async path => {
+      if (path.startsWith('/v1/workspaces/ws-1/social/conversations/conv-1/messages?')) {
+        return json(200, {items: rows, cursor: null});
+      }
+      return original(path);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await fire(el('conversation-search-open'), 'click');
+    await fire(el('conversation-search-tab-photos'), 'click');
+    assert.equal(el('conversation-search-tab-photos').getAttribute('aria-selected'), 'true');
+    const photos = el('conversation-search-results').children;
+    assert.equal(photos.length, 1, 'only the image attachment is a photo');
+    assert.ok(descendants(photos[0]).some(node => node.textContent === 'pixel.png'));
+    assert.match(el('conversation-search-status').textContent, /已显示 1 张照片/);
+    await fire(photos[0], 'click');
+    const jumped = el('message-list').children.find(node => node.dataset.messageId === 'm-1');
+    assert.equal(jumped.dataset.searchJump, 'true', 'a photo hit jumps back to its message and highlights it');
+    await fire(el('conversation-search-tab-files'), 'click');
+    const files = el('conversation-search-results').children;
+    assert.equal(files.length, 1, 'the document attachment is a file, not a photo');
+    assert.ok(descendants(files[0]).some(node => node.textContent === 'plan.pdf'));
+    assert.match(el('conversation-search-status').textContent, /已显示 1 个文件/);
+    await fire(files[0], 'click');
+    assert.match(el('conversation-search-status').textContent, /不在当前已加载/, 'a hit outside the loaded window says so instead of pretending');
+  } finally { restore(); }
+});
+
+test('the photos and files tabs say what is missing instead of inventing an empty conversation', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async path => {
+      if (path.startsWith('/v1/workspaces/ws-1/social/conversations/conv-1/messages?')) {
+        return json(500, {error: {code: 'internal', message: 'nope'}});
+      }
+      return original(path);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await fire(el('conversation-search-open'), 'click');
+    await fire(el('conversation-search-tab-photos'), 'click');
+    assert.match(el('conversation-search-status').textContent, /读不到当前会话的附件/);
+    assert.equal(el('conversation-search-results').children.length, 0);
+  } finally { restore(); }
+});
+
 for (const phase of ['directory', 'fanout']) for (const target of ['ws-1','ws-2']) {
   test(`deferred ${phase} from an older load cannot overwrite the latest ${target} session list`, async () => {
     const {doc, el} = fakeChatDocument(chatHtml()); const restore = installChatGlobals();

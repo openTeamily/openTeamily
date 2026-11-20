@@ -10,6 +10,8 @@ automation and avatar steps remain pending.
 import json
 import re
 
+from . import automations
+
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS user_onboarding (
  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -70,6 +72,35 @@ def industries_view():
     return [{'name': name, 'roles': list(roles)} for name, roles in INDUSTRIES.items()]
 
 
+GROUPS = (
+    (('产品', '项目'), ('deck_report', 'task_breakdown', 'industry_watch', 'daily_brief', 'meeting_prep')),
+    (('工程', '开发', '技术', 'AI', '数据'), ('task_breakdown', 'build_web', 'daily_brief', 'meeting_prep')),
+    (('营销', '内容', '设计', '创作', '媒体'), ('industry_watch', 'deck_report', 'inbox_followup', 'daily_brief')),
+    (('财务', '会计', '投资', '金融'), ('market_research', 'inbox_followup', 'daily_brief', 'meeting_prep')),
+    (('研究', '学生', '科学', '教育'), ('expert_research', 'daily_brief', 'task_breakdown', 'meeting_prep')),
+    (('销售', '客户', '运营', '服务'), ('inbox_followup', 'daily_brief', 'task_breakdown', 'meeting_prep')),
+)
+DEFAULT_TEMPLATES = ('daily_brief', 'task_breakdown', 'meeting_prep', 'inbox_followup')
+
+
+def recommended_template_ids(role):
+    text = role or ''
+    for keys, ids in GROUPS:
+        if any(key in text for key in keys):
+            return list(ids)
+    return list(DEFAULT_TEMPLATES)
+
+
+def automation_recommendations(role):
+    items = []
+    for template_id in recommended_template_ids(role):
+        template = automations.TEMPLATES.get(template_id)
+        if template is None:
+            continue
+        items.append({'template_id': template_id, 'title': template['title'], 'prompt': template['prompt']})
+    return items
+
+
 def load(db, user_id):
     return db.execute('SELECT * FROM user_onboarding WHERE user_id=?', (user_id,)).fetchone()
 
@@ -78,7 +109,8 @@ def load(db, user_id):
 # list and the look attributes, but not a comparable layout, so this is a
 # functional flow that has not been compared with Teamily. Step 2 lists apps
 # honestly as not connected (no OAuth here); step 3 stores picks of self-written
-# task/routine suggestions (no automation is created); step 4 stores the Personal
+# task/routine suggestions (saving never creates automations; an explicit opt-in
+# button may create paused templates); step 4 stores the Personal
 # Agent look. Recommendation copy and look option labels are self-written.
 STEPS_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS user_onboarding_steps (

@@ -9,6 +9,7 @@ Markdown file; it is not a workspace export, a share link, a profile, or
 Teamily memory parity, and it is not browser E2E acceptance.
 """
 from datetime import datetime, timezone
+import json
 import re
 from urllib.parse import quote
 
@@ -80,6 +81,18 @@ CREATE TABLE IF NOT EXISTS memory_links (
  UNIQUE(workspace_id, key_hash),
  CHECK(left_id < right_id));
 CREATE INDEX IF NOT EXISTS memory_link_workspace ON memory_links(workspace_id, id);
+CREATE TABLE IF NOT EXISTS memory_suggestions (
+ id TEXT PRIMARY KEY,
+ workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+ page_id TEXT NOT NULL REFERENCES memory_pages(id) ON DELETE CASCADE,
+ kind TEXT NOT NULL,
+ summary TEXT NOT NULL,
+ payload TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('open', 'accepted', 'ignored')),
+ created INTEGER NOT NULL,
+ decided INTEGER,
+ applied TEXT);
+CREATE INDEX IF NOT EXISTS memory_suggestion_page ON memory_suggestions(workspace_id, page_id, id);
 CREATE TABLE IF NOT EXISTS memory_profiles (
  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -506,3 +519,104 @@ def record_version(db, workspace_id, page_id, revision, title, body, now, user_i
         'DELETE FROM memory_page_versions WHERE page_id=? AND revision<=?',
         (page_id, revision - VERSION_KEEP),
     )
+SUGGESTION_SELECT = 'SELECT * FROM memory_suggestions WHERE id=? AND workspace_id=? AND page_id=?'
+
+
+def suggestion_view(row):
+    if row is None:
+        return None
+    try:
+        payload = json.loads(row['payload'])
+    except ValueError:
+        payload = {}
+    try:
+        applied = json.loads(row['applied']) if row['applied'] else None
+    except ValueError:
+        applied = None
+    return {
+        'id': row['id'],
+        'kind': row['kind'],
+        'summary': row['summary'],
+        'status': row['status'],
+        'created': row['created'],
+        'decided': row['decided'],
+        'detail': payload if isinstance(payload, dict) else {},
+        'applied': applied if isinstance(applied, dict) else None,
+    }
+
+
+def load_suggestion(db, workspace_id, page_id, suggestion_id):
+    return db.execute(SUGGESTION_SELECT, (suggestion_id, workspace_id, page_id)).fetchone()
+
+
+def paragraphs(body):
+    return [part.strip() for part in re.split(r'\n[ \t]*\n', body or '') if part.strip()]
+
+
+def _paragraph_key(text):
+    return re.sub(r'\s+', ' ', text).strip().casefold()
+
+
+def duplicate_paragraph(body):
+    """The first pair of byte-different paragraphs that say the same thing."""
+    seen = {}
+    for part in paragraphs(body):
+        key = _paragraph_key(part)
+        if key in seen:
+            return seen[key], part
+        seen.setdefault(key, part)
+    return None, None
+
+
+def propose(db, workspace_id, page, now, suggestion_id):
+    """One suggestion for this page, or None when there is honestly nothing to do."""
+    kept, dropped = duplicate_paragraph(page['body'])
+    if kept is None:
+        return None
+    payload = json.dumps({'kept': kept[:4000], 'dropped': dropped[:4000]},
+                         ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    summary = '这一页有 2 段重复的正文，可以合并成 1 段。'
+    db.execute('INSERT INTO memory_suggestions VALUES(?,?,?,?,?,?,?,?,?,?)',
+               (suggestion_id, workspace_id, page['id'], 'merge_paragraphs', summary, payload,
+                'open', now, None, None))
+    return load_suggestion(db, workspace_id, page['id'], suggestion_id)
+
+
+def merged_body(body, dropped):
+    """Drop later paragraphs that repeat the one the suggestion named; keep the first."""
+    key = _paragraph_key(dropped or '')
+    kept_any = False
+    out = []
+    for part in paragraphs(body):
+        if _paragraph_key(part) == key:
+            if kept_any:
+                continue
+            kept_any = True
+        out.append(part)
+    if not out:
+        return body
+    return '\n\n'.join(out) + ('\n' if body.endswith('\n') else '')
+
+
+def decide(db, workspace, page, suggestion, action, user_id, now):
+    """Apply or decline one suggestion. Accept is the only path that writes a page."""
+    status = 'accepted' if action == 'accept' else 'ignored'
+    applied = None
+    if action == 'accept':
+        try:
+            payload = json.loads(suggestion['payload'])
+        except ValueError:
+            payload = {}
+        dropped = payload.get('dropped') if isinstance(payload, dict) else ''
+        before = page['body']
+        after = merged_body(before, dropped)
+        if after == before:
+            applied = {'removed': None, 'note': '接受时这一页已经没有重复段落，正文未改动。'}
+        else:
+            db.execute('UPDATE memory_pages SET body=?, revision=revision+1, updated=?, updated_by=? WHERE id=?',
+                       (after, now, user_id, page['id']))
+            applied = {'removed': dropped, 'before_length': len(before), 'after_length': len(after)}
+    db.execute('UPDATE memory_suggestions SET status=?, decided=?, applied=? WHERE id=?',
+               (status, now, json.dumps(applied, ensure_ascii=False, sort_keys=True) if applied else None,
+                suggestion['id']))
+    return applied

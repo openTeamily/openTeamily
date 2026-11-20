@@ -137,6 +137,30 @@ export function statusLabel(message) {
   return message.body || '';
 }
 
+// The template endpoint reports a handful of known refusals; keep those in the
+// page's language and leave anything else in the server's own words.
+export function teamTemplateFailure(status, body) {
+  const message = body && body.error && body.error.message ? String(body.error.message) : '';
+  if (/Only workspace owners and admins/i.test(message)) return '只有工作区所有者或管理员可以创建 AI 团队。';
+  if (/Template not found/i.test(message)) return '没有找到这个团队模板。';
+  if (/Idempotency/i.test(message)) return '这次请求的幂等键无效，请重试。';
+  if (/Conversation (member limit|capacity) reached/i.test(message)) return '群会话或成员配额已满，先清理旧群会话再试。';
+  return message || '无法用这个模板建团队。';
+}
+
+export function templateAgentText(template) {
+  const names = (template && template.agents ? template.agents : []).map((agent) => agent.name).filter(Boolean);
+  return names.length ? '含 ' + names.length + ' 个智能体：' + names.join('、') : '';
+}
+
+function teamTemplateKey() {
+  const bytes = new Uint8Array(18);
+  globalThis.crypto.getRandomValues(bytes);
+  let text = '';
+  for (const value of bytes) text += String.fromCharCode(value);
+  return globalThis.btoa(text).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
@@ -167,6 +191,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let selectedCategory = categoryFromSearch(globalThis.location && globalThis.location.search);
   let selectedCreator = '';
   let memberNames = new Map();
+  let teamTemplates = [];
+  let teamTemplatesLoaded = false;
 
   function renderCategoryFilter() {
     for (const button of categoryButtons) {
@@ -212,6 +238,82 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     let parsed = {};
     try { parsed = await response.json(); } catch { parsed = {}; }
     return {status: response.status, body: parsed};
+  }
+
+  function renderTeamTemplates() {
+    const list = document.getElementById('team-template-list');
+    const empty = document.getElementById('teams-empty');
+    if (!list) return;
+    list.replaceChildren();
+    for (const template of teamTemplates) {
+      const card = document.createElement('li');
+      card.className = 'team-template-card';
+      card.dataset.slug = template.slug;
+      const name = document.createElement('h3');
+      name.textContent = template.name || template.slug;
+      const summary = document.createElement('p');
+      summary.className = 'summary';
+      summary.textContent = template.summary || '';
+      const members = document.createElement('p');
+      members.className = 'note';
+      members.textContent = templateAgentText(template);
+      const apply = document.createElement('button');
+      apply.type = 'button';
+      apply.className = 'primary';
+      apply.textContent = '用这个模板建团队';
+      apply.dataset.slug = template.slug;
+      if (!canManage(actor)) {
+        apply.disabled = true;
+        apply.title = '只有工作区所有者或管理员可以创建 AI 团队';
+      }
+      apply.addEventListener('click', () => applyTeamTemplate(template, apply));
+      card.append(name, summary, members, apply);
+      list.append(card);
+    }
+    if (empty) empty.hidden = teamTemplates.length > 0;
+  }
+
+  async function loadTeamTemplates() {
+    if (teamTemplatesLoaded) return;
+    const listed = await request('GET', '/v1/team-templates');
+    if (listed.status !== 200) {
+      const empty = document.getElementById('teams-empty');
+      if (empty) {
+        empty.hidden = false;
+        empty.textContent = '模板列表没有加载出来：' + messageFor(listed.body.error, '服务端没有返回模板。');
+      }
+      return;
+    }
+    teamTemplates = listed.body.items || [];
+    teamTemplatesLoaded = true;
+    renderTeamTemplates();
+  }
+
+  async function applyTeamTemplate(template, button) {
+    if (!canManage(actor) || button.disabled) return;
+    const id = workspaceId();
+    if (!id) {
+      show('error', '先选择一个工作区，再用模板建团队。');
+      return;
+    }
+    button.disabled = true;
+    const previous = button.textContent;
+    button.textContent = '正在建团队…';
+    try {
+      const result = await request('POST', `/v1/workspaces/${id}/team-templates/${template.slug}`, {},
+        {'Idempotency-Key': teamTemplateKey()});
+      if ((result.status !== 200 && result.status !== 201) || !result.body.conversation) {
+        show('error', teamTemplateFailure(result.status, result.body));
+        return;
+      }
+      const href = '/chat#workspace=' + encodeURIComponent(id) + '&social=' + encodeURIComponent(result.body.conversation.id);
+      show('ok', '团队已建好，正在打开群会话。');
+      if (globalThis.location && typeof globalThis.location.assign === 'function') globalThis.location.assign(href);
+      else if (globalThis.location) globalThis.location.href = href;
+    } finally {
+      button.disabled = false;
+      button.textContent = previous;
+    }
   }
 
   function workspaceId() {
@@ -899,11 +1001,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       document.getElementById('list-panel').hidden = false;
       document.getElementById('teams-panel').hidden = true;
     });
-    tabTeams.addEventListener('click', () => {
+    tabTeams.addEventListener('click', async () => {
       tabAgents.setAttribute('aria-selected', 'false');
       tabTeams.setAttribute('aria-selected', 'true');
       document.getElementById('list-panel').hidden = true;
       document.getElementById('teams-panel').hidden = false;
+      await loadTeamTemplates();
     });
   }
 
