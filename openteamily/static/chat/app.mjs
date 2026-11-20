@@ -1,3 +1,4 @@
+import { mountAgentMentions } from './mentions.mjs';
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
@@ -708,6 +709,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let currentConversation = null;
   const messageUtilities = mountMessageUtilities(document, {request, notify: show, composerContext: () => currentConversation ? {wid: workspaceId(), cid: currentConversation.id, source: currentSource} : null, context: () => currentSource === 'social' && currentConversation ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null});
   let currentSource = 'agent';
+  const agentMentions = mountAgentMentions(document, () => {
+    if (currentSource !== 'social' || currentConversation?.kind !== 'group') return null;
+    return {scope: `${workspaceId()}/${currentConversation.id}`, agents: currentConversation.agent_members || []};
+  });
   let pollTimer = 0;
   let searchTab = 'all';
   let searchConversation = '';
@@ -1751,6 +1756,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openAgentConversation(agentId, conversationId) {
+    agentMentions.clear();
     setSocialHeaderTools(false);
     setGroupInfo(null);
     const pin = document.getElementById('pin-conversation');
@@ -1810,6 +1816,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
     }
     currentConversation = result.body.conversation;
+    agentMentions.refresh();
     setSessionsOpen(false);
     const pin = document.getElementById('pin-conversation');
     syncMuteButton(currentConversation);
@@ -2444,6 +2451,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
   workspaceSelect.addEventListener('change', async () => {
     notificationSnapshot = null;
+    agentMentions.clear();
     renderNotifications({items: [], unread_count: 0});
     currentAgent = null;
     currentConversation = null;
@@ -3026,7 +3034,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (currentSource === 'social') {
-      if (!validMessage(text)) {
+      const message = agentMentions.message(text);
+      if (!validMessage(message.body)) {
         show('error', '请输入 1–4000 字符的消息。');
         return;
       }
@@ -3034,16 +3043,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         show('error', '请先打开或创建一个会话。');
         return;
       }
-      const result = await request('POST', `${socialBase()}/${currentConversation.id}/messages`, {body: text}, {
+      const conversationId = currentConversation.id;
+      const wid = workspaceId();
+      const result = await request('POST', `${socialBase()}/${conversationId}/messages`, message, {
         'Idempotency-Key': idempotencyKey('socialmsg-'),
       });
       if (result.status !== 201 && result.status !== 200) {
         show('error', messageFor(result.body.error, '发送失败。'));
         return;
       }
-      document.getElementById('chat-body').value = '';
-      await openSocialConversation(currentConversation.id);
-      show('ok', '已发送。');
+      if (workspaceId() === wid && currentSource === 'social' && currentConversation?.id === conversationId) {
+        document.getElementById('chat-body').value = '';
+        agentMentions.clear();
+        await openSocialConversation(conversationId);
+        show('ok', '已发送。');
+      }
       return;
     }
     if (!currentAgent) {
@@ -3110,7 +3124,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   document.getElementById('chat-body').addEventListener('keydown', event => {
-    if (!shouldSendOnShortcut(event, sendShortcut)) return;
+    if (agentMentions.keydown(event) || !shouldSendOnShortcut(event, sendShortcut)) return;
     event.preventDefault();
     if (!(document.getElementById('chat-body').value || '').trim()) return;
     sendCurrentMessage();

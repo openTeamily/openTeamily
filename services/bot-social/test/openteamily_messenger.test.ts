@@ -116,3 +116,38 @@ test("group agents: the owner's DS-Bot gets mentions and auto-reply turns; auto 
     agent_ref: "helper", body: "disabled while a turn was running", mode: "auto", reply_to: inbox.items[3].message.id
   })).status, 409);
 });
+
+test("explicit mentions address the selected owner, even when agents share IDs and names", async () => {
+  const A = await home(S.base, "mention-a");
+  const B = await home(S.base, "mention-b");
+  const C = await home(S.base, "mention-c");
+  await teamOf(A, B, C);
+  const group = await A.ok("POST", "/v1/ot/conversations", {
+    kind: "group", title: "Mentions", members: [B.handle, C.handle],
+  });
+  const root = `/v1/ot/conversations/${group.id}`;
+  await B.ok("PUT", root + "/agents/shared", {name: "Helper"});
+  await C.ok("PUT", root + "/agents/shared", {name: "Helper"});
+  const owner = (await B.ok("GET", "/v1/ot/me")).owner_id;
+  const target = {owner_id:owner, agent_id:"shared"};
+  const posted = await A.ok("POST", root + "/messages", {body:"Please check", agent_mentions:[target]});
+  assert.equal(posted.body, "@Helper Please check");
+  const forB = await B.ok("GET","/v1/ot/agent-inbox");
+  assert.deepEqual(forB.items.map((entry: any) => [entry.message.id, entry.agent_ref, entry.mode]),
+    [[posted.id, "shared", "mention"]]);
+  assert.deepEqual((await C.ok("GET", "/v1/ot/agent-inbox")).items, []);
+  const removed = await A.call("POST", root + "/messages", {
+    body:"Still there?", agent_mentions:[{owner_id:owner, agent_id:"missing"}],
+  });
+  assert.equal(removed.status,400);
+  assert.equal((await A.ok("GET", root + "/messages")).messages.length, 1);
+
+  await B.ok("PUT", root + "/agents/second", {name:"第二位助手"});
+  const both = await A.ok("POST", root + "/messages", {
+    body:"各给一个答案", agent_mentions:[target, {owner_id:owner,agent_id:"second"}],
+  });
+  assert.equal(both.body,"@Helper @第二位助手 各给一个答案");
+  const page = await B.ok("GET", `/v1/ot/agent-inbox?after=${forB.cursor}&limit=1`);
+  assert.deepEqual(page.items.map((entry: any) => entry.agent_ref).sort(), ["second","shared"]);
+  assert.deepEqual((await B.ok("GET", `/v1/ot/agent-inbox?after=${page.cursor}`)).items, []);
+});

@@ -104,3 +104,16 @@ test('the group settings route patches only the requested automatic-reply prefer
   const invalid = await e.v1({method:'POST',path,body:{auto_reply:'false'}})
   assert.equal(invalid.status, 400)
 })
+
+
+test('legacy chat forwards explicitly selected group agents to Bot Social', async () => {
+  const dir = fixture()
+  const f = fake({'POST /v1/ot/conversations/otc_1/messages': body => ({id: 'm1', body: body.body})})
+  setSharedBotSocial(createBotSocial({server: SERVER, credentialsPath: join(dir, 'bot', 'flybot-social.json'), fetch: f.fetch}))
+  const e = messenger({dataDir: dir}).endpoints
+  const targets = [{owner_id:'owner-a', agent_id:'helper'}]
+  const path = '/v1/workspaces/' + 'a'.repeat(32) + '/social/conversations/otc_1/messages'
+  const result = await e.v1({method:'POST',path,body:{body:'Question',agent_mentions:targets}})
+  assert.equal(result.status, 201)
+  assert.deepEqual(f.calls.at(-1).body.agent_mentions, targets)
+})

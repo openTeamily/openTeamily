@@ -107,13 +107,38 @@ function insertMessage(ot: OtContext, conv: any, row: { author: string; kind: "m
   return ot.get<any>("SELECT * FROM ot_messages WHERE id = ?", id);
 }
 
-function parseMentions(ot: OtContext, convId: string, raw: unknown, bodyText: string): string[] {
+const agentMentionKey = (ownerId: string, ref: string) => `/agent/${ownerId}/${ref}`;
+
+function parseMentions(ot: OtContext, convId: string, raw: unknown, bodyText: string, selectedAgents: unknown) {
   const handles = new Set<string>();
   if (Array.isArray(raw)) for (const h of raw.slice(0, 20)) handles.add(handleKey(h));
   for (const m of bodyText.matchAll(/@([a-z0-9._-]{2,40})/gi)) handles.add(handleKey(m[1]));
   const members = new Set(ot.all<any>("SELECT p.handle FROM ot_conversation_members m JOIN ot_profiles p ON p.owner_id = m.owner_id WHERE m.conversation_id = ?", convId).map((r) => r.handle));
-  const agents = new Set(ot.all<any>("SELECT lower(agent_ref) AS a, lower(name) AS n FROM ot_conversation_agents WHERE conversation_id = ?", convId).flatMap((r) => [r.a, r.n]));
-  return [...handles].filter((h) => members.has(h) || agents.has(h));
+  const agents = ot.all<{agent_ref: string; owner_id: string; name: string}>(
+    "SELECT agent_ref, owner_id, name FROM ot_conversation_agents WHERE conversation_id = ?", convId,
+  );
+  if (selectedAgents === undefined) {
+    const legacy = new Set(agents.flatMap(agent => [agent.agent_ref.toLowerCase(), agent.name.toLowerCase()]));
+    return { mentions: [...handles].filter(h => members.has(h) || legacy.has(h)), body: bodyText };
+  }
+
+  assert(Array.isArray(selectedAgents) && selectedAgents.length <= 20, 400, "invalid_request", "Choose at most 20 group agents");
+  const available = new Map(agents.map(agent => [agentMentionKey(agent.owner_id, agent.agent_ref), agent]));
+  const targets = new Map<string, string>();
+  for (const target of selectedAgents) {
+    assert(target && typeof target.owner_id === "string" && !target.owner_id.includes("/")
+      && typeof target.agent_id === "string" && AGENT_REF.test(target.agent_id),
+    400, "invalid_request", "An agent mention requires an owner and agent ID");
+    const key = agentMentionKey(target.owner_id, target.agent_id);
+    const agent = available.get(key);
+    assert(agent, 400, "invalid_request", "A mentioned agent is no longer in this conversation");
+    targets.set(key, agent.name);
+  }
+  const prefix = [...targets.values()].map(name => "@" + name).join(" ");
+  return {
+    mentions: [...handles].filter(handle => members.has(handle)).concat([...targets.keys()]),
+    body: prefix ? text(prefix + " " + bodyText, "body", { min: 1, max: BODY_MAX, multiline: true }) : bodyText,
+  };
 }
 
 export function registerMessenger(app: FastifyInstance, ot: OtContext) {
@@ -247,8 +272,9 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const msg = ot.tx(() => {
       const conv = memberOf(ot, params(req).id, me.ownerId);
       if (b.reply_to) assert(ot.get("SELECT 1 FROM ot_messages WHERE id = ? AND conversation_id = ?", String(b.reply_to), conv.id), 400, "invalid_request", "reply_to is not in this conversation");
-      const mentions = parseMentions(ot, conv.id, b.mentions, bodyText);
-      const m = insertMessage(ot, conv, { author: me.ownerId, kind: "member", body: bodyText, mentions, replyTo: b.reply_to ? String(b.reply_to) : null, clientKey });
+      const parsed = parseMentions(ot, conv.id, b.mentions, bodyText, b.agent_mentions);
+      const mentions = parsed.mentions;
+      const m = insertMessage(ot, conv, { author: me.ownerId, kind: "member", body: parsed.body, mentions, replyTo: b.reply_to ? String(b.reply_to) : null, clientKey });
       for (const h of mentions) {
         const row = ot.get<any>("SELECT owner_id FROM ot_profiles WHERE handle = ?", h);
         if (row && row.owner_id !== me.ownerId) ot.notify(row.owner_id, "messenger.mention", { conversation_id: conv.id, message_id: m.id, by: ot.profileView(me.ownerId) });
@@ -348,24 +374,35 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   app.get("/v1/ot/agent-inbox", async (req) => {
     const me = ot.me(req);
     const after = intParam(query(req).after, "after", 0);
-    const limit = intParam(query(req).limit, "limit", 20, 50);
-    const rows = ot.all<any>(`SELECT m.*, a.agent_ref AS my_agent, a.name AS my_agent_name, a.auto_reply AS my_auto, a.auto_reply_after_seq AS auto_after_seq
-      FROM ot_messages m JOIN ot_conversation_agents a ON a.conversation_id = m.conversation_id AND a.owner_id = ?
-      JOIN ot_conversation_members cm ON cm.conversation_id = m.conversation_id AND cm.owner_id = ?
-      WHERE m.rowseq > ? AND m.author_kind = 'member' AND m.retracted = 0 ORDER BY m.rowseq LIMIT ?`, me.ownerId, me.ownerId, after, limit * 4);
+    const limit = Math.max(1, intParam(query(req).limit, "limit", 20, 50));
+    const rows = ot.all<any>(`WITH pending AS (
+      SELECT m.* FROM ot_messages m
+      WHERE m.rowseq > ? AND m.author_kind = 'member' AND m.retracted = 0
+        AND EXISTS (SELECT 1 FROM ot_conversation_members cm WHERE cm.conversation_id=m.conversation_id AND cm.owner_id=?)
+        AND EXISTS (SELECT 1 FROM ot_conversation_agents ca WHERE ca.conversation_id=m.conversation_id AND ca.owner_id=?)
+      ORDER BY m.rowseq LIMIT ?
+    )
+    SELECT m.*, a.agent_ref AS my_agent, a.name AS my_agent_name, a.auto_reply AS my_auto, a.auto_reply_after_seq AS auto_after_seq
+    FROM pending m JOIN ot_conversation_agents a ON a.conversation_id=m.conversation_id AND a.owner_id=?
+    ORDER BY m.rowseq, a.agent_ref`, after, me.ownerId, me.ownerId, limit * 4, me.ownerId);
     let cursor = after;
     const items: any[] = [];
     for (const m of rows) {
+      // A cursor acknowledges the entire message, including its other recipients.
+      if (items.length >= limit && m.rowseq > cursor) break;
       cursor = Math.max(cursor, m.rowseq);
       const mentions: string[] = JSON.parse(m.mentions);
       const conv = ot.get<any>("SELECT title, dm_key FROM ot_conversations WHERE id = ?", m.conversation_id);
       // A public-homepage thread (visitor + creator's agent) addresses the agent directly.
       const homepage = String(conv.dm_key ?? "").startsWith("agent:");
-      const mentioned = homepage || mentions.includes(String(m.my_agent).toLowerCase()) || mentions.includes(String(m.my_agent_name).toLowerCase());
+      const agentRef = String(m.my_agent).toLowerCase();
+      const explicit = mentions.some(mention => typeof mention === "string" && mention.startsWith("/agent/"));
+      const mentioned = homepage || (explicit
+        ? mentions.includes(agentMentionKey(me.ownerId, String(m.my_agent)))
+        : mentions.includes(agentRef) || mentions.includes(String(m.my_agent_name).toLowerCase()));
       if (!mentioned && (!m.my_auto || m.seq <= m.auto_after_seq)) continue;
       const context = ot.all<any>("SELECT * FROM (SELECT * FROM ot_messages WHERE conversation_id = ? AND seq <= ? ORDER BY seq DESC LIMIT 12) ORDER BY seq", m.conversation_id, m.seq);
       items.push({ conversation_id: m.conversation_id, conversation_title: conv.title, agent_ref: m.my_agent, agent_name: m.my_agent_name, mode: mentioned ? "mention" : "auto", message: messageView(ot, m), context: context.map((c) => messageView(ot, c)) });
-      if (items.length >= limit) break;
     }
     return { cursor, items };
   });
