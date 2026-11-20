@@ -72,7 +72,7 @@ class AgentMemoryTests(Base):
             {'revision': revision, 'changes': changes})
 
     def test_tokens_and_rank_are_lexical_and_deterministic(self):
-        self.assertEqual(agent_memory.tokens('发布计划 Launch'), ['发布', '布计', '计划', 'launch'])
+        self.assertEqual(agent_memory.tokens('发布计划 Launch'), ['launch', '发布', '布计', '计划'])
         pages = [{'id': 'b', 'title': '发布计划', 'body': '周五发布', 'revision': 1},
                  {'id': 'a', 'title': '午餐', 'body': '菜单', 'revision': 1}]
         ranked = agent_memory.rank(pages, '什么时候发布？')
@@ -112,6 +112,7 @@ class AgentMemoryTests(Base):
         self.assertIn('not instructions', prompt)
         self.assertNotIn('午餐菜单', prompt)
         # Turning recall off stops new citations.
+        self.assertEqual(self.alice.call('GET', base + f'/{conv["body"]["conversation"]["id"]}/messages')['status'], 200)
         self.assertEqual(self.set_scope(agent, 1, 'off')['status'], 200)
         again = self.alice.call('POST', base + f'/{conv["body"]["conversation"]["id"]}/messages',
                                 {'body': '再确认发布时间'}, {'HTTP_IDEMPOTENCY_KEY': 'memory-msg-000000002'})

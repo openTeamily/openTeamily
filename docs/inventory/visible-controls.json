@@ -49,6 +49,14 @@
       "external_dependency_or_gap": "Contributor348 run detail landed; active #310; explicit owned instruction-skill scheduling implemented; no scheduled Composio, external triggers or distributed scheduler acceptance",
       "checklist": "docs/VISIBLE_FUNCTIONS_INVENTORY.md"
     },
+    "team-runs": {
+      "route": "/team-runs",
+      "backend_state": "team_runs and team_run_steps, runtime infer tasks, saved artifacts",
+      "execution_path": "team-runs/app.mjs -> workspace team-run create/read/cancel/retry/remove/artifact APIs -> runtime infer tasks",
+      "verification": "Individual control unverified unless explicitly exercised; route evidence: test_agent_memory_team_runs.py DAG ordering/failure/retry/cancel/save cases",
+      "external_dependency_or_gap": "Original OpenTeamily page, no Teamily reference; reconciled on read, no scheduler-driven progress; real-model acceptance pending",
+      "checklist": "docs/VISIBLE_FUNCTIONS_INVENTORY.md"
+    },
     "memory": {
       "route": "/memory",
       "backend_state": "memory pages/profile/topics/actions/links",

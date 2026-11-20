@@ -263,10 +263,10 @@ def save_artifact(app, db, workspace, session, run, position, now, refuse):
         refuse(409, 'conflict', 'Only a finished step with output can be saved')
     step = steps[position]
     key_hash = digest('artifact-source:team_run:%s:%d' % (run['id'], position))
-    existing = db.execute('SELECT * FROM artifacts WHERE workspace_id=? AND key_hash=?',
+    existing = db.execute('SELECT id FROM artifacts WHERE workspace_id=? AND key_hash=?',
                           (workspace['id'], key_hash)).fetchone()
     if existing is not None:
-        return 200, {'artifact': artifacts.view(existing)}, []
+        return 200, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], existing['id']))}, []
     content = step['output'][:artifacts.BODY_MAX]
     title = artifacts.unique_title(db, workspace['id'], ('%s · 第 %d 步' % (run['title'], position + 1))[:80],
                                    run['id'] + ':%d' % position)
