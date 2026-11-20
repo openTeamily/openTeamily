@@ -169,7 +169,7 @@ export function createAgents({ db, host }) {
     async messages(p) {
       const agent = load(ws(p), p.id)
       const convo = conversation(agent, p.conversation_id)
-      return { items: all('SELECT * FROM agent_messages WHERE conversation_id=? ORDER BY created, id', convo.id).map((m) => ({ ...m, meta: JSON.parse(m.meta) })) }
+      return { items: all('SELECT * FROM agent_messages WHERE conversation_id=? ORDER BY created, rowid', convo.id).map((m) => ({ ...m, meta: JSON.parse(m.meta) })) }
     },
     // Send one message to the agent: a native DS-Bot turn on this conversation's session.
     async send(p) {
@@ -190,7 +190,7 @@ export function createAgents({ db, host }) {
         throw error
       }
       run('UPDATE agent_conversations SET updated=? WHERE id=?', now(), convo.id)
-      const rows = all('SELECT * FROM agent_messages WHERE id IN (?,?) ORDER BY created, id', userId, replyId)
+      const rows = all('SELECT * FROM agent_messages WHERE id IN (?,?) ORDER BY created, rowid', userId, replyId)
       return { message: rows.find((r) => r.id === userId), reply: { ...rows.find((r) => r.id === replyId), meta: JSON.parse(rows.find((r) => r.id === replyId).meta) } }
     },
     turn,
