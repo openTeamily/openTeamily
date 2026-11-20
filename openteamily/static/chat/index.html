@@ -391,14 +391,20 @@
             </div>
           </div>
           <button type="button" id="composer-emoji-open" title="插入表情" aria-haspopup="dialog"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M8 9h1 M15 9h1 M7 14a6 6 0 0 0 10 0"/></svg><span class="sr-only">表情</span></button>
-          <button type="button" disabled title="未实现：语音消息"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0V6Z M5 11v2a7 7 0 0 0 14 0v-2 M12 20v3"/></svg><span class="sr-only">语音</span></button>
+          <button type="button" id="composer-voice" title="录一条语音：点一下开始，再点一下结束并试听"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0V6Z M5 11v2a7 7 0 0 0 14 0v-2 M12 20v3"/></svg><span class="sr-only">语音</span></button>
           <button type="submit" class="composer-send" aria-label="发送" title="发送"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14 M13 6l6 6-6 6"/></svg></button>
         </div>
+      </div>
+      <div id="voice-bar" class="voice-bar" hidden>
+        <span id="voice-status" class="note" role="status"></span>
+        <audio id="voice-preview" controls preload="metadata" hidden></audio>
+        <button type="button" id="voice-send" disabled>发送语音</button>
+        <button type="button" id="voice-cancel">取消</button>
       </div>
     </form>
     <details class="gap-note">
       <summary>对照说明</summary>
-      <p class="note">聊天页同时列出当前工作区的智能体会话和人↔人单聊、群聊。单聊和群聊支持个人置顶、未读和筛选；智能体私聊未读仍未接通。技能与应用连接器可从输入工具进入管理页；会议录制、语音、第三方智能体、邀请和通话尚未接通，对应按钮保留禁用。非空消息气泡和移动端布局是原创补充，未经 Teamily 对照。还不能写成已经功能对等。</p>
+      <p class="note">聊天页同时列出当前工作区的智能体会话和人↔人单聊、群聊。单聊和群聊支持个人置顶、未读和筛选；智能体私聊未读仍未接通。技能与应用连接器可从输入工具进入管理页；会议录制、第三方智能体、邀请和通话尚未接通，对应按钮保留禁用；语音消息已接通（录音、试听、发送，气泡里用播放条播放）。非空消息气泡和移动端布局是原创补充，未经 Teamily 对照。还不能写成已经功能对等。</p>
     </details>
     <p id="role-note" class="note" hidden></p>
     <section id="chat-panel">

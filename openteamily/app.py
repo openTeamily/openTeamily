@@ -5072,9 +5072,15 @@ class App:
         refuse(400, 'invalid', 'Invalid notification request')
 
     def send_social_message(self, db, workspace, session, row, now, env):
-        body = self.body(env, ['body', 'artifact_id', 'artifact_revision'])
+        body = self.body(env, ['body', 'artifact_id', 'artifact_revision', 'voice_ms'])
         text = body.get('body')
         artifact_id = body.get('artifact_id')
+        voice_ms = body.get('voice_ms')
+        if voice_ms is not None:
+            if type(voice_ms) is not int or not 1 <= voice_ms <= social.VOICE_MAX_MS:
+                refuse(400, 'invalid', 'Provide a recorded length in milliseconds')
+            if artifact_id is None:
+                refuse(400, 'invalid', 'A voice message needs its recording')
         attachment = None
         if artifact_id is not None:
             if not isinstance(artifact_id, str) or not social.HEX32.fullmatch(artifact_id):
@@ -5095,6 +5101,8 @@ class App:
         request_document = {'body': body.get('body')}
         if artifact_id is not None:
             request_document.update(artifact_id=artifact_id, artifact_revision=body.get('artifact_revision'))
+        if voice_ms is not None:
+            request_document.update(voice_ms=voice_ms)
         key_hash, request_hash = digest('social-message:' + key), digest(
             json.dumps(request_document, sort_keys=True, separators=(',', ':'), ensure_ascii=False))
         prior = social.load_message_by_key(db, row['id'], key_hash)
@@ -5112,6 +5120,8 @@ class App:
             'INSERT INTO social_messages VALUES(?,?,?,?,?,?,?,?,?)',
             (message_id, row['id'], workspace['id'], session['user_id'], text,
              social.next_seq(db, row['id']), now, key_hash, request_hash))
+        if voice_ms is not None:
+            db.execute('INSERT INTO social_voice_messages VALUES(?,?)', (message_id, voice_ms))
         if attachment is not None:
             db.execute('INSERT INTO social_attachments VALUES(?,?)', (message_id, artifact_id))
             db.execute('INSERT INTO social_artifact_versions VALUES(?,?,?,?,?)', (message_id, attachment['revision'], artifacts.public_kind(attachment), attachment['title'], artifact_id))

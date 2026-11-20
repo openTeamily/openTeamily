@@ -117,7 +117,14 @@ CREATE TABLE IF NOT EXISTS social_reactions (
  emoji TEXT NOT NULL,
  created INTEGER NOT NULL,
  PRIMARY KEY(message_id, user_id, emoji));
+CREATE TABLE IF NOT EXISTS social_voice_messages (
+ message_id TEXT PRIMARY KEY REFERENCES social_messages(id) ON DELETE CASCADE,
+ duration_ms INTEGER NOT NULL CHECK(duration_ms BETWEEN 1 AND 600000));
 '''
+
+# A voice message is an ordinary media attachment plus its recorded length, so
+# the bubble can show a play bar with a duration instead of a document card.
+VOICE_MAX_MS = 600000
 
 # Fixed, self-chosen reaction set (OpenTeamily default, not a Teamily copy).
 REACTIONS = ('👍', '❤️', '😄', '🎉', '👀', '✅')
@@ -180,6 +187,8 @@ def message_view(row):
     data.update(revision=row['revision'] if 'revision' in row.keys() else 1,
                 edited=row['edited'] if 'edited' in row.keys() else None,
                 retracted=bool(row['retracted']) if 'retracted' in row.keys() else False)
+    data['voice'] = ({'duration_ms': row['voice_ms']}
+                     if 'voice_ms' in row.keys() and row['voice_ms'] else None)
     if not data['retracted'] and 'attachment_id' in row.keys() and row['attachment_id']:
         mime = row['attachment_mime'] if 'attachment_mime' in row.keys() else None
         base = '/v1/workspaces/' + row['workspace_id'] + '/artifacts/' + row['attachment_id']
@@ -210,16 +219,19 @@ MESSAGE_ROWS = """
  SELECT m.id, m.conversation_id, m.workspace_id, m.user_id, m.body, m.seq, m.created,
         NULL AS agent_id, NULL AS agent_name, COALESCE(st.revision,1) AS revision,
         st.edited, COALESCE(st.retracted,0) AS retracted, at.artifact_id AS attachment_id, COALESCE(av.title,af.title) AS attachment_title,
-        am.mime AS attachment_mime, av.revision AS attachment_revision, COALESCE(av.kind,'media') AS attachment_kind FROM social_messages m
+        am.mime AS attachment_mime, av.revision AS attachment_revision, COALESCE(av.kind,'media') AS attachment_kind,
+        vm.duration_ms AS voice_ms FROM social_messages m
  LEFT JOIN social_message_state st ON st.message_id=m.id
  LEFT JOIN social_attachments at ON at.message_id=m.id
  LEFT JOIN artifacts af ON af.id=at.artifact_id
  LEFT JOIN artifact_media am ON am.artifact_id=at.artifact_id
  LEFT JOIN social_artifact_versions av ON av.message_id=m.id
+ LEFT JOIN social_voice_messages vm ON vm.message_id=m.id
  UNION ALL
  SELECT id, conversation_id, workspace_id, NULL, body, seq, updated,
         agent_id, agent_name, 1 AS revision, NULL AS edited, 0 AS retracted, NULL AS attachment_id, NULL AS attachment_title,
-        NULL AS attachment_mime, NULL AS attachment_revision, NULL AS attachment_kind
+        NULL AS attachment_mime, NULL AS attachment_revision, NULL AS attachment_kind,
+        NULL AS voice_ms
  FROM social_agent_replies WHERE status='succeeded'
 """
 

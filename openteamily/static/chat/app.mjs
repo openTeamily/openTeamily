@@ -1,6 +1,28 @@
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
+// Voice messages: the recorder is the browser's MediaRecorder, the clip is an
+// ordinary media attachment, and the message carries its length so the bubble
+// can show a play bar with a duration.
+export function voiceDurationLabel(ms) {
+  const total = Math.max(0, Math.round((Number(ms) || 0) / 1000));
+  return Math.floor(total / 60) + ':' + String(total % 60).padStart(2, '0');
+}
+export function canRecord(scope) {
+  const api = scope || {};
+  return Boolean(api.MediaRecorder && api.navigator && api.navigator.mediaDevices
+    && typeof api.navigator.mediaDevices.getUserMedia === 'function');
+}
+export function voiceFileExtension(mime) {
+  const value = String(mime || '');
+  if (value.includes('ogg')) return 'ogg';
+  if (value.includes('mp4')) return 'm4a';
+  if (value.includes('wav')) return 'wav';
+  return 'webm';
+}
+export function voicePayload(artifactId, durationMs) {
+  return {body: '', artifact_id: artifactId, voice_ms: Math.max(1, Math.round(Number(durationMs) || 0))};
+}
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
 import { conversationLabel, memberChoices, validMessage } from '../messenger/app.mjs';
 import { createLookAvatar } from '../look/app.mjs';
@@ -1266,7 +1288,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       time.className = 'time';
       time.textContent = formatTime(item.created);
       li.append(role, body, time);
-      if (item.attachment && !item.retracted) {
+      if (item.voice && item.attachment && !item.retracted) {
+        const player = document.createElement('div');
+        player.className = 'voice-message';
+        const audio = document.createElement('audio');
+        audio.controls = true;
+        audio.preload = 'metadata';
+        audio.src = item.attachment.path;
+        audio.setAttribute('aria-label', '语音消息 ' + voiceDurationLabel(item.voice.duration_ms));
+        const length = document.createElement('span');
+        length.className = 'voice-duration';
+        length.textContent = '语音 ' + voiceDurationLabel(item.voice.duration_ms);
+        player.append(audio, length);
+        li.append(player);
+      }
+      if (item.attachment && !item.retracted && !item.voice) {
         const card = document.createElement('article');
         card.className = 'stream-artifact';
         const copy = document.createElement('span');
@@ -2302,6 +2338,128 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     out.textContent = `邀请令牌只显示一次：${result.body.token}`;
   });
+  const voiceButton = document.getElementById('composer-voice');
+  const voiceBar = document.getElementById('voice-bar');
+  const voiceStatus = document.getElementById('voice-status');
+  const voicePreview = document.getElementById('voice-preview');
+  const voiceSend = document.getElementById('voice-send');
+  const voiceCancel = document.getElementById('voice-cancel');
+  let voiceRecorder = null;
+  let voiceStream = null;
+  let voiceChunks = [];
+  let voiceStarted = 0;
+  let voiceBlob = null;
+  let voiceUrl = '';
+  let voiceMs = 0;
+  let voiceTicker = null;
+
+  function voiceReset() {
+    if (voiceTicker) { clearInterval(voiceTicker); voiceTicker = null; }
+    if (voiceStream) { try { voiceStream.getTracks().forEach(track => track.stop()); } catch {} voiceStream = null; }
+    if (voiceUrl) { try { URL.revokeObjectURL(voiceUrl); } catch {} voiceUrl = ''; }
+    voiceRecorder = null; voiceChunks = []; voiceBlob = null; voiceMs = 0;
+    if (voicePreview) { try { voicePreview.pause(); } catch {} voicePreview.hidden = true; voicePreview.removeAttribute('src'); }
+    if (voiceBar) voiceBar.hidden = true;
+    if (voiceSend) { voiceSend.disabled = true; voiceSend.textContent = '发送语音'; }
+    if (voiceButton) voiceButton.setAttribute('aria-pressed', 'false');
+  }
+
+  function voiceTick() {
+    if (!voiceStatus) return;
+    voiceStatus.textContent = '正在录音 ' + voiceDurationLabel(Date.now() - voiceStarted) + ' · 再点一下麦克风结束';
+  }
+
+  async function voiceStart() {
+    if (!canRecord(globalThis)) {
+      show('error', '本浏览器不支持录音。可以改用文字消息，或用「上传」发一段音频文件。');
+      return;
+    }
+    voiceReset();
+    if (voiceBar) voiceBar.hidden = false;
+    if (voiceStatus) voiceStatus.textContent = '正在请求麦克风…';
+    try {
+      voiceStream = await globalThis.navigator.mediaDevices.getUserMedia({audio: true});
+      const types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
+      const mime = types.find(type => typeof globalThis.MediaRecorder.isTypeSupported === 'function'
+        && globalThis.MediaRecorder.isTypeSupported(type)) || '';
+      voiceRecorder = mime ? new globalThis.MediaRecorder(voiceStream, {mimeType: mime})
+        : new globalThis.MediaRecorder(voiceStream);
+      voiceChunks = [];
+      voiceStarted = Date.now();
+      voiceRecorder.addEventListener('dataavailable', event => {
+        if (event.data && event.data.size) voiceChunks.push(event.data);
+      });
+      voiceRecorder.addEventListener('stop', () => {
+        voiceMs = Math.max(1, Date.now() - voiceStarted);
+        if (voiceTicker) { clearInterval(voiceTicker); voiceTicker = null; }
+        if (voiceStream) { try { voiceStream.getTracks().forEach(track => track.stop()); } catch {} voiceStream = null; }
+        voiceBlob = new Blob(voiceChunks, {type: (voiceRecorder && voiceRecorder.mimeType) || mime || 'audio/webm'});
+        if (voicePreview) {
+          if (voiceUrl) { try { URL.revokeObjectURL(voiceUrl); } catch {} }
+          voiceUrl = URL.createObjectURL(voiceBlob);
+          voicePreview.src = voiceUrl;
+          voicePreview.hidden = false;
+        }
+        if (voiceStatus) voiceStatus.textContent = '录好了：' + voiceDurationLabel(voiceMs) + '，先试听再发送。';
+        if (voiceSend) voiceSend.disabled = false;
+        if (voiceButton) voiceButton.setAttribute('aria-pressed', 'false');
+      });
+      voiceRecorder.start();
+      if (voiceButton) voiceButton.setAttribute('aria-pressed', 'true');
+      voiceTick();
+      voiceTicker = setInterval(voiceTick, 500);
+    } catch {
+      if (voiceBar) voiceBar.hidden = true;
+      show('error', '无法使用麦克风：请允许录音权限，或改用文字消息/上传音频。');
+    }
+  }
+
+  if (voiceButton) voiceButton.addEventListener('click', async () => {
+    if (voiceRecorder && voiceRecorder.state === 'recording') {
+      if (voiceStatus) voiceStatus.textContent = '正在结束录音…';
+      voiceRecorder.stop();
+      return;
+    }
+    await voiceStart();
+  });
+
+  if (voiceSend) voiceSend.addEventListener('click', async () => {
+    if (!voiceBlob || !voiceBlob.size) { show('error', '还没有录音。'); return; }
+    if (currentSource !== 'social' || !currentConversation) { show('error', '语音只能发到单聊或群聊。'); return; }
+    const wid = workspaceId(), cid = currentConversation.id;
+    voiceSend.disabled = true; voiceSend.textContent = '正在发送…';
+    try {
+      const name = 'voice-' + Date.now() + '.' + voiceFileExtension(voiceBlob.type);
+      const file = new File([voiceBlob], name, {type: voiceBlob.type || 'audio/webm'});
+      const form = new FormData();
+      form.append('kind', 'media');
+      form.append('title', '语音消息 ' + voiceDurationLabel(voiceMs) + ' · ' + Date.now());
+      form.append('file', file);
+      const response = await fetcher(`/v1/workspaces/${wid}/artifacts`, {method: 'POST', credentials: 'same-origin',
+        headers: {'X-CSRF-Token': csrfCookie(document.cookie), 'Idempotency-Key': idempotencyKey()}, body: form});
+      const uploaded = await response.json();
+      if (response.status !== 201) throw new Error(messageFor(uploaded.error, '语音未上传。'));
+      const result = await request('POST', `/v1/workspaces/${wid}/social/conversations/${cid}/messages`,
+        voicePayload(uploaded.artifact.id, voiceMs), {'Idempotency-Key': idempotencyKey('voice-')});
+      if (result.status !== 201 && result.status !== 200) {
+        throw new Error(messageFor(result.body.error, '语音已上传，但消息未发送。'));
+      }
+      voiceReset();
+      if (workspaceId() === wid && currentConversation && currentConversation.id === cid) {
+        await loadSessions(); await openSocialConversation(cid);
+      }
+      show('ok', '语音已发送。');
+    } catch (failure) {
+      if (voiceSend) { voiceSend.disabled = false; voiceSend.textContent = '发送语音'; }
+      show('error', failure.message || '语音未发送。');
+    }
+  });
+
+  if (voiceCancel) voiceCancel.addEventListener('click', () => {
+    if (voiceRecorder && voiceRecorder.state === 'recording') { try { voiceRecorder.stop(); } catch {} }
+    voiceReset();
+  });
+
   const notificationsToggle = document.getElementById('notifications-toggle');
   if (notificationsToggle) notificationsToggle.addEventListener('click', async () => {
     const panel = document.getElementById('notifications-panel');

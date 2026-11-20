@@ -1146,7 +1146,8 @@ test('icon chat controls preserve accessible names, disabled truth and attachmen
   assert.match(html, /disabled title="未实现：语音或视频通话"/);
   assert.match(html, /class="attachment-menu"[\s\S]*?id="chat-attachment"/);
   assert.match(html, /工作区成员可在作品库查看/);
-  assert.match(html, /disabled title="未实现：语音消息"[\s\S]*?sr-only">语音/);
+  assert.match(html, /id="composer-voice"[^>]*title="录一条语音：点一下开始，再点一下结束并试听"[\s\S]*?sr-only">语音/);
+  assert.ok(!/id="composer-voice"[^>]*disabled/.test(html), 'the voice button must not stay disabled');
 });
 
 import {notificationBadgeText, notificationSummary} from '../openteamily/static/chat/app.mjs';

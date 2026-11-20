@@ -873,6 +873,24 @@
 #message-list li.mine .role, #message-list li.user .role { color: var(--ot-ink); }
 #message-list li.mine .time, #message-list li.user .time { color: var(--ot-muted); }
 .composer-tools button[title*="模式"] { margin-left: auto; }
+.voice-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .4rem;
+  margin: 0 .75rem .35rem;
+  padding: .4rem .55rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 10px;
+  background: var(--ot-surface);
+  font-size: .82rem;
+}
+.voice-bar[hidden] { display: none; }
+.voice-bar audio { max-width: 16rem; height: 2rem; }
+.voice-bar .note { margin: 0; flex: 1 1 12rem; }
+.voice-message { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; margin-top: .2rem; }
+.voice-message audio { max-width: 18rem; height: 2.1rem; }
+.voice-duration { color: var(--ot-muted); font-size: .75rem; }
 
 /* @mention notification center: compact list inside the session pane. */
 #notifications-toggle { position: relative; }
