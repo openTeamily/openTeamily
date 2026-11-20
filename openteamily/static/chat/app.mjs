@@ -1,3 +1,4 @@
+import { decodeVoice, mountVoiceRecorder } from './voice.mjs';
 import { mountAgentMentions } from './mentions.mjs';
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
@@ -713,6 +714,72 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (currentSource !== 'social' || currentConversation?.kind !== 'group') return null;
     return {scope: `${workspaceId()}/${currentConversation.id}`, agents: currentConversation.agent_members || []};
   });
+  function voiceContext() {
+    if (currentSource !== 'social' || !currentConversation) return null;
+    const wid = workspaceId();
+    const cid = currentConversation.id;
+    return {wid, cid, scope: `${wid}/${cid}`};
+  }
+  const voiceRecorder = mountVoiceRecorder(document, {
+    context: voiceContext,
+    createKey: () => idempotencyKey('voice-'),
+    async send(destination, voice, key) {
+      const {wid, cid, scope} = destination;
+      const result = await request('POST', `/v1/workspaces/${wid}/social/conversations/${cid}/messages`,
+        {voice}, {'Idempotency-Key': key});
+      if (![200, 201].includes(result.status) || !result.body?.message?.voice) {
+        throw new Error(messageFor(result.body?.error, '语音发送失败，请重试。'));
+      }
+      if (voiceContext()?.scope === scope) {
+        await openSocialConversation(cid);
+        show('ok', '语音已发送。');
+      }
+    },
+  });
+  const voiceUrls = new Set();
+  function clearVoicePlayers() {
+    for (const url of voiceUrls) URL.revokeObjectURL(url);
+    voiceUrls.clear();
+  }
+  globalThis.addEventListener?.('pagehide', clearVoicePlayers);
+
+  function voicePlayer(item) {
+    const player = document.createElement('section');
+    player.className = 'voice-message';
+    const play = document.createElement('button');
+    play.type = 'button';
+    play.textContent = '播放语音';
+    const destination = voiceContext();
+    if (!destination) return player;
+    play.addEventListener('click', async () => {
+      if (play.disabled || voiceContext()?.scope !== destination.scope) return;
+      play.disabled = true;
+      play.textContent = '正在加载…';
+      try {
+        const path = `/v1/workspaces/${destination.wid}/social/conversations/${destination.cid}/messages/${item.id}/voice`;
+        const result = await request('GET', path);
+        if (result.status !== 200) throw new Error('Voice unavailable');
+        if (voiceContext()?.scope !== destination.scope || player.isConnected === false) return;
+        const url = URL.createObjectURL(decodeVoice(result.body));
+        voiceUrls.add(url);
+        const audio = document.createElement('audio');
+        audio.src = url;
+        audio.controls = true;
+        audio.preload = 'metadata';
+        audio.setAttribute('aria-label', '语音消息');
+        player.replaceChildren(audio);
+        audio.focus();
+        audio.play().catch(() => {});
+      } catch {
+        play.textContent = '重试播放语音';
+        play.disabled = false;
+        show('error', '无法播放语音，请重试。');
+      }
+    });
+    player.append(play);
+    return player;
+  }
+
   let pollTimer = 0;
   let searchTab = 'all';
   let searchConversation = '';
@@ -1273,6 +1340,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   let lastSocialItems = [];
   function renderSocialMessages(items) {
+    clearVoicePlayers();
     lastSocialItems = items || [];
     const list = document.getElementById('message-list');
     list.replaceChildren();
@@ -1300,6 +1368,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       time.className = 'time';
       time.textContent = formatTime(item.created);
       li.append(role, body, time);
+      if (item.voice && !item.retracted) li.insertBefore(voicePlayer(item), time);
       if (item.attachment && !item.retracted) {
         const card = document.createElement('article');
         card.className = 'stream-artifact';
@@ -1757,6 +1826,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   async function openAgentConversation(agentId, conversationId) {
     agentMentions.clear();
+    voiceRecorder.clear();
+    clearVoicePlayers();
     setSocialHeaderTools(false);
     setGroupInfo(null);
     const pin = document.getElementById('pin-conversation');
@@ -1769,6 +1840,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     currentAgent = agent;
     currentSource = 'agent';
+    voiceRecorder.refresh();
     document.getElementById('social-agent-members').hidden = true;
     applyChatIdentity(document, agent.name);
     setDirectoryLink({source: 'agent'});
@@ -1803,6 +1875,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openSocialConversation(conversationId) {
+    if (currentConversation?.id !== conversationId) voiceRecorder.clear();
     currentAgent = null;
     currentSource = 'social';
     stopPolling();
@@ -1817,6 +1890,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     currentConversation = result.body.conversation;
     agentMentions.refresh();
+    voiceRecorder.refresh();
     setSessionsOpen(false);
     const pin = document.getElementById('pin-conversation');
     syncMuteButton(currentConversation);
@@ -2264,6 +2338,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const session = await request('GET', '/v1/auth/session');
     if (session.status !== 200) {
       currentUser = null;
+      currentConversation = null;
+      voiceRecorder.refresh();
+      clearVoicePlayers();
       loginPanel.hidden = false;
       mainPanel.hidden = true;
       document.getElementById('session-pane').hidden = true;
@@ -2456,6 +2533,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentAgent = null;
     currentConversation = null;
     currentSource = 'agent';
+    voiceRecorder.refresh();
+    clearVoicePlayers();
     stopPolling();
     closeSearchPanel();
     closeComposeDialog();

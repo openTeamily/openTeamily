@@ -117,3 +117,22 @@ test('legacy chat forwards explicitly selected group agents to Bot Social', asyn
   assert.equal(result.status, 201)
   assert.deepEqual(f.calls.at(-1).body.agent_mentions, targets)
 })
+
+
+test('voice recording and playback proxy through the member messenger', async () => {
+  const dir = fixture()
+  const voice = {mime:'audio/webm', data:'GkXfowAAAAAAAAAA'}
+  const f = fake({
+    'POST /v1/ot/conversations/otc_1/messages': body => ({id:'m1',voice:{mime:body.voice.mime}}),
+    'GET /v1/ot/conversations/otc_1/messages/m1/voice': () => voice,
+  })
+  setSharedBotSocial(createBotSocial({server:SERVER, credentialsPath:join(dir,'bot','flybot-social.json'),fetch:f.fetch}))
+  const feature = messenger({dataDir:dir}).endpoints
+  const path = '/v1/workspaces/' + 'a'.repeat(32) + '/social/conversations/otc_1/messages'
+  const sent = await feature.v1({method:'POST',path,body:{voice}})
+  assert.equal(sent.status,201)
+  assert.deepEqual(sent.body.message.voice,{mime:voice.mime})
+  assert.deepEqual(f.calls.at(-1).body.voice,voice)
+  const fetched = await feature.v1({method:'GET',path:path+'/m1/voice'})
+  assert.deepEqual(fetched,{status:200,body:voice})
+})

@@ -1197,7 +1197,8 @@ test('icon chat controls preserve accessible names, disabled truth and attachmen
   assert.match(html, /disabled title="未实现：语音或视频通话"/);
   assert.match(html, /class="attachment-menu"[\s\S]*?id="chat-attachment"/);
   assert.match(html, /工作区成员可在作品库查看/);
-  assert.match(html, /disabled title="未实现：语音消息"[\s\S]*?sr-only">语音/);
+  assert.match(html, /id="voice-record"[^>]*aria-label="录制语音"/);
+  assert.match(html, /id="voice-preview" controls/);
 });
 
 import {notificationBadgeText, notificationSummary} from '../openteamily/static/chat/app.mjs';

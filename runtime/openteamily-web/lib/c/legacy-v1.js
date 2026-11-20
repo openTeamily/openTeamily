@@ -116,6 +116,7 @@ function messageItem(row, me, env, workspaceId) {
     revision: row.revision || 1,
     edited: unix(row.edited_at) || null,
     retracted: !!row.retracted,
+    ...(row.voice ? { voice: row.voice } : {}),
     ...(agent ? { role: 'agent', agent_id: row.agent_ref || author.agent_ref, agent_name: row.agent_name || author.name, source: 'runtime_infer' } : {}),
   }
 }
@@ -564,13 +565,25 @@ function messengerRoutes(host) {
       },
     },
     {
+      method: 'GET', path: /^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})\/messages\/([A-Za-z0-9._-]{1,80})\/voice$/,
+      async handle({ match }) {
+        return wrap(async () => {
+          const bs = client(host)
+          await teamFor(bs, match[1], 'Workspace', env)
+          const conversation = seg(match[2], 'conversation_id')
+          const message = seg(match[3], 'message_id')
+          return [200, await bs.get(`/v1/ot/conversations/${conversation}/messages/${message}/voice`)]
+        })
+      },
+    },
+    {
       method: 'POST', path: /^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})\/messages$/,
       async handle({ match, body, idempotency_key }) {
         return wrap(async () => {
           const bs = client(host)
           await teamFor(bs, match[1], 'Workspace', env)
           const me = await meOf(bs, env)
-          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: body?.body, client_key: idempotency_key, mentions: body?.mentions, agent_mentions: body?.agent_mentions, reply_to: body?.reply_to })
+          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: body?.body, voice: body?.voice, client_key: idempotency_key, mentions: body?.mentions, agent_mentions: body?.agent_mentions, reply_to: body?.reply_to })
           return [201, { message: messageItem({ ...data, conversation_id: match[2] }, me, env, match[1]) }]
         })
       },
@@ -699,7 +712,8 @@ function messengerExtraRoutes(host) {
           for (const id of ids) {
             const row = rows.find((m) => m.id === id)
             if (!row || row.retracted || !row.body) continue
-            await bs.post(`${conv(target)}/messages`, { body: `[转发] ${row.body}`.slice(0, 4000), client_key: `fwd:${tag}:${id}`.slice(0, 80) })
+            const voice = row.voice ? await bs.get(`${conv(match[2])}/messages/${seg(id, 'message_id')}/voice`) : undefined
+            await bs.post(`${conv(target)}/messages`, { body: `[转发] ${row.body}`.slice(0, 4000), voice, client_key: `fwd:${tag}:${id}`.slice(0, 80) })
             forwarded++
           }
           return [201, { forwarded, target_conversation_id: target }]

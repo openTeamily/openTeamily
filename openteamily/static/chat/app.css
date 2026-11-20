@@ -1832,3 +1832,20 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
   background: var(--ot-accent-soft);
   color: var(--ot-ink);
 }
+
+.voice-draft-panel {
+  margin: .375rem .5rem;
+  padding: .625rem;
+  border-radius: .75rem;
+  background: var(--ot-surface-2);
+}
+.voice-draft-panel[hidden], .voice-draft-panel audio[hidden] { display: none; }
+.voice-draft-panel p { margin: 0 0 .375rem; font-size: .8125rem; }
+.voice-draft-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+}
+.voice-draft-actions button, .voice-message button { font-size: .8125rem; }
+.voice-message { margin-top: .375rem; }
+.voice-draft-panel audio, .voice-message audio { max-width: 100%; }
