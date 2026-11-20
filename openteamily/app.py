@@ -1046,7 +1046,7 @@ class App:
                 return self.message_utility_dispatch(db, session, method, query, now, env, *utility_path.groups())
             social_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/social/conversations'
-                r'(?:/([0-9a-f]{32})(?:/(messages(?:/[0-9a-f]{32}(?:/(?:edit|retract|reactions|pin|save))?)?|forward|preferences|read|agent-replies|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
+                r'(?:/([0-9a-f]{32})(?:/(messages(?:/[0-9a-f]{32}(?:/(?:edit|retract|reactions|pin|save))?)?|forward|preferences|read|agent-replies|auto-reply|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
             if social_path:
                 return self.social_dispatch(db, session, method, query, now, env, *social_path.groups())
             discover_path = re.fullmatch(
@@ -4453,6 +4453,22 @@ class App:
             db.execute('INSERT INTO social_preferences VALUES(?,?,?) ON CONFLICT(conversation_id,user_id) '
                        'DO UPDATE SET pinned=excluded.pinned', (row['id'], session['user_id'], int(pinned)))
             return 200, social.preference(db, row['id'], session['user_id']), []
+        if action == 'auto-reply' and method in ('GET', 'POST') and not query:
+            role = members.role_of(db, workspace, session['user_id'])
+            if method == 'POST':
+                if role not in ('owner', 'admin'):
+                    refuse(403, 'forbidden', 'Only a workspace owner or admin can change automatic replies')
+                enabled = self.body(env, ['enabled']).get('enabled')
+                if type(enabled) is not bool:
+                    refuse(400, 'invalid', 'Provide enabled as a boolean')
+                if enabled and social.auto_reply_agent(db, row['id'], workspace['id']) is None:
+                    refuse(400, 'invalid', 'Add an active group agent before enabling automatic replies')
+                db.execute('INSERT INTO social_auto_reply(conversation_id,workspace_id,enabled,updated) '
+                           'VALUES(?,?,?,?) ON CONFLICT(conversation_id) DO UPDATE SET '
+                           'enabled=excluded.enabled, updated=excluded.updated',
+                           (row['id'], workspace['id'], int(enabled), now))
+            return 200, {'auto_reply': social.auto_reply_view(
+                db, workspace['id'], row['id'], members.role_of(db, workspace, session['user_id']), now)}, []
         if action and action.endswith('/pin') and method == 'POST' and not query:
             return self.pin_social_message(db, session, row, action.split('/')[1], now, env)
         if action == 'forward' and method == 'POST' and not query:
@@ -4505,6 +4521,9 @@ class App:
             conversation = social.conversation_item(db, row, user_id=session['user_id'])
             conversation['unread_count'] = social.unread_count(db, row['id'], session['user_id'])
             return 200, {'conversation': conversation,
+                         'auto_reply': social.auto_reply_view(
+                             db, workspace['id'], row['id'],
+                             members.role_of(db, workspace, session['user_id']), now),
                          'agent_replies': [social.reply_view(item) for item in social.reply_requests(db, row['id'])],
                          'pinned_messages': social.pinned_messages(db, row['id'], session['user_id']),
                          'items': social.forward_info(db, social.with_reactions(
@@ -5086,8 +5105,49 @@ class App:
             db.execute('INSERT INTO social_artifact_versions VALUES(?,?,?,?,?)', (message_id, attachment['revision'], artifacts.public_kind(attachment), attachment['title'], artifact_id))
         notifications.record_mentions(db, workspace['id'], row['id'], message_id, session['user_id'], text, now)
         db.execute('UPDATE social_conversations SET updated=? WHERE id=?', (now, row['id']))
+        self.maybe_auto_reply(db, workspace, session, row, message_id, text, now)
         message = db.execute(f'SELECT * FROM ({social.MESSAGE_ROWS}) WHERE id=?', (message_id,)).fetchone()
         return 201, {'message': social.message_view(message)}, []
+
+    def maybe_auto_reply(self, db, workspace, session, conversation, message_id, text, now):
+        """Queue one reply for a group message that names no agent, within the hourly cap.
+
+        No connected runtime means no request row at all: nothing was produced, so the
+        hourly count stays untouched and the message stays a plain human message.
+        """
+        if conversation['kind'] != 'group' or not social.auto_reply_setting(db, conversation['id']):
+            return None
+        if social.mentions_group_agent(db, conversation['id'], workspace['id'], text):
+            return None
+        agent = social.auto_reply_agent(db, conversation['id'], workspace['id'])
+        if agent is None or social.auto_reply_used(db, conversation['id'], now) >= social.AUTO_REPLY_LIMIT:
+            return None
+        key_hash = digest('social-auto-reply:' + message_id)
+        if db.execute('SELECT 1 FROM social_agent_replies WHERE conversation_id=? AND key_hash=?',
+                      (conversation['id'], key_hash)).fetchone():
+            return None
+        prompt = conversations.compose_prompt(agent, [], text)
+        task_id, _error, _dispatch = self.queue_infer_task(
+            db, session['user_id'], now, prompt, workspace['id'], agent['id'])
+        if not task_id and workspace['owner_id'] != session['user_id']:
+            # A member may write in a group where only the owner keeps a runtime
+            # connected; the automatic reply still belongs to that group.
+            task_id, _error, _dispatch = self.queue_infer_task(
+                db, workspace['owner_id'], now, prompt, workspace['id'], agent['id'])
+        if not task_id:
+            return None
+        reply_id = uuid4().hex
+        db.execute(
+            'INSERT INTO social_agent_replies '
+            '(id,conversation_id,workspace_id,agent_id,agent_name,requested_by,prompt,agent_revision,'
+            'status,task_id,error_code,created,updated,key_hash,request_hash) '
+            'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (reply_id, conversation['id'], workspace['id'], agent['id'], agent['name'],
+             session['user_id'], text, agent['revision'], 'queued', task_id, None,
+             now, now, key_hash, digest('social-auto:' + message_id)))
+        db.execute('INSERT INTO social_auto_reply_sends(id,conversation_id,reply_id,created) '
+                   'VALUES(?,?,?,?)', (uuid4().hex, conversation['id'], reply_id, now))
+        return reply_id
 
     def invite_dispatch(self, db, session, method, query, now, env, workspace_id, invite_id, revoking):
         workspace = members.load(db, workspace_id, session['user_id'])

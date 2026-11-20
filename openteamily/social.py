@@ -117,6 +117,18 @@ CREATE TABLE IF NOT EXISTS social_reactions (
  emoji TEXT NOT NULL,
  created INTEGER NOT NULL,
  PRIMARY KEY(message_id, user_id, emoji));
+CREATE TABLE IF NOT EXISTS social_auto_reply (
+ conversation_id TEXT PRIMARY KEY REFERENCES social_conversations(id) ON DELETE CASCADE,
+ workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+ enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN(0,1)),
+ updated INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS social_auto_reply_sends (
+ id TEXT PRIMARY KEY,
+ conversation_id TEXT NOT NULL REFERENCES social_conversations(id) ON DELETE CASCADE,
+ reply_id TEXT NOT NULL,
+ created INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS social_auto_reply_send_window
+ ON social_auto_reply_sends(conversation_id, created);
 '''
 
 # Fixed, self-chosen reaction set (OpenTeamily default, not a Teamily copy).
@@ -435,6 +447,49 @@ def with_reactions(db, views, user_id):
 
 PIN_LIMIT = 20
 FORWARD_LIMIT = 20
+# Group automatism: one agent answers a message that names nobody, capped so a
+# busy group cannot turn into a stream of model calls.
+AUTO_REPLY_LIMIT = 3
+AUTO_REPLY_WINDOW = 3600
+
+
+def auto_reply_agent(db, conversation_id, workspace_id):
+    return db.execute(
+        'SELECT a.* FROM workspace_agents a JOIN social_agent_members m ON m.agent_id=a.id '
+        'WHERE m.conversation_id=? AND a.workspace_id=? AND a.archived=0 '
+        'ORDER BY a.name, a.id LIMIT 1', (conversation_id, workspace_id)).fetchone()
+
+
+def auto_reply_setting(db, conversation_id):
+    row = db.execute('SELECT enabled FROM social_auto_reply WHERE conversation_id=?',
+                     (conversation_id,)).fetchone()
+    return bool(row and row['enabled'])
+
+
+def auto_reply_used(db, conversation_id, now):
+    return db.execute(
+        'SELECT COUNT(*) FROM social_auto_reply_sends WHERE conversation_id=? AND created>?',
+        (conversation_id, now - AUTO_REPLY_WINDOW)).fetchone()[0]
+
+
+def mentions_group_agent(db, conversation_id, workspace_id, text):
+    for name in db.execute(
+            'SELECT a.name FROM workspace_agents a JOIN social_agent_members m ON m.agent_id=a.id '
+            'WHERE m.conversation_id=? AND a.workspace_id=? AND a.archived=0',
+            (conversation_id, workspace_id)).fetchall():
+        if '@' + name['name'] in text:
+            return True
+    return False
+
+
+def auto_reply_view(db, workspace_id, conversation_id, role, now):
+    agent = auto_reply_agent(db, conversation_id, workspace_id)
+    used = auto_reply_used(db, conversation_id, now)
+    return {'enabled': auto_reply_setting(db, conversation_id),
+            'can_manage': role in ('owner', 'admin'),
+            'available': agent is not None,
+            'agent_name': agent['name'] if agent is not None else None,
+            'used': used, 'limit': AUTO_REPLY_LIMIT, 'window_seconds': AUTO_REPLY_WINDOW}
 
 
 def pinned_messages(db, conversation_id, user_id=None):
