@@ -46,18 +46,42 @@ async function legacyJSON(fetcher, path, headers) {
   return response.json();
 }
 
+// A source may confirm that its import is complete even when it has no rows
+// (a genuinely empty account). Without that marker an empty read is
+// inconclusive; a non-empty read that exhausted its pages is its own receipt.
+export function sourceCompletion(listed) {
+  if (!listed || typeof listed !== 'object') return undefined;
+  for (const key of ['complete', 'import_complete', 'importComplete']) {
+    if (listed[key] === true) return true;
+    if (listed[key] === false) return false;
+  }
+  if (Object.prototype.hasOwnProperty.call(listed, 'receipt')) {
+    const receipt = listed.receipt;
+    if (receipt === false || receipt === null || receipt === '') return false;
+    if (receipt !== undefined) return receipt;
+  }
+  return undefined;
+}
+
 // Copy this user's own platform history (personal agent) into their DS-Bot once.
 // Reads only through the user's own session; writes only to the user's own DS-Bot.
+// An empty read without a completion marker stays pending: it may mean the
+// platform bundle has not arrived yet, not that the account has no history.
 export async function importLegacyHistory(fetcher, base, headers, call) {
   const status = await call('chat/importStatus', {});
   if (status.error || (status.value && status.value.done)) return status.value || null;
   const conversations = [];
   let cursor = '';
+  let marker;
+  let truncated = false;
   for (let page = 0; page < 20; page += 1) {
     const listed = await legacyJSON(fetcher, `${base}/conversations?limit=100${cursor ? '&cursor=' + cursor : ''}`, headers);
+    const found = sourceCompletion(listed);
+    if (found !== undefined) marker = found;
     conversations.push(...(listed.items || []));
     if (!listed.cursor) break;
     cursor = listed.cursor;
+    if (page === 19) truncated = true;
   }
   let imported = {conversations: 0, messages: 0};
   for (let i = 0; i < conversations.length; i += 20) {
@@ -72,6 +96,7 @@ export async function importLegacyHistory(fetcher, base, headers, call) {
         }
         if (!listed.cursor) break;
         after = listed.cursor;
+        if (page === 9) truncated = true;
       }
       batch.push({id: row.id, title: row.title, created: row.created, updated: row.updated, messages});
     }
@@ -79,7 +104,11 @@ export async function importLegacyHistory(fetcher, base, headers, call) {
     if (out.error) return null;
     imported = {conversations: imported.conversations + out.value.conversations, messages: imported.messages + out.value.messages};
   }
-  const done = await call('chat/import', {conversations: [], finish: true});
+  const complete = !truncated && marker !== false && (marker !== undefined || conversations.length > 0);
+  if (!complete) return {...imported, done: false};
+  const payload = {conversations: [], finish: true, complete: true};
+  if (marker !== undefined && marker !== true && marker !== false) payload.receipt = marker;
+  const done = await call('chat/import', payload);
   return done.error ? null : {...imported, done: true};
 }
 

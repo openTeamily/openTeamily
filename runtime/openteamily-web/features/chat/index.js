@@ -87,6 +87,12 @@ export default function chat(host) {
         const d = await database()
         const list = Array.isArray(payload?.conversations) ? payload.conversations : []
         if (list.length > 100) fail('chat/invalid', 'at most 100 conversations per call')
+        // Finishing is not enough: an empty source may simply mean the platform
+        // import bundle has not arrived yet. Only a positive receipt from the
+        // source makes the legacy import permanently done.
+        const receipt = payload?.receipt
+        const complete = payload?.complete === true || (receipt !== undefined && receipt !== null && receipt !== false && receipt !== '')
+        const done = payload?.finish === true && complete
         let conversations = 0
         let messages = 0
         d.exec('BEGIN')
@@ -106,12 +112,14 @@ export default function chat(host) {
                 .run(m.id, c.id, m.role, text, ms(m.created) || created, JSON.stringify({ imported: 'platform' })).changes)
             }
           }
-          if (payload?.finish === true) {
-            d.prepare("INSERT OR REPLACE INTO chat_state VALUES('legacy_import', ?)").run(JSON.stringify({ done: true, at: now() }))
+          if (done) {
+            const marker = { done: true, at: now() }
+            if (receipt !== undefined && receipt !== true) marker.receipt = receipt
+            d.prepare("INSERT OR REPLACE INTO chat_state VALUES('legacy_import', ?)").run(JSON.stringify(marker))
           }
           d.exec('COMMIT')
         } catch (error) { d.exec('ROLLBACK'); throw error }
-        return { conversations, messages, done: payload?.finish === true }
+        return { conversations, messages, done }
       },
       async send(payload) {
         const convo = await conversation(payload?.conversation_id)

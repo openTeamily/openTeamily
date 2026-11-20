@@ -94,11 +94,35 @@ test('legacy history import is idempotent and keeps ids', async () => {
   assert.deepEqual(await table['chat/import'](payload), { conversations: 1, messages: 2, done: false })
   assert.deepEqual(await table['chat/import'](payload), { conversations: 0, messages: 0, done: false })
   assert.equal((await table['chat/importStatus']()).done, false)
-  await table['chat/import']({ conversations: [], finish: true })
+  await table['chat/import']({ conversations: [], finish: true, complete: true })
   assert.equal((await table['chat/importStatus']()).done, true)
   const history = await table['chat/messages']({ conversation_id: c })
   assert.deepEqual(history.items.map((m) => [m.role, m.text, m.created]), [['user', 'hi', 1700000000000], ['assistant', 'hello', 1700000001000]])
   await assert.rejects(table['chat/import']({ conversations: [{ id: 'nope' }] }), { code: 'chat/invalid' })
+})
+
+test('a finished legacy import stays pending until the source confirms completion', async () => {
+  const table = await load()
+  assert.deepEqual(await table['chat/import']({ conversations: [], finish: true }), { conversations: 0, messages: 0, done: false })
+  assert.equal((await table['chat/importStatus']()).done, false)
+  const c = 'a'.repeat(32)
+  assert.deepEqual(await table['chat/import']({ conversations: [{ id: c, title: 'Partial', created: 1700000000, messages: [] }] }), { conversations: 1, messages: 0, done: false })
+  assert.deepEqual(await table['chat/import']({ conversations: [], finish: true, complete: false }), { conversations: 0, messages: 0, done: false })
+  assert.equal((await table['chat/importStatus']()).done, false)
+})
+
+test('an explicit completed-empty legacy source is done', async () => {
+  const table = await load()
+  assert.deepEqual(await table['chat/import']({ conversations: [], finish: true, complete: true }), { conversations: 0, messages: 0, done: true })
+  const status = await table['chat/importStatus']()
+  assert.equal(status.done, true)
+  assert.equal(typeof status.at, 'number')
+})
+
+test('a completion receipt is stored so an empty import is auditable', async () => {
+  const table = await load()
+  assert.deepEqual(await table['chat/import']({ conversations: [], finish: true, receipt: 'bundle-42' }), { conversations: 0, messages: 0, done: true })
+  assert.equal((await table['chat/importStatus']()).receipt, 'bundle-42')
 })
 
 test('skills/sync materializes digest-checked bound skills and detaches stale ones', async () => {
