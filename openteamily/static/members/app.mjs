@@ -1,4 +1,5 @@
 import { conversationChatHref } from '../shell/thumb.mjs';
+import { acceptOutcome, inviteTokenFromHash } from '../shell/invite-link.mjs';
 
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
@@ -749,6 +750,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     await loadWorkspace();
   });
 
+  const acceptHint = document.getElementById('accept-hint');
+  // A chat invite link is /members#invite=<token>: fill the form so the person
+  // only has to press 加入, and say so instead of making them paste a token.
+  const linkedToken = inviteTokenFromHash(globalThis.location ? globalThis.location.hash : '');
+  if (linkedToken) {
+    const tokenInput = document.querySelector ? document.querySelector('#accept-form input[name="token"]') : null;
+    if (tokenInput) tokenInput.value = linkedToken;
+    if (acceptHint) {
+      acceptHint.hidden = false;
+      acceptHint.textContent = '邀请链接里的令牌已填好，点「加入」即可。';
+    }
+  }
+  function clearInviteHash() {
+    if (!globalThis.location) return;
+    try {
+      history.replaceState(null, '', globalThis.location.pathname + globalThis.location.search);
+    } catch {}
+  }
+
   document.getElementById('accept-form').addEventListener('submit', async event => {
     event.preventDefault();
     const values = readAccept(event.currentTarget);
@@ -757,16 +777,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       return;
     }
     const result = await request('POST', '/v1/invites/accept', values);
-    if (![200, 201, 202].includes(result.status)) {
+    const outcome = acceptOutcome(result.status, result.body);
+    if (!outcome) {
       show('error', messageFor(result.body.error, '无法接受邀请。'));
       return;
     }
     event.currentTarget.reset();
-    if (result.status === 202 || (result.body.join_request && result.body.join_request.status === 'pending')) {
+    if (acceptHint) acceptHint.hidden = true;
+    clearInviteHash();
+    if (outcome === 'pending') {
       show('ok', '已提交加入申请，等待所有者或管理员审批。');
       return;
     }
-    show('ok', '已加入工作区。');
+    show('ok', outcome === 'already' ? '你已经在这个工作区了。' : '已加入工作区。');
     await load();
   });
 

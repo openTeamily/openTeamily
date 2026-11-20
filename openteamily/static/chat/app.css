@@ -958,6 +958,19 @@
   white-space: nowrap;
 }
 #chat-invite-result { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }
+#chat-invite-link-row { display: flex; flex: 1 1 100%; flex-wrap: wrap; align-items: center; gap: .4rem; }
+#chat-invite-link-row[hidden] { display: none; }
+#chat-invite-link {
+  flex: 1 1 16rem;
+  min-width: 0;
+  padding: .2rem .4rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 8px;
+  background: var(--ot-bg);
+  color: var(--ot-ink);
+  font: inherit;
+  font-size: .8rem;
+}
 .message-tools { display: inline-flex; gap: .3rem; margin-top: .15rem; font-size: .78rem; }
 .message-tools button {
   padding: .05rem .45rem;

@@ -1,4 +1,5 @@
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
+import { copyInviteText, inviteLink } from '../shell/invite-link.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
@@ -1633,11 +1634,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function setSocialHeaderTools(social) {
-    const invite = document.getElementById('chat-invite');
-    const unavailable = document.getElementById('chat-invite-unavailable');
     const multi = document.getElementById('multi-select-toggle');
-    if (invite) invite.hidden = !social;
-    if (unavailable) unavailable.hidden = social;
     if (multi) multi.hidden = !social;
     if (!social) {
       selecting = false; selectedMessages.clear(); syncForwardBar();
@@ -2276,6 +2273,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadSessions();
   });
   const chatInvite = document.getElementById('chat-invite');
+  let currentInviteLink = '';
   if (chatInvite) chatInvite.addEventListener('click', () => {
     const panel = document.getElementById('chat-invite-panel');
     panel.hidden = !panel.hidden;
@@ -2291,6 +2289,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   if (chatInviteForm) chatInviteForm.addEventListener('submit', async event => {
     event.preventDefault();
     const out = document.getElementById('chat-invite-result');
+    const row = document.getElementById('chat-invite-link-row');
+    const input = document.getElementById('chat-invite-link');
     const result = await request('POST', `/v1/workspaces/${workspaceId()}/invites`, {
       role: 'member', expires_in: 7 * 86400, max_uses: 1,
       requires_approval: document.getElementById('chat-invite-approval').checked,
@@ -2300,7 +2300,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         ? '只有工作区所有者或管理员可以生成邀请。' : messageFor(result.body.error, '无法生成邀请。');
       return;
     }
-    out.textContent = `邀请令牌只显示一次：${result.body.token}`;
+    currentInviteLink = inviteLink(globalThis.location && globalThis.location.origin, result.body.token);
+    if (!currentInviteLink) {
+      out.textContent = '邀请已生成，但拼不出可复制的链接；请到「成员」页处理。';
+      return;
+    }
+    input.value = currentInviteLink;
+    row.hidden = false;
+    out.textContent = '邀请链接已生成：7 天内有效、只能用一次。';
+    const copy = document.getElementById('chat-invite-copy');
+    if (copy) copy.textContent = '复制链接';
+    input.focus?.();
+  });
+  const inviteCopy = document.getElementById('chat-invite-copy');
+  if (inviteCopy) inviteCopy.addEventListener('click', async () => {
+    const out = document.getElementById('chat-invite-result');
+    const copied = await copyInviteText(currentInviteLink, globalThis.navigator && globalThis.navigator.clipboard);
+    if (!copied) {
+      out.textContent = '复制失败：请选中上面的链接手动复制。';
+      return;
+    }
+    out.textContent = '已复制邀请链接，发给对方即可。';
+    inviteCopy.textContent = '已复制';
+    setTimeout(() => { inviteCopy.textContent = '复制链接'; }, 2000);
   });
   const notificationsToggle = document.getElementById('notifications-toggle');
   if (notificationsToggle) notificationsToggle.addEventListener('click', async () => {
