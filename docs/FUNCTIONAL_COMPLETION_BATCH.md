@@ -1,3 +1,17 @@
+# Functional completion batch: space actions, member DMs, home deep links, dark theme
+
+Base: confirm live green main at branch creation (6bee24ca after #374+#125). `feat/functional-ui-completion` does not take contested `chat/*`, `settings_page.py`, or Deployment HTTP policy. `/messenger` remains a redirect to `/chat` because the page router is in-flight on contributor Discover PRs; this batch therefore does not advertise an independent-session entry that would bounce.
+
+| Gap/control | Implementation and state | Automated proof | Acceptance still required |
+|---|---|---|---|
+| 让智能体搭建网站 / 保存聊天中的消息 | Empty CTAs and 新建 menu now create a real website artifact, open/create a same-workspace agent conversation, POST the brief, or save an existing completed social/agent message through current APIs. Honest copy if no agent, no runtime (`no_agent`), or no saveable message. `#artifact-notify` stays disabled with 未实现. | space_actions Node; test_artifacts_page entry/script; existing artifact/social save APIs unchanged | Controlled-model dispatch only; does not itself finish a built site; no vendor/Teamily acceptance |
+| Members 发消息 | Other members get a working button that reuses existing DM create (idempotent/existing DM) and opens `/chat#workspace=&social=`. No self-message control. | members_page Node (create, Idempotency-Key, assign, error); test_members_page script | Browser/mobile on a deployed revision; does not add chat three-column or group-agent flows |
+| Home recent artifacts | Rows deep-link `/space?workspace=&artifact=`; catalog shortcuts gain the workspace query. Action grid wraps with auto-fit instead of a fixed 7-column squash. | home_page Node; test_home script | Visual density on phone still needs screenshots after CI |
+| Dark theme palette | shell dark theme keeps the green tokens already defined first; the later purple/cyan overwrite, glow, and low-contrast muted values are removed. | shell_page contrast plus explicit no `#8b7cff`/`#2ee6e9` assertion | Visual check in light and dark, desktop and mobile |
+| Independent /messenger three-column | Static assets were prepared (list/thread/detail, hash, pane switch) but `/messenger` still 302s to `/chat`. Not counted as a usable entry. | Existing messenger redirect tests unchanged | Requires an uncontested router change later |
+
+Remaining still not in this PR: auto-translate #320, notification consumers #284, old-message search load #271/#352/#354, social SSE auto-apply, likes/favorites visibility, semantic memory, team DAG, AV rooms, HTTP exact endpoint (Deployment branch), #197/#126/#131 as-is, #124 reply protocol. Controlled models are not vendor acceptance.
+
 # Owned functional completion aggregate
 
 Base: ef71b3d1, after merged342; ordinary-synced main54222f7 including contributors332,348,363 and340. Local branch: feat/functional-completion-big. Not a claim of Teamily parity or all controls complete.

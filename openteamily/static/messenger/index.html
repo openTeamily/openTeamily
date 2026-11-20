@@ -65,13 +65,18 @@
   <section id="main-panel" hidden>
     <header class="page-top">
       <h1>消息</h1>
-      <p class="note">工作区内的人↔人单聊与群聊。这里还没有 Agent 入群、未读、通知或附件；这些是后续切片。</p>
+      <p class="note">人与人的独立会话：左侧列表、中间对话、右侧资料。智能体入群、附件和通知仍在聊天页处理，这里不会假装已经接通。</p>
       <p id="whoami"></p>
       <label class="workspace-pick">工作区
         <select id="workspace"></select>
       </label>
     </header>
-    <div class="messenger-layout">
+    <div class="messenger-pane-switch" role="tablist" aria-label="独立会话栏">
+      <button type="button" data-pane="list" aria-pressed="true">会话</button>
+      <button type="button" data-pane="chat">对话</button>
+      <button type="button" data-pane="detail">资料</button>
+    </div>
+    <div class="messenger-layout" data-pane="list">
       <section class="conversation-pane" aria-label="会话列表">
         <ul id="conversation-list"></ul>
         <p id="conversations-empty" class="note" hidden>还没有会话。用下面的表单新建单聊或群聊。</p>
@@ -94,7 +99,7 @@
       <section class="chat-pane" aria-label="会话内容">
         <h2 id="chat-title">消息</h2>
         <div id="message-scroller" class="message-scroller">
-          <p id="chat-empty" class="note">选择一个会话，或新建一个。</p>
+          <p id="chat-empty" class="note">选择左侧的会话，或新建一个。未选择时不会假装已经进入对话。</p>
           <ul id="message-list"></ul>
         </div>
         <form id="message-form" class="message-form">
@@ -103,6 +108,17 @@
           <button type="submit">发送</button>
         </form>
       </section>
+      <aside class="detail-pane" id="session-detail" aria-label="会话资料">
+        <h2>资料</h2>
+        <p id="detail-empty" class="note">选择一个会话后，这里显示成员和入口。</p>
+        <div id="detail-body" hidden>
+          <p id="detail-kind"></p>
+          <p id="detail-updated"></p>
+          <h3>成员</h3>
+          <ul id="detail-members"></ul>
+          <a id="detail-open-chat" href="/chat">在聊天页打开</a>
+        </div>
+      </aside>
     </div>
     <form id="logout-form" method="post" action="/v1/auth/logout">
       <button type="submit">退出登录</button>

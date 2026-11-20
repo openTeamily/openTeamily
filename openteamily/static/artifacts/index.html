@@ -171,6 +171,8 @@
             <button type="button" id="new-dashboard" role="menuitem">看板</button>
             <button type="button" id="new-board" role="menuitem">白板</button>
             <button type="button" id="new-media" role="menuitem">上传</button>
+            <button type="button" id="new-agent-website" role="menuitem">让智能体搭建网站</button>
+            <button type="button" id="new-save-message" role="menuitem">从对话保存</button>
           </div>
         </div>
         <label class="dir-search">
@@ -199,14 +201,14 @@
                 <span class="empty-cta-copy"><strong>新建云文档</strong><span class="hint">从空白页开始。</span></span>
                 <span class="empty-cta-go" aria-hidden="true">→</span>
               </button>
-              <button type="button" class="empty-cta" id="empty-agent-website" disabled title="未实现：还没有从作品库让智能体搭网站的接口">
+              <button type="button" class="empty-cta" id="empty-agent-website">
                 <span class="empty-cta-icon" data-tone="globe" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18zm0 1.6a7.4 7.4 0 0 0 0 14.8V4.6zm2.4 1.2c.9 1.3 1.5 3.3 1.6 5.6H20A7.4 7.4 0 0 0 14.4 5.8zM4 11.4h4c.1-2.3.7-4.3 1.6-5.6A7.4 7.4 0 0 0 4 11.4z"/></svg></span>
-                <span class="empty-cta-copy"><strong>让智能体搭建网站</strong><span class="hint">未实现：对照里写的是描述需求后由智能体搭建，OpenTeamily 还没有这条入口。</span></span>
+                <span class="empty-cta-copy"><strong>让智能体搭建网站</strong><span class="hint">在本页填写需求、选择智能体。会先创建网站作品再发出搭建请求；没有运行时时会如实说明，不会假装已经搭好。</span></span>
                 <span class="empty-cta-go" aria-hidden="true">→</span>
               </button>
-              <a href="/chat" class="empty-cta" id="empty-save-message">
+              <button type="button" class="empty-cta" id="empty-save-message">
                 <span class="empty-cta-icon" data-tone="chat" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-6l-4 3v-3H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/></svg></span>
-                <span class="empty-cta-copy"><strong>保存聊天中的消息</strong><span class="hint">在已完成的对话里保存到作品库。这一页不能右键保存，也还没有对照里的右键菜单。</span></span>
+                <span class="empty-cta-copy"><strong>保存聊天中的消息</strong><span class="hint">从本工作区已有对话里选择一条已完成的消息，保存为云文档。</span></span>
                 <span class="empty-cta-go" aria-hidden="true">→</span>
               </a>
             </div>
@@ -216,9 +218,9 @@
             <h2>暂无收藏</h2>
             <p>点击作品卡片上的书签，将作品收藏到这里。</p>
             <div class="empty-cta-list">
-              <a href="/chat" class="empty-cta" id="empty-starred-save-message">
+              <button type="button" class="empty-cta" id="empty-starred-save-message">
                 <span class="empty-cta-icon" data-tone="chat" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-6l-4 3v-3H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/></svg></span>
-                <span class="empty-cta-copy"><strong>保存聊天中的消息</strong><span class="hint">在已完成的对话里保存到作品库。点击作品上的书签可以收藏。</span></span>
+                <span class="empty-cta-copy"><strong>保存聊天中的消息</strong><span class="hint">从本工作区已有对话里选择一条已完成的消息并保存；保存后可用书签收藏。</span></span>
                 <span class="empty-cta-go" aria-hidden="true">→</span>
               </a>
               <a href="/chat" class="empty-cta" id="empty-save-image">

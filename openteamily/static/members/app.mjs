@@ -1,3 +1,5 @@
+import { conversationChatHref } from '../shell/thumb.mjs';
+
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
@@ -110,7 +112,8 @@ function messageFor(error, fallback) {
   return fallback;
 }
 
-export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
+export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), assign} = {}) {
+  const goTo = assign || ((href) => globalThis.location.assign(href));
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
@@ -124,9 +127,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     status.textContent = text;
   }
 
-  async function request(method, path, body) {
+  async function request(method, path, body, extraHeaders) {
     const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie)};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
+    if (extraHeaders) Object.assign(headers, extraHeaders);
     const response = await fetcher(path, {
       method, headers, credentials: 'same-origin',
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -303,6 +307,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return wrap;
   }
 
+  function messageKey() {
+    const raw = (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() : (String(Date.now()) + 'dmxxxxxxxx');
+    return ('member-dm-' + raw.replace(/-/g, '')).slice(0, 64);
+  }
+
+  async function startDirectMessage(item) {
+    const id = workspaceId();
+    if (!id || !item || !item.user_id) return;
+    if (currentId() && item.user_id === currentId()) {
+      show('error', '不能给自己发消息。');
+      return;
+    }
+    const result = await request('POST', `/v1/workspaces/${id}/social/conversations`, {
+      kind: 'dm', member_ids: [item.user_id],
+    }, {'Idempotency-Key': messageKey()});
+    if (result.status !== 200 && result.status !== 201) {
+      show('error', messageFor(result.body.error, '无法打开与对方的单聊。'));
+      return;
+    }
+    const conversation = result.body.conversation;
+    if (!conversation || !conversation.id) {
+      show('error', '已发起会话，但没有返回可打开的对话。');
+      return;
+    }
+    goTo(conversationChatHref(id, {source: 'social', id: conversation.id}));
+  }
+
   function renderMembers(items) {
     const list = document.getElementById('member-list');
     const empty = document.getElementById('members-empty');
@@ -319,6 +350,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       role.className = 'role-pill' + (item.role === 'owner' ? ' is-owner' : '');
       role.textContent = ROLE_LABELS[item.role] || item.role;
       row.appendChild(role);
+      if (item.user_id !== selfId) {
+        const message = document.createElement('button');
+        message.type = 'button';
+        message.textContent = '发消息';
+        message.title = '打开与对方的人与人单聊';
+        message.addEventListener('click', () => startDirectMessage(item));
+        row.appendChild(message);
+      }
       if (canSuspend(actor, item, selfId)) {
         const suspend = document.createElement('button');
         suspend.type = 'button';

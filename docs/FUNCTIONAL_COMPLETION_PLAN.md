@@ -1,3 +1,5 @@
+<!-- t244u batch: space website/save CTAs, members DM, home artifact deep links, dark theme restored to green. /messenger still redirects. HTTP policy not in this PR. -->
+
 # Complete functional continuation scope
 
 This is the owner's requested remaining scope, not a completion claim. PR342 is merged at ef71b3d1. The current owned broad follow-on branch is feat/functional-completion-big; do not split a cosmetic series, compete with moving contributor branches, or convert disabled placeholders to fake success. Credits remain explicitly excluded. The full route/control/state census and remaining engineering are in VISIBLE_FUNCTIONS_INVENTORY.md. All external acceptance remains separate from synthetic tests and Teamily scene comparison.

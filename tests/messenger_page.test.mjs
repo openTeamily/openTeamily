@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   conversationLabel, sortConversations, validMessage, memberChoices,
 } from '../openteamily/static/messenger/app.mjs';
+import { parseMessengerHash } from '../openteamily/static/shell/thumb.mjs';
 
 const current = 'a'.repeat(32);
 
@@ -36,4 +37,10 @@ test('memberChoices excludes the signed-in user', () => {
     {user_id: 'b'.repeat(32), username: 'bob'},
   ];
   assert.deepEqual(memberChoices(members, current).map((member) => member.username), ['bob']);
+});
+
+
+test('independent-session hash parsing keeps workspace and conversation distinct', () => {
+  assert.deepEqual(parseMessengerHash('#workspace=w1&conversation=c1'), {workspace: 'w1', conversation: 'c1'});
+  assert.deepEqual(parseMessengerHash('workspace=w1'), {workspace: 'w1', conversation: ''});
 });

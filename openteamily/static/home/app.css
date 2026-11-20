@@ -133,7 +133,7 @@
 
 .home-actions {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(8.75rem, 1fr));
   gap: 0.6rem;
   margin-bottom: 1rem;
 }

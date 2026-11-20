@@ -32,7 +32,10 @@ class MembersPageTests(unittest.TestCase):
         self.assertIn('/v1/workspaces', html)
         self.assertIn('/v1/invites/accept', html)
         self.assertIn('default-src \'none\'', page['headers']['Content-Security-Policy'])
-        self.assertEqual(self.raw.call('GET', '/members/app.mjs')['status'], 200)
+        script = self.raw.call('GET', '/members/app.mjs')
+        self.assertEqual(script['status'], 200)
+        self.assertIn('发消息', script['body'].decode())
+        self.assertIn('startDirectMessage', script['body'].decode())
         self.assertEqual(self.raw.call('GET', '/members/app.css')['status'], 200)
         self.assertEqual(self.raw.call('GET', '/members/missing')['status'], 404)
 

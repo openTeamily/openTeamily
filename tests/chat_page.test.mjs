@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity, composeSelectedLabel, filterMemberChoices, composeCreateEnabled, composeGroupPayload, GROUP_CREATE_INTRO, GROUP_CREATE_MODES, mount, messageSearchQuery, homepageStartIndex, stripHomepageStartQuery } from '../openteamily/static/chat/app.mjs';
+import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity, composeSelectedLabel, filterMemberChoices, composeCreateEnabled, composeGroupPayload, GROUP_CREATE_INTRO, GROUP_CREATE_MODES, mount, messageSearchQuery, homepageStartIndex, stripHomepageStartQuery, wrapBold, inlineBold } from '../openteamily/static/chat/app.mjs';
 
 const alice = 'a'.repeat(32);
 const bob = 'b'.repeat(32);
@@ -1478,6 +1478,30 @@ test('removing a group agent sends nothing until the explicit confirmation', asy
     await fire(question.children[2], 'click');
     assert.equal(posts.length,1);
   } finally {restore();}
+});
+
+test('the composer exposes a real bold tool instead of the disabled placeholder', () => {
+  const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
+  const start = html.indexOf('id="chat-format"');
+  assert.ok(start > -1, 'the composer has a format control');
+  const open = html.lastIndexOf('<button', start);
+  const block = html.slice(open, html.indexOf('>', start) + 1);
+  assert.doesNotMatch(block, /disabled/, 'the format control must not be disabled');
+  assert.match(html, /id="chat-format-bold"/, 'the format menu offers bold');
+});
+
+test('wrapBold puts double asterisks around the selected text', () => {
+  assert.deepEqual(wrapBold('你好世界', 2, 4), {text: '你好**世界**', start: 4, end: 6});
+  assert.deepEqual(wrapBold('abc', 1, 1), {text: 'a****bc', start: 3, end: 3});
+  assert.deepEqual(wrapBold('', 0, 0), {text: '****', start: 2, end: 2});
+});
+
+test('inlineBold splits text into plain and bold runs', () => {
+  assert.deepEqual(inlineBold('发 **重要** 通知'), [
+    {text: '发 ', bold: false}, {text: '重要', bold: true}, {text: ' 通知', bold: false},
+  ]);
+  assert.deepEqual(inlineBold('**未闭合'), [{text: '**未闭合', bold: false}]);
+  assert.deepEqual(inlineBold(''), []);
 });
 
 test('the message menu offers delete that hides the message only for this account', () => {

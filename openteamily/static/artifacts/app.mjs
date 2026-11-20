@@ -9,7 +9,11 @@ export function artifactTargetFromSearch(search) {
 }
 
 import { bindDocumentEditor } from '../shell/rich-editor.mjs';
-import { renderThumb } from '../shell/thumb.mjs';
+import {
+  renderThumb,
+  websiteTitle, websiteStub, websitePrompt, saveableSocialMessage, saveableAgentMessage,
+  socialSavePath, agentSavePath, defaultSaveTitle, describeWebsiteDispatch,
+} from '../shell/thumb.mjs';
 
 // `/space?new=<kind>` opens the matching 新建 editor once the page has loaded
 // (used by the chat composer's 创建 grid). Unknown values are ignored.
@@ -1469,6 +1473,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     openEditor({kind: 'document'});
   });
 
+  bindCreate('empty-agent-website', () => { closeNewMenu(); openWebsiteBriefDialog(); });
+  bindCreate('new-agent-website', () => { closeNewMenu(); openWebsiteBriefDialog(); });
+  bindCreate('empty-save-message', () => { closeNewMenu(); openSaveMessageDialog(); });
+  bindCreate('empty-starred-save-message', () => { closeNewMenu(); openSaveMessageDialog(); });
+  bindCreate('new-save-message', () => { closeNewMenu(); openSaveMessageDialog(); });
+
   const newMenuButton = document.getElementById('new-menu-button');
   if (newMenuButton) {
     newMenuButton.addEventListener('click', (event) => {
@@ -1778,6 +1788,226 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       document.addEventListener('keydown', onKey);
     });
   }
+
+
+  let spaceActionDialog = null;
+
+  function closeSpaceActionDialog() {
+    if (spaceActionDialog && spaceActionDialog.parentNode) spaceActionDialog.parentNode.removeChild(spaceActionDialog);
+    spaceActionDialog = null;
+  }
+
+  function spaceDialogHost() {
+    return mainPanel || listPanel || form;
+  }
+
+  function openSpaceDialog(id, titleText) {
+    closeSpaceActionDialog();
+    closeAgentTaskDialog();
+    const dialog = document.createElement('div');
+    dialog.id = id;
+    dialog.className = 'send-dialog';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-labelledby', id + '-title');
+    const card = document.createElement('div');
+    card.className = 'send-dialog-card';
+    const heading = document.createElement('h2');
+    heading.id = id + '-title';
+    heading.textContent = titleText;
+    const note = document.createElement('p');
+    note.className = 'note';
+    note.hidden = true;
+    card.appendChild(heading);
+    card.appendChild(note);
+    dialog.appendChild(card);
+    const host = spaceDialogHost();
+    if (host && typeof host.appendChild === 'function') host.appendChild(dialog);
+    spaceActionDialog = dialog;
+    return {dialog, card, note, heading};
+  }
+
+  async function openWebsiteBriefDialog() {
+    if (!workspaceId()) { show('error', '先选择一个工作区。'); return; }
+    const ui = openSpaceDialog('website-brief-dialog', '让智能体搭建网站');
+    const brief = document.createElement('textarea');
+    brief.id = 'website-brief';
+    brief.rows = 6;
+    brief.maxLength = 4000;
+    brief.placeholder = '描述网站要做什么、给谁看、需要哪些栏目。';
+    const agentLabel = document.createElement('label');
+    agentLabel.textContent = '智能体';
+    const agentSelect = document.createElement('select');
+    agentSelect.id = 'website-brief-agent';
+    agentLabel.appendChild(agentSelect);
+    const actions = document.createElement('div');
+    actions.className = 'space-action-row';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = '取消';
+    cancel.addEventListener('click', () => closeSpaceActionDialog());
+    const submit = document.createElement('button');
+    submit.type = 'button';
+    submit.textContent = '创建并发送请求';
+    actions.append(cancel, submit);
+    ui.card.append(brief, agentLabel, actions);
+    const agents = await request('GET', `/v1/workspaces/${workspaceId()}/agents?limit=100`);
+    const personal = await request('GET', '/v1/personal-agent');
+    const options = [];
+    const personalAgent = personal.status === 200 ? personal.body.personal_agent : null;
+    if (personalAgent && personalAgent.agent && personalAgent.workspace && personalAgent.workspace.id === workspaceId()) {
+      const agent = personalAgent.agent;
+      options.push({id: agent.id, name: (agent.name || '个人智能体') + '（个人）'});
+    }
+    if (agents.status === 200) {
+      for (const agent of agents.body.items || []) {
+        if (options.some((row) => row.id === agent.id)) continue;
+        options.push({id: agent.id, name: agent.name || '智能体'});
+      }
+    }
+    if (!options.length) {
+      ui.note.hidden = false;
+      ui.note.textContent = '这个工作区还没有可选用的智能体，无法发出搭建请求。';
+      submit.disabled = true;
+    }
+    for (const option of options) {
+      const row = document.createElement('option');
+      row.value = option.id;
+      row.textContent = option.name;
+      agentSelect.append(row);
+    }
+    submit.addEventListener('click', async () => {
+      const text = brief.value.trim();
+      if (!text) { ui.note.hidden = false; ui.note.textContent = '请先填写网站需求。'; return; }
+      if (!agentSelect.value) { ui.note.hidden = false; ui.note.textContent = '请选择一个智能体。'; return; }
+      submit.disabled = true;
+      const title = websiteTitle(text);
+      const created = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts`, {
+        title, kind: 'website', body: websiteStub(text),
+      }, { 'Idempotency-Key': idempotencyKey('site-brief-') });
+      if (created.status !== 201 && created.status !== 200) {
+        submit.disabled = false;
+        ui.note.hidden = false;
+        ui.note.textContent = messageFor(created.body.error, '无法创建网站作品。');
+        return;
+      }
+      const artifact = created.body.artifact;
+      const conversation = await request('POST', `/v1/workspaces/${workspaceId()}/agents/${agentSelect.value}/conversations`, {
+        title,
+      }, { 'Idempotency-Key': idempotencyKey('site-conv-') });
+      if (conversation.status !== 201 && conversation.status !== 200) {
+        closeSpaceActionDialog();
+        show('error', '网站作品已创建，但未能打开智能体会话：' + messageFor(conversation.body.error, '请稍后重试。'));
+        await loadList();
+        if (artifact && artifact.id) openEditor(artifact);
+        return;
+      }
+      const conv = conversation.body.conversation;
+      const sent = await request('POST', `/v1/workspaces/${workspaceId()}/agents/${agentSelect.value}/conversations/${conv.id}/messages`, {
+        body: websitePrompt(title, text),
+      }, { 'Idempotency-Key': idempotencyKey('site-msg-') });
+      closeSpaceActionDialog();
+      if (sent.status !== 201 && sent.status !== 200) {
+        show('error', '网站作品已创建，但搭建请求发送失败：' + messageFor(sent.body.error, '请打开对话后重试。'));
+      } else {
+        show('ok', describeWebsiteDispatch(sent.body.reply || sent.body.message));
+      }
+      if (catalogScope !== 'all') { catalogScope = 'all'; syncViewUrl(); }
+      await loadList();
+      if (artifact && artifact.id) openEditor(artifact);
+    });
+    if (typeof brief.focus === 'function') brief.focus();
+  }
+
+  async function openSaveMessageDialog() {
+    if (!workspaceId()) { show('error', '先选择一个工作区。'); return; }
+    const ui = openSpaceDialog('save-message-dialog', '保存聊天中的消息');
+    const list = document.createElement('ul');
+    list.id = 'save-message-list';
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = '关闭';
+    close.addEventListener('click', () => closeSpaceActionDialog());
+    ui.card.append(list, close);
+    const candidates = [];
+    const social = await request('GET', `/v1/workspaces/${workspaceId()}/social/conversations?limit=20`);
+    if (social.status === 200) {
+      for (const conversation of social.body.items || []) {
+        const messages = await request('GET', `/v1/workspaces/${workspaceId()}/social/conversations/${conversation.id}/messages?limit=20`);
+        if (messages.status !== 200) continue;
+        for (const item of messages.body.items || []) {
+          if (saveableSocialMessage(item)) {
+            candidates.push({
+              label: (conversation.title || '会话') + ' · ' + defaultSaveTitle(item.body),
+              path: socialSavePath(workspaceId(), conversation.id, item.id),
+              title: defaultSaveTitle(item.body),
+              revision: item.revision || 1,
+              social: true,
+            });
+          }
+        }
+      }
+    }
+    const agents = await request('GET', `/v1/workspaces/${workspaceId()}/agents?limit=100`);
+    const agentItems = agents.status === 200 ? (agents.body.items || []) : [];
+    const personal = await request('GET', '/v1/personal-agent');
+    const personalSave = personal.status === 200 ? personal.body.personal_agent : null;
+    if (personalSave && personalSave.agent && personalSave.workspace && personalSave.workspace.id === workspaceId()) {
+      const agent = personalSave.agent;
+      if (!agentItems.some((row) => row.id === agent.id)) agentItems.unshift(agent);
+    }
+    for (const agent of agentItems) {
+      const conversations = await request('GET', `/v1/workspaces/${workspaceId()}/agents/${agent.id}/conversations?limit=20`);
+      if (conversations.status !== 200) continue;
+      for (const conversation of conversations.body.items || []) {
+        const messages = await request('GET', `/v1/workspaces/${workspaceId()}/agents/${agent.id}/conversations/${conversation.id}/messages?limit=20`);
+        if (messages.status !== 200) continue;
+        for (const item of messages.body.items || []) {
+          if (saveableAgentMessage(item)) {
+            candidates.push({
+              label: (agent.name || '智能体') + ' · ' + defaultSaveTitle(item.body),
+              path: agentSavePath(workspaceId(), agent.id, conversation.id, item.id),
+              title: defaultSaveTitle(item.body),
+              social: false,
+            });
+          }
+        }
+      }
+    }
+    if (!candidates.length) {
+      ui.note.hidden = false;
+      ui.note.textContent = '这个工作区还没有可保存的已完成消息。';
+      return;
+    }
+    for (const candidate of candidates.slice(0, 40)) {
+      const row = document.createElement('li');
+      const label = document.createElement('span');
+      label.textContent = candidate.label;
+      const save = document.createElement('button');
+      save.type = 'button';
+      save.textContent = '保存';
+      save.addEventListener('click', async () => {
+        save.disabled = true;
+        const body = {title: candidate.title};
+        if (candidate.social) body.revision = candidate.revision;
+        const saved = await request('POST', candidate.path, body);
+        if (saved.status === 200 || saved.status === 201) {
+          closeSpaceActionDialog();
+          show('ok', '已保存为云文档。');
+          if (catalogScope !== 'all') { catalogScope = 'all'; syncViewUrl(); }
+          await loadList();
+          if (saved.body.artifact) openEditor(saved.body.artifact);
+          return;
+        }
+        save.disabled = false;
+        ui.note.hidden = false;
+        ui.note.textContent = messageFor(saved.body.error, '保存失败。');
+      });
+      row.append(label, save);
+      list.append(row);
+    }
+  }
+
 
   let agentTaskDialog = null;
 

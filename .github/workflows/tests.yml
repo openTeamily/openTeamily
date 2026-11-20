@@ -52,6 +52,7 @@ jobs:
       - run: node --test tests/meetings_page.test.mjs
       - run: node --test tests/meetings_action_toggle.test.mjs
       - run: node --test tests/meetings_attendee_complete.test.mjs
+      - run: node --test tests/onboarding_page.test.mjs
       - run: node --test tests/agents_creator_filter.test.mjs
       - run: node --test tests/registration_page.test.mjs
       - run: node --test tests/workspace_events.test.mjs

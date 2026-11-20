@@ -371,7 +371,13 @@
           <button type="button" disabled title="未实现：Auto / Instant / Agentic 模式">Instant</button>
           <button type="button" id="composer-memory-open" title="选择真实记忆内容，检查后附加到输入框"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4a4 4 0 0 0-4 4v8a4 4 0 0 0 4 4 M16 4a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4 M8 8h8 M8 12h8 M8 16h8 M12 4v16"/></svg><span class="sr-only">记忆</span></button>
           <button type="button" disabled title="未实现：会议纪要"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h13v14H3z m13 5 5-3v10l-5-3"/></svg><span class="sr-only">会议</span></button>
-          <button type="button" disabled title="未实现：格式工具"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16 M12 5v15 M8 20h8"/></svg><span class="sr-only">格式</span></button>
+          <div class="format-wrap">
+            <button type="button" id="chat-format" aria-expanded="false" aria-controls="chat-format-menu" title="格式：把选中的字加粗"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16 M12 5v15 M8 20h8"/></svg><span class="sr-only">格式</span></button>
+            <div id="chat-format-menu" class="format-menu" hidden>
+              <button type="button" id="chat-format-bold" title="把选中的字包进 **…**"><strong>B</strong> 加粗</button>
+              <p class="format-hint">先选中文字再点；发出的消息里显示为粗体。</p>
+            </div>
+          </div>
           <button type="button" id="composer-emoji-open" title="插入表情" aria-haspopup="dialog"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M8 9h1 M15 9h1 M7 14a6 6 0 0 0 10 0"/></svg><span class="sr-only">表情</span></button>
           <button type="button" disabled title="未实现：语音消息"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0V6Z M5 11v2a7 7 0 0 0 14 0v-2 M12 20v3"/></svg><span class="sr-only">语音</span></button>
           <button type="submit" class="composer-send" aria-label="发送" title="发送"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14 M13 6l6 6-6 6"/></svg></button>

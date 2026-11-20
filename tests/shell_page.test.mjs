@@ -276,6 +276,10 @@ test('workspace tokens meet text contrast in explicit light and dark themes', ()
   }
   assert.match(css, /prefers-reduced-motion/);
   assert.match(css, /outline: 2px solid var\(--ot-focus\)/);
+  const dark = css.split('html[data-theme-resolved="dark"] {')[1].split('}')[0];
+  assert.doesNotMatch(dark, /#8b7cff|#2ee6e9|--ot-glow: 0 /);
+  assert.match(dark, /--ot-accent: #89d5b5/);
+  assert.match(dark, /--ot-glow: none/);
 });
 
 

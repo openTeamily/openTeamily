@@ -134,11 +134,11 @@ function fakeDocument() {
 
 function jsonResponse(status, body) { return {status, json: async () => body}; }
 
-function makeApi({members, invites = [], forbiddenPaths = [], notFoundPaths = []}) {
+function makeApi({members, invites = [], forbiddenPaths = [], notFoundPaths = [], failSocial = false}) {
   const calls = [];
   async function api(path, options = {}) {
     const method = options.method || 'GET';
-    calls.push({method, path, body: options.body ? JSON.parse(options.body) : undefined});
+    calls.push({method, path, body: options.body ? JSON.parse(options.body) : undefined, headers: options.headers || {}});
     if (path === '/v1/auth/session') return jsonResponse(200, {user: {id: 'u-me', username: 'alice'}});
     if (path === '/v1/workspaces?limit=100') return jsonResponse(200, {items: [{id: 'w1', name: 'W1'}]});
     if (path === '/v1/workspaces/w1/members' && method === 'GET') {
@@ -153,6 +153,13 @@ function makeApi({members, invites = [], forbiddenPaths = [], notFoundPaths = []
     if (path === '/v1/workspaces/w1/directory' && method === 'GET') {
       return jsonResponse(200, {listing: {listed: false, summary: ''}});
     }
+
+    const social = path === '/v1/workspaces/w1/social/conversations' && method === 'POST';
+    if (social) {
+      if (failSocial) return jsonResponse(400, {error: {message: '无法创建会话'}});
+      return jsonResponse(200, {conversation: {id: 'c-dm-1', kind: 'dm'}});
+    }
+
     const removal = path.match(/^\/v1\/workspaces\/w1\/members\/([^/]+)\/remove$/);
     if (removal && method === 'POST') {
       const index = members.findIndex(item => item.user_id === removal[1]);
@@ -186,9 +193,10 @@ async function settle(rounds = 20) {
 async function mountMembers(options) {
   const {doc} = fakeDocument();
   const {api, calls} = makeApi(options);
-  await mount(doc, {fetcher: api});
+  const assigned = [];
+  await mount(doc, {fetcher: api, assign: (href) => assigned.push(href)});
   return {
-    doc, calls,
+    doc, calls, assigned,
     list: doc.getElementById('member-list'),
     inviteList: doc.getElementById('invite-list'),
     status: doc.getElementById('status'),
@@ -429,4 +437,29 @@ test('a refused freeze shows the Chinese reason instead of the server sentence',
 
   assert.equal(status.textContent, '只有工作区所有者或管理员可以冻结邀请。');
   assert.doesNotMatch(status.textContent, /Admins can only manage/);
+});
+
+
+test('other members get a working 发消息 button that opens the existing DM route', async () => {
+  const {doc, calls, list, assigned} = await mountMembers({members: [{...ALICE}, {...BOB}]});
+  const selfRow = rowWithText(list, 'alice');
+  const bobRow = rowWithText(list, 'bob');
+  assert.equal(rowButton(selfRow, '发消息'), undefined, 'the current user has no self-message button');
+  const send = rowButton(bobRow, '发消息');
+  assert.ok(send, 'another member can be messaged');
+  doc.fire('click', {target: send});
+  await settle();
+  const created = calls.filter((call) => call.method === 'POST' && call.path === '/v1/workspaces/w1/social/conversations');
+  assert.equal(created.length, 1);
+  assert.deepEqual(created[0].body, {kind: 'dm', member_ids: ['u-bob']});
+  assert.match(created[0].headers['Idempotency-Key'] || '', /^[A-Za-z0-9_-]{16,64}$/);
+  assert.deepEqual(assigned, ['/chat#workspace=w1&social=c-dm-1']);
+});
+
+test('发消息 reports an error when the conversation cannot be opened', async () => {
+  const {doc, list, assigned, status} = await mountMembers({members: [{...ALICE}, {...BOB}], failSocial: true});
+  doc.fire('click', {target: rowButton(rowWithText(list, 'bob'), '发消息')});
+  await settle();
+  assert.equal(assigned.length, 0);
+  assert.equal(status.textContent, '无法创建会话');
 });

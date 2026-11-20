@@ -1720,6 +1720,28 @@ html[data-theme-resolved="dark"] position: absolute; right: .5rem; bottom: -.625
   #message-list li .message-reactions:has(.reaction-picker:not([hidden])) .reaction-add { opacity: 1; }
 }
 
+/* Formatting tools in the composer: bold wraps the selection in **…**. */
+.format-wrap { position: relative; display: inline-flex; }
+.format-menu {
+  position: absolute;
+  bottom: calc(100% + .65rem);
+  right: 0;
+  z-index: 14;
+  width: min(15rem, calc(100vw - 6rem));
+  display: grid;
+  gap: .35rem;
+  padding: .6rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .75rem;
+  background: var(--ot-surface);
+  box-shadow: var(--ot-shadow);
+  text-align: left;
+}
+.format-menu[hidden] { display: none; }
+.format-menu button { justify-content: flex-start; gap: .5rem; width: 100%; padding: .35rem .5rem; }
+.format-menu button strong { font-weight: 700; }
+.format-hint { margin: 0; color: var(--ot-muted); font-size: .78rem; line-height: 1.4; }
+
 #message-assist-dialog, #announcement-dialog {width:min(44rem,calc(100vw - 2rem));max-height:85vh;overflow:auto;border:1px solid var(--ot-line);border-radius:14px;padding:24px;color:var(--ot-ink);background:var(--ot-surface);}
 #message-assist-dialog::backdrop, #announcement-dialog::backdrop {background:#14281d55;}
 #message-assist-dialog input, #announcement-dialog textarea {display:block;width:100%;box-sizing:border-box;margin:8px 0 12px;font:inherit;}

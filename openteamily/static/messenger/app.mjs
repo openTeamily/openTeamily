@@ -1,4 +1,5 @@
 import { csrfCookie, idempotencyKey } from '../agents/app.mjs';
+import { parseMessengerHash, messengerHref, conversationChatHref } from '../shell/thumb.mjs';
 
 export function conversationLabel(row, currentUserId) {
   if (!row) return '';
@@ -133,11 +134,55 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis) } 
     scroller.scrollTop = scroller.scrollHeight;
   }
 
+  function setPane(name) {
+    const layout = document.querySelector('.messenger-layout');
+    if (layout) layout.setAttribute('data-pane', name);
+    for (const button of document.querySelectorAll('.messenger-pane-switch [data-pane]')) {
+      button.setAttribute('aria-pressed', button.getAttribute('data-pane') === name ? 'true' : 'false');
+    }
+  }
+
+  function renderDetail() {
+    const empty = document.getElementById('detail-empty');
+    const body = document.getElementById('detail-body');
+    if (!currentConversation) {
+      if (empty) empty.hidden = false;
+      if (body) body.hidden = true;
+      return;
+    }
+    if (empty) empty.hidden = true;
+    if (body) body.hidden = false;
+    const kind = document.getElementById('detail-kind');
+    const updated = document.getElementById('detail-updated');
+    const list = document.getElementById('detail-members');
+    if (kind) kind.textContent = currentConversation.kind === 'group' ? '群聊' : '单聊';
+    if (updated) updated.textContent = formatTime(currentConversation.updated) ? ('更新于 ' + formatTime(currentConversation.updated)) : '';
+    if (list) {
+      list.replaceChildren();
+      for (const member of currentConversation.members || []) {
+        const li = document.createElement('li');
+        li.textContent = member.username || member.user_id || '成员';
+        list.append(li);
+      }
+    }
+    const link = document.getElementById('detail-open-chat');
+    if (link && workspaceSelect.value) {
+      link.href = conversationChatHref(workspaceSelect.value, {source: 'social', id: currentConversation.id});
+    }
+  }
+
+  function writeHash() {
+    if (!globalThis.history) return;
+    globalThis.history.replaceState(null, '', messengerHref(workspaceSelect.value, currentConversation && currentConversation.id).replace(/^\/messenger/, '') || '#');
+  }
+
   function resetChat() {
     currentConversation = null;
     document.getElementById('chat-title').textContent = '消息';
     messageList.replaceChildren();
     document.getElementById('chat-empty').hidden = false;
+    renderDetail();
+    writeHash();
   }
 
   async function openConversation(conversationId) {
@@ -150,6 +195,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis) } 
     document.getElementById('chat-title').textContent = conversationLabel(currentConversation, currentUser && currentUser.id);
     renderMessages(result.body.items);
     renderConversations();
+    renderDetail();
+    writeHash();
+    setPane('chat');
   }
 
   async function loadWorkspaceData() {
@@ -169,7 +217,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis) } 
     }
     conversations = listed.body.items || [];
     renderConversations();
-    if (conversations.length) await openConversation(conversations[0].id);
+    const wanted = parseMessengerHash(globalThis.location && globalThis.location.hash).conversation;
+    if (wanted && conversations.some((row) => row.id === wanted)) await openConversation(wanted);
     else resetChat();
   }
 
@@ -196,8 +245,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis) } 
       option.textContent = space.name;
       workspaceSelect.append(option);
     }
-    if (previous && [...workspaceSelect.options].some(option => option.value === previous)) {
-      workspaceSelect.value = previous;
+    const hashWorkspace = parseMessengerHash(globalThis.location && globalThis.location.hash).workspace;
+    const preferred = hashWorkspace || previous;
+    if (preferred && [...workspaceSelect.options].some(option => option.value === preferred)) {
+      workspaceSelect.value = preferred;
     }
     if (!workspaces.length) {
       resetChat();
@@ -286,6 +337,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis) } 
     await request('POST', '/v1/auth/logout', {});
     await load();
   });
+
+  for (const button of document.querySelectorAll('.messenger-pane-switch [data-pane]')) {
+    button.addEventListener('click', () => setPane(button.getAttribute('data-pane')));
+  }
 
   return load();
 }

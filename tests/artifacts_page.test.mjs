@@ -2,6 +2,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
+  websiteTitle, websiteStub, websitePrompt, saveableSocialMessage, saveableAgentMessage,
+  socialSavePath, agentSavePath, defaultSaveTitle, conversationChatHref, messengerHref,
+  parseMessengerHash, describeWebsiteDispatch, spaceHref, escapeHtml,
+} from '../openteamily/static/shell/thumb.mjs';
+import {
   csrfCookie, listQuery, visibleArtifacts, artifactMatchesType,
   artifactMatchesModified, viewFromSearch, queryForView, FILE_TYPE_LABELS,
   sessionFilterChoices, applyDirectoryCollapsed, artifactDeletePrompt, mount,
@@ -851,4 +856,58 @@ test('saved result deep links require an exact authorized workspace and artifact
   assert.deepEqual(artifactTargetFromSearch('?workspace='+wid+'&artifact='+aid),{workspace:wid,artifact:aid});
   assert.equal(artifactTargetFromSearch('?new=document'),null);
   for(const query of ['?artifact='+aid,'?workspace='+wid,'?workspace=../private&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&new=document','?workspace='+wid+'&artifact='+aid+'&x=1'])assert.deepEqual(artifactTargetFromSearch(query),{invalid:true});
+});
+
+test('website helpers keep titles and escaped stubs bounded and honest', () => {
+  assert.equal(websiteTitle('  给产品做介绍站  '), '网站：给产品做介绍站');
+  assert.equal(websiteTitle('x'.repeat(80)).startsWith('网站：'), true);
+  assert.ok(websiteTitle('x'.repeat(80)).length <= 50);
+  assert.equal(websiteTitle('   '), '新网站');
+  assert.match(websiteStub('<script>'), /&lt;script&gt;/);
+  assert.doesNotMatch(websiteStub('<script>alert(1)</script>'), /<script>/);
+  assert.equal(escapeHtml('a&b<"'), 'a&amp;b&lt;&quot;');
+  assert.match(websitePrompt('站点', '需要首页和关于'), /作品标题：站点/);
+  assert.match(websitePrompt('站点', '需要首页和关于'), /需要首页和关于/);
+});
+
+test('saveable messages require real text and reject retracted or unfinished rows', () => {
+  assert.equal(saveableSocialMessage({body: '你好', revision: 1}), true);
+  assert.equal(saveableSocialMessage({body: '  ', revision: 1}), false);
+  assert.equal(saveableSocialMessage({body: '你好', retracted: 1}), false);
+  assert.equal(saveableAgentMessage({body: '完成稿', status: 'succeeded'}), true);
+  assert.equal(saveableAgentMessage({body: '完成稿', status: 'queued'}), false);
+  assert.equal(defaultSaveTitle('  第一段内容  '), '第一段内容');
+  const wid = 'a'.repeat(32), cid = 'b'.repeat(32), mid = 'c'.repeat(32), aid = 'd'.repeat(32);
+  assert.equal(
+    socialSavePath(wid, cid, mid),
+    `/v1/workspaces/${wid}/social/conversations/${cid}/messages/${mid}/save`,
+  );
+  assert.equal(
+    agentSavePath(wid, aid, cid, mid),
+    `/v1/workspaces/${wid}/agents/${aid}/conversations/${cid}/messages/${mid}/artifact`,
+  );
+});
+
+test('deep links point at existing space and chat routes, not invented pages', () => {
+  const wid = 'a'.repeat(32), id = 'b'.repeat(32), aid = 'c'.repeat(32);
+  assert.equal(spaceHref(), '/space');
+  assert.equal(spaceHref(wid), '/space?workspace=' + wid);
+  assert.equal(spaceHref(wid, id), '/space?workspace=' + wid + '&artifact=' + id);
+  assert.equal(conversationChatHref(wid, {source: 'social', id}), '/chat#workspace=' + wid + '&social=' + id);
+  assert.equal(
+    conversationChatHref(wid, {source: 'agent', id, agent_id: aid}),
+    '/chat#workspace=' + wid + '&agent=' + aid + '&conversation=' + id,
+  );
+  assert.equal(messengerHref(wid, id), '/messenger#workspace=' + wid + '&conversation=' + id);
+  assert.deepEqual(parseMessengerHash('#workspace=' + wid + '&conversation=' + id), {
+    workspace: wid, conversation: id,
+  });
+  assert.deepEqual(parseMessengerHash(''), {workspace: '', conversation: ''});
+});
+
+test('website dispatch copy distinguishes queued work from a missing runtime', () => {
+  assert.match(describeWebsiteDispatch({status: 'queued', task_id: 't1'}), /发出搭建请求/);
+  assert.match(describeWebsiteDispatch({status: 'queued', error_code: 'no_agent'}), /没有在线运行时/);
+  assert.match(describeWebsiteDispatch({error_code: 'quota'}), /quota/);
+  assert.match(describeWebsiteDispatch(null), /未能发出搭建请求/);
 });

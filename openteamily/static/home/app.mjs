@@ -1,3 +1,4 @@
+import { spaceHref } from '../shell/thumb.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 
 export const KIND_LABELS = {
@@ -175,7 +176,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     list.replaceChildren(...(items || []).map((item) => {
       const li = element('li');
       const link = element('a', 'home-row');
-      link.href = '/space';
+      link.href = spaceHref(selectedId, item && item.id);
       const title = element('strong', '', item.title);
       const meta = element('span', 'home-row-note', kindLabel(item.kind));
       const when = element('time', 'home-row-time', formatWhen(item.updated, now));
@@ -234,6 +235,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     renderStats(result.body.counts || null);
     const quickChat = document.querySelector('.home-actions a[href="/chat"]');
     if (quickChat) quickChat.href = '/chat#workspace=' + encodeURIComponent(selectedId);
+    const spaceLinks = document.querySelectorAll('a[href^="/space"]');
+    for (const link of spaceLinks) {
+      if (link.classList.contains('home-row')) continue;
+      link.href = spaceHref(selectedId);
+    }
     const notifications = document.getElementById('home-notifications');
     const unread = Number(result.body.unread_notifications) || 0;
     if (notifications) {
