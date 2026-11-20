@@ -47,6 +47,7 @@ export function mount(document, fetcher = globalThis.fetch.bind(globalThis), tim
   let currentRun = null;
   let poll = null;
   let pendingKey = null;
+  let pendingPayload = '';
 
   function show(kind, text) { status.dataset.kind = kind; status.textContent = text; }
 
@@ -108,7 +109,9 @@ export function mount(document, fetcher = globalThis.fetch.bind(globalThis), tim
       row.querySelector('.remove-step').hidden = rows.length <= 2;
       row.querySelector('.remove-step').setAttribute('aria-label', `移除第 ${index + 1} 步`);
       const deps = row.querySelector('.step-deps');
+      const initialized = deps.dataset.ready === 'true';
       const checked = new Set([...deps.querySelectorAll('input:checked')].map(box => Number(box.value)));
+      deps.dataset.ready = 'true';
       deps.replaceChildren();
       if (index === 0) { deps.textContent = '第一步没有前置步骤，会最先运行。'; return; }
       deps.append(document.createTextNode('依赖：'));
@@ -116,7 +119,7 @@ export function mount(document, fetcher = globalThis.fetch.bind(globalThis), tim
         const lab = document.createElement('label');
         const box = document.createElement('input');
         box.type = 'checkbox'; box.name = 'depends'; box.value = String(prior);
-        box.checked = checked.size ? checked.has(prior) : prior === index - 1;
+        box.checked = initialized ? checked.has(prior) : prior === index - 1;
         lab.append(box, document.createTextNode(` 第 ${prior + 1} 步`));
         deps.append(lab);
       }
@@ -279,6 +282,7 @@ export function mount(document, fetcher = globalThis.fetch.bind(globalThis), tim
   }
 
   async function loadWorkspace() {
+    $('new-run').disabled = true;
     stopPoll();
     currentRun = null;
     $('run-view').hidden = true;
@@ -287,6 +291,7 @@ export function mount(document, fetcher = globalThis.fetch.bind(globalThis), tim
     const listed = await request('GET', `/v1/workspaces/${workspaceSelect.value}/agents?limit=100`);
     agentsList = listed.status === 200 ? (listed.body.items || []).filter(item => !item.archived) : [];
     await loadRuns(true);
+    $('new-run').disabled = false;
   }
 
   $('new-run').addEventListener('click', openForm);
@@ -307,10 +312,12 @@ export function mount(document, fetcher = globalThis.fetch.bind(globalThis), tim
     const data = new FormData(form);
     const steps = readSteps($('step-editor'));
     if (steps.some(step => !step.instruction)) { show('error', '每一步都要写清楚要做什么。'); return; }
+    const payload = {title: String(data.get('title') || '').trim(), goal: String(data.get('goal') || '').trim(), steps};
+    const signature = JSON.stringify(payload);
+    if (signature !== pendingPayload) pendingKey = null;
+    pendingPayload = signature;
     pendingKey = pendingKey || newKey();
-    const result = await request('POST', base(), {
-      title: String(data.get('title') || '').trim(), goal: String(data.get('goal') || '').trim(), steps,
-    }, {'Idempotency-Key': pendingKey});
+    const result = await request('POST', base(), payload, {'Idempotency-Key': pendingKey});
     if (result.status !== 201 && result.status !== 200) { show('error', errorText(result.body, '无法开始团队任务。')); return; }
     pendingKey = null;
     show('ok', '团队任务已开始，前置步骤完成后下一步会自动排队。');

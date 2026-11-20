@@ -13,7 +13,7 @@ API: `GET|POST /v1/workspaces/{w}/agents/{a}/memory-scope`, `POST …/memory-sco
 
 ## Team task runs (`/team-runs`, linked from `/agents`)
 - One goal, 2–8 steps; each step = active workspace agent + instruction + dependencies on earlier steps only (acyclic by construction). Steps are grouped into stages by graph depth.
-- A step queues one ordinary runtime `infer` task (same agent/runtime selection as private chat, no tool or Composio grant) once all dependencies succeeded; dependency outputs (≤900 chars each) and the goal go into its prompt.
+- A step queues one ordinary runtime `infer` task (same agent/runtime selection as private chat, no tool or Composio grant) once all dependencies succeeded; dependency outputs (1200-char shared budget, divided across dependencies) and the goal go into its prompt.
 - A failed step blocks its dependants; independent branches continue. Run ends 已完成 or 未完成. Members can cancel (queued/claimed runtime tasks are cancelled), retry a failed step (≤3 attempts, resets the steps it blocked), save a finished step's output as a works-library document (idempotent), and delete finished records.
 - No runtime online → step stays queued with `no_agent` and is queued on the next read after a FlyBot connects. Progress is reconciled on read (page polls every 3s while running); there is no background scheduler.
 - Runs are private to the member who started them; quotas: 50 records, 5 running.
