@@ -28,6 +28,8 @@ function fixture() {
   writeFileSync(join(pages, 'chat', 'index.html'), '<!doctype html><html><head><title>Chat</title></head><body>chat</body></html>')
   writeFileSync(join(pages, 'home', 'index.html'), '<html><head></head><body>home</body></html>')
   writeFileSync(join(pages, 'shell', 'app.css'), 'body{}')
+  writeFileSync(join(pages, 'shell', 'app.mjs'), 'export const shell = true')
+  writeFileSync(join(pages, 'shell', 'dsbot-api.mjs'), 'export const api = true')
   mkdirSync(join(pages, 'settings'), { recursive: true })
   writeFileSync(join(pages, 'settings', 'index.html'), '<html><head></head><body>settings</body></html>')
   writeFileSync(join(root, 'secret.txt'), 'outside')
@@ -71,6 +73,12 @@ test('serves pages from this runtime, marked with this runtime identity', async 
   const css = await get(route, '/shell/app.css')
   assert.equal(css.status, 200)
   assert.match(css.headers.get('content-type'), /text\/css/)
+  for (const path of ['/shell/app.mjs', '/shell/dsbot-api.mjs']) {
+    const module = await get(route, path)
+    assert.equal(module.status, 200, path)
+    assert.match(module.headers.get('content-type'), /javascript/, path)
+    assert.equal(module.headers.get(SERVED_BY_HEADER), `ds-bot; instance=${identity.instanceId}`)
+  }
 })
 
 test('refuses traversal, symlink escape, hidden and unknown files', async () => {

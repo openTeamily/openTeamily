@@ -202,7 +202,9 @@ class GatewayError(Exception):
 
 def load_routes(path=ROUTES_FILE):
     data = json.loads(Path(path).read_text('utf-8'))
-    if data.get('version') != 1 or set(data) != {'version', 'mount', 'passthrough', 'moved_pages'}:
+    required = {'version', 'mount', 'passthrough', 'moved_pages'}
+    allowed = required | {'moved_assets'}
+    if data.get('version') != 1 or not required <= set(data) or set(data) - allowed:
         raise ValueError('Unsupported DS-Bot route table')
     mount = data['mount']
     if not re.fullmatch(r'/[a-z]{1,16}', mount):
@@ -213,14 +215,57 @@ def load_routes(path=ROUTES_FILE):
     pages = list(data['moved_pages'])
     if any(not PAGE_SEGMENT.fullmatch(p) for p in pages) or len(set(pages)) != len(pages):
         raise ValueError('Invalid moved page list')
-    return {'mount': mount, 'passthrough': tuple(passthrough), 'moved_pages': frozenset(pages)}
+    # Shared directories such as /shell/ are moved only for pages served by the
+    # same DS-Bot; target_for() keeps them on the platform for legacy pages.
+    assets = list(data.get('moved_assets', ()))
+    if any(not PAGE_SEGMENT.fullmatch(p) for p in assets) or len(set(assets)) != len(assets):
+        raise ValueError('Invalid moved asset list')
+    return {'mount': mount, 'passthrough': tuple(passthrough), 'moved_pages': frozenset(pages),
+            'moved_assets': frozenset(assets)}
+
+
+def _first_segment(path):
+    return path.split('/')[1] if path != '/' else 'home'
+
+
+def _referer_segment(referer):
+    """Return the first path segment of a browser Referer, or None."""
+    if not isinstance(referer, str) or not referer or len(referer) > 2048:
+        return None
+    try:
+        path = urlsplit(referer).path
+    except ValueError:
+        return None
+    if not path.startswith('/') or '\\' in path:
+        return None
+    return _first_segment(path)
+
+
+def _moved_asset(uri_path, routes, referer, fetch_dest, fetch_mode):
+    """True when this /shell-like asset belongs to a page served by the DS-Bot.
+
+    Moved pages (and their module imports) always send a same-origin Referer.
+    Platform pages answer with ``Referrer-Policy: no-referrer``; a no-referer
+    browser subresource therefore stays on the platform. A direct request with
+    no fetch metadata (curl, tests) follows the moved asset so the runtime's
+    own shell is reachable.
+    """
+    first = _first_segment(uri_path)
+    if first not in routes.get('moved_assets', ()):
+        return False
+    source = _referer_segment(referer)
+    if source is not None:
+        return source in routes['moved_pages'] or source in routes.get('moved_assets', ())
+    if fetch_dest and fetch_dest.lower() != 'document' and (fetch_mode or '').lower() in ('no-cors', 'cors', 'same-origin'):
+        return False
+    return True
 
 
 def ensure_schema(db):
     db.executescript(SCHEMA)
 
 
-def target_for(uri, routes):
+def target_for(uri, routes, referer='', fetch_dest='', fetch_mode=''):
     """Map a browser request target to the DS-Bot path, or None for the platform."""
     if not isinstance(uri, str) or not uri.startswith('/') or len(uri) > 2048:
         return None
@@ -242,7 +287,9 @@ def target_for(uri, routes):
     if feature is not None:
         # Plugin legacy surface; authorize() keeps the session cookie swap.
         return '/api/openteamily/legacy?feature=' + quote(feature, safe='') + '&path=' + quote(path, safe='') + (('&query=' + quote(query, safe='')) if query else '')
-    first = path.split('/')[1] if path != '/' else 'home'
+    first = _first_segment(path)
+    if _moved_asset(path, routes, referer, fetch_dest, fetch_mode):
+        return PAGE_ROUTE + '?path=' + quote(path, safe='')
     if first in routes['moved_pages'] and not query:
         return PAGE_ROUTE + '?path=' + quote(path, safe='')
     return None
@@ -306,7 +353,7 @@ def _upstream_row(db, instance_id):
 
 
 def authorize(db, *, cookie_header, session_cookie, method, uri, origin, fetch_site, fetch_mode,
-              upgrade, public_origin, now, routes, authorization=''):
+              upgrade, public_origin, now, routes, authorization='', referer='', fetch_dest=''):
     """Return the internal headers for the edge, or raise GatewayError."""
     method = (method or '').upper()
     if method not in ('GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE'):
@@ -333,7 +380,7 @@ def authorize(db, *, cookie_header, session_cookie, method, uri, origin, fetch_s
             ('X-OT-Instance', row[0]),
             ('X-OT-Upstream-Token', token),
         ]
-    upstream_path = target_for(uri, routes)
+    upstream_path = target_for(uri, routes, referer=referer, fetch_dest=fetch_dest, fetch_mode=fetch_mode)
     if upstream_path is None:
         raise GatewayError(404, 'not_gateway')
     if not _same_origin(method, origin or '', (fetch_site or '').lower(), (fetch_mode or '').lower(),
@@ -491,7 +538,8 @@ class GatewayApp:
                 origin=env.get('HTTP_ORIGIN', ''), fetch_site=env.get('HTTP_SEC_FETCH_SITE', ''),
                 fetch_mode=env.get('HTTP_SEC_FETCH_MODE', ''), upgrade=env.get('HTTP_X_ORIGINAL_UPGRADE', ''),
                 public_origin=self.public_origin, now=int(self.clock()), routes=self.routes,
-                authorization=env.get('HTTP_AUTHORIZATION', ''))
+                authorization=env.get('HTTP_AUTHORIZATION', ''), referer=env.get('HTTP_REFERER', ''),
+                fetch_dest=env.get('HTTP_SEC_FETCH_DEST', ''))
 
     def record(self, env, iid):
         """Manager report: where instance ``iid`` listens and its DSH session cookie."""
@@ -615,6 +663,41 @@ def mount(app, gateway):
     return composed
 
 
+SHELL_NAMED_LOCATIONS = r'''  # Moved /shell-like assets normally come from the page's own DS-Bot. Legacy
+  # and public pages still ask the platform: the authorizer returns not_gateway
+  # (404) for their no-referrer subresources, so fall back instead of leaking a
+  # 404/401 to a stylesheet. A runtime image too old to bundle the asset also
+  # falls back during rollout.
+  location @ot_dsbot_shell {
+    auth_request /_ot_authz;
+    auth_request_set $ot_upstream $upstream_http_x_ot_upstream;
+    auth_request_set $ot_path $upstream_http_x_ot_upstream_path;
+    auth_request_set $ot_origin $upstream_http_x_ot_upstream_origin;
+    auth_request_set $ot_cookie $upstream_http_x_ot_upstream_cookie;
+    error_page 401 403 404 500 502 503 504 = @ot_platform_shell;
+    proxy_pass http://$ot_upstream$ot_path;
+    proxy_http_version 1.1;
+    proxy_set_header Host $ot_upstream;
+    proxy_set_header Origin $ot_origin;
+    proxy_set_header Cookie $ot_cookie;
+    proxy_set_header Authorization "";
+    proxy_set_header Sec-Fetch-Site "";
+    proxy_set_header X-OT-Upstream "";
+    proxy_set_header X-OT-Upstream-Cookie "";
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $ot_connection_upgrade;
+    proxy_buffering off;
+    proxy_read_timeout 3600s;
+    proxy_redirect off;
+    proxy_hide_header Set-Cookie;
+  }
+  location @ot_platform_shell {
+    proxy_pass http://__PLATFORM__;
+    proxy_set_header Host $host;
+    proxy_set_header X-OT-Gateway-Key "";
+  }'''
+
+
 NGINX_TEMPLATE = r'''# Generated by openteamily.dsbot_gateway.nginx_config. Edge for one public origin:
 # platform paths go to the management app; DS-Bot paths go to the signed-in owner's
 # own runtime after auth_request. Client X-OT-* headers and dsh-auth-* cookies never
@@ -643,6 +726,9 @@ __SOCIAL_LOCATION__
     proxy_set_header X-Original-Method $request_method;
     proxy_set_header X-Original-Upgrade $http_upgrade;
     proxy_set_header Authorization $http_authorization;
+    proxy_set_header Referer $http_referer;
+    proxy_set_header Sec-Fetch-Dest $http_sec_fetch_dest;
+    proxy_set_header Sec-Fetch-Mode $http_sec_fetch_mode;
     proxy_set_header X-OT-Gateway-Key $ot_gateway_key;
   }
 __DSBOT_LOCATIONS__
@@ -668,6 +754,7 @@ __DSBOT_LOCATIONS__
     proxy_redirect off;
     proxy_hide_header Set-Cookie;
   }
+__ASSET_SHELL_LOCATIONS__
   location ^~ /v1/gateway/ {
     auth_request /_ot_authz;
     auth_request_set $ot_upstream $upstream_http_x_ot_upstream;
@@ -693,6 +780,7 @@ __DSBOT_LOCATIONS__
   }
   recursive_error_pages on;
   error_page 418 = @ot_dsbot;
+__ASSET_ERROR_PAGE__
   error_page 401 = @ot_login;
   location @ot_login { return 302 /register/; }
   location / {
@@ -775,10 +863,19 @@ def nginx_config(routes, platform, listen, key_include=None, key=None, bot_socia
             locations.append('  location = / { return 418; }')
         locations.append(f'  location = /{page} {{ return 418; }}')
         locations.append(f'  location ^~ /{page}/ {{ return 418; }}')
+    # Shared asset directories (/shell/) go through their own named location so
+    # legacy pages can fall back to the platform copy.
+    for asset in sorted(routes.get('moved_assets', ())):
+        locations.append(f'  location = /{asset} {{ return 419; }}')
+        locations.append(f'  location ^~ /{asset}/ {{ return 419; }}')
     social = social_location(bot_social) if bot_social else ''
+    assets = routes.get('moved_assets', ())
+    shell_locations = SHELL_NAMED_LOCATIONS if assets else ''
+    shell_error = '  error_page 419 = @ot_dsbot_shell;' if assets else ''
     return (NGINX_TEMPLATE.replace('__LISTEN__', str(listen)).replace('__PLATFORM__', platform)
             .replace('__KEY_SETTING__', setting).replace('__DSBOT_LOCATIONS__', '\n'.join(locations))
-            .replace('__SOCIAL_LOCATION__', social))
+            .replace('__SOCIAL_LOCATION__', social).replace('__ASSET_SHELL_LOCATIONS__', shell_locations)
+            .replace('__ASSET_ERROR_PAGE__', shell_error))
 
 
 def main(argv=None):

@@ -160,6 +160,44 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/shares/{aid}/revoke'), 'artifacts')
         self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/discover'))
 
+    def test_moved_shell_assets_follow_the_page_to_the_owners_dsbot(self):
+        routes = gw.load_routes()
+        self.assertEqual(routes['moved_assets'], frozenset({'shell'}))
+        for uri in ('/shell/app.css', '/shell/app.mjs', '/shell/dsbot-api.mjs'):
+            self.assertEqual(gw.target_for(uri, routes),
+                             '/api/openteamily/page?path=' + uri.replace('/', '%2F'))
+        # A moved page and its module imports carry a same-origin Referer.
+        self.assertEqual(
+            gw.target_for('/shell/app.css', routes, referer=ORIGIN + '/chat/'),
+            '/api/openteamily/page?path=%2Fshell%2Fapp.css')
+        self.assertEqual(
+            gw.target_for('/shell/app.mjs', routes, referer=ORIGIN + '/artifacts/app.mjs'),
+            '/api/openteamily/page?path=%2Fshell%2Fapp.mjs')
+        # Legacy pages keep the platform copy (including no-referrer subresources).
+        self.assertIsNone(gw.target_for('/shell/app.css', routes, referer=ORIGIN + '/about/'))
+        self.assertIsNone(gw.target_for('/shell/app.css', routes, fetch_dest='style', fetch_mode='no-cors'))
+        self.assertIsNone(gw.target_for('/shell/app.mjs', routes, fetch_dest='script', fetch_mode='same-origin'))
+        # Without the moved-assets row /shell/ stays entirely on the platform.
+        legacy = dict(routes, moved_assets=frozenset())
+        self.assertIsNone(gw.target_for('/shell/app.css', legacy))
+
+    def test_shell_assets_are_authorized_for_the_ready_owner_only(self):
+        a, b = self.tokens['a' * 32], self.tokens['b' * 32]
+        for uri, encoded in (('/shell/app.css', '%2Fshell%2Fapp.css'),
+                             ('/shell/app.mjs', '%2Fshell%2Fapp.mjs')):
+            status, headers = self.call(a, uri=uri, Referer=ORIGIN + '/chat/')
+            self.assertEqual(status, 204)
+            self.assertEqual(headers['X-OT-Upstream'], '172.30.0.11:8080')
+            self.assertEqual(headers['X-OT-Upstream-Path'], '/api/openteamily/page?path=' + encoded)
+        status, headers = self.call(b, uri='/shell/app.css')
+        self.assertEqual((status, headers['X-OT-Upstream']), (204, '172.30.0.12:8080'))
+        # Legacy pages and their assets stay platform-side, even with a session.
+        self.assertEqual(self.call(a, uri='/shell/app.css', Referer=ORIGIN + '/about/')[0], 404)
+        self.assertEqual(self.call(a, uri='/shell/app.css', Sec_Fetch_Dest='style',
+                                   Sec_Fetch_Mode='no-cors')[0], 404)
+        # An unprovisioned visitor gets 401 here; nginx falls back to the platform copy.
+        self.assertEqual(self.call(None, uri='/shell/app.css', Referer=ORIGIN + '/chat/')[0], 401)
+
     def test_c_api_routing_matches_plugin_features_without_platform_execution(self):
         ws, ident = 'a' * 32, 'b' * 32
         for path, feature in (
@@ -220,6 +258,22 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('absolute_redirect off;', conf)
         self.assertIn('location @ot_login { return 302 /register/; }', conf)
         self.assertIn('location ^~ /v1/discover/ { return 418; }', conf)
+
+    def test_nginx_shell_assets_follow_pages_and_fall_back_to_the_platform(self):
+        conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)
+        self.assertIn('location ^~ /shell/ { return 419; }', conf)
+        self.assertIn('location = /shell { return 419; }', conf)
+        self.assertIn('error_page 419 = @ot_dsbot_shell;', conf)
+        self.assertIn('location @ot_dsbot_shell {', conf)
+        self.assertIn('error_page 401 403 404 500 502 503 504 = @ot_platform_shell;', conf)
+        self.assertIn('location @ot_platform_shell {', conf)
+        self.assertIn('proxy_set_header Referer $http_referer;', conf)
+        self.assertIn('proxy_set_header Sec-Fetch-Dest $http_sec_fetch_dest;', conf)
+        self.assertIn('proxy_set_header Sec-Fetch-Mode $http_sec_fetch_mode;', conf)
+        # Platform pages keep serving their own /shell/ when the row is not moved.
+        legacy = gw.nginx_config(dict(gw.load_routes(), moved_assets=frozenset()),
+                                 '127.0.0.1:8080', 8081, key='k' * 40)
+        self.assertNotIn('location ^~ /shell/', legacy)
 
     def test_nginx_config_optional_social_path(self):
         routes = gw.load_routes()

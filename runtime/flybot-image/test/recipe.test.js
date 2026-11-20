@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
@@ -126,4 +126,22 @@ test('notice installer runs again after the web profile is installed', () => {
   const second = docker.lastIndexOf('install-redistribution-notices.mjs')
   assert.ok(profile !== -1 && second !== -1)
   assert.ok(second > profile)
+})
+
+test('pages bundle carries the shared /shell directory used by moved pages', () => {
+  const docker = read('Dockerfile')
+  assert.match(docker, /COPY --from=openteamily-static \/ \/opt\/openteamily\/runtime\/openteamily-web\/pages\//)
+  const routes = JSON.parse(readFileSync(join(repo, 'openteamily', 'dsbot_routes.json'), 'utf8'))
+  assert.ok(routes.moved_assets.includes('shell'), 'the gateway must route shell with the page')
+  const shell = join(repo, 'openteamily', 'static', 'shell')
+  const bundled = readdirSync(shell).filter((name) => /\.(?:css|mjs)$/.test(name))
+  assert.ok(bundled.includes('app.css') && bundled.includes('app.mjs'), bundled)
+  for (const page of routes.moved_pages) {
+    const htmlPath = join(repo, 'openteamily', 'static', page, 'index.html')
+    if (!existsSync(htmlPath)) continue
+    const html = readFileSync(htmlPath, 'utf8')
+    for (const match of html.matchAll(/(?:href|src)="\/shell\/([A-Za-z0-9._-]+)"/g)) {
+      assert.ok(bundled.includes(match[1]), `${page} references shell/${match[1]}, missing from the pages bundle`)
+    }
+  }
 })
