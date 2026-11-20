@@ -97,6 +97,16 @@ class ChatPageTests(unittest.TestCase):
         self.assertEqual(discover['status'], 200)
         self.assertIn('id="discover-list"', discover['body'].decode())
 
+    def test_esm_dependencies_of_the_shell_and_chat_page_are_served(self):
+        # /chat boots from these two modules; a missing route leaves the page
+        # half-initialised (#workspace empty, #conversation-list hidden).
+        for path in ('/chat/dsbot.mjs', '/shell/dsbot-skills.mjs'):
+            response = self.raw.call('GET', path)
+            self.assertEqual(response['status'], 200, path)
+            headers = {name.lower(): value for name, value in response['headers'].items()}
+            self.assertIn('text/javascript', headers.get('content-type', ''), path)
+            self.assertIn(b'export', response['body'], path)
+
     def test_empty_state_offers_the_two_recorded_next_steps(self):
         page = self.raw.call('GET', '/chat')
         self.assertEqual(page['status'], 200)

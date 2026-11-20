@@ -66,6 +66,7 @@ class SettingsPage:
         '/shell/dsbot-skills.mjs': ('shell', 'dsbot-skills.mjs', 'text/javascript; charset=utf-8'),
         '/chat': ('chat', 'index.html', 'text/html; charset=utf-8'),
         '/chat/utilities.mjs': ('chat', 'utilities.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/dsbot.mjs': ('chat', 'dsbot.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.mjs': ('chat', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/chat/voice.mjs': ('chat', 'voice.mjs', 'text/javascript; charset=utf-8'),
         '/chat/mentions.mjs': ('chat', 'mentions.mjs', 'text/javascript; charset=utf-8'),
