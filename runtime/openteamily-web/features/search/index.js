@@ -1,10 +1,12 @@
 // Search feature (stream B3): message and resource search over this owner's
 // own data, executed inside the user's DS-Bot (legacy search.py and
-// app.py search_messages/search_resources). Agent-conversation messages come
-// from the chat feature, files from the artifacts feature, and notes from the
-// memory/meetings/artifacts '<name>/search' endpoints, all via host.call; a
-// feature that is not present contributes nothing. Shared (social) messages
-// live in Bot Social and are searched there (stream C).
+// app.py search_messages/search_resources). Personal-chat messages come from
+// the chat feature and workspace-agent conversation history (including imported
+// rows) from the agents feature's search hook; files come from the artifacts
+// feature, and notes from the memory/meetings/artifacts '<name>/search'
+// endpoints, all via host.call; a feature that is not present contributes
+// nothing. Shared (social) messages live in Bot Social and are searched there
+// (stream C).
 import { CONTROL, HEX32, refuse } from '../../featurekit/http.js'
 import { defineFeature } from '../../featurekit/feature.js'
 
@@ -12,6 +14,7 @@ export const QUERY_MAX = 80
 export const KINDS = ['all', 'agent', 'social']
 const SNIPPET_MAX = 160
 const MAX_CONVERSATIONS = 200
+const AGENT_SEARCH_LIMIT = 5000
 const casefold = (v) => String(v).toLocaleLowerCase('en-US')
 export const snippet = (body) => { const t = String(body ?? '').split(/\s+/).filter(Boolean).join(' '); return t.length <= SNIPPET_MAX ? t : t.slice(0, SNIPPET_MAX) + '…' }
 const validQuery = (v) => typeof v === 'string' && v.trim().length >= 1 && v.trim().length <= QUERY_MAX && !CONTROL.test(v)
@@ -23,19 +26,35 @@ async function optional(host, endpoint, payload) {
   }
 }
 
-// All of this owner's agent-conversation messages as legacy search rows.
-export async function agentMessages(host) {
+const seconds = (value) => Math.floor(Number(value ?? 0) / (Number(value) > 1e12 ? 1000 : 1))
+
+async function chatMessages(host) {
   const listed = await optional(host, 'chat/conversations', {})
   const conversations = (listed?.items ?? []).slice(0, MAX_CONVERSATIONS)
   const rows = []
   for (const convo of conversations) {
     const messages = await optional(host, 'chat/messages', { conversation_id: convo.id })
     for (const message of messages?.items ?? []) {
-      rows.push({ id: message.id, conversation_id: convo.id, title: convo.title, body: message.text ?? '',
-        created: Math.floor(Number(message.created ?? 0) / (Number(message.created) > 1e12 ? 1000 : 1)) })
+      rows.push({ id: message.id, conversation_id: convo.id, title: convo.title, body: message.text ?? '', created: seconds(message.created) })
     }
   }
-  return rows.sort((a, b) => a.created - b.created || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  return rows
+}
+
+async function workspaceAgentMessages(host, workspaceId) {
+  if (typeof workspaceId !== 'string' || !HEX32.test(workspaceId)) return []
+  const found = await optional(host, 'agents/search', { workspace_id: workspaceId, limit: AGENT_SEARCH_LIMIT })
+  return (found?.items ?? []).map((row) => ({
+    id: row.id, conversation_id: row.conversation_id, title: row.title, agent_name: row.agent_name,
+    body: row.body ?? row.text ?? '', created: seconds(row.created),
+  }))
+}
+
+// All of this owner's private-chat and workspace-agent messages as legacy search
+// rows. Missing chat or agents features simply contribute no rows.
+export async function agentMessages(host, workspaceId) {
+  const [chat, agents] = await Promise.all([chatMessages(host), workspaceAgentMessages(host, workspaceId)])
+  return [...chat, ...agents].sort((a, b) => a.created - b.created || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
 }
 
 const after = (rows, cursor) => {
@@ -58,16 +77,16 @@ export function parseMessageQuery(query) {
   return { text: text.trim(), kind, limit: Number(limit), conversationId, cursor }
 }
 
-async function messages(req) {
+async function messages(req, workspaceId) {
   if (req.method !== 'GET') refuse(405, 'method', 'Only GET is supported')
   const { text, kind, limit, conversationId, cursor } = parseMessageQuery(req.query)
-  let rows = kind === 'social' ? [] : await agentMessages(req.host)
+  let rows = kind === 'social' ? [] : await agentMessages(req.host, workspaceId)
   if (conversationId) rows = rows.filter((row) => row.conversation_id === conversationId)
   const needle = casefold(text)
   rows = after(rows, cursor).filter((row) => casefold(row.body).includes(needle))
   const page = rows.slice(0, limit + 1)
   const items = page.slice(0, limit).map((row) => ({ kind: 'agent', conversation_id: row.conversation_id, message_id: row.id,
-    title: row.title || '对话', snippet: snippet(row.body), created: row.created }))
+    title: row.agent_name || row.title || '对话', snippet: snippet(row.body), created: row.created }))
   return { body: { items, cursor: page.length > limit ? page[limit - 1].id : null } }
 }
 
@@ -93,7 +112,7 @@ async function resources(req, workspaceId) {
     return { body: { items: rows.slice(0, n), cursor: rows.length > n ? rows[n - 1].id : null } }
   }
   const needle = casefold(text || 'http')
-  const rows = after(await agentMessages(req.host), cursor).filter((row) => casefold(row.body).includes(needle))
+  const rows = after(await agentMessages(req.host, workspaceId), cursor).filter((row) => casefold(row.body).includes(needle))
   const page = rows.slice(0, n)
   const items = []
   for (const row of page) {

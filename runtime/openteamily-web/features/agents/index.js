@@ -18,6 +18,8 @@ export const LIMITS = { name: 80, summary: 500, instructions: 16000, quickStarts
 const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/
 const ID = /^[0-9a-f]{32}$/
 const IDEM = /^[A-Za-z0-9_-]{16,64}$/
+const SEARCH_DEFAULT = 20
+const SEARCH_MAX = 5000
 const sha = (t) => createHash('sha256').update(String(t)).digest('hex')
 const now = () => Math.floor(Date.now() / 1000)
 
@@ -79,6 +81,38 @@ export function createAgents({ db, host }) {
     const row = typeof id === 'string' && ID.test(id) ? one('SELECT * FROM agent_conversations WHERE id=? AND agent_id=?', id, agent.id) : undefined
     if (!row) fail('not-found', 'Conversation not found', 404)
     return row
+  }
+
+  // Search this workspace's agent conversation history. The search feature calls
+  // this hook instead of reading another feature's SQLite file; imported history
+  // and live messages are the same rows, so both become searchable at cutover.
+  function searchMessages(p) {
+    const workspaceId = ws(p)
+    const conversationId = p.conversation_id ?? ''
+    if (conversationId && !(typeof conversationId === 'string' && ID.test(conversationId))) fail('invalid', 'conversation_id must be 32 hex', 400)
+    const query = p.q === undefined || p.q === null ? '' : String(p.q).trim()
+    if (query.length > 80 || CONTROL.test(query)) fail('invalid', 'q must be up to 80 characters', 400)
+    const requested = p.limit === undefined || p.limit === null ? SEARCH_DEFAULT : Number(p.limit)
+    if (!Number.isInteger(requested) || requested < 1) fail('invalid', 'limit must be a positive integer', 400)
+    const limit = Math.min(requested, SEARCH_MAX)
+    const cursor = typeof p.cursor === 'string' ? p.cursor : ''
+    const where = ['a.workspace_id=?']
+    const args = [workspaceId]
+    if (conversationId) { where.push('m.conversation_id=?'); args.push(conversationId) }
+    if (query) { where.push('instr(lower(m.text), lower(?))>0'); args.push(query) }
+    if (cursor && ID.test(cursor)) {
+      const seat = one('SELECT m.created FROM agent_messages m JOIN agent_conversations c ON c.id=m.conversation_id '
+        + 'JOIN agents a ON a.id=c.agent_id WHERE a.workspace_id=? AND m.id=?', workspaceId, cursor)
+      if (seat) {
+        where.push('(m.created > ? OR (m.created = ? AND m.id > ?))')
+        args.push(seat.created, seat.created, cursor)
+      }
+    }
+    const rows = all('SELECT m.id, m.conversation_id, m.text, m.text AS body, m.created, m.role, m.status, '
+      + 'c.title, c.agent_id, a.name AS agent_name FROM agent_messages m '
+      + 'JOIN agent_conversations c ON c.id=m.conversation_id JOIN agents a ON a.id=c.agent_id '
+      + 'WHERE ' + where.join(' AND ') + ' ORDER BY m.created, m.id LIMIT ?', ...args, limit + 1)
+    return { items: rows.slice(0, limit), cursor: rows.length > limit ? rows[limit - 1].id : null }
   }
 
   // One DS-Bot turn as this agent. Shared by the external API and team runs.
@@ -228,6 +262,7 @@ export function createAgents({ db, host }) {
       await native.session(agent, `agent:${agent.id}:${convo.id}`, convo.title)
       return { items: all('SELECT * FROM agent_messages WHERE conversation_id=? ORDER BY created, id', convo.id).map((m) => ({ ...m, meta: JSON.parse(m.meta) })) }
     },
+    search: async (p) => searchMessages(p),
     // Send one message to the agent: a native DS-Bot turn on this conversation's session.
     async send(p) {
       const agent = load(ws(p), p.id)
