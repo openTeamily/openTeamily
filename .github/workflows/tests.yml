@@ -40,6 +40,7 @@ jobs:
       - run: node --test tests/settings_page.test.mjs
       - run: node --test tests/settings_support_links.test.mjs
       - run: node --test tests/runtimes_copy_feedback.test.mjs
+      - run: node --test tests/runtimes_keys_flow.test.mjs
       - run: node --test tests/shell_page.test.mjs
       - run: node --test tests/agent_loop.test.mjs
       - run: node --test tests/model_http_policy.test.mjs

@@ -1553,6 +1553,79 @@ async function main() {
       { soft: true },
     );
     screenshots.push(path.basename(await shot(page, outDir, '15-runtimes-connect.png')));
+    const uiKeyName = `ci-ui-key-${Date.now().toString(36)}`;
+    await page.locator('#key-name').fill(uiKeyName);
+    await page.locator('#generate-key').click();
+    await page.locator('#issued-token').waitFor({ state: 'visible', timeout: 8000 });
+    const issuedText = await visibleText(page.locator('#issued-token'));
+    let uiKeyListed = true;
+    try {
+      await page.waitForFunction(
+        (wanted) => document.getElementById('key-list').innerText.includes(wanted),
+        uiKeyName,
+        { timeout: 8000 },
+      );
+    } catch {
+      uiKeyListed = false;
+    }
+    const listAfterCreate = await visibleText(page.locator('#key-list'));
+    record(
+      'runtimes_key_created_in_list',
+      uiKeyListed
+        && issuedText.includes('密钥只显示一次')
+        && !listAfterCreate.includes(issuedText.replace('密钥只显示一次：', ''))
+        && await page.locator('#key-name').inputValue() === ''
+        && await page.locator('#generate-key').isDisabled(),
+      `issued=${issuedText.slice(0, 16)}…; listed=${uiKeyListed}`,
+    );
+    // The one-time banner must not reach a screenshot, so the remaining shots
+    // reload first: the key persists on the server, the secret does not.
+    await page.reload({ waitUntil: 'load' });
+    await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+    await page.locator('[data-tab="connect"]').click();
+    await page.locator('#connect-panel').waitFor({ state: 'visible', timeout: 15000 });
+    await page.waitForFunction(
+      (wanted) => document.getElementById('key-list').innerText.includes(wanted),
+      uiKeyName,
+      { timeout: 15000 },
+    );
+    record(
+      'runtimes_key_survives_reload',
+      !(await page.locator('#issued-token').isVisible())
+        && (await visibleText(page.locator('#key-list'))).includes(uiKeyName),
+      (await visibleText(page.locator('#key-list'))).replace(/\n/g, ' | ').slice(0, 160),
+    );
+    screenshots.push(path.basename(await shot(page, outDir, '15b-runtimes-key-created.png')));
+    const uiKeyRow = page.locator('#key-list li').filter({ hasText: uiKeyName });
+    await uiKeyRow.getByRole('button', { name: '撤销' }).click();
+    await uiKeyRow.getByRole('button', { name: '确认撤销' }).waitFor({ state: 'visible', timeout: 8000 });
+    const askingRow = await visibleText(page.locator('#key-list'));
+    record(
+      'runtimes_revoke_asks_first',
+      askingRow.includes('确认撤销') && askingRow.includes('取消') && askingRow.includes(uiKeyName) && !askingRow.includes('已撤销'),
+      askingRow.replace(/\n/g, ' | ').slice(0, 160),
+    );
+    screenshots.push(path.basename(await shot(page, outDir, '15c-runtimes-key-revoke-ask.png')));
+    await uiKeyRow.getByRole('button', { name: '确认撤销' }).click();
+    let uiKeyRevoked = true;
+    try {
+      await page.waitForFunction(
+        (wanted) => {
+          const row = [...document.querySelectorAll('#key-list li')].find((li) => li.innerText.includes(wanted));
+          return Boolean(row) && row.innerText.includes('已撤销') && !/确认撤销|取消/.test(row.innerText);
+        },
+        uiKeyName,
+        { timeout: 8000 },
+      );
+    } catch {
+      uiKeyRevoked = false;
+    }
+    record(
+      'runtimes_key_revoked_row',
+      uiKeyRevoked,
+      (await visibleText(page.locator('#key-list'))).replace(/\n/g, ' | ').slice(0, 160),
+    );
+    screenshots.push(path.basename(await shot(page, outDir, '15d-runtimes-key-revoked.png')));
     try {
       await page.locator('.os-tabs [data-os="windows"]').click();
       await page.locator('#install-windows').waitFor({ state: 'visible', timeout: 8000 });

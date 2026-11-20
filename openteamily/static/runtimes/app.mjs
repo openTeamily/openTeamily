@@ -36,6 +36,17 @@ export function listItemHasSecret(item) {
   return Boolean(item && Object.prototype.hasOwnProperty.call(item, 'token'));
 }
 
+export function keyStateText(item) {
+  return item && item.revoked ? '已撤销' : formatExpiry(item && item.expires);
+}
+
+export function keyRowText(item) {
+  return `${item.name} · ${item.prefix}… · ${keyStateText(item)}`;
+}
+
+export const REVOKE_ASK = '确认撤销';
+export const REVOKE_CANCEL = '取消';
+
 export function summarizeConnections(items) {
   const list = Array.isArray(items) ? items.filter(Boolean) : [];
   const online = list.filter(item => item.status === 'online');
@@ -200,34 +211,53 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
     if (apiBlock) apiBlock.hidden = usable;
   }
 
+  let revokePending = null;
+  let lastKeys = [];
+
+  function keyButton(label, handler) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.addEventListener('click', handler);
+    return button;
+  }
+
   function renderKeys(items) {
     const list = document.getElementById('key-list');
     const empty = document.getElementById('keys-empty');
-    const rows = (items || []).filter((item) => !listItemHasSecret(item));
+    lastKeys = (items || []).filter((item) => !listItemHasSecret(item));
     list.textContent = '';
-    if (empty) empty.hidden = rows.length > 0;
-    for (const item of rows) {
+    if (empty) empty.hidden = lastKeys.length > 0;
+    for (const item of lastKeys) {
       const row = document.createElement('li');
       const meta = document.createElement('span');
-      const state = item.revoked ? '已撤销' : formatExpiry(item.expires);
-      meta.textContent = `${item.name} · ${item.prefix}… · ${state}`;
+      meta.textContent = keyRowText(item);
       row.appendChild(meta);
       if (!item.revoked) {
-        const revoke = document.createElement('button');
-        revoke.type = 'button';
-        revoke.textContent = '撤销';
-        revoke.addEventListener('click', () => revokeKey(item));
-        row.appendChild(revoke);
+        if (revokePending === item.id) {
+          row.appendChild(keyButton(REVOKE_ASK, () => revokeKey(item)));
+          row.appendChild(keyButton(REVOKE_CANCEL, () => {
+            revokePending = null;
+            renderKeys(lastKeys);
+          }));
+        } else {
+          row.appendChild(keyButton('撤销', () => {
+            revokePending = item.id;
+            renderKeys(lastKeys);
+          }));
+        }
       }
       list.appendChild(row);
     }
-    renderKeyDependent(rows);
+    renderKeyDependent(lastKeys);
   }
 
   async function revokeKey(item) {
     const result = await request('POST', `/v1/runtime-keys/${item.id}/revoke`, {});
+    revokePending = null;
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '无法撤销密钥。'));
+      renderKeys(lastKeys);
       return;
     }
     show('ok', '已撤销密钥。');
@@ -490,7 +520,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
 
   document.getElementById('key-form').addEventListener('submit', async event => {
     event.preventDefault();
-    const values = readKeyForm(event.currentTarget);
+    const form = event.currentTarget;
+    const values = readKeyForm(form);
     if (!canIssueKey(values.name)) {
       syncGenerateButton();
       show('error', '请填写密钥名称。');
@@ -506,9 +537,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
     box.textContent = result.body.token
       ? `密钥只显示一次：${result.body.token}`
       : '已生成密钥，但响应里没有令牌。';
-    event.currentTarget.reset();
+    form.reset();
     syncGenerateButton();
     show('ok', '已生成密钥。完整密钥只显示这一次，列表只保留前缀。');
+    if (result.body.key) {
+      const fresh = lastKeys.filter((item) => item.id !== result.body.key.id);
+      renderKeys([result.body.key, ...fresh]);
+    }
     await loadKeys();
   });
 
@@ -516,7 +551,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
   if (taskForm) {
     taskForm.addEventListener('submit', async event => {
       event.preventDefault();
-      const values = readTestTask(event.currentTarget);
+      const form = event.currentTarget;
+      const values = readTestTask(form);
       if (!values.prompt) {
         show('error', '请填写测试内容。');
         return;
@@ -530,7 +566,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
       box.hidden = false;
       box.textContent = '已排队，等待这台机器上的守护进程回传结果。下方「最近任务」会显示状态。';
       show('ok', '已发送测试任务。');
-      event.currentTarget.reset();
+      form.reset();
       await loadTasks();
     });
   }
