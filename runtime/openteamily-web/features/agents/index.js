@@ -275,6 +275,13 @@ export function createAgents({ db, host }) {
     async import(bundle) {
       const rows = Array.isArray(bundle?.agents) ? bundle.agents : null
       if (!rows || rows.length > LIMITS.agents) fail('invalid', 'agents list required', 400)
+      // A moved personal-agent bundle replaces this volume's pre-import
+      // placeholders. Remove only the ids the caller names; never touch other
+      // workspace agents or the owner's later edits.
+      const remove = Array.isArray(bundle?.remove) ? bundle.remove.filter((id) => typeof id === 'string' && ID.test(id)) : []
+      if (remove.length) {
+        for (const id of remove) run('DELETE FROM agents WHERE id=?', id)
+      }
       let imported = 0
       for (const r of rows) {
         if (!r || !ID.test(String(r.id)) || !ID.test(String(r.workspace_id)) || !validName(r.name)) fail('invalid', 'Invalid legacy agent row', 400)

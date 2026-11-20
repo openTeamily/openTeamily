@@ -86,6 +86,32 @@ FEATURE_TABLES = {
         ('artifact_chat_sources', _scoped('artifact_chat_sources', 'artifact_id')),
         ('artifact_versions', _via_artifact('artifact_versions', 'x.artifact_id, x.revision')),
     ],
+    # The personal agent and built-in roster belong to the owner's personal
+    # workspace. Export the workspace/user mapping, the mapped agent rows and
+    # the owner's saved look; never another account's personal records.
+    'personal': [
+        ('ot_users', 'SELECT id, username FROM users WHERE id = ? ORDER BY id'),
+        ('workspaces',
+         'SELECT w.id, w.owner_id, w.name, w.created FROM workspaces w '
+         'JOIN personal_agents p ON p.workspace_id = w.id AND p.user_id = ? '
+         'WHERE w.owner_id = ? ORDER BY w.id'),
+        ('workspace_agents',
+         'SELECT a.* FROM workspace_agents a '
+         'JOIN personal_agents p ON p.workspace_id = a.workspace_id AND p.user_id = ? '
+         'JOIN workspaces w ON w.id = p.workspace_id AND w.owner_id = ? '
+         'WHERE a.id = p.agent_id '
+         'OR a.id IN (SELECT b.agent_id FROM builtin_agents b WHERE b.workspace_id = p.workspace_id) '
+         'ORDER BY a.id'),
+        ('personal_agents', 'SELECT * FROM personal_agents WHERE user_id = ? ORDER BY user_id'),
+        ('builtin_agents',
+         'SELECT b.* FROM builtin_agents b '
+         'JOIN personal_agents p ON p.workspace_id = b.workspace_id AND p.user_id = ? '
+         'JOIN workspaces w ON w.id = b.workspace_id AND w.owner_id = ? '
+         'ORDER BY b.workspace_id, b.rowid'),
+        ('personal_look',
+         'SELECT s.user_id, s.look, s.updated FROM user_onboarding_steps s '
+         'WHERE s.user_id = ? ORDER BY s.user_id'),
+    ],
 }
 
 

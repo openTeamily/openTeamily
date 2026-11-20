@@ -96,6 +96,7 @@ class ImportJobTests(unittest.TestCase):
         self.assertIn('automations-v1.bundle', first['features'])
         self.assertIn('agents-v1.bundle', first['features'])
         self.assertIn('artifacts-v1.bundle', first['features'])
+        self.assertIn('personal-v1.bundle', first['features'])
         engine.runner.calls.clear()
         again = dsbot_import.deliver(engine, client, iid)
         self.assertEqual(again['status'], 'already-imported')
