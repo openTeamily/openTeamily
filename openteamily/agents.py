@@ -371,3 +371,9 @@ def homepage_headers():
         ('Permissions-Policy', 'camera=(), microphone=(), geolocation=()'),
         ('X-Frame-Options', 'DENY'),
     ]
+
+
+# Recall settings and team runs keep their own tables; appended here so the
+# store schema line stays unchanged (same pattern as skill_packages).
+from . import agent_work_schema as _agent_work_schema  # noqa: E402
+SCHEMA += _agent_work_schema.AGENT_MEMORY + _agent_work_schema.TEAM_RUNS

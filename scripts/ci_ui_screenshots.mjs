@@ -2526,6 +2526,45 @@ async function main() {
       await page.locator('#chat-body').fill('');
     } catch(error) { record('visible_message_utilities',false,String(error)); }
 
+    // Original agent-memory / DAG surfaces: use only this job's synthetic workspace.
+    try {
+      await page.goto(`${origin}/agents`, {waitUntil:'load'});
+      await selectWorkspace(page,ready.workspace_name);
+      await waitForLocatorText(page,'#agent-list',ready.agent_name);
+      await openListItem(page,ready.agent_name,'#agent-list');
+      await page.locator('#memory-scope-panel').waitFor({state:'visible'});
+      const created=await page.evaluate(async wid=>{
+        const cookie=document.cookie.split(';').map(s=>s.trim().split('=')).find(p=>p[0]==='ot_dev_csrf'||p[0]==='__Host-ot_csrf');
+        const r=await fetch(`/v1/workspaces/${wid}/memory`,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':decodeURIComponent(cookie[1]),'Idempotency-Key':'ci-memory-recall-378001'},body:JSON.stringify({title:'[SYNTHETIC CI] quokka release',body:'The quokka release is on Friday. This is synthetic CI reference material.',topics:[]})});
+        return {status:r.status,body:await r.json()};
+      },ready.workspace_id);
+      if(created.status!==201) throw Error('Recall fixture create: '+JSON.stringify(created));
+      await page.locator('#memory-scope-form input[value="all"]').check();
+      await page.locator('#memory-scope-form button[type="submit"]').click();
+      await waitForLocatorText(page,'#memory-scope-status','已保存');
+      await page.locator('#memory-preview-form input[name="text"]').fill('quokka release');
+      await page.locator('#memory-preview-form button').click();
+      await waitForLocatorText(page,'#memory-preview-list','quokka release');
+      record('agent_memory_scope_preview',true,'Persisted agent memory scope + real lexical preview of a newly-created synthetic page');
+      screenshots.push(path.basename(await shot(page,outDir,'111-agent-memory-recall.png')));
+      await page.goto(`${origin}/team-runs`,{waitUntil:'load'});
+      await page.locator('#main-panel').waitFor({state:'visible'});
+      await selectWorkspace(page,ready.workspace_name);
+      // Wait for the workspace's agent request before opening the editor.
+      await page.waitForFunction(()=>!document.getElementById('new-run').disabled&&(document.getElementById('run-empty').hidden===false||document.querySelector('#run-list button')));
+      await page.locator('#new-run').click();
+      await page.locator('#run-form input[name="title"]').fill('[SYNTHETIC CI] two-step handoff');
+      await page.locator('#run-form textarea[name="goal"]').fill('Describe a synthetic release, then review it. No external actions.');
+      const instructions=page.locator('#step-editor textarea');
+      await instructions.nth(0).fill('Write a short synthetic release outline.');
+      await instructions.nth(1).fill('Review the previous step output.');
+      screenshots.push(path.basename(await shot(page,outDir,'112-team-run-editor.png')));
+      await page.locator('#run-form button[type="submit"]').click();
+      await waitForLocatorText(page,'#run-title','two-step handoff');
+      record('team_run_graph_created',await page.locator('.step-card').count()===2&&await page.locator('.stage').count()===2,'Real two-step graph accepted and staged; runtime results are fixture-only');
+      screenshots.push(path.basename(await shot(page,outDir,'113-team-run-stage-board.png')));
+    } catch(error) {record('agent_memory_team_runs',false,String(error));}
+
     await context.close();
   } finally {
     await browser.close();

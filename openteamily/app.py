@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import skill_packages, agent_runtime, agents, artifacts, automations, bot_social, composio, composio_principals, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams, skill_installs
+from . import skill_packages, agent_memory, agent_runtime, agents, artifacts, automations, bot_social, composio, composio_principals, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams, skill_installs
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -991,6 +991,17 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/agents/([0-9a-f]{32})/api-keys(?:/([0-9a-f]{32})/revoke)?', path)
             if api_key_path:
                 return self.api_key_dispatch(db, session, method, query, now, env, *api_key_path.groups())
+            memory_scope_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/agents/([0-9a-f]{32})/memory-scope(?:/(preview))?', path)
+            if memory_scope_path:
+                from . import agent_memory
+                return agent_memory.dispatch(self, db, session, method, query, now, env, refuse,
+                                             *memory_scope_path.groups())
+            if re.fullmatch(r'/v1/workspaces/[0-9a-f]{32}/team-runs(?:/.*)?', path):
+                from . import team_runs
+                if not team_runs.PATH.fullmatch(path):
+                    refuse(404, 'not_found', 'Not found')
+                return team_runs.dispatch(self, db, session, method, query, now, env, refuse, path)
             conversation_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/agents/([0-9a-f]{32})/conversations'
                 r'(?:/([0-9a-f]{32})(?:/(messages(?:/([0-9a-f]{32})(?:/(artifact))?)?|read))?)?', path)
@@ -2944,7 +2955,7 @@ class App:
         )
         row = conversations.load_conversation(db, workspace['id'], conversation_id)
         history = conversations.history_for_prompt(db, row['id'])
-        prompt = conversations.compose_prompt(agent, history, text)
+        prompt, memory_refs = agent_memory.compose(db, workspace['id'], agent, history, text)
         if not runtime_connect.valid_prompt(prompt):
             refuse(400, 'invalid', 'Provide a message')
         if (db.execute('SELECT COUNT(*) FROM agent_messages WHERE conversation_id=?',
@@ -2967,6 +2978,7 @@ class App:
             (assistant_id, row['id'], workspace['id'], agent['id'], session['user_id'], 'assistant',
              '', 'queued', task_id, error_code, agent['revision'], now, now, None, None, 2),
         )
+        agent_memory.record(db, assistant_id, memory_refs)
         if dispatch:
             agent_runtime.attach_dispatch(
                 db, assistant_id, dispatch['source'], dispatch.get('instance_id'), dispatch.get('connection_id'))
@@ -3163,6 +3175,7 @@ class App:
     def public_message(self, db, row):
         data = conversations.message_view(row)
         data['dispatch'] = agent_runtime.message_dispatch_view(agent_runtime.load_dispatch(db, row['id']))
+        data['memory'] = agent_memory.refs_view(db, row['workspace_id'], row['id']) if row['role'] == 'assistant' else []
         return data
 
     def workspace_instance(self, db, workspace_id, instance_id):
@@ -3432,8 +3445,8 @@ class App:
                 > self.config.max_messages_per_conversation):
             refuse(429, 'quota', 'Conversation message capacity reached')
         history = conversations.history_for_prompt(db, row['id'])
-        prompt = conversations.compose_prompt(
-            agent, history, text, settings.chat_language_name(chat_language))
+        prompt, memory_refs = agent_memory.compose(
+            db, workspace['id'], agent, history, text, settings.chat_language_name(chat_language))
         if not runtime_connect.valid_prompt(prompt):
             refuse(400, 'invalid', 'Provide a message')
         user_id = uuid4().hex
@@ -3456,6 +3469,7 @@ class App:
              '', 'queued', task_id, error_code, agent['revision'], now, now, None, None,
              next_seq + 2),
         )
+        agent_memory.record(db, assistant_id, memory_refs)
         if dispatch:
             agent_runtime.attach_dispatch(
                 db, assistant_id, dispatch['source'], dispatch.get('instance_id'), dispatch.get('connection_id'))
@@ -3573,7 +3587,7 @@ class App:
                 if user is None:
                     continue
                 history = conversations.history_for_prompt(db, row['id'], user['seq'])
-                prompt = conversations.compose_prompt(agent, history, user['body'])
+                prompt, memory_refs = agent_memory.compose(db, row['workspace_id'], agent, history, user['body'])
                 if not runtime_connect.valid_prompt(prompt):
                     continue
                 task_id, error_code, dispatch = self.queue_infer_task(
@@ -3585,6 +3599,7 @@ class App:
                     (task_id, error_code, 'queued', now, message['id']),
                 )
                 db.execute('DELETE FROM agent_message_dispatch WHERE message_id=?', (message['id'],))
+                agent_memory.record(db, message['id'], memory_refs)
                 if dispatch:
                     agent_runtime.attach_dispatch(
                         db, message['id'], dispatch['source'], dispatch.get('instance_id'), dispatch.get('connection_id'))

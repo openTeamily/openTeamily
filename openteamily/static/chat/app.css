@@ -1770,3 +1770,5 @@ html[data-theme-resolved="dark"] #message-assist-submit,
 html[data-theme-resolved="dark"] #announcement-save { background: #6953c7; color: #ffffff; border-color: transparent; }
 html[data-theme-resolved="dark"] #message-assist-submit:hover,
 html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3; color: #ffffff; }
+
+.memory-refs { margin: 0.25rem 0 0; font-size: 0.75rem; color: var(--ot-muted, #5a6861); }

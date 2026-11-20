@@ -37,6 +37,7 @@ jobs:
       - run: node --test tests/messenger_page.test.mjs
       - run: node --test tests/runtimes_page.test.mjs
       - run: node --test tests/team_page.test.mjs
+      - run: node --test tests/team_runs_page.test.mjs
       - run: node --test manager/compose-planner/compose-command-planner.test.js
       - run: node --test tests/settings_page.test.mjs
       - run: node --test tests/settings_support_links.test.mjs

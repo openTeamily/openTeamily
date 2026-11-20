@@ -33,6 +33,9 @@ class SettingsPage:
         '/automations': ('automations', 'index.html', 'text/html; charset=utf-8'),
         '/automations/app.mjs': ('automations', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/automations/app.css': ('automations', 'app.css', 'text/css; charset=utf-8'),
+        '/team-runs': ('team-runs', 'index.html', 'text/html; charset=utf-8'),
+        '/team-runs/app.mjs': ('team-runs', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/team-runs/app.css': ('team-runs', 'app.css', 'text/css; charset=utf-8'),
         '/team': ('team', 'index.html', 'text/html; charset=utf-8'),
         '/new/team': ('team', 'index.html', 'text/html; charset=utf-8'),
         '/team/app.mjs': ('team', 'app.mjs', 'text/javascript; charset=utf-8'),
@@ -50,6 +53,7 @@ class SettingsPage:
         '/agents': ('agents', 'index.html', 'text/html; charset=utf-8'),
         '/agents/app.mjs': ('agents', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/agents/app.css': ('agents', 'app.css', 'text/css; charset=utf-8'),
+        '/agents/memory-scope.mjs': ('agents', 'memory-scope.mjs', 'text/javascript; charset=utf-8'),
         '/memory': ('memory', 'index.html', 'text/html; charset=utf-8'),
         '/memory/app.mjs': ('memory', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/memory/rich.mjs': ('memory', 'rich.mjs', 'text/javascript; charset=utf-8'),
@@ -104,7 +108,7 @@ class SettingsPage:
         '/home/app.mjs': ('home', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/home/app.css': ('home', 'app.css', 'text/css; charset=utf-8'),
     }
-    PREFIXES = ('/register', '/settings', '/automations', '/team', '/new', '/members', '/runtimes', '/artifacts', '/space', '/agents', '/memory', '/install', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/meetings', '/download', '/guide', '/about', '/skills', '/home', '/help', '/terms', '/privacy', '/docs')
+    PREFIXES = ('/register', '/settings', '/automations', '/team-runs', '/team', '/new', '/members', '/runtimes', '/artifacts', '/space', '/agents', '/memory', '/install', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/meetings', '/download', '/guide', '/about', '/skills', '/home', '/help', '/terms', '/privacy', '/docs')
     CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
            "img-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'self'; "
            "frame-ancestors 'none'; object-src 'none'")
