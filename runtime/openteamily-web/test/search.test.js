@@ -26,6 +26,17 @@ function seedChat(bot, workspace = WS, prefix = 'a') {
   return { agent, conversation, ids }
 }
 
+test('the session directory lists only the selected workspace conversations without a native runtime', async () => {
+  const bot = await boot()
+  const local = seedChat(bot)
+  const other = seedChat(bot, 'b'.repeat(32), 'b')
+  const result = await bot.endpoint('agents/conversationSummaries', {
+    workspace_id: WS, agent_ids: [local.agent, other.agent, local.agent],
+  })
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.deepEqual(result.value.items, [{id:local.conversation, agent_id:local.agent, title:'周报助手', updated:1}])
+})
+
 test('message search runs in DS-Bot over this owner\'s own conversations', async () => {
   const bot = await boot()
   assert.ok(bot.features.loaded.includes('search'), JSON.stringify(bot.features.failed))

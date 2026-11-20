@@ -63,12 +63,13 @@ export default function chat(host) {
     }
     return {...await linked,id:scope.agent_id}
   }
-  for (const name of ['conversations','create','messages','send','rename','remove']) {
+  for (const name of ['conversations','create','open','messages','send','rename','remove']) {
     feature.endpoints[name] = async (p = {}) => {
       const scope = await binding(p)
       const payload = {...p,...scope}
       if (name === 'conversations') return host.call('agents/conversations',payload)
       if (name === 'create') return (await host.call('agents/conversation-create',payload)).conversation
+      if (name === 'open') return host.call('agents/openConversation',payload)
       if (name === 'messages') return host.call('agents/messages',payload)
       if (name === 'send') {
         const profile = await host.call('personal/get',{})

@@ -98,7 +98,7 @@ export function nativeAgents({ host, db }) {
     }
     const m = s.exclusive ? await s.exclusive(reconcile) : await reconcile()
 
-    return { native_bot_id: mapped.native_bot_id, native_session_id: m.session_id }
+    return { native_bot_id: mapped.native_bot_id, native_session_id: m.session_id, native_name: mapped.native_name }
   }
   return { ensure: row => serial(() => ensure(row)), update: (row,patch) => serial(() => update(row,patch)), session: (row,key,title) => serial(() => session(row,key,title)) }
 }

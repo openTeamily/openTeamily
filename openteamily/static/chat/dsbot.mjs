@@ -21,7 +21,7 @@ export function dsbotRoute(method, path, body, personalAgentId) {
   const base = String(path).replace(/\/conversations.*$/, '');
   if (!cid && method === 'GET') return {endpoint: 'chat/conversations', payload: {}, shape: 'list', base};
   if (!cid && method === 'POST') return {endpoint: 'chat/create', payload: {title: (body && body.title) || ''}, shape: 'created', base};
-  if (cid && !tail && method === 'GET') return {endpoint: 'chat/messages', payload: {conversation_id: cid}, shape: 'open', cid, base};
+  if (cid && !tail && method === 'GET') return {endpoint: 'chat/open', payload: {conversation_id: cid}, shape: 'open', base};
   if (cid && tail === '/messages' && method === 'POST') {
     return {endpoint: 'chat/send', payload: {conversation_id: cid, text: (body && body.body) || ''}, shape: 'sent', cid, base};
   }
@@ -34,11 +34,13 @@ function conversation(row, agentId) {
 }
 
 function message(row) {
-  return {id: row.id, role: row.role, body: row.text, status: 'succeeded', created: row.created,
+  return {id: row.id, role: row.role, body: row.text,
+    status: !row.status || row.status === 'sent' ? 'succeeded' : row.status, created: row.created,
     memory_refs: (row.meta && row.meta.memory_refs) || [], engine: 'ds-bot'};
 }
 
-const STATUS = {'chat/not-found': 404, 'chat/invalid': 400, 'openteamily/invalid': 400, 'openteamily/not-found': 404};
+const STATUS = {'chat/not-found': 404, 'chat/invalid': 400, 'agents/not-found': 404,
+  'openteamily/invalid': 400, 'openteamily/not-found': 404};
 
 let skillsSyncedAt = 0;
 
@@ -67,9 +69,6 @@ export async function dsbotRequest(fetcher, route, agentId, headers) {
   if (route.shape === 'list') return {status: 200, body: {items: (value.items || []).map(row => conversation(row, agentId))}};
   if (route.shape === 'created') return {status: 201, body: {conversation: conversation(value, agentId)}};
   if (route.shape === 'sent') return {status: 201, body: {reply: {id: value.reply.id, status: 'succeeded', engine: 'ds-bot'}}};
-  // open: the conversation row comes from the list (one small extra call).
-  const listed = await call('chat/conversations', {agent_id:agentId, workspace_id:scope?.[1]});
-  const row = listed.value && (listed.value.items || []).find(item => item.id === route.cid);
-  if (!row) return {status: 404, body: {error: {code: 'chat/not-found'}}};
-  return {status: 200, body: {conversation: conversation(row, agentId), items: (value.items || []).map(message)}};
+  return {status: 200, body: {agent: value.agent, conversation: conversation(value.conversation, agentId),
+    items: (value.items || []).map(message)}};
 }

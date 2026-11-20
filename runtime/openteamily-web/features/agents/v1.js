@@ -43,9 +43,7 @@ export function agentsV1({ endpoints, log }) {
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}$`), handle: wrap(async (req, workspaceId, id, conversationId) => {
       if (req.method !== 'GET') throw new FeatureError(400, 'invalid', 'Invalid conversation request')
-      const { agent } = await call('get', { workspace_id: workspaceId, id })
-      const conversation = await call('conversation-get', { workspace_id: workspaceId, id, conversation_id: conversationId })
-      const { items } = await call('messages', { workspace_id: workspaceId, id, conversation_id: conversationId })
+      const { agent, conversation, items } = await call('openConversation', { workspace_id: workspaceId, id, conversation_id: conversationId })
       return { status: 200, body: { conversation: publicConversation(conversation, workspaceId, id), agent: publicAgent(agent), items: items.map((row) => publicMessage(row, workspaceId, id)) } }
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations$`), handle: wrap(async (req, workspaceId, id) => {
@@ -76,7 +74,13 @@ export function agentsV1({ endpoints, log }) {
         const cursor = req.query.get('cursor') || ''
         const limit = Math.min(Math.max(Number(req.query.get('limit') || 20), 1), 100)
         const sliced = rows.filter((row) => row.id > cursor).slice(0, limit + 1)
-        return { status: 200, body: { items: sliced.slice(0, limit).map(publicAgent), cursor: sliced.length > limit ? sliced[limit - 1].id : null } }
+        const items = sliced.slice(0, limit).map(publicAgent)
+        const body = { items, cursor: sliced.length > limit ? sliced[limit - 1].id : null }
+        if (req.query.get('include') === 'conversations') {
+          const directory = await call('conversationSummaries', { workspace_id: workspaceId, agent_ids: items.map(item => item.id) })
+          body.conversations = directory.items
+        }
+        return { status: 200, body }
       }
       if (!id && req.method === 'POST') {
         const body = await req.json()

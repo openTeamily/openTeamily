@@ -1702,6 +1702,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const banner=document.getElementById('conversation-live-update');if(banner)banner.hidden=true;
   });
   let sessionsRequest = 0, sessionsWorkspace = null, sessionsUser = null;
+  let membersStatus = '', artifactsStatus = '';
   async function loadSessions() {
     const sequence = ++sessionsRequest;
     const user = currentUser;
@@ -1712,41 +1713,55 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       setSessionsStatus('正在加载对话…');
       sessionsWorkspace = id; sessionsUser = user;
       sessions = []; agents = []; members = []; artifacts = []; socialConversations = [];
+      membersStatus = artifactsStatus = 'loading';
       renderSessions();
     }
     if (!id) return;
     const current = () => sequence === sessionsRequest && id === workspaceId() && user === currentUser;
-    const [listed, social, people, works] = await Promise.all([
-      request('GET', `/v1/workspaces/${id}/agents?limit=100`),
-      request('GET', `/v1/workspaces/${id}/social/conversations?limit=100`),
-      request('GET', `/v1/workspaces/${id}/members`),
-      request('GET', `/v1/workspaces/${id}/artifacts?limit=100`),
+    const path = `/v1/workspaces/${id}`;
+    const read = suffix => request('GET', path + suffix).catch(() => ({status: 0, body: {}}));
+    void read('/members').then(result => {
+      if (!current()) return;
+      membersStatus = result.status === 200 ? '' : 'failed';
+      if (!membersStatus) members = result.body.items || [];
+      if (!document.getElementById('compose-dialog').hidden) renderMemberChoices(composeMode === 'contact', true);
+      if (['all', 'contacts'].includes(searchTab)) refreshDirectorySearch();
+    });
+    void read('/artifacts?limit=100').then(result => {
+      if (!current()) return;
+      artifactsStatus = result.status === 200 ? '' : 'failed';
+      if (!artifactsStatus) artifacts = result.body.items || [];
+      if (['all', 'artifacts', 'documents', 'media'].includes(searchTab)) refreshDirectorySearch();
+    });
+    const [listed, social] = await Promise.all([
+      read('/agents?limit=100&include=conversations'),
+      read('/social/conversations?limit=100'),
     ]);
     if (!current()) return;
-    if (listed.status !== 200) {
-      setSessionsStatus('无法加载智能体对话，请重试。');
-      return;
+    const nextAgents = listed.status === 200 ? listed.body.items || [] : [];
+    let rows = listed.body.conversations;
+    let partial = listed.status !== 200 || social.status !== 200;
+    if (!Array.isArray(rows)) {
+      // A tab served by a previous runtime image may still return only the agent list.
+      const results = await Promise.all(nextAgents.map(async agent => ({
+        agent, response: await read(`/agents/${agent.id}/conversations?limit=100`),
+      })));
+      if (!current()) return;
+      rows = results.flatMap(({agent, response}) => response.status === 200
+        ? (response.body.items || []).map(row => ({...row, agent_id: agent.id})) : []);
+      partial ||= results.some(({response}) => response.status !== 200);
     }
-    const nextAgents = listed.body.items || [];
-    const results = await Promise.all(nextAgents.map(agent =>
-      request('GET', `/v1/workspaces/${id}/agents/${agent.id}/conversations?limit=100`)
-        .then(result => ({agent, result}))));
-    if (!current()) return;
     agents = nextAgents;
-    members = people.status === 200 ? people.body.items || [] : [];
-    artifacts = works.status === 200 ? works.body.items || [] : [];
     socialConversations = social.status === 200 ? social.body.items || [] : [];
-    const agentRows = [];
-    for (const {agent, result} of results) {
-      if (result.status !== 200) continue;
-      for (const row of result.body.items || []) {
-        agentRows.push({...row, agent});
-      }
-    }
-    sessions = mergeSessions(agentRows, socialConversations, currentUser && currentUser.id);
-    const incomplete = social.status !== 200 || results.some(({result}) => result.status !== 200);
-    setSessionsStatus(incomplete ? '部分对话加载失败，请重试。' : '');
+    const agentById = new Map(agents.map(agent => [agent.id, agent]));
+    sessions = mergeSessions(rows.flatMap(row => {
+      const agent = agentById.get(row.agent_id);
+      return agent ? [{...row, agent}] : [];
+    }), socialConversations, currentUser && currentUser.id);
+    setSessionsStatus(partial ? '部分对话加载失败，请重试。' : '');
     renderSessions();
+    if (!document.getElementById('compose-dialog').hidden && composeMode === 'group') renderMemberChoices(false, true);
+    if (['all', 'agents', 'groups'].includes(searchTab)) refreshDirectorySearch();
     // The first SSE snapshot may immediately refresh; do not invalidate the
     // initial directory before deep-link resolution has a committed snapshot.
     workspaceEvents.start(id);
@@ -2046,7 +2061,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const empty = document.getElementById('compose-members-empty');
     if (!labels.length) {
       empty.hidden = false;
-      empty.textContent = '没有可邀请的工作区成员。';
+      empty.textContent = membersStatus === 'loading' ? '正在加载工作区成员…'
+        : (membersStatus === 'failed' ? '无法加载工作区成员。' : '没有可邀请的工作区成员。');
     } else if (!visible) {
       empty.hidden = false;
       empty.textContent = '没有匹配的成员。';
@@ -2111,8 +2127,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     syncSelectedCount();
   }
 
-  function renderMemberChoices(single) {
+  function renderMemberChoices(single, preserveSelection = false) {
     const holder = document.getElementById('member-choices');
+    const selected = preserveSelection
+      ? new Set([...document.querySelectorAll('#member-choices input:checked')].map(box => box.name + ':' + box.value))
+      : new Set();
     holder.replaceChildren();
     const choices = groupPickerChoices(members, currentUser && currentUser.id, single ? [] : agents);
     for (const member of choices) {
@@ -2121,6 +2140,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       box.type = single ? 'radio' : 'checkbox';
       box.name = member.kind === 'agent' ? 'agent-member' : 'member';
       box.value = member.id;
+      box.checked = selected.has(box.name + ':' + box.value);
       const text = document.createElement('span');
       text.className = 'choice-label';
       text.textContent = member.label;
@@ -2174,6 +2194,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (narrowScreen()) setSessionsOpen(true);
     if (tab) setSearchTab(tab);
     renderSearch();
+  }
+
+  function refreshDirectorySearch() {
+    if (isSearchOpen() && !messageSearch.state.loading) void renderSearch({reuseMessages: true});
   }
 
   function closeSearchPanel() {
@@ -2380,7 +2404,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (!total) {
       empty.hidden = false;
-      if (!query) empty.textContent = '当前工作区里还没有可列出的内容。';
+      const directoryStatus = searchTab === 'contacts' ? membersStatus
+        : (['artifacts', 'documents', 'media'].includes(searchTab) ? artifactsStatus : '');
+      if (directoryStatus === 'loading') empty.textContent = '正在加载…';
+      else if (directoryStatus === 'failed') empty.textContent = '无法加载搜索范围。';
+      else if (!query) empty.textContent = '当前工作区里还没有可列出的内容。';
       else if (paged && messageSearch.state.warning) empty.textContent = '可搜索的内容里没有匹配结果。';
       else empty.textContent = '当前工作区里没有匹配的结果。';
     }
