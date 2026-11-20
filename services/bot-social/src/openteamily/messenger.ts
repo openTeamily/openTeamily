@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS ot_conversation_members (
 CREATE INDEX IF NOT EXISTS ot_conversation_members_owner ON ot_conversation_members(owner_id);
 CREATE TABLE IF NOT EXISTS ot_conversation_agents (
   conversation_id TEXT NOT NULL REFERENCES ot_conversations(id) ON DELETE CASCADE, agent_ref TEXT NOT NULL,
-  owner_id TEXT NOT NULL, name TEXT NOT NULL, auto_reply INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL,
+  owner_id TEXT NOT NULL, name TEXT NOT NULL, auto_reply INTEGER NOT NULL DEFAULT 0,
+  auto_reply_after_seq INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL,
   PRIMARY KEY (conversation_id, agent_ref, owner_id)
 );
 CREATE TABLE IF NOT EXISTS ot_messages (
@@ -118,6 +119,10 @@ function parseMentions(ot: OtContext, convId: string, raw: unknown, bodyText: st
 export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   const messageCols = new Set(ot.all<any>("PRAGMA table_info(ot_messages)").map(c => c.name));
   if (!messageCols.has("revision")) ot.run("ALTER TABLE ot_messages ADD COLUMN revision INTEGER NOT NULL DEFAULT 1");
+  const agentCols = new Set(ot.all<any>("PRAGMA table_info(ot_conversation_agents)").map(c => c.name));
+  if (!agentCols.has("auto_reply_after_seq")) {
+    ot.run("ALTER TABLE ot_conversation_agents ADD COLUMN auto_reply_after_seq INTEGER NOT NULL DEFAULT 0");
+  }
   app.post("/v1/ot/conversations", async (req, reply) => {
     const me = ot.me(req);
     const b = body(req);
@@ -311,9 +316,26 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     assert(AGENT_REF.test(ref), 400, "invalid_request", "agent id is invalid");
     const b = body(req);
     const name = text(b.name, "name", { min: 1, max: 40 });
-    ot.run("INSERT INTO ot_conversation_agents(conversation_id, agent_ref, owner_id, name, auto_reply, created_at) VALUES (?,?,?,?,?,?) ON CONFLICT(conversation_id, agent_ref, owner_id) DO UPDATE SET name = excluded.name, auto_reply = excluded.auto_reply",
-      conv.id, ref, me.ownerId, name, b.auto_reply ? 1 : 0, ot.now());
+    ot.run(`INSERT INTO ot_conversation_agents(conversation_id, agent_ref, owner_id, name, auto_reply, auto_reply_after_seq, created_at)
+      VALUES (?,?,?,?,?,?,?) ON CONFLICT(conversation_id, agent_ref, owner_id) DO UPDATE SET
+        name=excluded.name, auto_reply=excluded.auto_reply,
+        auto_reply_after_seq=CASE WHEN ot_conversation_agents.auto_reply=0 AND excluded.auto_reply=1
+          THEN excluded.auto_reply_after_seq ELSE ot_conversation_agents.auto_reply_after_seq END`,
+    conv.id, ref, me.ownerId, name, b.auto_reply === true ? 1 : 0, conv.last_seq, ot.now());
     return conversationView(ot, conv, me.ownerId);
+  });
+  app.patch("/v1/ot/conversations/:id/agents/:agent", async (req) => {
+    const me = ot.me(req);
+    const conv = memberOf(ot, params(req).id, me.ownerId);
+    assert(conv.kind === "group", 400, "invalid_request", "agents join groups only");
+    const enabled = body(req).auto_reply;
+    assert(typeof enabled === "boolean", 400, "invalid_request", "auto_reply must be a boolean");
+    const result = ot.run(`UPDATE ot_conversation_agents SET
+      auto_reply_after_seq=CASE WHEN auto_reply=0 AND ?=1 THEN ? ELSE auto_reply_after_seq END,
+      auto_reply=? WHERE conversation_id=? AND agent_ref=? AND owner_id=?`,
+    Number(enabled), conv.last_seq, Number(enabled), conv.id, params(req).agent, me.ownerId);
+    assert(result.changes === 1, 404, "agent_not_found", "that agent of yours is not in this group");
+    return { auto_reply: enabled };
   });
   app.delete("/v1/ot/conversations/:id/agents/:agent", async (req) => {
     const me = ot.me(req);
@@ -327,7 +349,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const me = ot.me(req);
     const after = intParam(query(req).after, "after", 0);
     const limit = intParam(query(req).limit, "limit", 20, 50);
-    const rows = ot.all<any>(`SELECT m.*, a.agent_ref AS my_agent, a.name AS my_agent_name, a.auto_reply AS my_auto
+    const rows = ot.all<any>(`SELECT m.*, a.agent_ref AS my_agent, a.name AS my_agent_name, a.auto_reply AS my_auto, a.auto_reply_after_seq AS auto_after_seq
       FROM ot_messages m JOIN ot_conversation_agents a ON a.conversation_id = m.conversation_id AND a.owner_id = ?
       JOIN ot_conversation_members cm ON cm.conversation_id = m.conversation_id AND cm.owner_id = ?
       WHERE m.rowseq > ? AND m.author_kind = 'member' AND m.retracted = 0 ORDER BY m.rowseq LIMIT ?`, me.ownerId, me.ownerId, after, limit * 4);
@@ -340,7 +362,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       // A public-homepage thread (visitor + creator's agent) addresses the agent directly.
       const homepage = String(conv.dm_key ?? "").startsWith("agent:");
       const mentioned = homepage || mentions.includes(String(m.my_agent).toLowerCase()) || mentions.includes(String(m.my_agent_name).toLowerCase());
-      if (!mentioned && !m.my_auto) continue;
+      if (!mentioned && (!m.my_auto || m.seq <= m.auto_after_seq)) continue;
       const context = ot.all<any>("SELECT * FROM (SELECT * FROM ot_messages WHERE conversation_id = ? AND seq <= ? ORDER BY seq DESC LIMIT 12) ORDER BY seq", m.conversation_id, m.seq);
       items.push({ conversation_id: m.conversation_id, conversation_title: conv.title, agent_ref: m.my_agent, agent_name: m.my_agent_name, mode: mentioned ? "mention" : "auto", message: messageView(ot, m), context: context.map((c) => messageView(ot, c)) });
       if (items.length >= limit) break;
@@ -357,6 +379,13 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const conv = memberOf(ot, params(req).id, me.ownerId);
       const agent = ot.get<any>("SELECT * FROM ot_conversation_agents WHERE conversation_id = ? AND agent_ref = ? AND owner_id = ?", conv.id, ref, me.ownerId);
       assert(agent, 404, "agent_not_found", "that agent of yours is not in this group");
+      if (mode === "auto") {
+        assert(agent.auto_reply, 409, "auto_reply_disabled", "automatic replies are disabled for this agent");
+        if (b.reply_to) {
+          const trigger = ot.get<any>("SELECT seq FROM ot_messages WHERE id=? AND conversation_id=?", String(b.reply_to), conv.id);
+          assert(trigger && trigger.seq > agent.auto_reply_after_seq, 409, "auto_reply_disabled", "message predates automatic replies");
+        }
+      }
       const since = ot.now() - HOUR;
       const used = ot.get<any>("SELECT COUNT(*) AS n FROM ot_messages WHERE conversation_id = ? AND author_kind = 'agent' AND reply_mode = ? AND created_at > ?", conv.id, mode, since).n;
       assert(used < (mode === "auto" ? AUTO_PER_HOUR : MENTION_PER_HOUR), 429, "agent_reply_limit", mode === "auto" ? "automatic agent replies are limited to 3 per hour in a group" : "agent reply limit reached");

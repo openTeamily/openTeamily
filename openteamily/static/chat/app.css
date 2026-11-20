@@ -1328,7 +1328,7 @@ html[data-theme-resolved="dark"] { --ot-bubble-mine: var(--ot-accent-soft); }
 .group-info-members { list-style: none; margin: .25rem 0 0; padding: 0; display: grid; gap: .125rem; }
 .group-info-members[hidden] { display: none; }
 .group-info-member { display: flex; align-items: center; gap: .625rem; padding: .375rem .25rem; border-radius: .5rem; }
-.group-info-member > span:last-child { display: grid; min-width: 0; }
+.group-info-member > span:nth-child(2) { display: grid; min-width: 0; flex: 1; }
 .group-info-member strong { font-size: .8125rem; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .group-info-member small { font-size: .75rem; color: var(--ot-muted); }
 .group-info-member-avatar { flex: none; width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: 50%; background: var(--ot-bg-accent); color: var(--ot-ink); font-size: .8125rem; font-weight: 600; }

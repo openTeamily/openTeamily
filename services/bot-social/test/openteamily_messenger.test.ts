@@ -92,14 +92,27 @@ test("group agents: the owner's DS-Bot gets mentions and auto-reply turns; auto 
   inbox = await A.ok("GET", `/v1/ot/agent-inbox?after=${inbox.cursor}`);
   assert.equal(inbox.items.length, 0, "agent messages never re-enter the inbox");
 
-  await A.ok("PUT", `/v1/ot/conversations/${g.id}/agents/helper`, { name: "Helper", auto_reply: true });
+  const agentSettings = `/v1/ot/conversations/${g.id}/agents/helper`;
+  const old = await B.ok("POST", `/v1/ot/conversations/${g.id}/messages`, { body: "before the switch" });
+  assert.equal((await B.call("PATCH",agentSettings, {auto_reply: true})).status, 404);
+  assert.deepEqual(await A.ok("PATCH",agentSettings, {auto_reply:true}), {auto_reply:true});
+  assert.equal((await A.ok("GET", `/v1/ot/conversations/${g.id}`)).agents[0].auto_reply, true);
+
   const cursor = inbox.cursor;
   for (let i = 0; i < 4; i++) await B.ok("POST", `/v1/ot/conversations/${g.id}/messages`, { body: `thought ${i}` });
   inbox = await A.ok("GET", `/v1/ot/agent-inbox?after=${cursor}`);
   assert.equal(inbox.items.length, 4);
   assert.ok(inbox.items.every((x: any) => x.mode === "auto"));
+  assert.ok(inbox.items.every((x: any) => x.message.id !== old.id));
+  assert.equal((await A.call("POST", `/v1/ot/conversations/${g.id}/agent-messages`, {
+    agent_ref: "helper", body: "stale auto", mode: "auto", reply_to: old.id
+  })).status, 409);
   for (let i = 0; i < 3; i++) await A.ok("POST", `/v1/ot/conversations/${g.id}/agent-messages`, { agent_ref: "helper", body: `auto ${i}`, mode: "auto" });
   const capped = await A.call("POST", `/v1/ot/conversations/${g.id}/agent-messages`, { agent_ref: "helper", body: "auto 4", mode: "auto" });
   assert.equal(capped.status, 429);
   assert.equal(capped.data.error.code, "agent_reply_limit");
+  assert.deepEqual(await A.ok("PATCH",agentSettings, {auto_reply:false}), {auto_reply:false});
+  assert.equal((await A.call("POST", `/v1/ot/conversations/${g.id}/agent-messages`, {
+    agent_ref: "helper", body: "disabled while a turn was running", mode: "auto", reply_to: inbox.items[3].message.id
+  })).status, 409);
 });

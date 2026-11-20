@@ -1,6 +1,7 @@
 // Stream C messenger feature and group-agent replies from this user's own DS-Bot (fake Bot Social).
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { createHash } from 'node:crypto'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -64,12 +65,18 @@ test('agent inbox items become native DS-Bot turns posted back as the agent; cur
   const turns = []
   const services = { chatTurn: async (key, text, id) => { turns.push({ key, id, text }); return { text: 'A useful reply' } } }
   const stateFile = join(dir, 'inbox.json')
-  const r = createAgentReplier({ bs, host: { currentRuntime: () => services }, stateFile })
+  const r = createAgentReplier({ bs, host: {
+    currentRuntime: () => services,
+    async call(endpoint, payload) {
+      assert.equal(endpoint, 'agents/turn')
+      return services.chatTurn(payload.key, payload.text, payload.request_id)
+    },
+  }, stateFile })
   assert.deepEqual(await r.once(), { replied: 1, cursor: 41 })
-  assert.equal(turns[0].key, 'social:otc_9:helper')
+  assert.equal(turns[0].key, 'social:otc_9')
   const post = f.calls.find((c) => c.method === 'POST')
   assert.equal(post.path, '/v1/ot/conversations/otc_9/agent-messages')
-  assert.deepEqual(post.body, { agent_ref: 'helper', body: 'A useful reply', reply_to: 'otm_5', mode: 'auto', client_key: 'r:otm_5' })
+  assert.deepEqual(post.body, { agent_ref: 'helper', body: 'A useful reply', reply_to: 'otm_5', mode: 'auto', client_key: 'r:' + createHash('sha256').update(JSON.stringify(['otm_5', 'helper'])).digest('hex') })
   assert.equal(JSON.parse(readFileSync(stateFile, 'utf8')).cursor, 41)
   assert.deepEqual(await r.once(), { replied: 0, cursor: 41 })
   assert.equal(turns.length, 1)
@@ -82,4 +89,18 @@ test('without a DS-Bot runtime nothing is fetched or answered', async () => {
   const r = createAgentReplier({ bs, host: { currentRuntime: () => null }, stateFile: join(dir, 's.json') })
   assert.deepEqual(await r.once(), { skipped: 'runtime' })
   assert.equal(f.calls.length, 0)
+})
+
+test('the group settings route patches only the requested automatic-reply preference', async () => {
+  const dir = fixture()
+  const f = fake({'PATCH /v1/ot/conversations/otc_1/agents/helper': body => body})
+  setSharedBotSocial(createBotSocial({ server: SERVER, credentialsPath: join(dir, 'bot', 'flybot-social.json'), fetch: f.fetch }))
+  const e = messenger({dataDir: dir}).endpoints
+  const path = '/v1/workspaces/' + 'a'.repeat(32) + '/social/conversations/otc_1/agents/helper/auto-reply'
+  const result = await e.v1({method:'POST',path,body:{auto_reply:true}})
+  assert.deepEqual(result.body, {auto_reply:true})
+  assert.equal(result.status, 200)
+  assert.deepEqual(f.calls.at(-1), {method:'PATCH',path:'/v1/ot/conversations/otc_1/agents/helper',body:{auto_reply:true}})
+  const invalid = await e.v1({method:'POST',path,body:{auto_reply:'false'}})
+  assert.equal(invalid.status, 400)
 })
