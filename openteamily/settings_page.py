@@ -206,7 +206,26 @@ class SettingsPage:
             template = query[len('template='):] if query.startswith('template=') else ''
             return template in TEMPLATES and template != 'custom'
         if path == '/discover':
-            return query in ('tab=agents', 'tab=agents&section=groups')
+            if query in ('tab=agents', 'tab=agents&section=groups'):
+                return True
+            # The feed tab, category and search are shareable deep links. The
+            # router only serves the screen; the page reads these itself, so the
+            # allowlist is limited to the keys and values it can produce.
+            seen = set()
+            for key, value in parse_qsl(query, keep_blank_values=True):
+                if key in seen or not value:
+                    return False
+                seen.add(key)
+                if key == 'feed' and value not in ('following', 'collected'):
+                    return False
+                if key == 'kind' and value not in ('website', 'image', 'audio', 'slides', 'video'):
+                    return False
+                if key == 'q':
+                    if len(value) > 80 or any(ord(ch) < 32 for ch in value):
+                        return False
+                elif key not in ('feed', 'kind'):
+                    return False
+            return bool(seen)
         if path == '/agents':
             slug = query[len('category='):] if query.startswith('category=') else ''
             return slug in discover.AGENT_CATEGORY_SLUGS

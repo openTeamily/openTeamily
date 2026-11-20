@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import skill_packages, agent_memory, agent_runtime, agents, artifacts, automations, bot_social, composio, composio_principals, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
+from . import skill_packages, agent_memory, agent_runtime, agents, artifacts, automations, bot_social, composio, composio_principals, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams, skill_installs
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -476,6 +476,8 @@ class App:
             refuse(405, 'method', 'Only GET, POST and DELETE are supported')
         if method == 'POST' and query:
             refuse(400, 'invalid', 'Query parameters are not accepted for writes')
+        if method == 'DELETE' and query:
+            refuse(400, 'invalid', 'Query parameters are not accepted for writes')
         now = int(self.clock())
         share_path = re.fullmatch(r'/share/([A-Za-z0-9_-]{43})', path)
         if share_path:
@@ -742,6 +744,22 @@ class App:
                 except ValueError:
                     refuse(429, 'quota', 'Skill secret limit reached')
                 return 200, skill_secrets.list_secrets(db, session['user_id']), []
+            if path == '/v1/skills/installed':
+                if method == 'GET' and not query:
+                    return 200, skill_installs.listing(db, session['user_id']), []
+                if method in ('POST', 'DELETE') and not query:
+                    if method == 'DELETE':
+                        self.csrf_check(env, session)
+                    body = self.body(env, ['skill'])
+                    skill_id = body.get('skill')
+                    if not skill_installs.valid_skill(skill_id):
+                        refuse(400, 'invalid', 'Provide a skill id from the skills catalogue')
+                    if method == 'POST':
+                        skill_installs.install(db, session['user_id'], skill_id, now)
+                    else:
+                        skill_installs.uninstall(db, session['user_id'], skill_id)
+                    return 200, skill_installs.listing(db, session['user_id']), []
+                refuse(400, 'invalid', 'Invalid installed-skills request')
             if path == '/v1/runtime-keys' and method == 'GET' and not query:
                 return 200, {
                     'items': runtime_keys.listing(db, session['user_id']),
@@ -3333,14 +3351,23 @@ class App:
                      'cursor': rows[int(limit) - 1]['id'] if len(rows) > int(limit) else None}, []
 
     def send_conversation_message(self, db, workspace, session, agent, row, now, env):
-        body = self.body(env, ['body'])
+        body = self.body(env, ['body', 'chat_language'])
         text = body.get('body')
         if not conversations.valid_message(text):
             refuse(400, 'invalid', 'Provide a message')
+        requested_language = body.get('chat_language')
+        if requested_language is not None and not settings.valid_value('chat_language', requested_language):
+            refuse(400, 'invalid', 'Unsupported chat language')
+        # The composer sends the stored preference; a client that does not send
+        # it still gets the account's choice, so the setting never depends on a
+        # page having been upgraded.
+        chat_language = requested_language or settings.stored_chat_language(db, session['user_id'])
         key = env.get('HTTP_IDEMPOTENCY_KEY', '')
         if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
             refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
         payload = {'body': text}
+        if requested_language is not None:
+            payload['chat_language'] = requested_language
         key_hash, request_hash = digest('message:' + key), digest(
             json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
         )
@@ -3372,7 +3399,8 @@ class App:
                 > self.config.max_messages_per_conversation):
             refuse(429, 'quota', 'Conversation message capacity reached')
         history = conversations.history_for_prompt(db, row['id'])
-        prompt, memory_refs = agent_memory.compose(db, workspace['id'], agent, history, text)
+        prompt, memory_refs = agent_memory.compose(
+            db, workspace['id'], agent, history, text, settings.chat_language_name(chat_language))
         if not runtime_connect.valid_prompt(prompt):
             refuse(400, 'invalid', 'Provide a message')
         user_id = uuid4().hex

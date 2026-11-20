@@ -26,6 +26,14 @@ CHAT_LANGUAGES = (
 )
 TIME = re.compile(r'(?:[01]\d|2[0-3]):[0-5]\d')
 
+# A prompt cannot use the stored code: the model is told the language by name.
+CHAT_LANGUAGE_NAMES = {
+    'en': 'English', 'fa': 'Persian', 'fr': 'French', 'de': 'German', 'es': 'Spanish',
+    'pt': 'Portuguese', 'it': 'Italian', 'ru': 'Russian', 'id': 'Indonesian',
+    'vi': 'Vietnamese', 'bn': 'Bengali', 'th': 'Thai', 'ar': 'Arabic', 'ja': 'Japanese',
+    'ko': 'Korean', 'zh-Hant': 'Traditional Chinese', 'zh-CN': 'Simplified Chinese',
+}
+
 # name -> (allowed values or kind, default). Booleans use (True, False).
 FIELDS = {
     'appearance': (('system', 'light', 'dark', 'auto'), 'system'),
@@ -96,6 +104,17 @@ def view(row):
             stored = {}
         result.update(migrate(stored))
     return {'values': result, 'revision': revision}
+
+
+def chat_language_name(code):
+    """The language name a prompt can use. 'auto' and unknown codes name nothing."""
+    return CHAT_LANGUAGE_NAMES.get(code) if isinstance(code, str) else None
+
+
+def stored_chat_language(db, user_id):
+    """The reply language this account stored, read at the moment a message is sent."""
+    row = db.execute('SELECT * FROM user_settings WHERE user_id=?', (user_id,)).fetchone()
+    return view(row)['values']['chat_language']
 
 
 def normalize_changes(changes):

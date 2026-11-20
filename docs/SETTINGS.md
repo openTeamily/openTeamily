@@ -71,3 +71,20 @@ unreadable setting falls back to `enter` and does not block the chat page.
 Message folding, auto-translate and link-preview rendering are not applied in
 the transcript here because those result layouts were not recaptured. This is
 not Teamily or Impeccable acceptance.
+
+## Chat language reaches the prompt (issue #319)
+
+`chat_language` used to be stored and never read outside the settings page, so
+choosing English still got Chinese replies. The `/chat` composer now reads the
+stored value from `GET /v1/settings` and sends it with the message request as
+`chat_language` (`auto` sends no field, so the model keeps its own default).
+`POST /v1/workspaces/{ws}/agents/{agent}/conversations/{id}/messages` accepts
+that one extra field, validates it against the same `CHAT_LANGUAGES` list the
+settings API uses (unsupported value → `400 invalid`, never silently ignored)
+and appends a single `Reply in <language>.` line to the prompt through
+`conversations.compose_prompt(..., reply_language=...)`. A client that does not
+send the field falls back to the account's stored value, so the preference does
+not depend on an upgraded page. `compose_prompt` without `reply_language`
+produces byte-for-byte the previous prompt. Language codes stay in the
+database; the prompt gets the language name from `settings.CHAT_LANGUAGE_NAMES`.
+This is not a translation catalogue: only the reply language is stated.

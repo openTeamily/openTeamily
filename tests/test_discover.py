@@ -191,9 +191,19 @@ class DiscoverCatalogPageTests(unittest.TestCase):
             self.assertIn('公开 AI 团队目录还没有接口', teams_text)
             self.assertNotRegex(teams_text, r'(?i)Teamily AI|Full-Stack Delivery Guild|积分|credits')
             self.assertIn('hidden', teams_text.split('id="teams-filters"', 1)[1].split('>', 1)[0])
-            for query in ('tab=teams', 'tab=agents&x=1', 'q=test', 'tab=agents&tab=agents',
+            for query in ('tab=teams', 'tab=agents&x=1', 'tab=agents&tab=agents',
                           'tab=agents&section=teams', 'section=groups'):
                 self.assertEqual(case.raw.call('GET', '/discover', query=query)['status'], 400)
+            # The feed tab, category and search are shareable deep links; the
+            # page router only serves the screen and never reads them itself.
+            for query in ('feed=following', 'feed=collected', 'feed=following&kind=video',
+                          'q=cat', 'kind=image&q=cat', 'feed=following&kind=image&q=cat',
+                          'q=%E4%B8%AD%E6%96%87&kind=audio'):
+                self.assertEqual(case.raw.call('GET', '/discover', query=query)['status'], 200, query)
+            for query in ('feed=activity', 'feed=bogus', 'feed=', 'kind=bogus', 'kind=',
+                          'feed=following&feed=collected', 'q=' + 'a' * 81,
+                          'feed=following&x=1', 'tab=agents&feed=following'):
+                self.assertEqual(case.raw.call('GET', '/discover', query=query)['status'], 400, query)
             self.assertEqual(case.raw.call('GET', '/settings/not-a-page')['status'], 404)
         finally:
             case.doCleanups()

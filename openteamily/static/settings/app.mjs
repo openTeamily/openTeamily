@@ -369,6 +369,22 @@ export function newlineBinding(sendShortcut) {
   return sendShortcut === 'mod_enter' ? 'Enter' : 'Shift+Enter';
 }
 
+// The stored value is a code; the sentence a user reads has to say what the
+// choice actually does when a message is sent, not just echo the label.
+export function chatLanguageEffect(value, label = '') {
+  if (!value || value === 'auto') {
+    return '跟随界面语言：发消息时不指定语言，智能体按你消息的语种回复。';
+  }
+  return '发消息时会带上「' + (label || value) + '」：智能体按这个语言回复。';
+}
+
+export function syncChatLanguageNote(document, value, label = '') {
+  const text = chatLanguageEffect(value, label);
+  const note = document.getElementById('chat-language-effect');
+  if (note) note.textContent = text;
+  return text;
+}
+
 export function syncShortcutRows(document, values) {
   const keys = document.getElementById('newline-keys');
   if (!keys) return;
@@ -491,6 +507,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (languageCurrent && languageSelect) {
       const option = languageSelect.selectedOptions[0];
       languageCurrent.textContent = option ? option.textContent : '';
+    }
+    const chatLanguageSelect = form.elements.chat_language;
+    if (chatLanguageSelect) {
+      const chosen = chatLanguageSelect.selectedOptions && chatLanguageSelect.selectedOptions[0];
+      syncChatLanguageNote(document, chatLanguageSelect.value, chosen ? chosen.textContent : '');
     }
     if (current) {
       syncShortcutRows(document, current);
@@ -641,6 +662,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       event.target.setAttribute('aria-checked', event.target.checked ? 'true' : 'false');
     }
     if (name === 'send_shortcut') syncShortcutRows(document, readForm(form));
+    if (name === 'chat_language' && event.target) {
+      const selected = event.target.selectedOptions && event.target.selectedOptions[0];
+      syncChatLanguageNote(document, event.target.value, selected ? selected.textContent : '');
+    }
     if (!AUTOSAVE_KEYS.includes(name)) return;
     const message = ['appearance', 'appearance_schedule', 'appearance_start', 'appearance_end'].includes(name)
       ? '外观已更新。' : '已保存。';

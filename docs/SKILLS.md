@@ -30,10 +30,17 @@ Covered: personal management inference/private agent chat and agent-scoped manag
 
 **Not implemented:** a third-party registry, package uploads/downloads, signatures/upgrades/migrations for arbitrary packages, executable/filesystem skills, dynamic SDK tools, standalone upstream DSH session loading, delegated/shared-runtime grants. A skill that asks for an external action does not authorize one. Real inference still requires an operator-configured model and online runtime; a persisted binding alone cannot manufacture those dependencies.
 
+## 「我的技能库」标记（per-account library）
+
+`/skills` 的每张卡片除了「安装 / 卸载」绑定按钮，还有一个「加入我的技能库 / 移出我的技能库」按钮。它写的是 `openteamily/skill_installs.py` 的 `skill_installs(user_id, skill_id, installed)` 表，接口是 `GET/POST/DELETE /v1/skills/installed`，按账号保存，刷新或换设备后仍然保留。
+
+它**不是**绑定：只记录这个账号把哪些技能放进了自己的库，不让技能内容进入模型上下文，也不创建任何凭据。真正决定运行时能加载什么的是上面那条版本/摘要绑定的生命周期。未登录写入被拒绝，允许的 id 必须与 `skill_packages.catalogue()` 完全一致（`tests/test_skills_page.py` 断言）。本仓库早期一版 `/skills` 的页面本地目录与「安装状态」文案已被真实目录与绑定生命周期取代。
+
 ## Verification
 
 - `tests/test_skill_packages.py`: actual synthetic provider request contains exact installed content; subsequent request omits it after uninstall; SQLite restart/new login; account/agent isolation; archived-agent revocation; explicit permission; CSRF; version/digest/field/traversal/archive injection; compatibility handshake; tampered/missing acknowledgement; cancel-on-revoke.
 - `tests/agent_loop.test.mjs`: container handshake/ack precedes real inference function, actual model-request context includes installed material and excludes revoked material; malformed package fields rejected.
+- `tests/test_skills_page.py`: 页面/账号库清单与严格响应头、`/v1/skills/installed` 往返与重新登录、CSRF/未知技能拒绝。
 - `tests/skills_page.test.mjs`: server catalogue/digests, permission gate, persisted synthetic service reload/uninstall and refusal without invented success. This service stub is labelled synthetic, not provider acceptance.
 - `scripts/ci_ui_screenshots.mjs`: real local page → SQLite install/reload → actual daemon → local synthetic model → loading receipt → uninstall/reload, with content and 390px captures. Python tests separately inspect provider request content.
 

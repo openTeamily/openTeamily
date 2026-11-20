@@ -66,6 +66,17 @@ export function shouldSendOnShortcut(event, sendShortcut = 'enter') {
   return !modifier && !event.shiftKey && !event.altKey;
 }
 
+// The chat language is stored per account by /settings; it only reaches the
+// model if the message request carries it. 'auto' means "no opinion", so the
+// field has to be absent rather than a value the server has to interpret.
+export function messagePayload(text, chatLanguage = 'auto') {
+  const payload = {body: text};
+  if (typeof chatLanguage === 'string' && chatLanguage && chatLanguage !== 'auto') {
+    payload.chat_language = chatLanguage;
+  }
+  return payload;
+}
+
 export function messageSearchQuery(query, conversationId = '', cursor = '') {
   const params = new URLSearchParams({q: query, limit: '20'});
   if (conversationId) params.set('conversation_id', conversationId);
@@ -610,6 +621,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let resourceCursor = '';
   let resourceItems = [];
   let sendShortcut = 'enter';
+  let chatLanguage = 'auto';
   let chatPreferences = {message_folding:'standard', document_cards:false, link_previews:true};
 
   function show(kind, text) {
@@ -2035,6 +2047,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const stored = settings.status === 200 && settings.body && settings.body.settings
       && settings.body.settings.values && settings.body.settings.values.send_shortcut;
     sendShortcut = stored === 'mod_enter' ? 'mod_enter' : 'enter';
+    const storedLanguage = settings.status === 200 && settings.body && settings.body.settings
+      && settings.body.settings.values && settings.body.settings.values.chat_language;
+    chatLanguage = typeof storedLanguage === 'string' ? storedLanguage : 'auto';
     document.getElementById('chat-body').dataset.sendShortcut = sendShortcut;
     workspaces = listed.status === 200 ? (listed.body.items || []) : [];
     const wanted = hashParams().workspace || personalWorkspace || workspaceSelect.value;
@@ -2574,7 +2589,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const result = await request(
       'POST',
       `${agentBase()}/conversations/${currentConversation.id}/messages`,
-      {body: text},
+      messagePayload(text, chatLanguage),
       {'Idempotency-Key': idempotencyKey('msg-')},
     );
     if (result.status !== 201 && result.status !== 200) {

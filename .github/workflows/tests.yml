@@ -27,6 +27,7 @@ jobs:
       - run: node --test tests/agents_search.test.mjs
       - run: node --test tests/artifacts_page.test.mjs
       - run: node --test tests/automations_page.test.mjs
+      - run: node --test tests/chat_language.test.mjs
       - run: node --test tests/chat_page.test.mjs
       - run: node --test tests/chat_reminder.test.mjs
       - run: node --test tests/ci_test_list.test.mjs

@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  filterSkills, mountSkills, skillCountLabel,
+  accountButtonLabel, filterSkills, mountSkills, readInstalled, skillCountLabel, writeInstalled,
 } from '../openteamily/static/skills/app.mjs';
 
 class Element {
@@ -18,6 +18,7 @@ class Element {
     this.style = {};
     this.textContent = '';
     this.hidden = false;
+    this.disabled = false;
     this.value = '';
     this.classList = {
       add: (name) => { if (!this.className.split(' ').includes(name)) this.className = (this.className + ' ' + name).trim(); },
@@ -95,6 +96,89 @@ test('server refusal never invents installed or runtime-loaded state', async () 
   assert.equal(el('skills-list').children[0].children[2].textContent,'安装');assert.equal(el('skills-error').textContent,'permission denied');
 });
 
+// The per-account library mark (issue #263) is a separate persisted record: it never
+// grants model context, so the binding button on the same card stays untouched.
+const LIBRARY = [
+  {id: 'meeting-notes', name: '会议纪要', version: '1.0.0', digest: 'a'.repeat(64), content: 'c'.repeat(120), permissions: ['model_context']},
+  {id: 'trip-plan', name: '行程规划', version: '1.0.0', digest: 'b'.repeat(64), content: 'd'.repeat(120), permissions: ['model_context']},
+];
+
+function okJson(payload) {
+  return {status: 200, ok: true, json: async () => payload};
+}
+
+test('accountButtonLabel names the library action instead of pretending to install', () => {
+  assert.equal(accountButtonLabel(false), '加入我的技能库');
+  assert.equal(accountButtonLabel(true), '移出我的技能库');
+});
+
+test('readInstalled asks the account endpoint with the session cookie', async () => {
+  const calls = [];
+  const installed = await readInstalled(async (url, options) => {
+    calls.push({url, options});
+    return okJson({installed: ['meeting-notes', 'trip-plan']});
+  });
+  assert.deepEqual([...installed], ['meeting-notes', 'trip-plan']);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, '/v1/skills/installed');
+  assert.equal(calls[0].options.method, 'GET');
+  assert.equal(calls[0].options.credentials, 'same-origin');
+});
+
+test('writeInstalled posts an install and deletes a removal with the CSRF token', async () => {
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    calls.push({url, options});
+    return okJson({installed: options.method === 'POST' ? ['meeting-notes'] : []});
+  };
+  const cookie = '__Host-ot_csrf=token-value';
+  const afterInstall = await writeInstalled('meeting-notes', true, {fetchImpl, cookie});
+  assert.deepEqual([...afterInstall], ['meeting-notes']);
+  assert.equal(calls[0].url, '/v1/skills/installed');
+  assert.equal(calls[0].options.method, 'POST');
+  assert.equal(calls[0].options.headers['X-CSRF-Token'], 'token-value');
+  assert.deepEqual(JSON.parse(calls[0].options.body), {skill: 'meeting-notes'});
+  const afterRemoval = await writeInstalled('meeting-notes', false, {fetchImpl, cookie});
+  assert.deepEqual([...afterRemoval], []);
+  assert.equal(calls[1].options.method, 'DELETE');
+});
+
+test('a refused library write rejects with the server message instead of guessing', async () => {
+  const fetchImpl = async () => ({status: 403, ok: false, json: async () => ({error: {code: 'csrf', message: 'A valid CSRF token is required'}})});
+  await assert.rejects(() => writeInstalled('meeting-notes', true, {fetchImpl, cookie: ''}), /A valid CSRF token is required/);
+});
+
+test('the library mark round-trips through the page without a model-context binding', async () => {
+  const {doc, el} = fakeDocument();
+  doc.cookie = '__Host-ot_csrf=synthetic-csrf';
+  el('skills-scope').value = 'account';
+  const writes = [];
+  let library = new Set();
+  const fetcher = async (path) => okJson({items: []});
+  const mounted = mountSkills(doc, {
+    fetcher, catalogue: LIBRARY,
+    read: async () => new Set(library),
+    write: async (id, wanted) => {
+      writes.push([id, wanted]);
+      library = new Set(wanted ? [...library, id] : [...library].filter((value) => value !== id));
+      return new Set(library);
+    },
+  });
+  await mounted.ready;
+  assert.equal(el('skills-list').children.length, 2);
+  assert.equal(el('skills-list').children[0].children[3].textContent, '加入我的技能库');
+  await el('skills-list').children[0].children[3].handlers.click();
+  assert.deepEqual(writes, [['meeting-notes', true]]);
+  assert.equal(el('skills-list').children[0].children[3].textContent, '移出我的技能库');
+  assert.equal(el('skills-list').children[0].children[3].attributes['aria-pressed'], 'true');
+  assert.equal(el('skills-list').children[0].className.includes('is-in-library'), true);
+  assert.equal(el('skills-list').children[0].children[2].textContent, '安装');
+  assert.equal(el('skills-list').children[0].children[2].className, 'skill-install');
+  assert.equal(mounted.installed.has('meeting-notes'), true);
+  await el('skills-list').children[0].children[3].handlers.click();
+  assert.deepEqual(writes, [['meeting-notes', true], ['meeting-notes', false]]);
+  assert.equal(el('skills-list').children[0].children[3].textContent, '加入我的技能库');
+});
 
 test('execution readiness is authoritative, missing/stale versions cannot appear runnable', async () => {
   const {doc,el}=fakeDocument();el('skills-scope').value='account';let code='runtime_upgrade_required';

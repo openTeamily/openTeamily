@@ -169,9 +169,13 @@ def history_for_prompt(db, conversation_id, before_seq=None):
     return rows
 
 
-def compose_prompt(agent, history, user_text):
+def compose_prompt(agent, history, user_text, reply_language=None):
     name = (agent['name'] or 'FlyBot').strip()
     parts = ['You are %s.' % name]
+    # Right after the identity, so a long summary or instruction block cannot
+    # push the chosen reply language out of the prompt budget.
+    if reply_language:
+        parts.append('Reply in %s.' % reply_language)
     summary = (agent['summary'] or '').strip()
     if summary:
         parts.append(summary)

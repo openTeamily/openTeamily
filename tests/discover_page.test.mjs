@@ -510,6 +510,152 @@ test('switching private feed tabs cannot be overwritten by an older in-flight re
 });
 
 
+test('feed selection round-trips through the URL search', async () => {
+  const {feedStateFromSearch, feedSearchText} = await import('../openteamily/static/discover/app.mjs');
+  assert.deepEqual(feedStateFromSearch('?feed=following&kind=video&q=cat'),
+    {tab: 'following', kind: 'video', query: 'cat'});
+  assert.deepEqual(feedStateFromSearch('?feed=collected&q=%E4%B8%AD%E6%96%87'),
+    {tab: 'collected', kind: '', query: '中文'});
+  assert.deepEqual(feedStateFromSearch('?tab=agents'),
+    {tab: 'activity', kind: '', query: ''});
+  assert.deepEqual(feedStateFromSearch('?feed=following&kind=bogus'),
+    {tab: 'following', kind: '', query: ''});
+  assert.deepEqual(feedStateFromSearch('?feed=activity'), {tab: 'activity', kind: '', query: ''});
+  assert.deepEqual(feedStateFromSearch(''), {tab: 'activity', kind: '', query: ''});
+  assert.deepEqual(feedStateFromSearch(undefined), {tab: 'activity', kind: '', query: ''});
+  assert.equal(feedSearchText({tab: 'following', kind: 'video', query: 'cat'}),
+    '?feed=following&kind=video&q=cat');
+  assert.equal(feedSearchText({tab: 'collected', kind: '', query: ''}), '?feed=collected');
+  assert.equal(feedSearchText({tab: 'activity', kind: '', query: ''}), '');
+  assert.equal(feedSearchText({tab: 'following', kind: 'bogus', query: ''}), '?feed=following');
+});
+
+
+test('a shared feed URL opens the tab, kind and search it names', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const calls = [], visit = [];
+  const fetcher = async (path) => {
+    calls.push(path);
+    if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    if (path.startsWith('/v1/discover/me/works?')) {
+      return {status: 200, json: async () => ({items: [{slug: 'followed-work', title: 'Followed', author: 'bob'}], cursor: null})};
+    }
+    throw new Error('unexpected ' + path);
+  };
+  await mount(doc, {
+    fetcher, location: {search: '?feed=following&kind=video&q=cat', pathname: '/discover'},
+    history: {pushState(_state, _title, url) { visit.push(url); }},
+    window: {addEventListener() {}},
+  });
+  assert.equal(doc.getElementById('feed-query').value, 'cat');
+  assert.equal(doc.getElementById('feed-tab-following').attributes['aria-selected'], 'true');
+  assert.equal(doc.getElementById('feed-tab-activity').attributes['aria-selected'], 'false');
+  assert.equal(doc.getElementById('feed-kind-video').attributes['aria-current'], 'true');
+  assert.equal(doc.getElementById('feed-kind-all').attributes['aria-current'], 'false');
+  const loaded = calls.findLast(path => path.startsWith('/v1/discover/me/works?'));
+  assert.match(loaded, /tab=following/);
+  assert.match(loaded, /kind=video/);
+  assert.match(loaded, /q=cat/);
+  assert.equal(visit.length, 0, 'opening a link must not add a history entry');
+});
+
+
+test('choosing a category keeps the feed tab instead of resetting to 动态', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const calls = [];
+  const fetcher = async (path) => {
+    calls.push(path);
+    if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    if (path.startsWith('/v1/discover/me/works?')) {
+      return {status: 200, json: async () => ({items: [{slug: 'followed-work', title: 'Followed', author: 'bob'}], cursor: null})};
+    }
+    throw new Error('unexpected ' + path);
+  };
+  await mount(doc, {fetcher, location: {search: '', pathname: '/discover'},
+    history: {pushState() {}}, window: {addEventListener() {}}});
+  const el = id => doc.getElementById(id);
+  await el('feed-tab-following').handlers.click();
+  assert.match(calls.at(-1), /tab=following/);
+  await el('feed-kind-image').handlers.click();
+  assert.match(calls.at(-1), /tab=following/);
+  assert.match(calls.at(-1), /kind=image/);
+  assert.equal(el('feed-tab-following').attributes['aria-selected'], 'true');
+  assert.equal(el('feed-tab-activity').attributes['aria-selected'], 'false');
+  assert.equal(el('feed-kind-image').attributes['aria-current'], 'true');
+  el('feed-query').value = 'cat';
+  await el('feed-search').handlers.submit({preventDefault() {}});
+  assert.match(calls.at(-1), /tab=following/);
+  assert.match(calls.at(-1), /kind=image/);
+  assert.match(calls.at(-1), /q=cat/);
+});
+
+
+test('feed tab and category changes push a shareable URL and back/forward restores them', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const visit = [];
+  const handlers = {};
+  const location = {search: '', pathname: '/discover'};
+  const calls = [];
+  const fetcher = async (path) => {
+    calls.push(path);
+    if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    if (path.startsWith('/v1/discover/me/works?')) return {status: 200, json: async () => ({items: [], cursor: null})};
+    throw new Error('unexpected ' + path);
+  };
+  await mount(doc, {fetcher, location,
+    history: {pushState(_state, _title, url) { visit.push(url); location.search = url.split('?')[1] ? '?' + url.split('?')[1] : ''; }},
+    window: {addEventListener(type, handler) { handlers[type] = handler; }}});
+  const el = id => doc.getElementById(id);
+  assert.equal(visit.length, 0);
+  await el('feed-tab-following').handlers.click();
+  assert.equal(visit.at(-1), '/discover?feed=following');
+  await el('feed-kind-image').handlers.click();
+  assert.equal(visit.at(-1), '/discover?feed=following&kind=image');
+  el('feed-query').value = 'cat';
+  await el('feed-search').handlers.submit({preventDefault() {}});
+  assert.equal(visit.at(-1), '/discover?feed=following&kind=image&q=cat');
+  assert.equal(typeof handlers.popstate, 'function');
+
+  location.search = '';
+  await handlers.popstate();
+  assert.equal(el('feed-tab-activity').attributes['aria-selected'], 'true');
+  assert.equal(el('feed-kind-all').attributes['aria-current'], 'true');
+  assert.equal(el('feed-query').value, '');
+  assert.doesNotMatch(calls.at(-1), /tab=following/);
+  assert.equal(visit.at(-1), '/discover?feed=following&kind=image&q=cat', 'back must not push a new entry');
+
+  location.search = '?feed=following&kind=image&q=cat';
+  await handlers.popstate();
+  assert.equal(el('feed-tab-following').attributes['aria-selected'], 'true');
+  assert.equal(el('feed-kind-image').attributes['aria-current'], 'true');
+  assert.equal(el('feed-query').value, 'cat');
+  assert.match(calls.at(-1), /tab=following/);
+  assert.match(calls.at(-1), /kind=image/);
+});
+
+
+test('following nobody from a shared URL shows the following empty note, not a blank feed', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const calls = [];
+  const fetcher = async (path) => {
+    calls.push(path);
+    if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    return {status: 200, json: async () => ({items: [], cursor: null})};
+  };
+  await mount(doc, {fetcher, location: {search: '?feed=following', pathname: '/discover'},
+    history: {pushState() {}}, window: {addEventListener() {}}});
+  const empty = doc.getElementById('feed-following-empty');
+  assert.equal(empty.hidden, false);
+  assert.equal(doc.getElementById('feed-tab-following').attributes['aria-selected'], 'true');
+  assert.match(doc.getElementById('feed-note').textContent, /只展示你关注的作者/);
+  assert.match(calls.at(-1), /tab=following/);
+});
+
+
 test('work covers use real same-origin published media, not invented screenshots', () => {
   const doc = fakeDocument();
   const image = renderFeedCard(doc, {slug: 'real-photo', title: '<safe>', kind: 'image'});

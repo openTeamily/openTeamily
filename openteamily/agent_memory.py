@@ -142,14 +142,14 @@ def note_block(hits):
     return '\n'.join(lines)
 
 
-def compose(db, workspace_id, agent, history, user_text):
+def compose(db, workspace_id, agent, history, user_text, reply_language=None):
     """compose_prompt plus recalled notes; returns (prompt, refs that truly reached the prompt)."""
     hits = recall(db, workspace_id, agent['id'], user_text)
     if not hits:
-        return conversations.compose_prompt(agent, history, user_text), []
+        return conversations.compose_prompt(agent, history, user_text, reply_language), []
     view = {key: agent[key] for key in ('id', 'name', 'summary', 'instructions')}
     view['instructions'] = ((agent['instructions'] or '').strip() + '\n\n' + note_block(hits)).strip()
-    prompt = conversations.compose_prompt(view, history, user_text)
+    prompt = conversations.compose_prompt(view, history, user_text, reply_language)
     refs = []
     for marker, score, page, text in hits:
         # A long agent instruction can push notes past the bounded prompt; only
@@ -158,7 +158,7 @@ def compose(db, workspace_id, agent, history, user_text):
             refs.append({'page_id': page['id'], 'title': page['title'],
                          'revision': page['revision'], 'rank': marker})
     if not refs:
-        return conversations.compose_prompt(agent, history, user_text), []
+        return conversations.compose_prompt(agent, history, user_text, reply_language), []
     return prompt, refs
 
 
