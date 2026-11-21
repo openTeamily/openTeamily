@@ -39,9 +39,40 @@ export function load(store, workspaceId, id) {
   return named(store, store.get(ROW_SELECT + 'WHERE a.id=? AND a.workspace_id=?', id, workspaceId))
 }
 
+// Searchable prose of a text artifact. A document row normally holds plain
+// text, but a legacy row can carry a JSON payload in body, and there the string
+// values are what the user wrote while the keys are only structure: match the
+// values and skip the keys so a query cannot hit on "bullets" or "schema".
+function searchableBody(body) {
+  if (typeof body !== 'string' || body === '') return ''
+  const trimmed = body.trim()
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return body
+  let parsed
+  try { parsed = JSON.parse(trimmed) } catch { return body }
+  const parts = []
+  const walk = (value, depth) => {
+    if (depth > 16) return
+    if (typeof value === 'string') parts.push(value)
+    else if (Array.isArray(value)) value.forEach((item) => walk(item, depth + 1))
+    else if (value && typeof value === 'object') Object.values(value).forEach((item) => walk(item, depth + 1))
+  }
+  walk(parsed, 0)
+  return parts.join('\n')
+}
+
+// Title first (as before), then the saved body of text artifacts. Media bytes
+// and the structured payloads of boards, slides, dashboards and workbooks stay
+// out of prose search; their own columns are never treated as text here.
+function matchesSearch(row, needle) {
+  if (row.title.toLocaleLowerCase('en-US').includes(needle)) return true
+  const kind = publicKind(row)
+  if (kind !== 'document' && kind !== 'website') return false
+  return searchableBody(row.body).toLocaleLowerCase('en-US').includes(needle)
+}
+
 export function listing(store, workspaceId, cursor, limit, needle = '') {
   let rows = store.all(ROW_SELECT + 'WHERE a.workspace_id=? ORDER BY a.id', workspaceId).map((row) => named(store, row))
-  if (needle) rows = rows.filter((row) => row.title.toLocaleLowerCase('en-US').includes(needle))
+  if (needle) rows = rows.filter((row) => matchesSearch(row, needle))
   if (cursor) rows = rows.filter((row) => row.id > cursor)
   return rows.slice(0, limit)
 }
