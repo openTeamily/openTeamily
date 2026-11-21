@@ -192,9 +192,12 @@ the request authority). The browser never sees a DSH token or cookie:
   against any other runtime even if leaked.
 
 ### 4.3.1 Deployment wiring (phase A2)
-* **Platform (wsgi.py):** `application = dsbot_gateway.wrap(app, store, config, '/data/operator/dsbot-gateway.json', manager_auth)`.
-  The key file is operator-owned (`{"version":1,"key":"<32–128 url-safe chars>"}`, 0600). Without it the
-  gateway stays off.
+* **Platform (wsgi.py):** `gunicorn openteamily.wsgi:app` with `OPENTEAMILY_DATA_DIR`,
+  `OPENTEAMILY_ORIGIN` and `OPENTEAMILY_GATEWAY_KEY_FILE=/data/operator/dsbot-gateway.json`. The key file
+  is operator-owned (`{"version":1,"key":"<32–128 url-safe chars>"}`, 0600); when set, startup mounts and
+  verifies `/v1/platform/route`, and refuses to start if it is not mounted/authorized. Set
+  `OPENTEAMILY_REQUIRE_GATEWAY=1` to also refuse startup when the key file is absent. Without either, the
+  legacy unwrapped app starts as before.
 * **Edge (nginx):** `python -m openteamily.dsbot_gateway render --platform 127.0.0.1:8080 --listen <edge
   listen> --key-include /etc/nginx/ot-gateway-key.conf > default.conf`; the include holds
   `set $ot_gateway_key "<same key>";` (operator-owned, not in the rendered file).

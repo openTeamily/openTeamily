@@ -8,6 +8,7 @@ import unittest
 
 from openteamily import dsbot_gateway as gw
 from openteamily import lifecycle
+from openteamily import wsgi as production
 from openteamily.lifecycle import ManagerAuth, ManagerIdentity
 from openteamily.security import digest
 from openteamily.store import Store
@@ -427,6 +428,91 @@ class GatewayTest(unittest.TestCase):
         status, rejected = post('3' * 32)
         self.assertEqual((status, rejected['error']['code']), (409, 'import_destination'))
         self.assertEqual(post('1' * 32)[0], 200)
+
+
+class ProductionEntrypointTest(unittest.TestCase):
+    """The production factory always mounts a configured gateway and fails loudly otherwise."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.chmod(self.tmp.name, 0o700)
+        self.data = os.path.join(self.tmp.name, 'state')
+        self.key_file = os.path.join(self.tmp.name, 'dsbot-gateway.json')
+        with open(self.key_file, 'w') as file:
+            json.dump({'version': 1, 'key': KEY}, file)
+        os.chmod(self.key_file, 0o600)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def settings(self, **overrides):
+        return production.Settings(data_dir=self.data, origin=ORIGIN, **overrides)
+
+    def call(self, app, token=None, uri='/b/', method='GET', key=KEY, **headers):
+        env = {'REQUEST_METHOD': 'GET', 'PATH_INFO': gw.ROUTE_PATH,
+               'HTTP_X_ORIGINAL_URI': uri, 'HTTP_X_ORIGINAL_METHOD': method}
+        if key is not None:
+            env[gw.KEY_HEADER] = key
+        if token is not None:
+            env['HTTP_COOKIE'] = f'{COOKIE}={token}'
+        env.update({'HTTP_' + name.upper(): value for name, value in headers.items()})
+        seen = {}
+
+        def start(status, response_headers):
+            seen['status'] = int(status.split()[0])
+            seen['headers'] = dict(response_headers)
+        body = b''.join(app(env, start))
+        return seen['status'], seen['headers'], body
+
+    def test_factory_returns_a_wrapped_app_with_the_internal_key_fence(self):
+        built = production.create_runtime(self.settings(gateway_key_file=self.key_file))
+        self.assertTrue(built.gateway)
+        tokens = seed(built.api.store)
+        session = tokens['a' * 32]
+        status, headers, _ = self.call(built.app, token=session)
+        self.assertEqual(status, 204)
+        self.assertEqual(headers['X-OT-Upstream'], '172.30.0.11:8080')
+        # The edge's private route exists but a missing/failing key cannot use it.
+        self.assertEqual(self.call(built.app, token=session, key=None)[0], 404)
+        self.assertEqual(self.call(built.app, token=session, key='x' * 40)[0], 404)
+        self.assertEqual(self.call(built.app)[0], 401)
+
+    def test_moved_route_through_the_wrapped_app_goes_to_the_owners_dsbot(self):
+        built = production.create_runtime(self.settings(gateway_key_file=self.key_file))
+        session = seed(built.api.store)['a' * 32]
+        status, headers, _ = self.call(built.app, token=session, uri='/v1/settings')
+        self.assertEqual(status, 204)
+        self.assertEqual(headers['X-OT-Instance'], '1' * 32)
+        self.assertIn('feature=settings', headers['X-OT-Upstream-Path'])
+        # No central body was executed for the moved route.
+        self.assertEqual(headers.get('Content-Type'), 'text/plain; charset=utf-8')
+
+    def test_unwrapped_legacy_mode_remains_available(self):
+        built = production.create_runtime(self.settings())
+        self.assertFalse(built.gateway)
+        status, headers, _ = self.call(built.app, key=KEY)
+        self.assertNotEqual(status, 204)
+        self.assertNotIn('X-OT-Upstream', headers)
+
+    def test_production_environment_selects_the_gateway(self):
+        from unittest.mock import patch
+        env = {'OPENTEAMILY_DATA_DIR': self.data, 'OPENTEAMILY_ORIGIN': ORIGIN,
+               'OPENTEAMILY_GATEWAY_KEY_FILE': self.key_file}
+        with patch.dict(os.environ, env, clear=True):
+            built = production.create_runtime()
+        self.assertTrue(built.gateway)
+
+    def test_configured_gateway_that_is_not_mounted_fails_startup(self):
+        from unittest.mock import patch
+        built = production.create_runtime(self.settings())
+        with patch.object(gw, 'mount', side_effect=lambda app, gateway: app):
+            with self.assertRaises(gw.GatewayConfigurationError):
+                gw.wrap(built.app, built.api.store, built.api.config, self.key_file)
+
+    def test_required_gateway_without_configuration_fails_startup(self):
+        with self.assertRaises(gw.GatewayConfigurationError):
+            production.create_runtime(self.settings(require_gateway=True))
+
 
 if __name__ == '__main__':
     unittest.main()

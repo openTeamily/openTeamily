@@ -165,6 +165,10 @@ class GatewayError(Exception):
         self.status, self.code = status, code
 
 
+class GatewayConfigurationError(RuntimeError):
+    """Configured gateway could not be mounted or authorized; refuse to start."""
+
+
 def load_routes(path=ROUTES_FILE):
     data = json.loads(Path(path).read_text('utf-8'))
     if data.get('version') != 1 or set(data) != {'version', 'mount', 'passthrough', 'moved_pages'}:
@@ -568,17 +572,43 @@ def load_operator_key(path):
     return key
 
 
+def require_mounted(app, key):
+    """Prove that ``app`` serves ``ROUTE_PATH`` through the gateway with ``key``.
+
+    A central app answering 404 is not enough: the gateway must reach authorization
+    and refuse the session-less probe with 401. This is a local, side-effect-free GET.
+    """
+    status = []
+    env = {'REQUEST_METHOD': 'GET', 'PATH_INFO': ROUTE_PATH,
+           'HTTP_X_ORIGINAL_METHOD': 'GET', 'HTTP_X_ORIGINAL_URI': '/b/', KEY_HEADER: key}
+    try:
+        body = app(env, lambda value, headers: status.append(int(value.split()[0])))
+        close = getattr(body, 'close', None)
+        if close is not None:
+            close()
+    except Exception as error:
+        raise GatewayConfigurationError(
+            'Gateway configuration was supplied but /v1/platform/route is not mounted') from error
+    if status != [401]:
+        raise GatewayConfigurationError(
+            'Gateway configuration was supplied but /v1/platform/route is not mounted/authorized')
+
+
 def wrap(app, store, config, key_file, manager_auth=None):
     """Deployment wiring for wsgi.py: ``application = dsbot_gateway.wrap(app, store, config, path, manager_auth)``.
 
     ``config`` is the management ``Config`` (public origin and session cookie name come
     from it). Without a key file the gateway stays off and ``app`` is returned as is.
+    With a key file the wrapped app is verified before it is returned.
     """
     if not key_file:
         return app
-    gateway = GatewayApp(store, config.origin, config.cookie_names[0], load_operator_key(key_file),
+    key = load_operator_key(key_file)
+    gateway = GatewayApp(store, config.origin, config.cookie_names[0], key,
                          manager_auth=manager_auth)
-    return mount(app, gateway)
+    wrapped = mount(app, gateway)
+    require_mounted(wrapped, key)
+    return wrapped
 
 
 def mount(app, gateway):
