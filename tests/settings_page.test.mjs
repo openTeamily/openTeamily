@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { applyComposioRows, applyConnectorSearch, applySettingsView, composioRowState, pickConnection, CONNECTOR_CATALOG, csrfCookie, describeAppearance, diff, filterConnectorCatalog, mount, newlineBinding, privacyChanges, readForm, settingsViewFromLocation, syncAppearanceExtras, syncMcpDialog, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
+import { applyComposioRows, applyConnectorFilter, applyConnectorSearch, applySettingsView, composioRowState, pickConnection, CONNECTOR_CATALOG, csrfCookie, describeAppearance, diff, filterConnectorCatalog, mount, newlineBinding, privacyChanges, readForm, settingsViewFromLocation, syncAppearanceExtras, syncMcpDialog, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -346,7 +346,7 @@ test('settings connectors markup lists the catalog as disconnected without leaki
   // map to a Composio toolkit and say 未配置 Composio, 8 have no toolkit (未接通).
   assert.equal((html.match(/<span class="connector-status" data-state="unconfigured">未配置 Composio<\/span>/g) || []).length, 31);
   assert.equal((html.match(/<span class="connector-status" data-state="unavailable">未接通<\/span>/g) || []).length, 8);
-  assert.equal((html.match(/data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">\+ 连接<\/button>/g) || []).length, 31);
+  assert.equal((html.match(/data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">\+ 连接<\/button>/g) || []).length, 31);
   assert.equal((html.match(/disabled title="未接通：Composio 没有这个应用，暂时不能连接。">\+ 连接<\/button>/g) || []).length, 8);
   assert.match(html, /id="composio-key-input" name="api_key" type="password"/);
   assert.equal((html.match(/class="connector-mark"/g) || []).length, 39);
@@ -355,7 +355,9 @@ test('settings connectors markup lists the catalog as disconnected without leaki
   assert.match(html, /class="connector-search-icon"/);
   assert.match(html, /id="connectors-empty"[^>]*hidden[^>]*>没有匹配的应用。/);
   assert.doesNotMatch(html, /还没有可连接的应用目录/);
-  assert.doesNotMatch(html, /已连接/);
+  // The overview admits the true count without claiming anything is connected.
+  assert.equal((html.match(/已连接/g) || []).length, 0);
+  assert.match(html, /0 个已接入/);
   for (const item of CONNECTOR_CATALOG) {
     assert.ok(html.includes(`>${item.name}<`), item.name);
     assert.ok(html.includes(item.about), item.id);
@@ -751,8 +753,11 @@ test('composioRowState never shows success without a real connected state', () =
   assert.equal(composioRowState({toolkit: null}, true, null).status, '未接通');
   const unconfigured = composioRowState(mapped, false, {state: 'connected', id: 'x'});
   assert.equal(unconfigured.status, '未配置 Composio');
-  assert.equal(unconfigured.disabled, true);
-  assert.match(unconfigured.title, /你自己的 Composio API key/);
+  // No key: the row never claims a connection, but the button is alive and
+  // only jumps to the key field. A dead disabled button hid that next step.
+  assert.equal(unconfigured.disabled, false);
+  assert.equal(unconfigured.action, 'focus-key');
+  assert.match(unconfigured.title, /API key 输入框/);
   assert.equal(composioRowState(mapped, true, null).status, '未连接');
   assert.equal(composioRowState(mapped, true, null).action, 'connect');
   assert.equal(composioRowState(mapped, true, {state: 'connecting'}).status, '连接中…');
@@ -798,7 +803,8 @@ test('applyComposioRows updates status, button and connection id from server dat
   assert.equal(amap.button.disabled, true);
   applyComposioRows(document, false, []);
   assert.equal(github.status.textContent, '未配置 Composio');
-  assert.equal(github.button.disabled, true);
+  assert.equal(github.button.disabled, false);
+  assert.equal(github.button.attrs['data-composio-action'], 'focus-key');
   assert.equal(github.button.attrs['data-connection-id'], undefined);
 });
 
@@ -809,4 +815,73 @@ test('connected-tool approvals do not imply a connected account before key setup
   assert.match(source, /允许此调用一次/);
   assert.match(source, /decision/);
   assert.doesNotMatch(source, /innerHTML/);
+});
+
+test('connectors overview groups the catalog by category with counts and a key anchor', () => {
+  const html = readFileSync(fileURLToPath(new URL('../openteamily/static/settings/index.html', import.meta.url)), 'utf8');
+  assert.match(html, /id="connectors-overview"/);
+  assert.match(html, /共 39 个应用/);
+  assert.match(html, /8 个分类/);
+  assert.match(html, /0 个已接入/);
+  assert.match(html, /id="connectors-key-jump"[^>]*href="#composio-key-input"/);
+  assert.match(html, /id="connectors-key-hint"/);
+  const groups = [['dev', '开发', 6], ['docs', '文档', 7], ['work', '协作', 11], ['commerce', '支付', 3],
+    ['data', '数据', 4], ['design', '设计', 5], ['search', '搜索', 2], ['mail', '邮件', 1]];
+  assert.equal((html.match(/data-connector-group="/g) || []).length, groups.length + 1);
+  assert.match(html, /data-connector-group="all"[^>]*>全部 39/);
+  for (const [id, label, count] of groups) {
+    assert.match(html, new RegExp(`data-connector-group="${id}"[^>]*>${label} ${count}`), id);
+  }
+});
+
+test('applyConnectorFilter keeps search and category filters independent', () => {
+  const rows = CONNECTOR_CATALOG.map((item) => ({
+    id: item.id,
+    hidden: false,
+    getAttribute(name) {
+      if (name === 'data-connector-id') return this.id;
+      if (name === 'data-category') return item.category;
+      return null;
+    },
+  }));
+  const chips = ['all', ...new Set(CONNECTOR_CATALOG.map((item) => item.category))].map((group) => ({
+    group, pressed: 'false',
+    getAttribute(name) { return name === 'data-connector-group' ? this.group : null; },
+    setAttribute(name, value) { if (name === 'aria-pressed') this.pressed = value; },
+  }));
+  const empty = {hidden: true, textContent: ''};
+  const document = {
+    getElementById(id) {
+      if (id === 'connectors-catalog') return {querySelectorAll: () => rows};
+      if (id === 'connectors-empty') return empty;
+      if (id === 'connectors-groups') return {querySelectorAll: (selector) => (selector === '[data-connector-group]' ? chips : [])};
+      return null;
+    },
+  };
+  const dev = applyConnectorFilter(document, {group: 'dev'});
+  assert.equal(dev.length, 6);
+  assert.equal(rows.filter((row) => !row.hidden).length, 6);
+  assert.equal(chips.find((chip) => chip.group === 'dev').pressed, 'true');
+  assert.equal(chips.find((chip) => chip.group === 'all').pressed, 'false');
+  const devGithub = applyConnectorFilter(document, {group: 'dev', query: 'github'});
+  assert.deepEqual(devGithub.map((item) => item.id), ['github']);
+  const noneHere = applyConnectorFilter(document, {group: 'mail', query: 'github'});
+  assert.deepEqual(noneHere, []);
+  assert.equal(empty.hidden, false);
+  assert.match(empty.textContent, /没有匹配的应用/);
+  const all = applyConnectorFilter(document, {group: 'all'});
+  assert.equal(all.length, 39);
+  assert.equal(rows.every((row) => !row.hidden), true);
+  assert.equal(chips.find((chip) => chip.group === 'all').pressed, 'true');
+});
+
+test('an unconfigured connect button jumps to the key field instead of staying dead', () => {
+  const mapped = {toolkit: 'github', managed: 'yes'};
+  const row = composioRowState(mapped, false, null);
+  assert.equal(row.status, '未配置 Composio');
+  assert.equal(row.disabled, false);
+  assert.equal(row.action, 'focus-key');
+  assert.match(row.title, /跳到本页上方的 API key 输入框/);
+  assert.equal(composioRowState(null, false, null).action, '');
+  assert.equal(composioRowState(null, false, null).disabled, true);
 });

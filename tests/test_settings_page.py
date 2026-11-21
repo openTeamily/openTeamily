@@ -266,10 +266,13 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('公开 HTTPS:443 Streamable HTTP', connectors)
         self.assertIn('class="connector-search-icon"', connectors)
         self.assertEqual(connectors.count('class="connector-row"'), 39)
-        # Rows start disabled until the user's own Composio key is loaded.
+        # Rows start unconfigured until the user's own Composio key is loaded.
         self.assertEqual(connectors.count('>未配置 Composio<'), 32)  # 31 rows + key card badge
         self.assertEqual(connectors.count('data-state="unavailable">未接通<'), 8)
-        self.assertEqual(connectors.count('disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接'), 31)
+        # No key yet: the connect button stays honest (never claims a connection)
+        # but is reachable — it jumps to the key field instead of being dead.
+        self.assertEqual(connectors.count('data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接'), 31)
+        self.assertEqual(connectors.count('id="connectors-key-jump"'), 1)
         self.assertEqual(connectors.count('disabled title="未接通：Composio 没有这个应用，暂时不能连接。">+ 连接'), 8)
         self.assertIn('id="composio-key-form"', connectors)
         self.assertIn('id="connectors-catalog"', connectors)

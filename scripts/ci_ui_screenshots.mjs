@@ -524,14 +524,37 @@ async function main() {
       const rowCount = await catalogRows.count();
       const connectButtons = page.locator('#connectors-catalog button');
       const connectCount = await connectButtons.count();
-      const allConnectDisabled = connectCount === 39
-        && await connectButtons.evaluateAll((nodes) => nodes.every((node) => node.disabled));
+      // Empty state: 31 rows have a toolkit, so their button points at the key
+      // input (`focus-key`, enabled but never sends a request without a key);
+      // the 8 rows without a toolkit stay disabled.
+      const focusKeyCount = await page
+        .locator('#connectors-catalog button[data-composio-action="focus-key"]')
+        .count();
+      const enabledFocusKeyCount = await page
+        .locator('#connectors-catalog button[data-composio-action="focus-key"]:not([disabled])')
+        .count();
+      const disabledConnectCount = await connectButtons.evaluateAll(
+        (nodes) => nodes.filter((node) => node.disabled).length,
+      );
       const statuses = await page.locator('#connectors-catalog .connector-status').allTextContents();
-      // The screenshot account has not saved its own Composio key, so every
-      // row stays disabled: 31 say 未配置 Composio and 8 (no toolkit) say 未接通.
       const allDisconnected = statuses.length === 39
         && statuses.filter((text) => text.trim() === '未配置 Composio').length === 31
         && statuses.filter((text) => text.trim() === '未接通').length === 8;
+      const overview = page.locator('#connectors-overview');
+      const overviewText = `${await visibleText(overview)}`;
+      const chipCount = await page.locator('#connectors-overview .connectors-group-chip').count();
+      const keyJumpHref = await page.locator('#connectors-key-jump').getAttribute('href');
+      const composioPosts = [];
+      const onComposioRequest = (request) => {
+        if (request.method() === 'POST' && request.url().includes('/v1/composio')) {
+          composioPosts.push(request.url());
+        }
+      };
+      page.on('request', onComposioRequest);
+      await page.locator('#connectors-catalog button[data-composio-action="focus-key"]').first().click();
+      await page.waitForTimeout(250);
+      const focusedId = await page.evaluate(() => document.activeElement && document.activeElement.id);
+      page.off('request', onComposioRequest);
       const connectorsText = `${await visibleText(connectors)}`;
       const addMcp = page.locator('#add-mcp-server');
       const addMcpDisabled = await addMcp.isDisabled();
@@ -539,8 +562,15 @@ async function main() {
         'settings_connectors',
         !addMcpDisabled
           && rowCount === 39
-          && allConnectDisabled
+          && focusKeyCount === 31
+          && enabledFocusKeyCount === 31
+          && disabledConnectCount === 8
           && allDisconnected
+          && overviewText.includes('共 39 个应用 · 8 个分类 · 0 个已接入')
+          && chipCount === 9
+          && keyJumpHref === '#composio-key-input'
+          && focusedId === 'composio-key-input'
+          && composioPosts.length === 0
           && connectorsText.includes('应用连接器')
           && connectorsText.includes('添加 MCP 服务器')
           && connectorsText.includes('GitHub')
@@ -550,7 +580,7 @@ async function main() {
           && !connectorsText.includes('还没有可连接的应用目录。')
           && !connectorsText.includes('已连接')
           && !/积分|套餐|升级/.test(connectorsText),
-        `rows=${rowCount}; connect=${connectCount}; addDisabled=${addMcpDisabled}; ${connectorsText || 'connectors page empty'}`,
+        `rows=${rowCount}; connect=${connectCount}; focusKey=${focusKeyCount}/${enabledFocusKeyCount}; disabled=${disabledConnectCount}; chips=${chipCount}; focused=${focusedId}; posts=${composioPosts.length}; addDisabled=${addMcpDisabled}; ${connectorsText || 'connectors page empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '46-settings-connectors.png')));
       await addMcp.click();

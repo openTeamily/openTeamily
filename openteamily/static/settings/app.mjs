@@ -211,21 +211,36 @@ export function filterConnectorCatalog(query, catalog = CONNECTOR_CATALOG) {
   ));
 }
 
-export function applyConnectorSearch(document, query) {
+export function applyConnectorFilter(document, {query = '', group = 'all'} = {}) {
   const list = document.getElementById('connectors-catalog');
   const empty = document.getElementById('connectors-empty');
-  const visible = filterConnectorCatalog(query);
-  if (!list) {
-    if (empty) empty.hidden = visible.length > 0;
-    return visible;
-  }
+  const hits = new Set(filterConnectorCatalog(query).map((item) => item.id));
+  const visible = CONNECTOR_CATALOG.filter((item) => (
+    hits.has(item.id) && (group === 'all' || item.category === group)
+  ));
   const allowed = new Set(visible.map((item) => item.id));
-  for (const row of list.querySelectorAll('[data-connector-id]')) {
-    const id = row.getAttribute('data-connector-id');
-    row.hidden = !allowed.has(id);
+  if (list) {
+    for (const row of list.querySelectorAll('[data-connector-id]')) {
+      row.hidden = !allowed.has(row.getAttribute('data-connector-id'));
+    }
   }
-  if (empty) empty.hidden = visible.length > 0;
+  const groups = document.getElementById('connectors-groups');
+  if (groups && typeof groups.querySelectorAll === 'function') {
+    for (const chip of groups.querySelectorAll('[data-connector-group]')) {
+      chip.setAttribute('aria-pressed', chip.getAttribute('data-connector-group') === group ? 'true' : 'false');
+    }
+  }
+  if (empty) {
+    empty.hidden = visible.length > 0;
+    if (visible.length === 0) {
+      empty.textContent = String(query || '').trim() ? '没有匹配的应用。' : '这个分类下还没有应用。';
+    }
+  }
   return visible;
+}
+
+export function applyConnectorSearch(document, query) {
+  return applyConnectorFilter(document, {query});
 }
 
 // Composio connections. Each user enters their own Composio API key; there is
@@ -249,8 +264,8 @@ export function composioRowState(row, configured, connection) {
             title: '未接通：Composio 没有这个应用，暂时不能连接。'};
   }
   if (!configured) {
-    return {state: 'unconfigured', status: '未配置 Composio', button: '+ 连接', disabled: true, action: '',
-            title: '未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。'};
+    return {state: 'unconfigured', status: '未配置 Composio', button: '+ 连接', disabled: false, action: 'focus-key',
+            title: '未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。'};
   }
   if (connection && connection.state === 'connected') {
     return {state: 'connected', status: '已连接', button: '断开', disabled: false, action: 'disconnect',
@@ -977,6 +992,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (input) input.placeholder = composioConfigured ? '输入新 key 替换（原文不会显示）' : '粘贴你的 Composio API key';
     if (remove) remove.hidden = !composioConfigured;
+    const keyHint = document.getElementById('connectors-key-hint');
+    if (keyHint) keyHint.hidden = composioConfigured;
     applyComposioRows(document, composioConfigured, composioItems);
   }
 
@@ -1066,6 +1083,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const action = button.getAttribute('data-composio-action');
       const row = button.closest('[data-connector-id]');
       const toolkit = row ? row.getAttribute('data-composio-toolkit') : '';
+      if (action === 'focus-key') {
+        const key = document.getElementById('composio-key-input');
+        if (key) {
+          if (typeof key.focus === 'function') key.focus();
+          if (typeof key.scrollIntoView === 'function') key.scrollIntoView({block: 'center'});
+        }
+        composioNote('error', '还没有填 Composio API key：先在上面填好保存，再点「连接」才会真的连到 Composio。');
+        return;
+      }
       if (action === 'connect' && toolkit) {
         const popup = typeof globalThis.open === 'function' ? globalThis.open('', '_blank') : null;
         button.disabled = true;
@@ -1107,12 +1133,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   const connectorSearch = document.getElementById('connector-search');
+  const connectorGroups = document.getElementById('connectors-groups');
+  let connectorGroup = 'all';
+  const applyConnectorView = () => applyConnectorFilter(document, {
+    query: connectorSearch ? connectorSearch.value : '',
+    group: connectorGroup,
+  });
   if (connectorSearch) {
-    const applySearch = () => applyConnectorSearch(document, connectorSearch.value);
-    connectorSearch.addEventListener('input', applySearch);
-    connectorSearch.addEventListener('search', applySearch);
-    applySearch();
+    connectorSearch.addEventListener('input', applyConnectorView);
+    connectorSearch.addEventListener('search', applyConnectorView);
   }
+  if (connectorGroups) {
+    connectorGroups.addEventListener('click', event => {
+      const chip = event.target && typeof event.target.closest === 'function'
+        ? event.target.closest('[data-connector-group]') : null;
+      if (!chip) return;
+      connectorGroup = chip.getAttribute('data-connector-group') || 'all';
+      applyConnectorView();
+    });
+  }
+  if (connectorSearch || connectorGroups) applyConnectorView();
 
   const addMcp = document.getElementById('add-mcp-server');
   const mcpAck = document.getElementById('mcp-dialog-ack');
