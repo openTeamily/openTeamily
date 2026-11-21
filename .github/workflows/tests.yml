@@ -57,6 +57,7 @@ jobs:
       - run: node --test tests/dsbot_api_shim.test.mjs
       - run: node --test tests/onboarding_page.test.mjs
       - run: node --test tests/agents_creator_filter.test.mjs
+      - run: node --test tests/agents_archived_view.test.mjs
       - run: node --test tests/registration_page.test.mjs
       - run: node --test tests/workspace_events.test.mjs
       - run: node --test tests/skill_imports.test.mjs

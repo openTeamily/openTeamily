@@ -97,7 +97,7 @@ export function agentsV1({ endpoints, log }) {
       const body = await req.json()
       const { agent } = await call('get', { workspace_id: workspaceId, id })
       if (Number.isInteger(body.revision) && body.revision !== agent.revision) throw new FeatureError(409, 'conflict', 'Agent was updated; reload and retry')
-      const result = await call('archive', { workspace_id: workspaceId, id })
+      const result = await call('archive', { workspace_id: workspaceId, id, archived: body.archived })
       return { status: 200, body: { agent: publicAgent(result.agent) } }
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents(?:/${HEX})?$`), handle: wrap(async (req, workspaceId, id) => {

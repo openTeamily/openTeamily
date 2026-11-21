@@ -272,3 +272,11 @@ body.app-workspace:not(.chat-open) > main > #main-panel:has(> .directory-top) { 
   margin-top: 0.35rem;
   align-self: flex-start;
 }
+
+/* Archived directory rows: only owners and admins can open this view. */
+.archived-toggle { display: inline-flex; align-items: center; gap: .4rem; font-size: .9rem; }
+.archived-toggle[hidden] { display: none; }
+.archived-tag { justify-self: start; padding: .1rem .45rem; border-radius: 999px; background: var(--ot-bg-accent); color: var(--ot-muted); font-size: .75rem; }
+.agent-card .restore-cta { align-self: center; padding: .3rem .7rem; border: 1px solid var(--ot-line-strong); border-radius: .5rem; background: var(--ot-surface); font-size: .85rem; }
+.agent-card .restore-cta:hover { background: var(--ot-bg-accent); }
+.agent-card .restore-cta:disabled { opacity: .6; }

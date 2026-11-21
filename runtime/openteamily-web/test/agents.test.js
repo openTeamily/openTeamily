@@ -119,6 +119,31 @@ test('v1 lists agents and conversations in the legacy /v1 shape', async () => {
   assert.equal(homepage.body.error.code, 'not_moved')
 })
 
+test('the legacy archive route forwards an explicit unarchive request', async () => {
+  const { agentsV1 } = await import('../features/agents/v1.js')
+  const seen = []
+  const id = 'a'.repeat(32)
+  const row = { revision: 7 }
+  const v1 = agentsV1({
+    endpoints: {
+      get: async () => ({ agent: { id, revision: row.revision } }),
+      archive: async (p) => {
+        seen.push(p); row.revision = 8
+        return { agent: { id, archived: p.archived === false ? 0 : 1, revision: row.revision } }
+      },
+    },
+    log: () => {},
+  })
+  const path = `/v1/workspaces/${W}/agents/${id}/archive`
+  const restored = await v1({ method: 'POST', path, body: { revision: 7, archived: false } })
+  assert.equal(restored.status, 200)
+  assert.equal(restored.body.agent.archived, 0)
+  assert.equal(seen[0].archived, false, 'the route dropped the unarchive flag')
+  const archived = await v1({ method: 'POST', path, body: { revision: 8 } })
+  assert.equal(archived.status, 200)
+  assert.equal(seen[1].archived, undefined, 'an ordinary archive request gained an archived value')
+})
+
 
 test('official agents bundle imports once including history', async () => {
   const { createHash } = await import('node:crypto')

@@ -24,6 +24,15 @@ export function canManage(actor) {
   return actor === 'owner' || actor === 'admin';
 }
 
+// Only owners and admins can list archived agents; the server refuses everyone else.
+export function canSeeArchived(actor) {
+  return canManage(actor);
+}
+
+export function archivedDirectoryQuery(showArchived) {
+  return showArchived ? '/agents?limit=100&include_archived=1' : '/agents?limit=100';
+}
+
 export const AGENT_CATEGORIES = [
   {slug: 'content-creation', label: 'Content Creation'},
   {slug: 'customer-support', label: 'Customer Support'},
@@ -395,6 +404,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   let directoryAgents = [];
+  let showArchived = false;
 
   function matchesDirectoryQuery(item, query) {
     if (!query) return true;
@@ -441,11 +451,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         tag.textContent = categoryLabel(item.category);
         copy.append(tag);
       }
-      const chat = document.createElement('a');
-      chat.className = 'chat-cta';
-      chat.href = '/chat#workspace=' + encodeURIComponent(id) + '&agent=' + encodeURIComponent(item.id);
-      chat.textContent = '聊天';
-      li.append(avatar, copy, chat);
+      if (item.archived) {
+        const tag = document.createElement('span');
+        tag.className = 'archived-tag';
+        tag.textContent = '已归档';
+        copy.append(tag);
+        const restore = document.createElement('button');
+        restore.type = 'button';
+        restore.className = 'restore-cta';
+        restore.dataset.restore = item.id;
+        restore.dataset.revision = String(item.revision || 0);
+        restore.textContent = '恢复';
+        li.append(avatar, copy, restore);
+      } else {
+        const chat = document.createElement('a');
+        chat.className = 'chat-cta';
+        chat.href = '/chat#workspace=' + encodeURIComponent(id) + '&agent=' + encodeURIComponent(item.id);
+        chat.textContent = '聊天';
+        li.append(avatar, copy, chat);
+      }
       list.append(li);
     }
     if (empty) {
@@ -507,8 +531,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         ? '你是管理员，可以创建和归档智能体，并与自己的智能体对话。'
         : '你是成员，可以查看目录并与自己的智能体对话，但不能改目录。';
     createForm.hidden = !canManage(actor);
+    const archivedToggle = document.getElementById('show-archived');
+    const archivedWrap = document.getElementById('show-archived-wrap');
+    const manage = canSeeArchived(actor);
+    if (archivedWrap) archivedWrap.hidden = !manage;
+    if (archivedToggle) {
+      archivedToggle.disabled = !manage;
+      if (!manage) showArchived = false;
+      archivedToggle.checked = showArchived;
+    }
     editForm.hidden = true;
-    const listed = await request('GET', `/v1/workspaces/${id}/agents?limit=100`);
+    const listed = await request('GET', `/v1/workspaces/${id}${archivedDirectoryQuery(showArchived)}`);
     if (listed.status !== 200) {
       show('error', messageFor(listed.body.error, '无法加载智能体目录。'));
       return;
@@ -722,7 +755,34 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   workspaceSelect.addEventListener('change', () => loadWorkspace());
 
+  const archivedToggle = document.getElementById('show-archived');
+  if (archivedToggle) archivedToggle.addEventListener('change', async () => {
+    if (!canSeeArchived(actor)) return;
+    showArchived = archivedToggle.checked;
+    await loadWorkspace();
+  });
+
   document.getElementById('agent-list').addEventListener('click', async event => {
+    const restore = event.target.closest('button[data-restore]');
+    if (restore && restore.dataset && restore.dataset.restore) {
+      if (!canManage(actor)) return;
+      const id = workspaceId();
+      restore.disabled = true;
+      const result = await request(
+        'POST',
+        `/v1/workspaces/${id}/agents/${restore.dataset.restore}/archive`,
+        {revision: Number(restore.dataset.revision || 0), archived: false},
+      );
+      if (result.status !== 200) {
+        restore.disabled = false;
+        restore.dataset.revision = String((result.body.agent && result.body.agent.revision) || 0);
+        show('error', messageFor(result.body.error, '无法恢复这个智能体。'));
+        return;
+      }
+      show('ok', '已恢复，回到默认目录。');
+      await loadWorkspace();
+      return;
+    }
     const button = event.target.closest('button[data-id]');
     if (!button) return;
     const id = workspaceId();
