@@ -31,7 +31,7 @@ KEY_HEADER = 'HTTP_X_OT_GATEWAY_KEY'
 PAGE_ROUTE = '/api/openteamily/page'
 API_ROUTE = '/api/openteamily'
 GATEWAY_PREFIX = '/v1/gateway/'
-GATEWAY_TOKEN = re.compile(r'^ota_([0-9a-f]{32})_([A-Za-z0-9_-]{43})$')
+GATEWAY_TOKEN = re.compile(r'^(?:ota_([0-9a-f]{32})_)?([A-Za-z0-9_-]{43})$')
 GATEWAY_INVOKE = re.compile(r'^/v1/gateway/agents/([0-9a-f]{32})/invocations$')
 GATEWAY_STATUS = re.compile(r'^/v1/gateway/invocations/([0-9a-f]{32})$')
 BEARER = re.compile(r'^Bearer ([A-Za-z0-9._~+/-]+=*)$')
@@ -285,6 +285,19 @@ def _upstream_row(db, instance_id):
     return row
 
 
+def _legacy_key_instance(db, token):
+    """Resolve a pre-cutover agent key to its owner's DS-Bot by stored digest."""
+    key = db.execute('SELECT workspace_id FROM agent_api_keys WHERE token_hash=? AND revoked=0',
+                     (digest(token),)).fetchone()
+    owner = db.execute('SELECT owner_id FROM workspaces WHERE id=?', (key[0],)).fetchone() if key else None
+    if owner is None:
+        raise GatewayError(401, 'unauthorized')
+    try:
+        return owned_instance(db, owner[0])
+    except RuntimeFault as error:
+        raise GatewayError(503, 'dsbot_not_ready') from error
+
+
 def authorize(db, *, cookie_header, session_cookie, method, uri, origin, fetch_site, fetch_mode,
               upgrade, public_origin, now, routes, authorization=''):
     """Return the internal headers for the edge, or raise GatewayError."""
@@ -301,6 +314,8 @@ def authorize(db, *, cookie_header, session_cookie, method, uri, origin, fetch_s
         if upgrade:
             raise GatewayError(400, 'upgrade')
         instance_id, endpoint, extra, token = call
+        if instance_id is None:
+            instance_id = _legacy_key_instance(db, token)
         row = _upstream_row(db, instance_id)
         address = validate_address(row[1])
         # Path includes the original /v1/gateway/... so the plugin can dispatch;

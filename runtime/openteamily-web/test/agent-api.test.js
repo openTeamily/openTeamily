@@ -5,7 +5,6 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createAgents } from '../features/agents/index.js'
 import { createAgentApi } from '../features/agent-api/index.js'
 import { loadFeatures } from '../src/features.js'
 
@@ -14,12 +13,32 @@ const W = 'a'.repeat(32)
 const INSTANCE = 'f'.repeat(32)
 
 async function fixture({ chatTurn } = {}) {
-  const turns = []
-  const runtime = async () => ({ rt: {}, ctx: {}, chatTurn: chatTurn ?? (async (key, text, rid) => { turns.push({ key, text, rid }); return { text: 'DS-Bot answer', sessionId: 's', turnId: 't' } }) })
+  const turns = [], byId = new Map()
+  let seq = 0
+  const run = chatTurn ?? (async (key, text, rid) => { turns.push({ key, text, rid }); return { text: 'DS-Bot answer', sessionId: 's', turnId: 't' } })
   const table = {}
-  const host = { identity: { instanceId: INSTANCE }, runtime, call: async (name, payload) => table[name](payload) }
-  const agents = createAgents({ db: new DatabaseSync(':memory:'), host }).endpoints
+  const agents = {
+    async create(p) {
+      const agent = { id: String(++seq).repeat(32), workspace_id: p.workspace_id, name: p.name, summary: p.summary ?? '', instructions: p.instructions ?? '', archived: false }
+      byId.set(agent.id, agent)
+      return { status: 201, agent }
+    },
+    async get(p) {
+      const agent = byId.get(p.id)
+      if (!agent) throw Object.assign(new Error('Agent not found'), { code: 'agents/not-found', status: 404 })
+      return { agent }
+    },
+    async turn(p) {
+      const agent = byId.get(p.agent_id)
+      if (!agent) throw Object.assign(new Error('Agent not found'), { code: 'agents/not-found', status: 404 })
+      const key = `agent:${agent.id}:${p.key}`
+      const text = `You are ${agent.name}.\n${agent.instructions}\n\nUser: ${p.text}`
+      return run(key, text, p.request_id)
+    },
+  }
   for (const [k, v] of Object.entries(agents)) table[`agents/${k}`] = v
+  const runtime = async () => ({ rt: {}, ctx: {} })
+  const host = { identity: { instanceId: INSTANCE }, runtime, call: async (name, payload) => table[name](payload) }
   const clock = { now: 1_800_000_000 }
   const api = createAgentApi({ db: new DatabaseSync(':memory:'), host, clock: () => clock.now })
   const { agent } = await agents.create({ workspace_id: W, name: '客服', instructions: 'Be brief.', idempotency_key: 'a'.repeat(16) })

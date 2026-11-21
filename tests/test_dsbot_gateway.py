@@ -388,6 +388,27 @@ class GatewayTest(unittest.TestCase):
         # steer to a browser page.
         self.assertEqual(self.call(self.tokens['a' * 32], uri='/v1/gateway/invocations/' + 'c' * 32)[0], 401)
 
+    def test_pre_cutover_agent_keys_are_routed_by_their_digest(self):
+        old = 'L' * 43
+        with self.store.transaction() as db:
+            db.execute('INSERT INTO workspace_agents VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                       ('a' * 32, '0' * 32, 'agent', 'h', '', '', 1, 1, 1, 'a' * 32, 0, 'kh', 'rh'))
+            db.execute('INSERT INTO agent_api_keys VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                       ('e' * 32, '0' * 32, 'a' * 32, 'legacy', digest(old), 'invoke', 5, 1,
+                        'a' * 32, None, 0))
+        status, headers = self.call(None, uri='/v1/gateway/agents/' + 'a' * 32 + '/invocations',
+                                    method='POST', Authorization='Bearer ' + old)
+        self.assertEqual(status, 204)
+        self.assertEqual(headers['X-OT-Instance'], '1' * 32)
+        self.assertEqual(headers['X-OT-Upstream'], '172.30.0.11:8080')
+        self.assertEqual(headers['X-OT-Upstream-Token'], old)
+        self.assertEqual(self.call(None, uri='/v1/gateway/agents/' + 'a' * 32 + '/invocations',
+                                   method='POST', Authorization='Bearer ' + 'X' * 43)[0], 401)
+        with self.store.transaction() as db:
+            db.execute('UPDATE agent_api_keys SET revoked=1')
+        self.assertEqual(self.call(None, uri='/v1/gateway/agents/' + 'a' * 32 + '/invocations',
+                                   method='POST', Authorization='Bearer ' + old)[0], 401)
+
     def test_nginx_config_has_external_agent_location(self):
         conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)
         self.assertIn('location ^~ /v1/gateway/ {', conf)

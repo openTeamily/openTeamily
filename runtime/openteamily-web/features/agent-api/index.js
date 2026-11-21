@@ -7,8 +7,10 @@
 // against a SHA-256 digest and never stored. An invocation is a native DS-Bot turn
 // of the named agent (agents/turn), run in the background and polled by id.
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { importPending } from '../../src/pending-import.js'
 import { openDatabase, newId } from '../../src/store.js'
 import { agentApiV1 } from './v1.js'
+import { importOfficialBundle } from './migrate.js'
 
 export const MAX_KEYS_PER_AGENT = 10
 export const DEFAULT_RATE = 10
@@ -16,6 +18,7 @@ const NAME = /^[^\u0000-\u001f\u007f]{1,60}$/
 const ID = /^[0-9a-f]{32}$/
 const IDEM = /^[A-Za-z0-9_-]{16,64}$/
 const TOKEN = /^ota_([0-9a-f]{32})_([A-Za-z0-9_-]{43})$/
+const LEGACY_TOKEN = /^[A-Za-z0-9_-]{43}$/
 const PROMPT_MAX = 8000
 const sha = (t) => createHash('sha256').update(String(t)).digest('hex')
 const now = () => Math.floor(Date.now() / 1000)
@@ -50,7 +53,8 @@ export function createAgentApi({ db, host, clock = now }) {
   // Constant-time check of a presented key; 401 for anything that does not match.
   function authenticate(token) {
     const m = typeof token === 'string' ? TOKEN.exec(token) : null
-    if (!m || m[1] !== host.identity.instanceId) fail('unauthorized', 'Invalid API key', 401)
+    const legacy = !m && typeof token === 'string' && LEGACY_TOKEN.test(token)
+    if ((!m && !legacy) || (m && m[1] !== host.identity.instanceId)) fail('unauthorized', 'Invalid API key', 401)
     const digest = sha(token)
     const row = one('SELECT * FROM api_keys WHERE token_hash=?', digest)
     if (!row || row.revoked || !timingSafeEqual(Buffer.from(row.token_hash), Buffer.from(digest))) fail('unauthorized', 'Invalid API key', 401)
@@ -150,6 +154,8 @@ export function createAgentApi({ db, host, clock = now }) {
 export default async function agentApi(host) {
   const db = await openDatabase(host, 'agent-api.sqlite3')
   const api = createAgentApi({ db, host })
+  const migrate = async (bundle) => importOfficialBundle(db, bundle)
+  await importPending({ host, db, migrate })
   // Invocations a previous process left queued/running are re-run once.
   db.exec("UPDATE api_invocations SET status='queued' WHERE status='running'")
   host.runtime({ timeoutMs: 10 * 60_000 }).then(() => {
@@ -157,5 +163,5 @@ export default async function agentApi(host) {
   }, () => {})
   const wrapped = {}
   for (const [name, fn] of Object.entries(api.endpoints)) wrapped[name] = async (payload) => fn(payload ?? {})
-  return { pages: [], endpoints: wrapped }
+  return { pages: [], endpoints: wrapped, migrate }
 }

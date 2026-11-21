@@ -60,6 +60,13 @@ FEATURE_TABLES = {
         ('meetings', 'SELECT m.* FROM meetings m JOIN workspaces w ON w.id = m.workspace_id '
                      'WHERE w.owner_id = ? ORDER BY m.id'),
     ],
+    'agent-api': [
+        ('agent_api_keys',
+         'SELECT k.id, k.workspace_id, k.agent_id, k.name, k.token_hash, k.scope, '
+         'k.rate_per_minute, k.created, k.last_used, k.revoked '
+         'FROM agent_api_keys k JOIN workspaces w ON w.id = k.workspace_id '
+         'WHERE w.owner_id = ? ORDER BY k.created, k.id'),
+    ],
     'memory': [
         ('ot_users', _MEMORY_USERS),
         ('memory_pages', _scoped('memory_pages')),

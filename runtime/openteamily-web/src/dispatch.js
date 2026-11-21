@@ -40,7 +40,7 @@ export const GATEWAY_PATH = '/api/openteamily/gateway'
 
 const INVOKE = /^\/v1\/gateway\/agents\/([0-9a-f]{32})\/invocations$/
 const STATUS = /^\/v1\/gateway\/invocations\/([0-9a-f]{32})$/
-const TOKEN = /^ota_[0-9a-f]{32}_[A-Za-z0-9_-]{43}$/
+const TOKEN = /^(?:ota_[0-9a-f]{32}_)?[A-Za-z0-9_-]{43}$/
 
 function gatewayJSON(body, status = 200) {
   return new Response(JSON.stringify(body), {
