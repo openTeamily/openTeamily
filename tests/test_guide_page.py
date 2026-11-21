@@ -49,6 +49,23 @@ class GuidePageTests(unittest.TestCase):
         self.assertNotIn('折叠会话列表', script)
         self.assertNotIn('innerHTML', script)
 
+    def test_guide_dialog_links_to_the_page_each_entry_names(self):
+        page = self.raw.call('GET', '/guide')
+        self.assertEqual(page['status'], 200)
+        html = page['body'].decode()
+        self.assertIn('id="guide-dialog-open"', html)
+        script = self.raw.call('GET', '/guide/app.mjs')['body'].decode()
+        self.assertIn('export function dialogHref', script)
+        self.assertIn('export function groupNoteText', script)
+        self.assertIn('/settings#send-shortcut', script)
+        self.assertIn('现在能做什么：', script)
+        self.assertIn('已知边界：', script)
+        # The graph view stays greyed; this slice never fakes it. The help centre is now a
+        # real /help page (main), so the account menu links to it instead of a greyed stub.
+        self.assertIn('id="view-graph" disabled', html)
+        self.assertIn('<a href="/help" role="menuitem">帮助中心</a>', html)
+        self.assertNotIn('未实现：还没有 OpenTeamily 帮助中心页', html)
+
     def test_guide_search_box_names_itself_and_states_the_empty_copy(self):
         page = self.raw.call('GET', '/guide')
         self.assertEqual(page['status'], 200)

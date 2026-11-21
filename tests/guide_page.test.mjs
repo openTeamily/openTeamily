@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 import * as guideModule from '../openteamily/static/guide/app.mjs';
-import {CATALOG, CATEGORIES, countByCategory, filterCatalog, formatPath, groupCatalog, guideHref, guideInitialQuery} from '../openteamily/static/guide/app.mjs';
+import {CATALOG, CATEGORIES, countByCategory, dialogHref, filterCatalog, formatPath, groupCatalog, groupNoteText, guideHref, guideInitialQuery} from '../openteamily/static/guide/app.mjs';
 
 test('catalog only contains known categories and no Teamily guide prose', () => {
   const ids = new Set(CATEGORIES.map((item) => item.id));
@@ -356,4 +358,43 @@ test('a fruitless search says there is no match and how to clear it', async () =
   } finally {
     page.restore();
   }
+});
+
+const STATIC_ROOT = new URL('../openteamily/static/', import.meta.url).pathname;
+
+test('every guide item names a real page and a real anchor', () => {
+  for (const item of CATALOG) {
+    assert.ok(item.href, `every guide item must name a real page: ${item.id}`);
+    assert.match(item.href, /^\/[a-z-]+(?:\?[a-z=_-]+)?(?:#[a-z-]+)?$/, `${item.id}: ${item.href}`);
+    const [target, fragment] = item.href.split('#');
+    const route = target.split('?')[0].replace(/^\//, '');
+    // settings_page.py serves /space out of the artifacts directory.
+    const page = route === 'space' ? 'artifacts' : route;
+    const file = path.join(STATIC_ROOT, page, 'index.html');
+    assert.ok(fs.existsSync(file), `missing page for ${item.id}: ${file}`);
+    if (fragment) {
+      const html = fs.readFileSync(file, 'utf8');
+      assert.ok(html.includes(`id="${fragment}"`),
+        `missing #${fragment} on /${page} for ${item.id}`);
+    }
+  }
+});
+
+test('dialogHref sends the reader to the page the entry names', () => {
+  assert.equal(dialogHref({id: 'x', href: '/settings#privacy'}), '/settings#privacy');
+  assert.equal(dialogHref({id: 'x'}), '');
+  const memory = CATALOG.find((item) => item.id === 'memory-profile');
+  assert.equal(dialogHref(memory), '/memory?page=profile');
+});
+
+test('groupNoteText writes what a group can do now and where it stops', () => {
+  for (const category of CATEGORIES) {
+    if (category.id === 'all') continue;
+    const text = groupNoteText(category.id);
+    assert.match(text, /现在能做什么：/, `${category.id} must say what works today`);
+    assert.match(text, /已知边界：/, `${category.id} must name its boundary`);
+    assert.doesNotMatch(text, /即将|敬请期待|coming soon/i, `${category.id} must not promise future work`);
+  }
+  assert.match(groupNoteText('calls'), /暂无条目/);
+  assert.equal(groupNoteText('nope'), '');
 });
