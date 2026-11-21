@@ -67,6 +67,13 @@ CREATE TABLE memory_capture_groups (
   membership INTEGER NOT NULL, cursor INTEGER NOT NULL, next_scan INTEGER NOT NULL,
   PRIMARY KEY(workspace_id,conversation_id));
 CREATE INDEX memory_capture_groups_due ON memory_capture_groups(next_scan);
+`, `
+CREATE TABLE memory_shares (
+  id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL,
+  page_id TEXT NOT NULL REFERENCES memory_pages(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE, token_prefix TEXT NOT NULL,
+  created INTEGER NOT NULL, created_by TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX memory_share_page ON memory_shares(workspace_id, page_id, revoked);
 `]
 
 export const IMPORT_TABLES = {

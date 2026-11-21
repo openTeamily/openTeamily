@@ -7,6 +7,7 @@ import {
   MAX_PAGES, TITLE_MAX, actor, casefold, loadPage, normalizeTopics, pageView, pagesView, recallWorkspace, replaceTopics, snippet,
   titleHash, topicsFor, usernames, validBody, validTitle,
 } from './common.js'
+import { republishShare, retireShares } from './share.js'
 
 export const VERSION_KEEP = 50
 const W = '([0-9a-f]{32})'
@@ -76,7 +77,7 @@ async function update(req, workspaceId, row) {
   if (title === row.title && content === row.body && stableJson(topics) === stableJson(current)) return { body: { page: pageView(req.store, row) } }
   const hash = titleHash(title)
   const user = actor(req)
-  return req.store.transaction((store) => {
+  const result = req.store.transaction((store) => {
     if (title !== row.title && store.get('SELECT id FROM memory_pages WHERE workspace_id=? AND title_hash=? AND id!=?', workspaceId, hash, row.id)) {
       refuse(409, 'conflict', 'A memory page with this title already exists')
     }
@@ -88,6 +89,8 @@ async function update(req, workspaceId, row) {
     if ('topics' in changes) replaceTopics(store, workspaceId, row.id, topics)
     return { body: { page: pageView(store, loadPage(store, workspaceId, row.id)) } }
   })
+  await republishShare(req, result.body.page)
+  return result
 }
 
 async function dispatch(req, workspaceId, targetId, removing) {
@@ -100,6 +103,7 @@ async function dispatch(req, workspaceId, targetId, removing) {
     if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid memory request')
     requireBodyKeys(await req.json(), [])
     const removed = pageView(req.store, row, { includeBody: false })
+    await retireShares(req, workspaceId, row.id)
     req.store.run('DELETE FROM memory_pages WHERE id=?', row.id)
     return { body: { removed } }
   }

@@ -134,6 +134,7 @@ function graphFetcher(graph) {
     if (path === '/v1/workspaces/ws-1/memory') return json(200, {items: []});
     if (path === '/v1/workspaces/ws-1/memory/actions') return json(200, {items: []});
     if (path === '/v1/workspaces/ws-1/memory/graph') return json(200, graph);
+    if (/^\/v1\/workspaces\/ws-1\/memory\/[a-z0-9-]+\/share$/.test(path)) return json(200, {share: null});
     throw new Error('unexpected ' + path);
   };
 }

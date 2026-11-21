@@ -88,7 +88,7 @@ A fourth visual and functional pass after #255. Still **not** a Teamily + Impecc
 - **Chat composer:** a lower capsule shell with a left-hand “+” sheet (上传 is wired to the existing media-attachment input; 创建 items that already have pages link to `/space`, `/automations` and `/memory`; the rest stay 未接通), icon tools, and a circular arrow send button. Enter-to-send is unchanged.
 - **Group chat surface:** the 群内智能体 form is collapsed behind a details summary so the conversation is the main surface; the request/add APIs are unchanged.
 - **Discover feed:** 4-column cover cards use hashed geometric patterns and a small dark kind badge; author monogram and like count sit on the meta row. Image works still use the same-origin published file, never invented screenshots.
-- **Memory editor:** typography and a markdown toolbar (bold/italic/headings/list/quote/code/link insert into the existing textarea and save through the current API). 做梦 / 分享 / 历史 stay disabled and labelled 未接通. Delete behaviour was not changed (#251 owns confirm).
+- **Memory editor:** typography and a markdown toolbar (bold/italic/headings/list/quote/code/link insert into the existing textarea and save through the current API). 做梦 / 历史 stay as they are; 分享 now mints a revocable read-only link for the open page (`docs/MEMORY.md`). Delete behaviour was not changed (#251 owns confirm).
 - **Connectors and channels:** original geometric CSS marks (category-colored tiles with simple strokes). They are not vendor trademarks; a faithful official icon is intentionally not attempted.
 - **Settings hub:** scoped dark-theme row hover now uses a dark green surface with light text, instead of white on `#a4e3c5`, without changing the light-theme white-ring canvas.
 

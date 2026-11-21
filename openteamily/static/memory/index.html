@@ -235,12 +235,22 @@
         <p id="editor-saved" class="editor-saved" hidden></p>
         <div class="editor-top-actions">
           <button type="button" id="dream-page" title="找出这一页可以合并的重复段落；不接受不会改动原文">做梦</button>
+          <button type="button" id="share-memory" title="生成这一页的只读分享链接；只有能编辑这一页的人可以生成或撤销。">分享</button>
           <button type="button" id="memory-share-group" aria-haspopup="dialog" hidden>分享到来源群</button>
           <button type="button" id="page-history-open" title="查看此页的历史版本">历史</button>
           <button type="button" id="page-export" disabled title="打开一页记忆后才能导出为 Markdown。">导出</button>
           <p id="page-export-status" class="note editor-export-status" hidden></p>
         </div>
       </div>
+      <section id="share-row" class="share-row" aria-label="分享链接" hidden>
+        <p id="share-note" class="note"></p>
+        <div class="share-actions">
+          <input id="share-link" type="text" readonly autocomplete="off" aria-label="只读分享链接" hidden>
+          <button type="button" id="copy-share-link" hidden>复制链接</button>
+          <button type="button" id="revoke-share-link" hidden>撤销链接</button>
+        </div>
+        <p id="share-status" role="status"></p>
+      </section>
       <p id="memory-page-chat-source" class="note" hidden><a id="memory-page-chat-link">查看来源消息</a></p>
       <section id="page-history" class="page-history" aria-labelledby="page-history-title" hidden>
         <header class="page-history-head">

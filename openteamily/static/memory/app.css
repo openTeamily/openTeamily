@@ -1048,3 +1048,41 @@ html[data-theme-resolved="dark"] #editor-form .editor-link-row label{ display: f
 #memory-review-body { min-height: 7rem; }
 #memory-review-excerpt { margin: .5rem 0; padding: .625rem; border-inline-start: 3px solid var(--ot-line); background: var(--ot-surface-2); overflow-wrap: anywhere; }
 .memory-views a[data-view="candidates"] { padding-inline-start: 2.125rem; }
+
+/* Read-only share row under the editor topbar (issue 299). */
+.share-row {
+  margin: 0.25rem 0 0.9rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius-lg, 10px);
+  background: var(--ot-bg-accent);
+}
+.share-row .note { margin: 0 0 0.5rem; }
+.share-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+.share-actions input {
+  flex: 1 1 14rem;
+  min-width: 0;
+  padding: 0.35rem 0.5rem;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--ot-ink);
+  background: var(--ot-surface);
+  border: 1px solid var(--ot-line);
+  border-radius: 8px;
+}
+.share-actions button {
+  padding: 0.35rem 0.65rem;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--ot-ink);
+  background: var(--ot-surface);
+  border: 1px solid var(--ot-line-strong);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.share-actions button:hover:not(:disabled) { border-color: var(--ot-accent); color: var(--ot-accent); }
+.share-actions button:disabled { opacity: 0.7; cursor: not-allowed; }
+#share-status { margin: 0.45rem 0 0; font-size: 0.82rem; color: var(--ot-muted); }
+@media (max-width: 30rem) {
+  .share-actions input { flex-basis: 100%; }
+}

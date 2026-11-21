@@ -125,6 +125,8 @@ function directoryFetcher(requests) {
     if (path === '/v1/workspaces/ws-1/memory/graph') {
       return json(200, {nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}});
     }
+    const shareMatch = /^\/v1\/workspaces\/ws-1\/memory\/([^/?]+)\/share$/.exec(path);
+    if (shareMatch) return json(200, {share: null});
     const pageMatch = /^\/v1\/workspaces\/ws-1\/memory\/([^/?]+)$/.exec(path);
     if (pageMatch) {
       const page = pages.find((row) => row.id === pageMatch[1]);

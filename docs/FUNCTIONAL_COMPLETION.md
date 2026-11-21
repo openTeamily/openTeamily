@@ -27,6 +27,8 @@ repair PR follows functional review; controls here use existing components/nativ
   MIME sniffing and per-request revocation checks. Publishing warning states public media visibility.
 - [x] Private three-section memory profile GET/save/reload per workspace and user, optimistic revisions.
   No invented generated text or silent injection into model prompts.
+- [x] Read-only, revocable share link for one memory page: token shown once, hashed at rest, rotated on
+  re-share, immediate `404` after revoke, public page carries only that page and no editor.
 - [x] Search in-flight race regression and stale Discover-tab response protection.
 
 ## Complete remaining-domain matrix (not silently dropped)
@@ -37,7 +39,7 @@ repair PR follows functional review; controls here use existing components/nativ
 | Access/collaboration #5 | Workspace membership and invitation-link APIs exist | Invite approval/freeze, in-chat invite links (with optional approval) and member suspension (owner any, admin members only, enforced centrally on workspace/conversation access and invite accept) are implemented. Still pending: comparison evidence |
 | Agents/public conversation #6 #192 | Stored public starters can launch an authenticated member conversation (#206) | Anonymous typed public chat, external channels and full public composer; no unrequested model call |
 | Teams/groups #7 #89 | Stored groups and explicit selected-agent runtime requests | Three self-written AI-team templates; round 3 adds an owner-listed public team directory with name/summary search, signed-in only, joining through the approval queue (uncompared functional flow). Still pending: a public AI-team (agent bundle) directory, complete collaboration execution; no import of competing #126/#131 protocol |
-| Memory #8 #179 | Pages/actions/graph; private profile editing here | Dreaming/generated profiles, explicit prompt integration and comparison acceptance |
+| Memory #8 #179 | Pages/actions/graph; private profile editing; one-page revocable read-only share links here | Public index or site export of memory, dreaming/generated profiles, explicit prompt integration and comparison acceptance |
 | Works/Studio #9 #90 | Existing supported artifacts; opt-in public works (#209); media content here | Remaining richer Studio workflows and same-state comparison, not a completeness claim from rendering |
 | Meetings #9 #12 #157 | Manual meeting records with transcript/summary/action fields and Markdown export are stored through the existing meetings API | Live capture/consent, automatic transcription, summaries and action extraction; transport/runtime/storage design and tests first; live external service use/recording needs permission |
 | Discover/profile #87 #12 #130 | Real public works, type/search/paging, likes/collections/follows here | Recommendations/ranking/comments, social profile avatar/posts/follower views, public agent-directory chat; no fabricated totals or recommendation data |
