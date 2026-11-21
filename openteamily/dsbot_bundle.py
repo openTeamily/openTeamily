@@ -259,8 +259,12 @@ def sealed_secrets(db, store, user_id, feature, seal_key):
 
 
 def build_with_secrets(db, store, user_id, feature, seal_key=None, now=None):
-    """build() plus, for B4 features, sealed secrets and their digest."""
-    bundle = build(db, user_id, feature, now)
+    """build() plus, for B4 features, sealed secrets and their digest.
+
+    Artifact media lives under the store's data directory on the real delivery
+    path, so thread it into build() instead of silently omitting media.
+    """
+    bundle = build(db, user_id, feature, now, data_dir=store.data_dir)
     if seal_key is not None and feature in ('model-api', 'connectors', 'skill-secrets'):
         secrets = sealed_secrets(db, store, user_id, feature, seal_key)
         bundle['seal_key_id'] = hashlib.sha256(bytes(seal_key)).hexdigest()
