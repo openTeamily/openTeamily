@@ -158,3 +158,18 @@ See `openteamily/manager/engine.py` `manifest()`: service `flybot`, user
 `1000:1000`, read-only, volume `/data`, tmpfs `/tmp`, a single read-only bind
 of the model API secret at `/run/secrets/openteamily-model-api.json`,
 published `127.0.0.1:<port>->8080/tcp`, optional HEALTHCHECK.
+
+## Chat runs on DS-Bot
+
+The runtime plugin sends OpenTeamily messages to the owner's native DS-Bot sessions.
+Its loopback-only OpenAI-compatible proxy listens at
+`127.0.0.1:${OPENTEAMILY_BRIDGE_PORT:-18731}` and serves DS-Bot's
+`openteamily` provider. DS-Bot uses a per-boot token to call the proxy.
+The proxy uses the owner's configured model or the platform default.
+Provider keys stay out of the DSH environment.
+
+The OpenTeamily plugin manages attached skills and connected app tools using
+DS-Bot capabilities. On first provision, it reads the personal agent bundle
+from the mounted provisioning file and imports it into the owner's instance.
+
+Set `OPENTEAMILY_DS_BOT_BRIDGE=0` to disable the model proxy and native chat.

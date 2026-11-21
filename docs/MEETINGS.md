@@ -2,9 +2,9 @@
 
 Related: [#212](https://github.com/openTeamily/openTeamily/issues/212), [#1](https://github.com/openTeamily/openTeamily/issues/1).
 
-This is the first meetings slice: **manual meeting notes** stored per workspace. It reuses the
-recorded `/space` meeting chrome (Birfy #115) instead of duplicating it. It does **not** record
-audio/video, transcribe, diarize, join calls, or dispatch action items to agents.
+Meeting notes are stored by workspace in the user's DS-Bot. Users can enter a transcript,
+generate a draft summary and action items, review and edit the result, and save the meeting.
+They can also record or upload up to ten minutes of audio and add the transcription to the notes.
 
 ## Routes
 
@@ -15,6 +15,9 @@ Outsiders get `404`.
 |---|---|---|
 | GET | `/` | Keyset page of meetings (`limit=1..100`, optional UUID-hex `cursor`). Items omit transcript/actions but include `action_count`/`done_count`. |
 | POST | `/` | Create `{title, started_at?, attendees?, transcript?, summary?, action_items?}` + `Idempotency-Key`. |
+| POST | `/draft` | Generate `{draft: {summary, action_items}}` from `{title?, attendees?, transcript}` through the user's DS-Bot text inference. The result remains a draft until the user saves the meeting. |
+| GET, POST | `/speech` | Read the local recognizer's readiness or start preparing its model. |
+| POST | `/transcribe` | Recognize one base64-encoded 16 kHz mono PCM WAV segment of up to 15 seconds. Returns `{text}`. |
 | GET | `/{meeting_id}` | Full meeting incl. transcript and action items. |
 | POST | `/{meeting_id}` | `{revision, changes:{...}}`; stale revision `409` with `error.current`. |
 | POST | `/{meeting_id}/remove` | Delete (author, owner or admin). |
@@ -23,11 +26,10 @@ Outsiders get `404`.
 `started_at` is Unix seconds (default: now). `attendees` is a list of 0–50 unique names (≤80
 chars). `transcript` ≤40,000; `summary` ≤8,000; `action_items` ≤50 items of
 `{text (1–500), owner (≤80, optional), done (bool, default false)}`. Titles are unique per
-workspace (casefold) and ≤120 chars. Control characters are rejected. Body limit for meetings is
-70 KiB so a full transcript fits.
+workspace (casefold) and ≤120 chars. Control characters are rejected. The DS-Bot meeting
+API accepts up to 512 KiB of JSON so the full text limits also work for multilingual input.
 
-Any workspace member may list, read and create; the author, an owner or an admin may edit/delete.
-Default capacity is 100 meetings per workspace (`Config.max_meetings_per_workspace`).
+Records use the signed-in runtime owner's storage. Each workspace in that runtime can hold 100 meetings.
 
 ## Storage
 
@@ -37,14 +39,21 @@ schema `user_version` stays 1. No existing tables or chrome change.
 ## Page
 
 `/meetings` lists workspace meetings and provides an editor for title, start time, attendees,
-summary, transcript and action-item rows (text, owner, done). The editor has a `导出 Markdown`
-download for the selected meeting. It is linked from the app rail.
+summary, transcript and action-item rows (text, owner, done). The editor previews the generated
+summary and action items before adding them to the form. Existing completed actions keep their
+status. Open a new record in the current workspace from the chat create menu, or return to a saved
+record through its link. The editor exports the selected meeting as Markdown.
+
+The container launch overlay activates DSH's local SenseVoice recognizer. Profiles with the
+official Voice Input bundle use its configured local recognizer. The first preparation downloads
+the model into the user's volume. The browser previews audio locally and submits segments only
+when transcription starts. The meeting stores the reviewed text through the regular save flow.
+The default local worker uses one thread and releases its model after one minute idle.
+The Compose manager allows 1.5 GiB per user runtime for DS-Bot and the speech worker.
 `docs/screenshots/meetings/` holds synthetic review captures.
 
-## Explicitly not in this slice
+## Remaining meeting features
 
-- Audio/video recording, live transcription, speaker separation, or call integration.
+- Live calls, streaming captions and speaker separation.
 - Automatically creating tasks/automations from action items.
-- PDF/DOCX export, attachments, audio/video, or server-side HTML rendering.
-- Birfy/Bot Social or control-plane behavior.
-- Browser E2E or Teamily page-by-page comparison.
+- PDF/DOCX export, saved audio/video attachments, or server-side HTML rendering.

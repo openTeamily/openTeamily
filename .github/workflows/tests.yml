@@ -30,30 +30,31 @@ jobs:
       - run: node --test tests/automations_page.test.mjs
       - run: node --test tests/chat_language.test.mjs
       - run: node --test tests/chat_page.test.mjs
+      - run: node --test tests/chat_dsbot.test.mjs
+      - run: node --test tests/dsbot_skills.test.mjs
       - run: node --test tests/chat_reminder.test.mjs
       - run: node --test tests/ci_test_list.test.mjs
       - run: node --test tests/guide_page.test.mjs
       - run: node --test tests/members_page.test.mjs
       - run: node --test tests/messenger_page.test.mjs
-      - run: node --test tests/runtimes_page.test.mjs
       - run: node --test tests/team_page.test.mjs
       - run: node --test manager/compose-planner/compose-command-planner.test.js
       - run: node --test tests/settings_page.test.mjs
       - run: node --test tests/settings_support_links.test.mjs
-      - run: node --test tests/runtimes_copy_feedback.test.mjs
       - run: node --test tests/shell_page.test.mjs
-      - run: node --test tests/agent_loop.test.mjs
+      - run: node --test tests/agent_bootstrap.test.mjs
+      - run: node --test tests/ds_bot_bridge.test.mjs
       - run: node --test tests/model_http_policy.test.mjs
       - run: node --test tests/memory_page.test.mjs
       - run: node --test tests/memory_search.test.mjs
       - run: node --test tests/memory_graph_empty.test.mjs
       - run: node --test tests/discover_page.test.mjs
       - run: node --test tests/profile_page.test.mjs
-      - run: node --test tests/download_page.test.mjs
       - run: node --test tests/profile_avatar.test.mjs
       - run: node --test tests/meetings_page.test.mjs
       - run: node --test tests/meetings_action_toggle.test.mjs
       - run: node --test tests/meetings_attendee_complete.test.mjs
+      - run: node --test tests/dsbot_api_shim.test.mjs
       - run: node --test tests/onboarding_page.test.mjs
       - run: node --test tests/agents_creator_filter.test.mjs
       - run: node --test tests/registration_page.test.mjs

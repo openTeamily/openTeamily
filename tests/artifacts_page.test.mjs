@@ -285,7 +285,7 @@ async function openArtifactsPage({items = [], artifact, meetings = [], meetingsS
     if (path === '/v1/workspaces?limit=100') return reply({body: {items: workspaces}});
     if (path === '/v1/workspaces/w2/artifacts') return reply({body: {items: []}});
     if (path === '/v1/workspaces/w1/artifacts') return reply({body: {items: listed}});
-    if (path === '/v1/workspaces/w1/meetings?limit=50') {
+    if (path === '/v1/workspaces/w1/meetings?limit=100') {
       if (meetingsStatus !== 200) return reply({status: meetingsStatus, body: meetingsError || {}});
       return reply({body: {items: meetings, cursor: null}});
     }
@@ -332,7 +332,7 @@ async function openArtifactsPage({items = [], artifact, meetings = [], meetingsS
       assert.ok(button, `kind button ${kind} must exist`);
       await button.dispatch('click');
     },
-    meetingCalls() { return calls.filter(call => call.path === '/v1/workspaces/w1/meetings?limit=50'); },
+    meetingCalls() { return calls.filter(call => call.path === '/v1/workspaces/w1/meetings?limit=100'); },
     removeCalls() { return calls.filter(call => call.path === '/v1/workspaces/w1/artifacts/a1/remove'); },
     alertdialog() { return created.filter(node => node.getAttribute('role') === 'alertdialog' && node.parentNode); },
     close() {
@@ -665,6 +665,9 @@ test('meetingsForScope keeps the workspace list unless the joined scope is selec
   );
   assert.deepEqual(meetingsForScope(items, {scope: 'joined', username: 'ALICE'}).map((row) => row.id), ['m1']);
   assert.deepEqual(meetingsForScope(items, {scope: 'joined'}).map((row) => row.id), []);
+  const local = [{id: 'm4', title: '独立容器的会议', attendees: [], created_by: 'owner'}];
+  assert.deepEqual(meetingsForScope(local, {scope: 'joined', userId: 'u1'}).map(row => row.id), ['m4']);
+  assert.deepEqual(meetingsForScope(local, {scope: 'joined'}), []);
 });
 
 test('the meetings kind renders the workspace meetings from the existing endpoint', async () => {
@@ -677,8 +680,9 @@ test('the meetings kind renders the workspace meetings from the existing endpoin
     assert.equal(page.meetingCalls().length, 1, 'the meetings tab reads the endpoint once');
     assert.equal(page.meetingCalls()[0].method, 'GET');
     const list = page.elements.get('artifact-list');
-    const rows = list.children.filter((child) => String(child.className || '').includes('artifact-item'));
+    const rows = list.children.filter((child) => child.className === 'meeting-item');
     assert.equal(rows.length, 2, 'two meetings must be listed');
+    assert.equal(rows[0].children[0].href, '/meetings#workspace=w1&meeting=m2');
     assert.match(rows[0].textContent, /发布复盘/);
     assert.match(rows[1].textContent, /设计周会/);
     assert.match(rows[0].textContent, /1 项行动项，全部完成/);
@@ -874,6 +878,7 @@ test('saveable messages require real text and reject retracted or unfinished row
   assert.equal(saveableSocialMessage({body: '你好', revision: 1}), true);
   assert.equal(saveableSocialMessage({body: '  ', revision: 1}), false);
   assert.equal(saveableSocialMessage({body: '你好', retracted: 1}), false);
+  assert.equal(saveableSocialMessage({body: '语音消息', revision: 1, voice: {mime: 'audio/webm'}}), false);
   assert.equal(saveableAgentMessage({body: '完成稿', status: 'succeeded'}), true);
   assert.equal(saveableAgentMessage({body: '完成稿', status: 'queued'}), false);
   assert.equal(defaultSaveTitle('  第一段内容  '), '第一段内容');

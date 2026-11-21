@@ -83,7 +83,7 @@
 <section class="skills-execution" aria-labelledby="skill-execution-heading">
 <h2 id="skill-execution-heading">运行与验证</h2>
 <p id="skills-readiness" role="status">正在检查当前范围的运行时和模型配置…</p>
-<p><button id="skills-refresh" type="button">刷新状态与记录</button> · <a href="/install/flybot.pyz">下载当前 FlyBot</a> · <a href="/runtimes">连接 / 重启运行时</a> · <a href="/settings#model-api-form">模型配置</a></p>
+<p><button id="skills-refresh" type="button">刷新状态与记录</button>  <a hidden href="/settings">连接 / 重启运行时</a> · <a href="/settings#model-api-form">模型配置</a></p>
 <p class="note" id="skill-scope-warning">试用只加载本次所选技能，不调用连接器、不发送消息。自动化范围安装后会在该任务定时运行时生效：仅使用安装者自己的兼容在线运行时，不自动回退到其他成员；输出对工作区成员可见。更新 zipapp 后须停止旧进程并用原来的私有 key-file 重启；不会替你执行命令或读取密钥。</p>
 <form id="skill-run-form"><label>本次使用的已安装技能<select id="skill-run-skill" required></select></label>
 <label>输入任务或源材料<textarea id="skill-run-prompt" rows="5" maxlength="4000" required placeholder="粘贴实际内容，并写明希望技能完成什么。不会自动访问网页或文件。"></textarea></label>

@@ -222,6 +222,13 @@ nav a[aria-current="page"] {
   margin: 0;
 }
 
+#status .public-agent-action {
+  display: inline-block;
+  margin-inline-start: .65rem;
+  font-size: inherit;
+}
+#status a.public-agent-action { color: inherit; text-decoration: underline; }
+
 #status:empty {
   display: none;
 }
@@ -1398,3 +1405,91 @@ html[data-theme-resolved="dark"] Aurora Glass: a deeper visual layer over the ne
 
 /* Same field geometry for unauthenticated desktop/mobile entry points. */
 #login-panel{max-width:30rem;width:100%;box-sizing:border-box}#login-form{display:grid;gap:.8rem}#login-form label{display:grid;gap:.4rem;align-items:start}#login-form input[type="text"],#login-form input[type="password"]{box-sizing:border-box;width:100%;min-width:0;min-height:44px;font-size:16px}.login-register-button{display:inline-flex;align-items:center;justify-content:center;min-height:44px;box-sizing:border-box;padding:.55rem 1rem;margin:.25rem .5rem .25rem 0;border:1px solid var(--ot-accent);border-radius:.5rem;color:var(--ot-accent-hover);background:var(--ot-surface);font-weight:600;text-decoration:none}.login-register-button:hover{color:var(--ot-ink);background:var(--ot-bg-accent)}
+
+.mobile-primary-nav { display: none; }
+
+@media (max-width: 700px) {
+  body.app-workspace.app-primary {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    min-height: 0;
+    height: 100dvh;
+    padding-top: env(safe-area-inset-top);
+    box-sizing: border-box;
+    background: var(--ot-surface);
+  }
+
+  body.app-workspace.app-primary > .app-rail {
+    grid-column: 1;
+    grid-row: 1;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    min-height: 3rem;
+    padding: .25rem .75rem;
+    background: var(--ot-surface);
+    border-bottom: 1px solid var(--ot-line);
+  }
+
+  body.app-workspace.app-primary > .app-rail > a:not(.brand-mark),
+  body.app-workspace.app-primary > .app-rail > button { display: none; }
+  body.app-workspace.app-primary > .app-rail .brand-mark { margin: 0; }
+  body.app-workspace.app-primary > .app-rail .account-slot { margin: 0; }
+  body.app-workspace.app-primary > .app-rail .account-trigger { min-width: 2.75rem; min-height: 2.75rem; }
+  body.app-workspace.app-primary .account-menu {
+    left: auto;
+    right: 0;
+    top: calc(100% + .375rem);
+    bottom: auto;
+    max-height: calc(100dvh - 5rem);
+  }
+
+  body.app-workspace.app-primary > #status { grid-column: 1; grid-row: 2; }
+  body.app-workspace.app-primary > #status:empty { display: none; }
+  body.app-workspace.app-primary > #main {
+    grid-column: 1;
+    grid-row: 3;
+    margin: 0;
+    border-radius: 0;
+    outline: none;
+    overflow: auto;
+  }
+
+  body.app-workspace.app-primary > .mobile-primary-nav,
+  body.app-workspace.chat-open.sessions-open > .mobile-primary-nav {
+    grid-column: 1;
+    grid-row: 4;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0;
+    padding: .25rem .5rem max(.25rem, env(safe-area-inset-bottom));
+    border-top: 1px solid var(--ot-line);
+    background: var(--ot-surface);
+  }
+  body.app-workspace.chat-open.sessions-open > .mobile-primary-nav { grid-row: 3; }
+
+  .mobile-primary-nav a {
+    display: grid;
+    justify-items: center;
+    align-content: center;
+    gap: .125rem;
+    min-height: 3rem;
+    padding: .125rem;
+    border-radius: .5rem;
+    color: var(--ot-muted);
+    font-size: .75rem;
+    text-decoration: none;
+  }
+  .mobile-primary-nav svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.65;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .mobile-primary-nav a:hover { background: var(--ot-bg-accent); }
+  .mobile-primary-nav a[aria-current="page"] {
+    background: var(--ot-accent-soft);
+    color: var(--ot-accent-hover);
+    font-weight: 650;
+  }
+}

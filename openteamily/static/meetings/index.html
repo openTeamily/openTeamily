@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/shell/app.css">
   <link rel="stylesheet" href="/meetings/app.css">
   <script type="module" src="/shell/app.mjs"></script>
+  <script type="module" src="/shell/dsbot-api.mjs"></script>
   <script type="module" src="/meetings/app.mjs"></script>
 </head>
 <body class="app-workspace">
@@ -64,8 +65,8 @@
   </section>
   <section id="main-panel" hidden>
     <header class="page-top">
+      <a id="meeting-library" href="/space?view=meetings" aria-label="返回会议资料">‹ 返回会议资料</a>
       <h1>会议</h1>
-      <p class="note">手工记录会议纪要、参会人和行动项。音频/视频录制与自动转写尚未实现。</p>
       <p id="whoami"></p>
       <label class="workspace-pick">工作区
         <select id="workspace"></select>
@@ -75,7 +76,7 @@
       <section class="meeting-list-pane" aria-label="会议列表">
         <div class="meeting-list-head">
           <h2>会议记录</h2>
-          <button type="button" id="new-meeting">新建会议</button>
+          <button type="button" id="new-meeting" disabled>新建会议</button>
         </div>
         <ul id="meeting-list"></ul>
         <p id="meetings-empty" class="note" hidden>还没有会议记录。点击「新建会议」开始。</p>
@@ -87,8 +88,37 @@
           <label>开始时间 <input id="meeting-started-at" type="datetime-local" required></label>
           <label>参会人 <input id="meeting-attendees" maxlength="2000" placeholder="用逗号分隔"></label>
           <ul id="attendee-matches" class="attendee-matches" role="listbox" aria-label="成员候选" hidden></ul>
-          <label>摘要 <textarea id="meeting-summary" maxlength="8000" rows="3"></textarea></label>
           <label>转写/正文 <textarea id="meeting-transcript" maxlength="40000" rows="6"></textarea></label>
+          <details id="meeting-audio" class="meeting-draft">
+            <summary>音频转写</summary>
+            <p class="note">可录音或上传音频，最长 10 分钟。请先征得参会人同意。</p>
+            <div class="meeting-actions">
+              <button type="button" id="meeting-audio-prepare" hidden>准备语音识别</button>
+              <button type="button" id="meeting-audio-record" disabled>录音</button>
+              <button type="button" id="meeting-audio-stop" hidden>停止录音</button>
+              <label>上传音频 <input type="file" id="meeting-audio-file" accept="audio/*,.webm,.ogg,.m4a" disabled></label>
+            </div>
+            <audio id="meeting-audio-preview" controls preload="metadata" hidden></audio>
+            <div class="meeting-actions">
+              <button type="button" id="meeting-audio-start" disabled>开始转写</button>
+              <button type="button" class="secondary" id="meeting-audio-discard" disabled>移除音频</button>
+            </div>
+            <p class="note" id="meeting-audio-status" role="status"></p>
+          </details>
+          <div class="meeting-actions">
+            <button type="button" id="generate-meeting-draft" class="secondary" disabled>生成纪要草稿</button>
+            <p id="meeting-draft-status" class="note" role="status"></p>
+          </div>
+          <section id="meeting-draft" class="meeting-draft" aria-labelledby="meeting-draft-heading" hidden>
+            <h3 id="meeting-draft-heading">纪要草稿</h3>
+            <p id="meeting-draft-summary"></p>
+            <ul id="meeting-draft-items" hidden></ul>
+            <div class="meeting-actions">
+              <button type="button" id="apply-meeting-draft">采用草稿</button>
+              <button type="button" id="discard-meeting-draft" class="secondary">丢弃草稿</button>
+            </div>
+          </section>
+          <label>摘要 <textarea id="meeting-summary" maxlength="8000" rows="3"></textarea></label>
           <fieldset>
             <legend>行动项</legend>
             <div id="action-list" class="action-list"></div>

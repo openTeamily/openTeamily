@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity, composeSelectedLabel, filterMemberChoices, composeCreateEnabled, composeGroupPayload, GROUP_CREATE_INTRO, GROUP_CREATE_MODES, mount, messageSearchQuery, homepageStartIndex, stripHomepageStartQuery, wrapBold, inlineBold } from '../openteamily/static/chat/app.mjs';
+import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity, composeSelectedLabel, filterMemberChoices, composeCreateEnabled, composeGroupPayload, GROUP_CREATE_INTRO, GROUP_CREATE_MODES, mount, messageSearchQuery, wrapBold, inlineBold, dueReminders, reminderDueLabel } from '../openteamily/static/chat/app.mjs';
+
+import {publicAgentIntentFromHash, publicAgentContinuation} from '../openteamily/static/shell/public-agent-link.mjs';
+import {mountPublicDraft} from '../openteamily/static/chat/public-draft.mjs';
 
 const alice = 'a'.repeat(32);
 const bob = 'b'.repeat(32);
@@ -176,9 +179,10 @@ test('group picker distinguishes stored agents and people; contact picker omits 
   const agents = [{id: 'helper', name: 'Helper'}, {id: 'old', name: 'Archived', archived: 1}];
   const choices = groupPickerChoices(humans, alice, agents);
   assert.deepEqual(choices.map(row => [row.id, row.kind]), [[bob, 'human'], ['helper', 'agent']]);
-  assert.ok(choices[1].label.includes('AI 智能体（自动回复未接通）'));
+  assert.ok(choices[1].label.includes('AI 智能体'));
   assert.deepEqual(groupPickerChoices(humans, alice).map(row => row.id), [bob]);
   assert.equal(composeCreateEnabled({composeMode: 'group', selectedCount: 1, selectedHumanCount: 0}), false);
+  assert.equal(composeCreateEnabled({composeMode: 'group', personal:true, selectedCount: 1, selectedHumanCount: 0, selectedAgentCount: 1}), true);
   assert.equal(composeCreateEnabled({composeMode: 'group', selectedCount: 2, selectedHumanCount: 1}), true);
   assert.equal(composeCreateEnabled({composeMode: 'group', groupMode: 'team', selectedCount: 2, selectedHumanCount: 1}), false);
   assert.deepEqual(composeGroupPayload([bob], '', ['helper']), {
@@ -251,6 +255,7 @@ class FakeElement {
       this.children.push(node);
     }
   }
+  appendChild(node) { this.append(node); return node; }
   replaceChildren(...nodes) {
     for (const child of this.children) child.parent = null;
     this.children = [];
@@ -383,7 +388,7 @@ function chatFetcher({failNext = false} = {}) {
     if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: 'ws-1'}}});
     if (path === '/v1/workspaces?limit=100') return json(200, {items: [{id: 'ws-1', name: 'Desk'}]});
     if (path === '/v1/settings') return json(200, {settings: {values: {}}});
-    if (path === '/v1/workspaces/ws-1/agents?limit=100') return json(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/agents?limit=100&include=conversations') return json(200, {items: []});
     if (path === '/v1/workspaces/ws-1/social/conversations?limit=100') return json(200, {items: []});
     if (path === '/v1/workspaces/ws-1/members') return json(200, {items: []});
     if (path === '/v1/workspaces/ws-1/artifacts?limit=100') return json(200, {items: []});
@@ -560,7 +565,7 @@ function sessionFetcher() {
     if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: 'ws-1'}}});
     if (path === '/v1/workspaces?limit=100') return json(200, {items: [{id: 'ws-1', name: 'Desk'}]});
     if (path === '/v1/settings') return json(200, {settings: {values: {}}});
-    if (path === '/v1/workspaces/ws-1/agents?limit=100') return json(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/agents?limit=100&include=conversations') return json(200, {items: []});
     if (path === '/v1/workspaces/ws-1/social/conversations?limit=100') {
       return json(200, {items: [first, second]});
     }
@@ -583,6 +588,73 @@ function sessionFetcher() {
 function sessionRows(el) {
   return el('conversation-list').children.map((li) => li.children[0]);
 }
+
+test('a slow send moves the draft into the conversation and submits only once', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher, requests} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  let resolveSend;
+  let sends = 0;
+  try {
+    await mount(doc, {fetcher: (path, options) => {
+      if (path.endsWith('/conv-1/messages') && options.method === 'POST') {
+        sends += 1;
+        return new Promise(resolve => { resolveSend = resolve; });
+      }
+      return fetcher(path);
+    }});
+    const row = sessionRows(el).find(item => item.dataset.conversation === 'conv-1');
+    await fire(el('conversation-list'), 'click', {target: row});
+    const body = el('chat-body');
+    body.value = '发出这条消息';
+    await fire(el('chat-form'), 'submit', {preventDefault() {}});
+    const pending = el('message-list').children.at(-1);
+    assert.equal(pending.dataset.sendPending, 'pending');
+    assert.ok(descendants(pending).some(node => node.textContent === '正在发送…'));
+    assert.equal(body.value, '');
+    assert.equal(body.focused, true);
+    assert.equal(el('chat-send').disabled, false);
+    await fire(el('chat-form'), 'submit', {preventDefault() {}});
+    assert.equal(sends, 1);
+    body.value = '下一条草稿';
+    resolveSend(json(201, {message: {id: 'sent', user_id: alice, body: '发出这条消息', created: 20}}));
+    await settle();
+    assert.equal(el('message-list').children.at(-1).dataset.messageId, 'sent');
+    assert.equal(el('chat-send').disabled, false);
+    assert.equal(body.value, '下一条草稿');
+    assert.equal(requests.filter(path => path.endsWith('/conv-1')).length, 1);
+  } finally { restore(); }
+});
+
+test('the first chat opens using the batched directory while people and artifacts are pending', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: fallback, requests} = sessionFetcher();
+  const restore = installChatGlobals({narrow: false});
+  let releasePeople, releaseArtifacts;
+  async function fetcher(path) {
+    if (path.endsWith('/agents?limit=100&include=conversations')) {
+      return json(200, {items: [{id: 'brief', name: 'Brief'}],
+        conversations: [{id: 'brief-chat', agent_id: 'brief', title: 'Prior briefing', updated: 1}]});
+    }
+    if (path.endsWith('/members')) return new Promise(resolve => {releasePeople = resolve;});
+    if (path.endsWith('/artifacts?limit=100')) return new Promise(resolve => {releaseArtifacts = resolve;});
+    return fallback(path);
+  }
+  try {
+    mount(doc, {fetcher});
+    await settle();
+    assert.ok(releasePeople && releaseArtifacts);
+    assert.ok(sessionRows(el).some(row => row.dataset.conversation === 'brief-chat'));
+    assert.equal(el('message-list').children[0].dataset.messageId, 'm-1');
+    assert.ok(!requests.some(path => path.includes('/agents/brief/conversations')));
+    await fire(el('compose-add-contact'), 'click');
+    assert.match(el('compose-members-empty').textContent, /正在加载/);
+    releasePeople(json(200, {items: [{user_id: bob, username: 'bob'}]}));
+    releaseArtifacts(json(200, {items: []}));
+    await settle();
+    assert.equal(descendants(el('member-choices')).filter(node => node.tagName === 'INPUT')[0].value, bob);
+  } finally { restore(); }
+});
 
 test('a narrow-screen chat starts on the conversation list and returns to it from the back control', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
@@ -807,113 +879,82 @@ test('a wide chat leaves the grid classes alone when search opens and closes', a
   }
 });
 
-test('homepageStartIndex only accepts a 0-4 start query', () => {
-  assert.equal(homepageStartIndex(''), null);
-  assert.equal(homepageStartIndex('?q=1'), null);
-  assert.equal(homepageStartIndex('?start=5'), null);
-  assert.equal(homepageStartIndex('?start=-1'), null);
-  assert.equal(homepageStartIndex('?start=abc'), null);
-  assert.equal(homepageStartIndex('?start=0'), 0);
-  assert.equal(homepageStartIndex('start=4'), 4);
-  assert.equal(homepageStartIndex('?start=1&x=2'), 1);
+const openingVersion = 'a'.repeat(64);
+
+test('public agent continuation only allows a slug and an exact versioned starter', () => {
+  const intent = {slug:'writing-demo', quickStart:0, version:openingVersion};
+  const hash = '#public-agent=writing-demo&quick-start=0&quick-start-version=' + openingVersion;
+  assert.equal(publicAgentContinuation(intent), hash);
+  assert.deepEqual(publicAgentIntentFromHash(hash), intent);
+  assert.deepEqual(publicAgentIntentFromHash('#public-agent=writing-demo'), {slug:'writing-demo'});
+  for (const bad of [
+    '#public-agent=writing-demo&quick-start=0', '#public-agent=writing-demo&quick-start-version=' + openingVersion,
+    '#public-agent=%2F%2Fevil.test', '?start=1', hash + '&next=https://evil.test',
+    hash + '&quick-start=2', hash.replace('=0', '=5'), hash.replace(openingVersion,'x'),
+  ]) assert.equal(publicAgentIntentFromHash(bad), null, bad);
 });
 
-test('stripHomepageStartQuery removes only the start parameter', () => {
-  assert.deepEqual(
-    stripHomepageStartQuery('/chat', '?start=0', '#workspace=ws-1'),
-    {changed: true, href: '/chat#workspace=ws-1'},
-  );
-  assert.deepEqual(
-    stripHomepageStartQuery('/chat', '?start=0&x=1', ''),
-    {changed: true, href: '/chat?x=1'},
-  );
-  assert.deepEqual(
-    stripHomepageStartQuery('/chat', '', '#workspace=ws-1'),
-    {changed: false, href: '/chat#workspace=ws-1'},
-  );
-});
-
-test('a homepage start query opens the created conversation after a member starts it', async () => {
+test('a versioned public quick start opens a conversation and stages the composer without sending', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
+  doc.querySelector = selector => selector === 'meta[name="openteamily-instance"]' ? {} : null;
   const calls = [];
-  const conversation = {
-    id: 'c'.repeat(32),
-    workspace_id: 'ws-1',
-    agent_id: 'a'.repeat(32),
-    title: '列出这个助手能做什么',
-  };
+  const conversation = {id:'otc_test_1', kind:'group', title:'文档助手', public_agent:{open:true}, members:[]};
+  const base = '/v1/workspaces/ws-1/social/conversations';
+  const hash = publicAgentContinuation({slug:'writing-demo', quickStart:0, version:openingVersion});
+  const starter = '列出这个助手能做什么';
+  const {fetcher: fallback} = chatFetcher();
   const fetcher = async (path, options = {}) => {
-    calls.push({path, method: options.method || 'GET', body: options.body});
-    if (path === '/v1/auth/session') return json(200, {user: {id: 'user-1', username: 'alice'}});
-    if (path === '/v1/onboarding') return json(200, {onboarding: {completed: true}});
-    if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: 'ws-1'}}});
-    if (path === '/v1/workspaces?limit=100') return json(200, {items: [{id: 'ws-1', name: 'Desk'}]});
-    if (path === '/v1/settings') return json(200, {settings: {values: {}}});
-    if (path === '/v1/workspaces/ws-1/agents?limit=100') {
-      return json(200, {items: [{id: conversation.agent_id, name: '文档助手'}]});
+    calls.push({path, method:options.method || 'GET'});
+    if (path === '/v1/discover/agents/writing-demo/start') {
+      assert.equal(options.method,'POST');
+      assert.deepEqual(JSON.parse(options.body), {quick_start:0, quick_start_version:openingVersion});
+      return json(200, {workspace_id:'ws-1', conversation_id:conversation.id, draft_text:starter});
     }
-    if (path === `/v1/workspaces/ws-1/agents/${conversation.agent_id}/conversations?limit=100`) {
-      return json(200, {items: [conversation]});
-    }
-    if (path === `/v1/workspaces/ws-1/agents/${conversation.agent_id}/conversations/${conversation.id}`) {
-      return json(200, {conversation, items: [
-        {id: 'm1', role: 'user', body: '列出这个助手能做什么', status: 'succeeded'},
-        {id: 'm2', role: 'assistant', body: '这是本地测试回复。', status: 'succeeded'},
-      ]});
-    }
-    if (path === '/v1/workspaces/ws-1/social/conversations?limit=100') return json(200, {items: []});
-    if (path === '/v1/workspaces/ws-1/members') return json(200, {items: []});
-    if (path === '/v1/workspaces/ws-1/artifacts?limit=100') return json(200, {items: []});
-    if (path === '/v1/agent-homepages/start') {
-      assert.equal(options.method, 'POST');
-      assert.equal(JSON.parse(options.body).quick_start, 0);
-      assert.match(options.headers['Idempotency-Key'] || '', /^home-start-/);
-      return json(201, {
-        conversation,
-        message: {id: 'm1', role: 'user', body: '列出这个助手能做什么'},
-        reply: {id: 'm2', role: 'assistant', body: '这是本地测试回复。', status: 'succeeded'},
-      });
-    }
-    throw new Error('unexpected ' + options.method + ' ' + path);
+    if (path === `${base}/${conversation.id}`) return json(200, {conversation, items:[]});
+    return fallback(path);
   };
-  const history = [];
-  const saved = {
-    location: globalThis.location,
-    history: globalThis.history,
-    addEventListener: globalThis.addEventListener,
+  const restore = installChatGlobals({narrow:true});
+  globalThis.location.hash = hash;
+  const writes = [];
+  globalThis.history.replaceState = (_state, _title, href) => {
+    writes.push(href);
+    globalThis.location.hash = href.includes('#') ? '#' + href.split('#').pop() : '';
   };
-  globalThis.location = {hash: '', pathname: '/chat', search: '?start=0'};
-  globalThis.history = {
-    replaceState(_state, _title, url) { history.push(String(url)); globalThis.location.hash = String(url).includes('#') ? '#' + String(url).split('#').pop() : ''; },
-  };
-  globalThis.addEventListener = () => {};
   try {
     await mount(doc, {fetcher});
     await settle();
-    const startCalls = calls.filter((item) => item.path === '/v1/agent-homepages/start');
-    assert.equal(startCalls.length, 1, 'the page should start once from the query');
-    assert.equal(JSON.parse(startCalls[0].body).quick_start, 0);
-    assert.match(history.join(' '), /conversation=/);
-    assert.ok(history.some((url) => url.startsWith('/chat#') || url === '/chat' || !url.includes('start=')),
-      'the start query should be removed after a successful start: ' + history.join(' | '));
-    const list = el('message-list');
-    const texts = [];
-    const visit = (node) => {
-      if (!node) return;
-      if (node.textContent) texts.push(String(node.textContent));
-      for (const child of node.children || []) visit(child);
-    };
-    visit(list);
-    assert.ok(texts.some((text) => text.includes('列出这个助手能做什么')),
-      'the started prompt should appear in the conversation: ' + texts.join(' | '));
-  } finally {
-    for (const key of Object.keys(saved)) {
-      if (saved[key] === undefined) delete globalThis[key];
-      else globalThis[key] = saved[key];
-    }
-  }
+    assert.equal(calls.filter(({path}) => path.endsWith('/start')).length, 1);
+    assert.equal(calls.filter(({method,path}) => method === 'POST' && path.endsWith('/messages')).length, 0);
+    assert.equal(el('chat-body').value, starter);
+    assert.equal(el('chat-body').focused, true);
+    assert.equal(el('message-list').children.length, 0);
+    assert.equal(writes.at(-1), '/chat#workspace=ws-1&social=' + conversation.id);
+  } finally { restore(); }
 });
 
+test('public draft preserves the edited text for its owner and thread, clearing when sent', async () => {
+  const saved = new Map();
+  const defaultView = {sessionStorage:{getItem:key => saved.get(key) || null,
+    setItem:(key, value) => saved.set(key,value), removeItem:key => saved.delete(key)}};
+  const {doc, el} = fakeChatDocument(chatHtml());
+  doc.defaultView = defaultView;
+  const draft = mountPublicDraft(doc);
+  draft.enter('alice/thread', true);
+  assert.equal(draft.fill('公开开场'), true);
+  el('chat-body').value = '改过的开场';
+  await fire(el('chat-body'), 'input');
+  draft.enter('bob/thread', true);
+  assert.equal(el('chat-body').value,'');
+  const {doc:reopened,el:field} = fakeChatDocument(chatHtml());
+  reopened.defaultView = defaultView;
+  const restored = mountPublicDraft(reopened);
+  restored.enter('alice/thread', true);
+  restored.fill('第二个快捷开场');
+  assert.equal(field('chat-body').value, '改过的开场');
+  field('chat-body').value = '';
+  restored.persist();
+  assert.equal(saved.size,0);
+});
 
 test('message search tab switches await the in-flight query and newer queries win', async () => {
   const {createMessageSearch} = await import('../openteamily/static/chat/app.mjs');
@@ -1002,6 +1043,56 @@ test('session filter selects only real unread social rows', async () => {
   } finally { restore(); }
 });
 
+test('the inbox filters personal agents and persists bulk-read and mute', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  const unread = new Set(['conv-1', 'conv-2']);
+  const writes = [];
+  let muted = false;
+  try {
+    await mount(doc, {fetcher: async (path, init) => {
+      if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: 'ws-1'}, agent: {id: 'personal'}}});
+      if (path.endsWith('/agents?limit=100&include=conversations')) return json(200, {items: [{id: 'personal', name: 'Personal'}]});
+      if (path.endsWith('/agents/personal/conversations?limit=100')) return json(200, {items: [{id: 'personal-chat'}]});
+      if (path.endsWith('/read')) {
+        const id = path.split('/').at(-2);
+        writes.push([id, JSON.parse(init.body)]);
+        unread.delete(id);
+        return json(200, {unread_count: 0});
+      }
+      if (path.endsWith('/conv-1/preferences')) {
+        muted = JSON.parse(init.body).muted;
+        return json(200, {muted});
+      }
+      const response = await original(path);
+      const data = await response.json();
+      if (path.endsWith('/social/conversations?limit=100')) return json(200, {
+        items: data.items.map(row => ({...row, unread_count: Number(unread.has(row.id)), muted: row.id === 'conv-1' && muted})),
+      });
+      if (path.endsWith('/conv-1')) return json(200, {...data, conversation: {...data.conversation, muted}});
+      return json(response.status, data);
+    }});
+    const filter = el('session-filter-value');
+    filter.value = 'personal';
+    await fire(filter, 'change');
+    assert.deepEqual(sessionRows(el).map(row => row.dataset.conversation), ['personal-chat']);
+    assert.equal(el('conversation-heading').textContent, '对话 · 1');
+    filter.value = 'all';
+    await fire(filter, 'change');
+    assert.equal(el('conversations-read-all').hidden, false);
+    await fire(el('conversations-read-all'), 'click');
+    assert.deepEqual(writes, [['conv-1', {}], ['conv-2', {}]]);
+    assert.equal(el('conversations-read-all').hidden, true);
+    const row = sessionRows(el).find(item => item.dataset.conversation === 'conv-1');
+    await fire(el('conversation-list'), 'click', {target: row});
+    await fire(el('mute-conversation'), 'click');
+    assert.equal(muted, true);
+    assert.equal(el('mute-conversation').getAttribute('aria-pressed'), 'true');
+    assert.match(sessionRows(el).find(item => item.dataset.conversation === 'conv-1').getAttribute('aria-label'), /免打扰/);
+  } finally { restore(); }
+});
+
 test('independent conversation search uses current id and pages without opening sidebar search', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: original} = sessionFetcher();
@@ -1009,11 +1100,11 @@ test('independent conversation search uses current id and pages without opening 
   const restore = installChatGlobals({narrow: true});
   try {
     await mount(doc, {fetcher: async path => {
-      if (path.includes('/search/messages?')) {
+      if (path.includes('/social/conversations/conv-1/messages?q=')) {
         calls.push(path);
         const url = new URL(path, 'https://management.test');
-        assert.equal(url.searchParams.get('conversation_id'), 'conv-1');
-        return json(200, {items: [{kind: 'social', conversation_id: 'conv-1', message_id: url.searchParams.get('cursor') ? 'second' : 'first', snippet: 'Scoped result'}], cursor: url.searchParams.get('cursor') ? null : 'next-id'});
+        assert.equal(url.pathname, '/v1/workspaces/ws-1/social/conversations/conv-1/messages');
+        return json(200, {items: [{kind: 'social', conversation_id: 'conv-1', id: url.searchParams.get('before') ? 'second' : 'first', body: 'Scoped result'}], cursor: url.searchParams.get('before') ? null : 42});
       }
       return original(path);
     }});
@@ -1029,7 +1120,7 @@ test('independent conversation search uses current id and pages without opening 
     await fire(el('conversation-search-more'), 'click');
     assert.equal(calls.length, 2);
     assert.equal(el('conversation-search-results').children.length, 2);
-    assert.match(calls[1], /cursor=next-id/);
+    assert.match(calls[1], /before=42/);
   } finally { restore(); }
 });
 
@@ -1140,13 +1231,14 @@ test('session timestamps use Hong Kong calendar boundaries and never invent unre
   assert.equal(formatSessionTime('invalid', now), '');
 });
 
-test('icon chat controls preserve accessible names, disabled truth and attachment privacy', () => {
+test('icon chat controls have accessible names and a direct file picker', () => {
   const html = chatHtml();
   assert.match(html, /id="conversation-search-open"[^>]*aria-label="搜索当前会话"[\s\S]*?<svg/);
-  assert.match(html, /disabled title="未实现：语音或视频通话"/);
-  assert.match(html, /class="attachment-menu"[\s\S]*?id="chat-attachment"/);
-  assert.match(html, /工作区成员可在作品库查看/);
-  assert.match(html, /disabled title="未实现：语音消息"[\s\S]*?sr-only">语音/);
+  assert.match(html, /id="chat-call" hidden aria-label="通话" aria-haspopup="dialog"/);
+  assert.match(html, /id="chat-attachment-open"[^>]*aria-label="发送文件"/);
+  assert.match(html, /id="chat-attachment"[^>]*multiple hidden/);
+  assert.match(html, /id="voice-record"[^>]*aria-label="录制语音"/);
+  assert.match(html, /id="voice-preview" controls/);
 });
 
 import {notificationBadgeText, notificationSummary} from '../openteamily/static/chat/app.mjs';
@@ -1159,6 +1251,10 @@ test('notification badge and summary text', () => {
     'bob 在「项目群」提及了你');
   assert.equal(notificationSummary({actor_username: 'bob', conversation_kind: 'dm', conversation_title: 'bob'}),
     'bob 在「单聊」提及了你');
+  assert.equal(notificationSummary({kind: 'messenger.added', by: {display_name: '小林'}, title: '项目群'}),
+    '小林 将你加入「项目群」');
+  assert.equal(notificationSummary({kind: 'messenger.call', by: {display_name: '小林'}, title: '项目群', call_kind: 'video'}),
+    '小林 在「项目群」发起了视频通话');
 });
 
 test('mention notifications show a badge, open the conversation and mark read', async () => {
@@ -1170,7 +1266,9 @@ test('mention notifications show a badge, open the conversation and mark read', 
   const inbox = () => ({unread_count: unread, limit: 100, items: [{
     id: 'n'.repeat(32), kind: 'mention', conversation_id: 'conv-1', conversation_kind: 'group',
     conversation_title: '项目群', message_id: 'm-1', actor_username: 'bob', excerpt: '@alice 看一下',
-    created: 30, read: unread === 0}]});
+    created: 30, read: unread === 0}, {
+    id: 'o'.repeat(32), kind: 'automation_reminder', title: '提醒', created: 20, read: true,
+  }]});
   try {
     await mount(doc, {fetcher: async (path, init = {}) => {
       if (path === '/v1/workspaces/ws-1/notifications') return json(200, inbox());
@@ -1186,6 +1284,12 @@ test('mention notifications show a badge, open the conversation and mark read', 
     await fire(el('notifications-toggle'), 'click');
     await settle();
     assert.equal(el('notifications-panel').hidden, false);
+    assert.equal(el('notification-list').children.length, 2);
+    el('notifications-kind').value = 'mention';
+    await fire(el('notifications-kind'), 'change');
+    el('notifications-unread').checked = true;
+    await fire(el('notifications-unread'), 'change');
+    assert.equal(el('notification-list').children.length, 1);
     const item = el('notification-list').children[0] && el('notification-list').children[0].children[0];
     assert.ok(item, 'the mention is listed');
     assert.equal(item.children[0].textContent, 'bob 在「项目群」提及了你');
@@ -1195,6 +1299,7 @@ test('mention notifications show a badge, open the conversation and mark read', 
     assert.deepEqual(posts, [{notification_id: 'n'.repeat(32)}]);
     assert.equal(el('notifications-panel').hidden, true);
     assert.equal(el('notification-count').hidden, true);
+    assert.equal(el('notifications-empty').textContent, '暂无未读提及。');
   } finally { restore(); }
 });
 
@@ -1310,8 +1415,92 @@ test('group info panel counts members and agents honestly and picks a readable g
   assert.equal(leadGlyph('产品群'), '产');
   assert.equal(leadGlyph('---', '群'), '群');
   const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
-  for (const label of ['视频通话', '语音通话', 'Agent 主动性', '自动翻译', '消息免打扰']) assert.ok(html.includes(label));
-  assert.match(html, /aria-label="自动翻译（未接通）"/);
+  for (const label of ['视频通话', '语音通话', '自动回复', '自动翻译', '消息免打扰']) assert.ok(html.includes(label));
+  assert.match(html, /id="group-translate"[^>]*aria-label="自动翻译"/);
+  assert.match(html, /id="group-translate-language"/);
+});
+
+test('group members can change automatic replies for their own agent only', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  const members = [
+    {id: 'own', name: '助手', mine: true, auto_reply: false},
+    {id: 'other', name: '同事的助手', mine: false, auto_reply: true},
+  ];
+  const updates = [];
+  let failNext = false;
+  try {
+    await mount(doc, {fetcher: async (path, init) => {
+      if (path.endsWith('/agents/own/auto-reply')) {
+        const data = JSON.parse(init.body);
+        updates.push(data);
+        return json(failNext ? 503 : 200, data);
+      }
+      const result = await original(path);
+      const body = await result.json();
+      if (path.endsWith('/conv-1')) return json(200, {
+        ...body, conversation: {...body.conversation, kind: 'group', agent_members: members},
+      });
+      return json(result.status, body);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    const [own, other] = el('group-info-agents').children;
+    assert.equal(other.children.some(child => child.tagName === 'BUTTON'), false);
+    const toggle = own.children.find(child => child.tagName === 'BUTTON');
+    assert.equal(toggle.getAttribute('aria-checked'), 'false');
+    await fire(toggle, 'click');
+    assert.deepEqual(updates, [{auto_reply: true}]);
+    assert.equal(toggle.getAttribute('aria-checked'), 'true');
+    failNext = true;
+    await fire(toggle, 'click');
+    assert.equal(toggle.getAttribute('aria-checked'), 'true');
+    assert.match(el('group-agent-auto-reply-status').textContent, /保存失败/);
+  } finally { restore(); }
+});
+
+test('a selected group mention sends the chosen owner and agent together', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  const composer = el('chat-body');
+  composer.setSelectionRange = (start, end) => {
+    composer.selectionStart = start;
+    composer.selectionEnd = end;
+  };
+  const posts = [];
+  try {
+    await mount(doc, {fetcher: async (path, init) => {
+      if (path.endsWith('/conv-1/messages') && init.method === 'POST') {
+        posts.push(JSON.parse(init.body));
+        return json(201, {});
+      }
+      const result = await original(path);
+      const body = await result.json();
+      if (path.endsWith('/conv-1')) return json(200, {
+        ...body, conversation: {...body.conversation, kind: 'group', agent_members: [
+          {id: 'same', name: '研究助手', owner_id: 'owner-one', owner_name: '小林'},
+          {id: 'same', name: '研究助手', owner_id: 'owner-two', owner_name: '小周'},
+        ]},
+      });
+      return json(result.status, body);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    composer.value = '@研究';
+    composer.setSelectionRange(composer.value.length, composer.value.length);
+    await fire(composer, 'input');
+    const list = el('chat-agent-mention-options');
+    assert.deepEqual(list.children.map(row => row.textContent), ['研究助手 · 小林', '研究助手 · 小周']);
+    await fire(composer, 'keydown', {key: 'ArrowDown', preventDefault() {}});
+    await fire(composer, 'keydown', {key: 'Enter', preventDefault() {}});
+    assert.deepEqual(posts, []);
+    assert.equal(el('chat-agent-mentions').children[0].textContent, '@研究助手 · 小周 ×');
+    composer.value = '请查一下';
+    await fire(el('chat-form'), 'submit', {preventDefault() {}});
+    await settle();
+    assert.deepEqual(posts, [{body: '请查一下', agent_mentions: [{owner_id: 'owner-two', agent_id: 'same'}]}]);
+    assert.equal(el('chat-agent-mentions').hidden, true);
+  } finally { restore(); }
 });
 
 test('in-chat search highlights every case-insensitive match without HTML', async () => {
@@ -1333,9 +1522,13 @@ test('composer + attach shortcuts narrow the file picker without widening it', (
 
 test('composer + creation grid deep-links real editors and labels the rest 未接通', () => {
   const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
-  for (const kind of ['website', 'document', 'slides', 'dashboard']) assert.ok(html.includes(`/space?new=${kind}`), kind);
+  for (const kind of ['website', 'document', 'slides', 'spreadsheet']) {
+    assert.ok(html.includes(`href="/space?new=${kind}" data-create-artifact="${kind}"`),kind);
+  }
   for (const id of ['meeting_prep', 'daily_brief', 'expert_research', 'advance_goals']) assert.ok(html.includes(`/automations?template=${id}`), id);
-  assert.ok((html.match(/未接通/g) || []).length >= 5);
+  assert.match(html, /id="composer-video-create"[^>]+aria-haspopup="dialog"/);
+  assert.match(html, /<video id="video-create-preview"[^>]+controls/);
+  assert.ok((html.match(/未接通/g) || []).length >= 4);
 });
 
 // Media shared in a chat is uploaded to the workspace library before the
@@ -1356,7 +1549,7 @@ function attachmentFetcher(item) {
     if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: 'ws-1'}}});
     if (path === '/v1/workspaces?limit=100') return json(200, {items: [{id: 'ws-1', name: 'Desk'}]});
     if (path === '/v1/settings') return json(200, {settings: {values: {}}});
-    if (path === '/v1/workspaces/ws-1/agents?limit=100') return json(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/agents?limit=100&include=conversations') return json(200, {items: []});
     if (path === '/v1/workspaces/ws-1/members') return json(200, {items: []});
     if (path === '/v1/workspaces/ws-1/artifacts?limit=100') return json(200, {items: []});
     if (path === '/v1/workspaces/ws-1/social/conversations?limit=100') return json(200, {items: [conversation]});
@@ -1423,13 +1616,53 @@ test('an audio attachment keeps the document card instead of becoming an image',
   }
 });
 
+test('social history prepends older messages and returns from a searched window to latest', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow:true});
+  const row = seq => ({id: 'history-' + seq, seq, user_id:bob, body:'Message ' + seq, created:seq});
+  const list = el('message-list');
+  const scroller = el('message-scroller');
+  Object.defineProperty(scroller, 'scrollHeight', {get: () => list.children.length * 100});
+  try {
+    await mount(doc, {fetcher: async path => {
+      if (path.endsWith('/conv-1')) {
+        const old = await original(path);
+        return json(200, {...await old.json(), items:[row(5), row(6)], cursor:5});
+      }
+      if (path.includes('before=5')) return json(200, {items:[row(3), row(4), row(5)],cursor:3});
+      if (path.includes('around=history-1')) return json(200, {items:[row(1), row(2)],cursor:null,has_newer:true});
+      if (path.includes('/messages?q=')) return json(200, {items:[row(1)],cursor:null});
+      return original(path);
+    }});
+    await fire(el('conversation-list'), 'click', {target:sessionRows(el)[0]});
+    const ids = () => list.children.map(item => item.dataset.messageId);
+    assert.deepEqual(ids(), ['history-5','history-6']);
+    scroller.scrollTop = 25;
+    await fire(el('chat-load-older'), 'click');
+    assert.deepEqual(ids(), ['history-3','history-4','history-5','history-6']);
+    assert.equal(scroller.scrollTop,225);
+    await fire(el('conversation-search-open'), 'click');
+    el('conversation-search-query').value = 'Message';
+    await fire(el('conversation-search-form'), 'submit', {preventDefault(){}});
+    await fire(el('conversation-search-results').children[0], 'click');
+    assert.deepEqual(ids(), ['history-1','history-2']);
+    assert.equal(list.children[0].dataset.searchJump,'true');
+    assert.equal(el('chat-back-to-latest').hidden,false);
+    await fire(el('chat-back-to-latest'),'click');
+    await settle();
+    assert.deepEqual(ids(), ['history-5','history-6']);
+    assert.equal(el('chat-back-to-latest').hidden,true);
+  } finally { restore(); }
+});
+
 test('in-chat search jumps to loaded messages, explains unloaded hits, and restores scroll on close', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: original} = sessionFetcher();
   const restore = installChatGlobals({narrow:true});
   try {
     await mount(doc, {fetcher: async path => {
-      if (path.includes('/search/messages?')) return json(200, {items:[{message_id:'jump-loaded',snippet:'Find me'}, {message_id:'not-loaded',snippet:'Earlier message'}],cursor:null});
+      if (path.includes('/messages?q=')) return json(200, {items:[{id:'jump-loaded',body:'Find me'}, {id:'not-loaded',body:'Earlier message'}],cursor:null});
       return original(path);
     }});
     await fire(el('conversation-list'), 'click', {target:sessionRows(el)[0]});
@@ -1627,7 +1860,8 @@ test('conversation search lists this conversation photos and files from real att
     assert.ok(descendants(files[0]).some(node => node.textContent === 'plan.pdf'));
     assert.match(el('conversation-search-status').textContent, /已显示 1 个文件/);
     await fire(files[0], 'click');
-    assert.match(el('conversation-search-status').textContent, /不在当前已加载/, 'a hit outside the loaded window says so instead of pretending');
+    const located = el('message-list').children.find(node => node.dataset.messageId === 'm-2');
+    assert.equal(located.dataset.searchJump, 'true', 'a file outside the window loads and highlights its message');
   } finally { restore(); }
 });
 
@@ -1662,7 +1896,7 @@ for (const phase of ['directory', 'fanout']) for (const target of ['ws-1','ws-2'
       if(path==='/v1/personal-agent')return json(200,{personal_agent:{workspace:{id:'ws-1'}}});
       if(path==='/v1/workspaces?limit=100')return json(200,{items:[{id:'ws-1',name:'First'},{id:'ws-2',name:'Second'}]});
       if(path==='/v1/settings')return json(200,{settings:{values:{}}});
-      if(path.endsWith('/agents?limit=100')){
+      if(path.endsWith('/agents?limit=100&include=conversations')){
         if(first){first=false;
           if(phase==='directory')return await new Promise(resolve=>{release=()=>resolve(json(200,{items:[{id:'old-agent',name:'old'}]}));});
           return json(200,{items:[{id:'old-agent',name:'old'}]});
@@ -1693,7 +1927,7 @@ test('initial SSE cannot supersede an uncommitted session directory and lose a c
  globalThis.EventSource=Source;globalThis.location.hash='#workspace=ws-1&agent=agent-1&conversation=conv-1';
  const fallback=chatFetcher().fetcher;
  const fetcher=async(path,options)=>{
-  if(path.endsWith('/agents?limit=100')){if(first){first=false;return await new Promise(resolve=>{release=()=>resolve(json(200,{items:[{id:'agent-1',name:'Deep link agent'}]}));});}return json(200,{items:[{id:'agent-1',name:'Deep link agent'}]});}
+  if(path.endsWith('/agents?limit=100&include=conversations')){if(first){first=false;return await new Promise(resolve=>{release=()=>resolve(json(200,{items:[{id:'agent-1',name:'Deep link agent'}]}));});}return json(200,{items:[{id:'agent-1',name:'Deep link agent'}]});}
   if(path.endsWith('/agents/agent-1/conversations?limit=100'))return json(200,{items:[{id:'conv-1',title:'Stored conversation'}]});
   if(path.endsWith('/agents/agent-1/conversations/conv-1'))return json(200,{conversation:{id:'conv-1',title:'Stored conversation'},items:[{id:'m-1',role:'assistant',body:'Stored actual response',status:'succeeded'}]});
   return fallback(path,options);
@@ -1704,4 +1938,81 @@ test('initial SSE cannot supersede an uncommitted session directory and lose a c
   sources[0].handlers.invalidate({data:JSON.stringify({version:'f'.repeat(64),domains:{social:'a'.repeat(64),artifacts:'b'.repeat(64),notifications:'c'.repeat(64)}})});
   await settle();assert.match(el('chat-title').textContent,/Deep link agent/);assert.ok(el('message-list').children.length>0,'initial snapshot refresh retains the deep-linked history');
  }finally{if(saved===undefined)delete globalThis.EventSource;else globalThis.EventSource=saved;restore();}
+});
+
+const reminderRow = (id, overrides = {}) => ({
+  id, title: '提醒：看这条消息', template_id: 'custom', scope: 'once', enabled: true,
+  participants: [{user_id: alice, username: 'alice'}],
+  schedule: {kind: 'once', date: '2026-11-19', time: '14:30', time_zone: 'UTC'},
+  ...overrides,
+});
+
+test('due reminders are only my enabled one-off automations that are already due, split by their own zone', () => {
+  const now = Date.parse('2026-11-19T16:05:00Z');
+  const rows = [
+    reminderRow('a'.repeat(32)),
+    reminderRow('b'.repeat(32), {schedule: {kind: 'once', date: '2026-11-19', time: '23:00', time_zone: 'UTC'}}),
+    reminderRow('c'.repeat(32), {schedule: {kind: 'daily', time: '09:00', time_zone: 'UTC'}}),
+    reminderRow('d'.repeat(32), {participants: [{user_id: bob, username: 'bob'}]}),
+    reminderRow('e'.repeat(32), {enabled: false}),
+    reminderRow('f'.repeat(32), {schedule: {kind: 'once', date: '2026-11-18', time: '09:00', time_zone: 'UTC'}}),
+    reminderRow('0'.repeat(32), {schedule: {kind: 'once', date: '2026-11-19', time: '10:30', time_zone: 'Asia/Shanghai'}}),
+    reminderRow('1'.repeat(32), {participants: [{username: 'alice'}], schedule: {kind: 'once', date: '2026-11-19', time: '13:00', time_zone: 'UTC'}}),
+  ];
+  const {today, older} = dueReminders(rows, {id: alice, username: 'alice'}, now);
+  assert.deepEqual(today.map((item) => item.id), ['a'.repeat(32), '1'.repeat(32)]);
+  assert.deepEqual(older.map((item) => item.id), ['0'.repeat(32), 'f'.repeat(32)]);
+  assert.equal(reminderDueLabel(today[0], now), '今天 14:30 到点');
+  assert.equal(reminderDueLabel(older[0], now), '11-19 10:30 到点');
+  assert.equal(reminderDueLabel(older[1], now), '11-18 09:00 到点');
+  assert.deepEqual(dueReminders([], alice, now), {today: [], older: []});
+  assert.deepEqual(dueReminders(null, alice, now), {today: [], older: []});
+});
+
+test('the sidebar lists 今天到点的提醒 from the automations the server returns and says 读不到 instead of 0', async () => {
+  const at = new Date();
+  const pad = (value) => String(value).padStart(2, '0');
+  const date = `${at.getUTCFullYear()}-${pad(at.getUTCMonth() + 1)}-${pad(at.getUTCDate())}`;
+  const due = {
+    id: 'r'.repeat(32), title: '提醒：看这条消息', template_id: 'custom', scope: 'once', enabled: true,
+    participants: [{user_id: alice, username: 'alice'}],
+    schedule: {kind: 'once', date, time: '00:00', time_zone: 'UTC'},
+  };
+  const future = {
+    ...due, id: 'q'.repeat(32), title: '提醒：明天',
+    schedule: {kind: 'once', date: '2999-01-01', time: '09:00', time_zone: 'UTC'},
+  };
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals();
+  try {
+    await mount(doc, {fetcher: async (path, init = {}) => {
+      if (path === '/v1/workspaces/ws-1/automations') return json(200, {items: [due, future]});
+      return original(path);
+    }});
+    await settle();
+    assert.equal(el('due-reminders').hidden, false, 'the panel appears when something is due today');
+    assert.equal(el('due-reminders-heading').textContent, '今天到点的提醒 1 条');
+    const rows = el('due-reminders-list').children;
+    assert.equal(rows.length, 1, 'only the due one is listed');
+    const link = rows[0].children[0];
+    assert.equal(link.tagName, 'A');
+    assert.match(String(link.getAttribute('href') || link.href), /\/automations$/);
+    assert.match(link.textContent, /提醒：看这条消息/);
+    assert.equal(link.children[0].textContent, '今天 00:00 到点');
+  } finally { restore(); }
+
+  const failing = fakeChatDocument(chatHtml());
+  const restore2 = installChatGlobals();
+  try {
+    await mount(failing.doc, {fetcher: async (path, init = {}) => {
+      if (path === '/v1/workspaces/ws-1/automations') return json(500, {error: {code: 'internal', message: 'boom'}});
+      return original(path);
+    }});
+    await settle();
+    assert.equal(failing.el('due-reminders').hidden, false, 'a failed read is shown, not hidden as 0');
+    assert.equal(failing.el('due-reminders-note').hidden, false);
+    assert.equal(failing.el('due-reminders-note').textContent, '读不到到点的提醒。');
+    assert.equal(failing.el('due-reminders-list').children.length, 0);
+  } finally { restore2(); }
 });

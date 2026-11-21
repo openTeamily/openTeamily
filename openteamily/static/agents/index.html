@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="/agents/app.css">
   <link rel="stylesheet" href="/look/app.css">
   <script type="module" src="/shell/app.mjs"></script>
+  <script type="module" src="/shell/dsbot-api.mjs"></script>
   <script type="module" src="/agents/app.mjs"></script>
 </head>
 <body class="app-workspace">
@@ -123,6 +124,7 @@
           <label>名称 <input type="text" name="name" required maxlength="80" autocomplete="off"></label>
           <label class="stack">简介 <input type="text" name="summary" maxlength="500" autocomplete="off"></label>
           <label class="stack">说明 <textarea name="instructions" maxlength="16000"></textarea></label>
+          <label class="stack">快捷开场 <textarea name="quick_starts" maxlength="404" rows="3" placeholder="每行一条，最多 5 条，每条不超过 80 字"></textarea></label>
           <label>类目 <select name="category"><option value="">未分类</option></select></label>
           <button type="submit">创建</button>
         </fieldset>
@@ -135,6 +137,7 @@
           <label>名称 <input type="text" name="name" required maxlength="80" autocomplete="off"></label>
           <label class="stack">简介 <input type="text" name="summary" maxlength="500" autocomplete="off"></label>
           <label class="stack">说明 <textarea name="instructions" maxlength="16000"></textarea></label>
+          <label class="stack">快捷开场 <textarea name="quick_starts" maxlength="404" rows="3" placeholder="每行一条，最多 5 条，每条不超过 80 字"></textarea></label>
           <label>类目 <select name="category"><option value="">未分类</option></select></label>
           <div class="actions">
             <button type="submit">保存</button>
@@ -145,13 +148,8 @@
       </form>
       <section id="homepage-panel" hidden>
         <h2>公开主页</h2>
-        <p id="homepage-note" class="note">默认仅工作区成员可见。发布后，拿到链接的人可以看到名称和简介，看不到说明，也不能在此页面对话。</p>
-        <p id="homepage-status" class="note"></p>
-        <p id="homepage-link-wrap" hidden>链接：<code id="homepage-link"></code></p>
-        <div class="actions">
-          <button type="button" id="publish-homepage">发布链接</button>
-          <button type="button" id="revoke-homepage">撤回链接</button>
-        </div>
+        <p class="note">在发现页管理公开主页、访客聊天和快捷开场。</p>
+        <a id="manage-public-homepage" href="/discover?tab=agents#catalog-manage">管理公开主页</a>
       </section>
       <section id="api-key-panel" hidden>
         <h2>外部 API 访问</h2>

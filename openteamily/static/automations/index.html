@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/shell/app.css">
   <link rel="stylesheet" href="/automations/app.css">
   <script type="module" src="/shell/app.mjs"></script>
+  <script type="module" src="/shell/dsbot-api.mjs"></script>
   <script type="module" src="/automations/app.mjs"></script>
 </head>
 <body class="app-workspace">
@@ -25,7 +26,7 @@
     <a href="/discover" title="发现" aria-label="发现"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg><span class="rail-label">发现</span></a>
     <span class="rail-spacer"></span>
     <a href="/profile" class="rail-signed-in" hidden title="我的资料" aria-label="我"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7a4 4 0 1 0 8 0 4 4 0 0 0-8 0 M4 21v-2a8 8 0 0 1 16 0v2"/></svg><span class="rail-label">我</span></a>
-    <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换浅色或深色。会写入已有外观设置；按钮在深色下显示「深色」。点击后的标签变化未经 Teamily 核实。">浅色</button>
+    <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换外观">浅色</button>
     <a href="/download" title="下载" aria-label="下载"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12 m-5-5 5 5 5-5 M4 16v5h16v-5"/></svg><span class="rail-label">下载</span></a>
     <div class="account-slot" hidden>
       <button type="button" id="account-menu-button" class="account-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="账户菜单">账户</button>
@@ -67,18 +68,16 @@
     <header class="page-top">
       <div class="page-heading">
         <h1>自动化</h1>
-        <button type="button" id="new-automation">新建自动化</button>
+        <button type="button" id="new-automation" disabled>新建自动化</button>
       </div>
-      <details class="gap-note">
-        <summary>对照说明</summary>
-        <p class="note">工作、生活页签展示 2026-11-16 对照记下的模板目录（标题和说明）。目录卡片的具体排版未经截图核实，不能写成界面已对等。意图、时间选项和生活模板文案已按第二轮对照补齐；每月的日期输入仍未完整记下。服务进程会在后台按点运行已启用的自动化，并把结果写在运行记录里；也可以手动触发一次。循环测试里的假提供方不能当成真实模型厂商已经验证。</p>
-      </details>
+
     </header>
     <p id="whoami" class="visually-hidden"></p>
     <div class="page-toolbar">
       <label class="workspace-field">工作区
-        <select id="workspace"></select>
+        <select id="workspace" aria-describedby="workspace-status"></select>
       </label>
+      <span id="workspace-status" role="status"></span>
     </div>
     <section id="list-panel">
       <div class="tabs" role="tablist">
@@ -94,78 +93,79 @@
       <p id="list-empty" class="empty-state" hidden>这个分类下还没有自动化。</p>
     </section>
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>
-      <div class="editor-head">
+      <header class="editor-head">
         <button type="button" id="cancel-editor">‹ 自动化</button>
-      </div>
-      <fieldset>
-        <legend>模板</legend>
-        <label>模板
-          <select name="template_id"></select>
-        </label>
+        <h1 id="editor-heading">新建自动化</h1>
+      </header>
+      <fieldset class="task-details">
+        <legend>任务</legend>
+        <label>名称 <input type="text" name="title" maxlength="80" required autocomplete="off" placeholder="例如：每周整理会议纪要"></label>
+        <label>交给智能体的任务 <textarea name="prompt" maxlength="4000" placeholder="描述要完成的任务和期望的结果"></textarea></label>
       </fieldset>
       <fieldset>
-        <legend>标签</legend>
-        <label>意图
-          <select name="intent">
-            <option value="">（不指定）</option>
-            <option value="research">研究</option>
-            <option value="monitor">监测</option>
-            <option value="create">创作</option>
-            <option value="analyze">分析</option>
-            <option value="plan">规划</option>
-            <option value="collaborate">协同</option>
+        <legend>运行时间</legend>
+        <label>频率
+          <select name="kind" id="schedule-kind">
+            <option value="now">启用后运行一次</option>
+            <option value="later">指定日期</option>
+            <option value="daily">每天</option>
+            <option value="weekdays">工作日</option>
+            <option value="weekly">每周</option>
+            <option value="monthly">每月</option>
           </select>
         </label>
-        <label>范围
-          <select name="scope">
-            <option value="once">单次（交付一次即完成）</option>
-            <option value="ongoing">长期（一直运行，直到停掉）</option>
-          </select>
-        </label>
-        <label>参与成员（用户名，逗号分隔） <input type="text" name="participants" maxlength="512" autocomplete="off"></label>
-        <label>参与的智能体（可选，逗号分隔） <input type="text" name="agents" maxlength="512" autocomplete="off"></label>
+        <div class="schedule-fields">
+          <label data-schedule-kind="later" hidden>日期 <input type="date" name="date"></label>
+          <label data-schedule-kind="weekly" hidden>星期
+            <select name="weekday">
+              <option value="1">星期一</option>
+              <option value="2">星期二</option>
+              <option value="3">星期三</option>
+              <option value="4">星期四</option>
+              <option value="5">星期五</option>
+              <option value="6">星期六</option>
+              <option value="7">星期日</option>
+            </select>
+          </label>
+          <label data-schedule-kind="monthly" hidden>每月第几天 <input type="number" name="day" min="1" max="31" value="1"></label>
+          <label data-schedule-kind="timed" hidden>时间 <input type="time" name="time" value="09:00"></label>
+          <label data-schedule-kind="timed" hidden>时区 <input type="text" name="time_zone" value="Asia/Shanghai" maxlength="64" autocomplete="off"></label>
+        </div>
+        <label class="schedule-toggle"><input type="checkbox" name="enabled"> 启用自动运行</label>
       </fieldset>
-      <fieldset>
-        <legend>时间安排</legend>
-        <label><input type="radio" name="kind" value="now"> 立即运行</label>
-        <label><input type="radio" name="kind" value="later"> 稍后</label>
-        <label><input type="radio" name="kind" value="daily"> 每天</label>
-        <label><input type="radio" name="kind" value="weekly"> 每周</label>
-        <label><input type="radio" name="kind" value="monthly"> 每月</label>
-        <label><input type="radio" name="kind" value="weekdays"> 工作日</label>
-        <label>日期 <input type="date" name="date"></label>
-        <label>时间 <input type="time" name="time" value="09:00"></label>
-        <label>星期
-          <select name="weekday">
-            <option value="1">星期一</option>
-            <option value="2">星期二</option>
-            <option value="3">星期三</option>
-            <option value="4">星期四</option>
-            <option value="5">星期五</option>
-            <option value="6">星期六</option>
-            <option value="7">星期日</option>
-          </select>
-        </label>
-        <label>每月第几天 <input type="number" name="day" min="1" max="31" value="1"></label>
-        <p class="note">每月的日期输入还没有从对照里完整记下，这里暂用 1–31，未经核对。</p>
-        <label>时区 <input type="text" name="time_zone" value="Asia/Shanghai" maxlength="64" autocomplete="off"></label>
-      </fieldset>
-      <fieldset>
-        <legend>已编排的提示词</legend>
-        <p class="note">可以根据标签自动生成，也可以直接改。</p>
-        <textarea name="prompt" maxlength="4000"></textarea>
-        <label><input type="checkbox" name="enabled"> 启用</label>
-      </fieldset>
-      <label>标题 <input type="text" name="title" maxlength="80" required autocomplete="off"></label>
+      <details class="editor-options">
+        <summary>更多设置</summary>
+        <div class="editor-option-fields">
+          <label>模板 <select name="template_id"><option value="custom">自定义</option></select></label>
+          <label>意图
+            <select name="intent">
+              <option value="">（不指定）</option>
+              <option value="research">研究</option>
+              <option value="monitor">监测</option>
+              <option value="create">创作</option>
+              <option value="analyze">分析</option>
+              <option value="plan">规划</option>
+              <option value="collaborate">协同</option>
+            </select>
+          </label>
+          <label>范围
+            <select name="scope">
+              <option value="once">单次</option>
+              <option value="ongoing">长期</option>
+            </select>
+          </label>
+          <label>参与成员 <input type="text" name="participants" maxlength="512" autocomplete="off" placeholder="用户名，以逗号分隔"></label>
+          <label>参与的智能体 <input type="text" name="agents" maxlength="512" autocomplete="off" placeholder="名称，以逗号分隔"></label>
+        </div>
+      </details>
       <div class="editor-actions">
         <button type="submit" id="save-automation">保存</button>
-        <button type="button" id="tick-automation">立即触发一次</button>
-        <button type="button" id="remove-automation">删除</button>
+        <button type="button" id="tick-automation" hidden>运行一次</button>
+        <button type="button" id="remove-automation" hidden>删除</button>
       </div>
     </form>
     <section id="run-panel" hidden>
       <h2>运行记录</h2>
-      <p class="note">结果来自已连接的 FlyBot 代理。假提供方给出的文本不能当成真实模型已经验证。</p>
       <nav class="run-filters" aria-label="运行状态">
         <button type="button" id="run-filter-all" data-run-filter="all" aria-current="true">全部</button>
         <button type="button" id="run-filter-succeeded" data-run-filter="succeeded" aria-current="false">成功</button>

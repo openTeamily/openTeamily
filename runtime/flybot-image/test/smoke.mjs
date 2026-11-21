@@ -3,6 +3,7 @@
 // rootfs, /data volume, tmpfs /tmp, no extra /workspace mount. Probes dsh web
 // on 8080 and the Bot API. Does not claim a license-complete release.
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { setTimeout } from 'node:timers/promises'
@@ -39,6 +40,8 @@ try {
     'run', '--detach', '--name', server, '--network', 'none',
     '--user', '1000:1000',
     '--read-only',
+    '--memory', '1536m',
+    '--cpus', '1',
     '--tmpfs', '/tmp:rw,noexec,nosuid,size=67108864',
     '--mount', `type=volume,src=${data},dst=/data`,
     '-e', 'DSH_TELEMETRY_DISABLED=1',
@@ -74,16 +77,9 @@ try {
   const processOwner = docker(['exec', server, 'stat', '-c', '%u:%g', '/proc/1']).stdout.trim()
   assert.equal(processOwner, '1000:1000', 'PID 1 must run as 1000:1000')
 
-  // The management task loop is shipped in the image and started by launch.mjs.
-  // This smoke does not inject a runtime key or a management server, so the
-  // loop must no-op. That is not a proof of real model inference.
-  const loopFile = docker(['exec', server, 'test', '-f', '/opt/openteamily/runtime/flybot-image/agent-loop.mjs'], { allowFailure: true })
-  assert.equal(loopFile.status, 0, 'image must ship agent-loop.mjs next to launch.mjs')
-  assert.match(
-    combined,
-    /agent-loop: no runtime key file; skip management task loop/,
-    'launch must start the management task loop, which no-ops without a key file',
-  )
+  const imageRuntime = '/opt/openteamily/runtime/flybot-image'
+  docker(['exec', server, 'test', '-f', imageRuntime + '/agent-bootstrap.mjs'])
+  docker(['exec', server, 'test', '!', '-e', imageRuntime + '/agent-loop.mjs'])
 
   const profileJson = docker(['exec', server, 'node', '--input-type=module', '-e',
     "import { readFileSync } from 'node:fs'; process.stdout.write(readFileSync('/data/profiles/web/package.json','utf8'))",
@@ -92,7 +88,11 @@ try {
   assert.equal(manifest.dependencies['@openteamily/flybot-runtime']?.startsWith('link:'), true, 'wrapper must be linked from the image path')
   assert.ok(manifest.dsh?.profile?.bundles?.includes('@openteamily/flybot-runtime'), 'wrapper must be a profile bundle')
   assert.ok(manifest.dsh?.profile?.bundles?.includes('@openteamily/flybot-social-web'), 'social web client must be a profile bundle')
+  const socialCompanion = JSON.parse(readFileSync(new URL('../../flybot-web-slots/social-web/package.json', import.meta.url), 'utf8'))
+  assert.equal(socialCompanion.dsh.bundle.patch, './cordis.patch.yml')
+  assert.equal(socialCompanion.exports['./client'], './client.js')
   assert.ok(!manifest.dsh?.profile?.bundles?.includes('ds-bot'), 'upstream ds-bot must not also be a bundle')
+  assert.ok(manifest.dsh?.profile?.bundles?.includes('@openteamily/web'), 'OpenTeamily DS-Bot plugin must be a profile bundle')
 
   const loginUrl = combined.match(/http:\/\/127\.0\.0\.1:8080\/\?token=[^\s]+/)?.[0]
     ?? combined.match(/http:\/\/[0-9.]+:8080\/\?token=[^\s]+/)?.[0]
@@ -112,6 +112,45 @@ try {
     const result = await response.json()
     assert.ok(result.ok, result.error?.message)
     assert.ok(Array.isArray(result.value.bots), 'the DS Bot runtime must load')
+    // Exercise the actual native validator/storage/Main Bot, not a permissive mock.
+    // Mirrors the deployment acceptance slug which previously exceeded 32 chars
+    // once prefixed. The CI container runs UID 1000 with a read-only rootfs.
+    const call = async (path, endpoint, payload = {}) => {
+      const response = await fetch('http://${address}:8080' + path, {
+        method: 'POST', headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ endpoint, payload }),
+      })
+      const body = await response.json()
+      assert.ok(response.ok && body.ok, endpoint + ': ' + JSON.stringify(body.error))
+      return body.value
+    }
+    const speech = await call('/api/openteamily', 'meetings/v1', {
+      method: 'GET', path: '/v1/workspaces/' + 'a'.repeat(32) + '/meetings/speech',
+    })
+    assert.equal(speech.status, 200)
+    assert.ok(['checking', 'unprepared'].includes(speech.body?.phase), JSON.stringify(speech.body))
+    assert.equal(speech.body.ready, false, 'a fresh offline volume must wait for model preparation')
+    const slug = 'deploy-accept-00000000'
+    const content = ${JSON.stringify('# CI native skill\nRead these instructions.')}
+    const saved = await call('/api/openteamily', 'skills/save', { name: slug, content })
+    assert.equal(saved.attached, true)
+    assert.ok(saved.name.length <= 32)
+    const state = await call('/api/bot', 'state')
+    assert.equal(state.capabilities.find(c => c.name === saved.name)?.content, content)
+    assert.ok(state.bots.some(bot => bot.capabilities?.includes(saved.name)))
+    assert.ok((await call('/api/openteamily', 'skills/list')).items.some(c => c.name === saved.name))
+    const { createHash } = await import('node:crypto')
+    const bound = await call('/api/openteamily', 'skills/sync', { items: [{
+      id: '0123456789abcdef'.repeat(2), content,
+      digest: createHash('sha256').update(content).digest('hex'),
+    }] })
+    assert.equal(bound.attached.length, 1)
+    assert.ok(bound.attached[0].length <= 32)
+    await call('/api/openteamily', 'skills/remove', { name: slug })
+    await call('/api/openteamily', 'skills/sync', { items: [] })
+    const revoked = await call('/api/bot', 'state')
+    assert.ok(revoked.bots.every(bot => !bot.capabilities?.includes(saved.name) && !bot.capabilities?.includes(bound.attached[0])))
+
     const flybot = await fetch('http://${address}:8080/api/flybot', {
       method: 'POST',
       headers: { 'content-type': 'application/json', cookie },

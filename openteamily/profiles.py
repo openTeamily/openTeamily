@@ -60,7 +60,7 @@ RESERVED = {
     'admin', 'api', 'settings', 'team', 'profile', 'chat', 'agents', 'discover',
     'memory', 'space', 'download', 'pricing', 'login', 'logout', 'support',
     'help', 'about', 'me', 'u', 'p', 'v1', 'new', 'edit', 'share', 'install',
-    'shell', 'runtimes', 'members', 'automations', 'artifacts', 'guide',
+    'shell', 'runtimes', 'members', 'contacts', 'automations', 'artifacts', 'guide',
 }
 
 

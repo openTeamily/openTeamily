@@ -59,7 +59,7 @@ class GuidePageTests(unittest.TestCase):
 
     def test_guide_accepts_only_the_q_deep_link_query(self):
         self.assertEqual(self.raw.call('GET', '/guide', query='q=%E5%A4%96%E8%A7%82')['status'], 200)
-        self.assertEqual(self.raw.call('GET', '/guide', query='q=flybot.pyz')['status'], 200)
+        self.assertEqual(self.raw.call('GET', '/guide', query='q=DS-Bot')['status'], 200)
         self.assertEqual(self.raw.call('GET', '/guide', query='q=')['status'], 400)
         self.assertEqual(self.raw.call('GET', '/guide', query='q=a&x=1')['status'], 400)
         self.assertEqual(self.raw.call('GET', '/guide/app.mjs', query='q=a')['status'], 400)

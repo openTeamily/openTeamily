@@ -163,7 +163,6 @@ button.pill[aria-pressed="true"] {
 }
 
 #create-form textarea, #edit-form textarea { min-height: 8rem; }
-#homepage-link { word-break: break-all; }
 
 /* Original mobile supplement; not compared this round. */
 @media (max-width: 50rem) {

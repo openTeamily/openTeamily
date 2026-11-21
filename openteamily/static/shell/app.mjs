@@ -13,11 +13,13 @@ function currentPath() {
 function markNavigation() {
   const here = currentPath();
   for (const link of document.querySelectorAll('nav a[href]')) {
+    if (link.closest('.catalog-tabs')) continue;
     const href = link.getAttribute('href') || '';
     if (!href.startsWith('/')) continue;
     const target = href.split('?')[0].split('#')[0].replace(/\/+$/, '') || '/';
     const works = (value) => value === '/space' || value === '/artifacts';
-    if (target === here || (works(target) && works(here))) link.setAttribute('aria-current', 'page');
+    const inSettings = target === '/settings' && here.startsWith('/settings/');
+    if (target === here || inSettings || (works(target) && works(here))) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   }
 }

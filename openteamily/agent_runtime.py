@@ -1,18 +1,4 @@
-"""Bind a workspace agent to a FlyBot container instance.
-
-Self-written for OpenTeamily. Conversations reuse the existing /v1/agent
-infer task path. A lease-gated manager endpoint issues an instance runtime
-key that the container loop uses to connect; the management process does
-not call a model provider and does not invent a second chat engine. The
-caller's own-machine connection remains an optional fallback.
-"""
-import hashlib
-import hmac
-import os
-import re
-import secrets
-import stat
-
+"""Stored agent-to-instance bindings and historical task migration data."""
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS workspace_agent_bindings (
@@ -40,61 +26,6 @@ CREATE TABLE IF NOT EXISTS agent_message_dispatch (
  connection_id TEXT);
 '''
 
-WRAP_NAME = 'instance-runtime.wrap'
-def wrapping_key(store):
-    directory = store.path.parent
-    path = directory / WRAP_NAME
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-            raise ValueError('Instance runtime wrapping key must be a private regular file')
-        key = os.read(fd, 64)
-        if len(key) == 0:
-            key = secrets.token_bytes(32)
-            os.write(fd, key)
-        elif len(key) != 32:
-            raise ValueError('Instance runtime wrapping key is the wrong size')
-        return key
-    finally:
-        os.close(fd)
-
-
-def _keystream(key, nonce, length):
-    out = bytearray()
-    counter = 0
-    while len(out) < length:
-        out.extend(hmac.new(key, nonce + counter.to_bytes(8, 'big'), hashlib.sha256).digest())
-        counter += 1
-    return bytes(out[:length])
-
-
-def wrap(key, plaintext):
-    data = plaintext.encode('utf-8')
-    nonce = secrets.token_bytes(16)
-    cipher = bytes(a ^ b for a, b in zip(data, _keystream(key, nonce, len(data))))
-    tag = hmac.new(key, nonce + cipher, hashlib.sha256).digest()
-    return (nonce + cipher + tag).hex()
-
-
-def unwrap(key, blob):
-    try:
-        raw = bytes.fromhex(blob)
-    except (TypeError, ValueError):
-        raise ValueError('corrupt instance runtime key') from None
-    if len(raw) < 48:
-        raise ValueError('corrupt instance runtime key')
-    nonce, cipher, tag = raw[:16], raw[16:-32], raw[-32:]
-    expected = hmac.new(key, nonce + cipher, hashlib.sha256).digest()
-    if not hmac.compare_digest(expected, tag):
-        raise ValueError('corrupt instance runtime key')
-    return bytes(a ^ b for a, b in zip(cipher, _keystream(key, nonce, len(cipher)))).decode('utf-8')
-
-
-def hostname_for(instance_id):
-    return 'flybot-' + instance_id[:12]
-
-
 def binding_view(row, status=None):
     data = {key: row[key] for key in (
         'agent_id', 'workspace_id', 'instance_id', 'revision', 'bound_by', 'created', 'updated')}
@@ -107,12 +38,6 @@ def load_binding(db, workspace_id, agent_id):
     return db.execute(
         'SELECT * FROM workspace_agent_bindings WHERE agent_id=? AND workspace_id=?',
         (agent_id, workspace_id),
-    ).fetchone()
-
-
-def load_instance_key(db, instance_id):
-    return db.execute(
-        'SELECT * FROM instance_runtime_keys WHERE instance_id=?', (instance_id,)
     ).fetchone()
 
 

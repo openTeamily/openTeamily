@@ -1,12 +1,30 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
+import {withSpeechOverlay} from '../speech-overlay.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const repo = join(root, '..', '..')
 const read = (rel) => readFileSync(join(root, rel), 'utf8')
+
+test('the web image enables local meeting speech without repeating the optional voice bundle', (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'ot-speech-profile-'))
+  t.after(() => rmSync(home, {recursive:true, force:true}))
+  const profile = join(home, 'profiles', 'web')
+  mkdirSync(profile, {recursive:true})
+  const writeProfile = bundles => writeFileSync(join(profile, 'package.json'), JSON.stringify({dsh:{profile:{bundles}}}))
+  const args = ['--profile', 'web', '--no-open']
+  writeProfile([])
+  const expanded = withSpeechOverlay(args, home)
+  assert.deepEqual(expanded, ['--profile', 'web', '--patch', join(root, 'meeting-speech.patch.yml'), '--no-open'])
+  assert.match(read('meeting-speech.patch.yml'), /defaultProvider: sensevoice-local/)
+  assert.match(read('meeting-speech.patch.yml'), /dshHomePath\('speech-to-text', 'sensevoice'\)/)
+  writeProfile(['@deepseek-ai/dsh-experimental-voice-input-bundle'])
+  assert.deepEqual(withSpeechOverlay(args, home), args)
+})
 
 test('image matches the compose manager contract (UID 1000, port 8080, healthcheck)', () => {
   const docker = read('Dockerfile')
@@ -102,7 +120,22 @@ test('template links the web-slot host and loads the social client without bundl
   const host = JSON.parse(readFileSync(join(root, '..', 'flybot-web-slots', 'package.json'), 'utf8'))
   assert.equal(host.name, '@openteamily/flybot-web-slots')
   const socialWeb = JSON.parse(readFileSync(join(root, '..', 'flybot-web-slots', 'social-web', 'package.json'), 'utf8'))
-  assert.equal(socialWeb.exports['./client'], '../../../flybot/plugins/social/client.js')
+  assert.equal(socialWeb.exports['./client'], './client.js')
+})
+
+test('template bundles the OpenTeamily DS-Bot plugin and its pages stage', () => {
+  const prepare = read('prepare-template.mjs')
+  assert.match(prepare, /'@openteamily\/web': `\$\{ROOT\}\/openteamily-web`/)
+  assert.match(prepare, /filtered.push\('@openteamily\/web'\)/)
+  const docker = read('Dockerfile')
+  assert.match(docker, /FROM scratch AS openteamily-static/)
+  assert.match(docker, /COPY openteamily-web \/opt\/openteamily\/runtime\/openteamily-web/)
+  assert.match(docker, /COPY --from=openteamily-static \/ \/opt\/openteamily\/runtime\/openteamily-web\/pages\//)
+  assert.ok(docker.indexOf('COPY openteamily-web') < docker.indexOf('dsh plugin --profile web'), 'plugin is copied before the profile is prepared and chowned')
+  const plugin = JSON.parse(readFileSync(join(root, '..', 'openteamily-web', 'package.json'), 'utf8'))
+  assert.equal(plugin.name, '@openteamily/web')
+  assert.equal(plugin.dsh.bundle.patch, './cordis.patch.yml')
+  assert.ok(!JSON.stringify(plugin).includes('@flybot/project'), 'never @flybot/project')
 })
 
 test('notice installer runs again after the web profile is installed', () => {

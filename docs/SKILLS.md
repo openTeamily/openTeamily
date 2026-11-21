@@ -2,6 +2,8 @@
 
 Related: #231, #10, #1, #14.
 
+The user's DS-Bot loads instruction skills for native execution. This document records the original management task protocol. The [current skills feature](../runtime/openteamily-web/features/skills/index.js) defines today's bindings and execution.
+
 `/skills` now installs **real, original, instruction-only packages**, not an in-memory installed set or a boolean claiming execution. A binding is not an execution receipt: the page separately reports “waiting for next task” and historical runtime loading acknowledgement. No claim of Teamily skill-operation parity or real-vendor acceptance.
 
 ## Content and source
@@ -10,7 +12,7 @@ Related: #231, #10, #1, #14.
 
 The content is actually added to a model request. It does not itself fetch a URL, send email, generate a file, run code, grant a connector, or authorize an external action. Such claims are explicitly prohibited in the package instructions without separate tool evidence. The catalogue is not a mock remote marketplace and contains no copied Teamily prose/assets/account data.
 
-Upstream reuse investigation inspected `ds-bot/src/host/office-skills.js` and `goal-skills.js` in the pinned DS-Bot source: they register description/content providers using SKILL.md material with `ctx.skills`. The management Python/zipapp inference loop and container `agent-loop.mjs` are separate from standalone DSH sessions. This implementation reuses the **declarative content contract**, not a pretend DSH filesystem install. It deliberately does not unpack archives, execute package hooks or write arbitrary runtime paths.
+Upstream reuse investigation inspected `ds-bot/src/host/office-skills.js` and `goal-skills.js` in the pinned DS-Bot source: they register description/content providers using SKILL.md material with `ctx.skills`. The original management inference loop ran separately from standalone DSH sessions. This implementation reuses the **declarative content contract**, not a pretend DSH filesystem install. It deliberately does not unpack archives, execute package hooks or write arbitrary runtime paths.
 
 ## Install, bind, load, revoke
 
@@ -39,7 +41,6 @@ Covered: personal management inference/private agent chat and agent-scoped manag
 ## Verification
 
 - `tests/test_skill_packages.py`: actual synthetic provider request contains exact installed content; subsequent request omits it after uninstall; SQLite restart/new login; account/agent isolation; archived-agent revocation; explicit permission; CSRF; version/digest/field/traversal/archive injection; compatibility handshake; tampered/missing acknowledgement; cancel-on-revoke.
-- `tests/agent_loop.test.mjs`: container handshake/ack precedes real inference function, actual model-request context includes installed material and excludes revoked material; malformed package fields rejected.
 - `tests/test_skills_page.py`: 页面/账号库清单与严格响应头、`/v1/skills/installed` 往返与重新登录、CSRF/未知技能拒绝。
 - `tests/skills_page.test.mjs`: server catalogue/digests, permission gate, persisted synthetic service reload/uninstall and refusal without invented success. This service stub is labelled synthetic, not provider acceptance.
 - `scripts/ci_ui_screenshots.mjs`: real local page → SQLite install/reload → actual daemon → local synthetic model → loading receipt → uninstall/reload, with content and 390px captures. Python tests separately inspect provider request content.

@@ -42,7 +42,17 @@ export function mountAutomationCreation(doc, send = request) {
     button.disabled = true;
     status.textContent = '正在创建暂停的自动化…';
     try {
-      const result = await send('POST', '/v1/onboarding/automations', {template_ids: selected});
+      const [personal, session] = await Promise.all([
+        send('POST', '/v1/personal-agent', {}),
+        send('GET', '/v1/auth/session'),
+      ]);
+      const workspaceId = personal.body?.personal_agent?.workspace?.id;
+      const username = session.body?.user?.username;
+      if (![200, 201].includes(personal.status) || session.status !== 200 || !workspaceId || !username) {
+        status.textContent = '无法加载个人工作区，请重试。';
+        return;
+      }
+      const result = await send('POST', '/v1/onboarding/automations', {workspace_id: workspaceId, template_ids: selected, username});
       if (result.status !== 200 && result.status !== 201) {
         status.textContent = messageFor(result.body.error, '创建失败，请重试。');
         return;

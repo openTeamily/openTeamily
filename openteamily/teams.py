@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS team_requests (
 SLUG = re.compile(r'[a-z0-9][a-z0-9-]{1,28}[a-z0-9]')
 RESERVED = frozenset({
     'admin', 'api', 'automations', 'docs', 'health', 'invite', 'invites',
-    'login', 'logout', 'me', 'members', 'new', 'settings', 'static', 'team',
+    'login', 'logout', 'me', 'members', 'contacts', 'new', 'settings', 'static', 'team',
     'teams', 'v1', 'workspaces',
 })
 

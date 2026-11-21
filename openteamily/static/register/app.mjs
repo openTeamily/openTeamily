@@ -1,4 +1,5 @@
 // Credentials stay in form memory and the existing same-origin auth API only.
+import {publicAgentIntentFromHash, publicAgentContinuation} from '../shell/public-agent-link.mjs';
 const MESSAGES = {
   registration_closed: '本实例尚未开放注册，请联系实例管理员。',
   conflict: '此用户名不可用，请选择其他用户名。',
@@ -37,6 +38,9 @@ export function mountRegistration(document, navigate, fetcher = globalThis.fetch
   const status = document.getElementById('register-status');
   const username = document.getElementById('register-username');
   const password = document.getElementById('register-password');
+  const continuation = publicAgentContinuation(publicAgentIntentFromHash(document.defaultView?.location?.hash));
+  const login = document.querySelector?.('a[href="/login"]');
+  if (login && continuation) login.href = '/login' + continuation;
   const helpButton=document.getElementById('help-menu-button'),helpMenu=document.getElementById('help-menu');
   helpButton?.addEventListener('click',()=>{if(helpMenu){helpMenu.hidden=!helpMenu.hidden;helpButton.setAttribute('aria-expanded',String(!helpMenu.hidden));}});
   let attempted=false;
@@ -58,7 +62,7 @@ export function mountRegistration(document, navigate, fetcher = globalThis.fetch
     button.disabled = false;
     if (result.ok) {
       status.textContent = '账户和登录会话已确认，正在初始化个人工作区…';
-      navigate('/');
+      navigate(continuation ? '/login' + continuation : '/');
     } else {
       status.textContent = result.message;
       password.focus();

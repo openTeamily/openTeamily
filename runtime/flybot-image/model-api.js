@@ -150,11 +150,9 @@ export function applyModelApi(config, env = process.env, log = console) {
     validateModelEndpoint(config.base_url, config.http_endpoint_grant)
     delete env[config.api_key_env]
     for (const name of ['PROVIDER', 'BASE_URL', 'NAME', 'SOURCE']) delete env['OPENTEAMILY_MODEL_' + name]
-    env.OPENTEAMILY_MODEL_TASK_ONLY = '1'
-    log.info?.('model API ready for authenticated task transport only; native SDK credential export disabled')
+    log.info?.('model API ready through the DS-Bot loopback proxy')
     return env
   }
-  delete env.OPENTEAMILY_MODEL_TASK_ONLY
   env[config.api_key_env] = config.api_key
   env.OPENTEAMILY_MODEL_PROVIDER = config.provider
   if (config.base_url) env.OPENTEAMILY_MODEL_BASE_URL = config.base_url

@@ -9,7 +9,7 @@ import json
 import re
 from uuid import uuid4
 
-from . import composio, composio_principals, runtime_connect, members
+from . import custom_mcp, composio, composio_principals, runtime_connect, members
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS connected_tool_owners (
@@ -43,7 +43,7 @@ def fail(status, code, message):
     raise Fault(status, code, message)
 
 
-def authorize(db, connection, task_id, now):
+def authorize(db, connection, task_id, now, require_composio=True):
     runtime_key = db.execute('SELECT * FROM runtime_keys WHERE id=?', (connection['key_id'],)).fetchone()
     if runtime_key is None or runtime_key['revoked'] or (runtime_key['expires'] is not None and runtime_key['expires'] <= now):
         fail(401, 'unauthorized', 'Runtime key expired or revoked')
@@ -60,7 +60,7 @@ def authorize(db, connection, task_id, now):
     if meta['workspace_id'] and members.load(db, meta['workspace_id'], user_id) is None:
         fail(403, 'forbidden', 'Workspace access was revoked')
     row = composio.load_key_row(db, user_id)
-    if row is None:
+    if row is None and require_composio:
         fail(409, 'composio_not_configured', 'Add your own Composio API key first')
     return user_id, row, meta
 
@@ -72,11 +72,10 @@ def grant(db, task_id, user_id):
 
 def available(db, task_id):
     owner = db.execute('SELECT user_id FROM connected_tool_owners WHERE task_id=?', (task_id,)).fetchone()
-    if owner is not None and composio.load_key_row(db, owner['user_id']) is not None:
-        return True
     principal = composio_principals.load(db, task_id)
-    return (principal is not None and composio_principals.live(db, principal)
-            and composio.load_key_row(db, principal['user_id']) is not None)
+    uid = owner['user_id'] if owner else (principal['user_id'] if principal is not None and composio_principals.live(db, principal) else None)
+    return bool(uid and (composio.load_key_row(db, uid) is not None or
+                db.execute('SELECT 1 FROM custom_mcp_servers WHERE user_id=? LIMIT 1', (uid,)).fetchone()))
 
 
 def scrub(value, secret):
@@ -114,6 +113,16 @@ class Broker:
 
     def discover(self, connection, task_id, now, search=None):
         with self.store.connect() as db:
+            uid, key, _ = authorize(db, connection, task_id, now, require_composio=False)
+            has_mcp = db.execute('SELECT 1 FROM custom_mcp_servers WHERE user_id=?', (uid,)).fetchone() is not None
+        if not has_mcp:
+            return self.discover_composio(connection, task_id, now, search)
+        tools = self.discover_composio(connection, task_id, now, search)['tools'] if key is not None else []
+        tools += custom_mcp.discover(self.app, connection, task_id, now, search)
+        return {'tools': tools, 'requires_approval': True, 'note': 'Composio and custom MCP tools: every call requires one-shot owner approval.'}
+
+    def discover_composio(self, connection, task_id, now, search=None):
+        with self.store.connect() as db:
             user_id, key, _ = authorize(db, connection, task_id, now)
             key_blob = key['key_blob']
             rows = db.execute("SELECT * FROM composio_connections WHERE user_id=? AND status='ACTIVE' ORDER BY created,id LIMIT 4",
@@ -130,7 +139,7 @@ class Broker:
                     continue
                 name, params, version = item.get('slug'), item.get('input_parameters'), item.get('version')
                 toolkit = item.get('toolkit') or {}
-                if (not isinstance(name, str) or not NAME.fullmatch(name) or name.startswith('COMPOSIO_')
+                if (not isinstance(name, str) or not NAME.fullmatch(name) or name.startswith(('COMPOSIO_', custom_mcp.PREFIX))
                         or not isinstance(toolkit, dict) or toolkit.get('slug', '').lower() != row['toolkit']
                         or not isinstance(params, dict) or not isinstance(version, str) or not version
                         or len(version) > 100 or item.get('is_deprecated')):
@@ -154,6 +163,8 @@ class Broker:
                 'note': 'Featured tools, at most 4 accounts × 20 tools. Search can discover more. Every call needs owner approval.'}
 
     def propose(self, connection, task_id, body, now):
+        if isinstance(body.get('name'), str) and body['name'].startswith(custom_mcp.PREFIX):
+            return custom_mcp.propose(self.app, connection, task_id, body, now)
         name, args, call_id = body.get('name'), body.get('arguments'), body.get('call_id')
         if not isinstance(name, str) or not NAME.fullmatch(name) or not isinstance(args, dict) or not isinstance(call_id, str) or not CALL_ID.fullmatch(call_id):
             fail(400, 'invalid', 'Provide tool name, arguments and a stable call_id')
@@ -203,12 +214,19 @@ class Broker:
                 account = db.execute('SELECT toolkit, account_id FROM composio_connections WHERE id=? AND user_id=?',
                                      (row['connection_id'], user_id)).fetchone()
                 task = runtime_connect.load_task(db, row['task_id'])
+                if account is None:
+                    mcp = db.execute('SELECT name,origin FROM custom_mcp_servers WHERE id=? AND user_id=?', (row['connection_id'], user_id)).fetchone()
+                    account = {'toolkit': 'MCP: ' + mcp['name'], 'account_id': mcp['origin']} if mcp else None
                 view['account'] = dict(account) if account else None
                 view['prompt'] = task['prompt'][:1000] if task else ''
                 items.append(scrub(view, key))
         return {'items': items}
 
     def run(self, connection, task_id, cid, now):
+        with self.store.connect() as db:
+            item = db.execute('SELECT name FROM connected_tool_calls WHERE id=? AND task_id=?', (cid, task_id)).fetchone()
+        if item and item['name'].startswith(custom_mcp.PREFIX):
+            return custom_mcp.run(self.app, connection, task_id, cid, now)
         # Atomically consume approval BEFORE external I/O. 'executing' is terminal
         # on crash/timeout: never implicitly retry a potentially side-effecting call.
         with self.store.transaction() as db:

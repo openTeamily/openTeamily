@@ -111,14 +111,3 @@ def load(db, user_id, key_id):
 
 def revoke(db, key_id):
     db.execute('UPDATE runtime_keys SET revoked=1 WHERE id=?', (key_id,))
-
-
-def issue_instance(db, owner_id, now, instance_id):
-    token = opaque()
-    from uuid import uuid4
-    key_id = uuid4().hex
-    db.execute(
-        'INSERT INTO runtime_keys VALUES(?,?,?,?,?,?,?,0)',
-        (key_id, owner_id, 'instance', digest(token), token[:PREFIX_LEN], now, None),
-    )
-    return key_id, token

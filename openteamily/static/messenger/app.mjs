@@ -1,10 +1,21 @@
 import { csrfCookie, idempotencyKey } from '../agents/app.mjs';
 import { parseMessengerHash, messengerHref, conversationChatHref } from '../shell/thumb.mjs';
 
+export function samePerson(item, self) {
+  if (!item || self == null || self === '') return false;
+  const user = typeof self === 'object' ? self : {id: self};
+  if (item.user_id && user.id && item.user_id === user.id) return true;
+  const strip = (value) => String(value || '').toLowerCase().replace(/^@/, '').replace(/\.home$/, '');
+  const mine = new Set([user.id, user.username, user.handle].filter(Boolean).map(strip).filter(Boolean));
+  if (!mine.size) return false;
+  return [item.user_id, item.username, item.handle].some((value) => value && mine.has(strip(value)));
+}
+
 export function conversationLabel(row, currentUserId) {
   if (!row) return '';
   if (row.kind === 'group') return row.title || '群聊';
-  const others = (row.members || []).filter(member => member.user_id !== currentUserId);
+  if (row.direct && row.title) return row.title;
+  const others = (row.members || []).filter(member => !samePerson(member, currentUserId));
   if (others.length) return others.map(member => member.username).join('、');
   return row.title || '单聊';
 }
@@ -19,7 +30,7 @@ export function validMessage(text) {
 }
 
 export function memberChoices(members, currentUserId) {
-  return (members || []).filter(member => member.user_id !== currentUserId);
+  return (members || []).filter(member => !samePerson(member, currentUserId));
 }
 
 function messageFor(error, fallback) {
@@ -83,7 +94,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis) } 
       if (currentConversation && currentConversation.id === row.id) button.setAttribute('aria-current', 'true');
       const title = document.createElement('span');
       title.className = 'title';
-      title.textContent = conversationLabel(row, currentUser && currentUser.id);
+      title.textContent = conversationLabel(row, currentUser);
       const meta = document.createElement('span');
       meta.className = 'preview';
       meta.textContent = (row.kind === 'group' ? '群聊 · ' : '单聊 · ') + ((row.members || []).length) + ' 人';
@@ -99,7 +110,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis) } 
   function renderMembers() {
     const holder = document.getElementById('member-choices');
     holder.replaceChildren();
-    for (const member of memberChoices(members, currentUser && currentUser.id)) {
+    for (const member of memberChoices(members, currentUser)) {
       const label = document.createElement('label');
       const box = document.createElement('input');
       box.type = 'checkbox';
@@ -115,11 +126,11 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis) } 
     document.getElementById('chat-empty').hidden = (items || []).length > 0;
     for (const item of items || []) {
       const li = document.createElement('li');
-      li.className = item.user_id === (currentUser && currentUser.id) ? 'mine' : 'other';
+      li.className = samePerson(item, currentUser) ? 'mine' : 'other';
       const who = document.createElement('p');
       who.className = 'role';
-      const member = members.find(entry => entry.user_id === item.user_id);
-      who.textContent = item.user_id === (currentUser && currentUser.id)
+      const member = members.find(entry => entry.user_id === item.user_id || (item.username && entry.username === item.username));
+      who.textContent = samePerson(item, currentUser)
         ? '我' : ((member && member.username) || '成员');
       const body = document.createElement('p');
       body.className = 'body';
@@ -192,7 +203,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis) } 
       return;
     }
     currentConversation = result.body.conversation;
-    document.getElementById('chat-title').textContent = conversationLabel(currentConversation, currentUser && currentUser.id);
+    document.getElementById('chat-title').textContent = conversationLabel(currentConversation, currentUser);
     renderMessages(result.body.items);
     renderConversations();
     renderDetail();
@@ -235,6 +246,12 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis) } 
     loginPanel.hidden = true;
     mainPanel.hidden = false;
     document.getElementById('whoami').textContent = currentUser.username;
+    // Preserve previously shared agent links through the current chat page.
+    const startSlug = new URLSearchParams(String(globalThis.location?.hash || '').slice(1)).get('start');
+    if (startSlug && /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(startSlug)) {
+      globalThis.location.replace('/chat#public-agent=' + startSlug);
+      return;
+    }
     const listed = await request('GET', '/v1/workspaces?limit=100');
     const workspaces = listed.status === 200 ? (listed.body.items || []) : [];
     const previous = workspaceSelect.value;

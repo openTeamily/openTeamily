@@ -17,6 +17,7 @@ const LINKS = {
   '@flybot/social': `${ROOT}/flybot/plugins/social`,
   '@openteamily/flybot-web-slots': `${ROOT}/flybot-web-slots`,
   '@openteamily/flybot-social-web': `${ROOT}/flybot-web-slots/social-web`,
+  '@openteamily/web': `${ROOT}/openteamily-web`,
   'ds-bot': `${ROOT}/ds-bot-upstream/ds-bot`,
 }
 const BASE_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']
@@ -39,6 +40,8 @@ if (!filtered.includes('@deepseek-ai/dsh-base')) filtered.unshift('@deepseek-ai/
 if (!filtered.includes('@deepseek-ai/dsh-web-app')) filtered.splice(1, 0, '@deepseek-ai/dsh-web-app')
 if (!filtered.includes(OUR_BUNDLE)) filtered.push(OUR_BUNDLE)
 if (!filtered.includes('@openteamily/flybot-social-web')) filtered.push('@openteamily/flybot-social-web')
+// OpenTeamily pages and /api/openteamily, served by this user's own DS-Bot.
+if (!filtered.includes('@openteamily/web')) filtered.push('@openteamily/web')
 next.dsh.profile.bundles = filtered
 
 writeFileSync(path, JSON.stringify(next, null, 2) + '\n')

@@ -8,13 +8,20 @@
   "main": "index.js",
   "exports": {
     ".": "./index.js",
-    "./client": "../../../flybot/plugins/social/client.js",
+    "./client": "./client.js",
     "./package.json": "./package.json"
   },
-  "keywords": ["dsh-plugin", "flybot", "openteamily"],
+  "keywords": [
+    "dsh-plugin",
+    "flybot",
+    "openteamily"
+  ],
   "dsh": {
     "client": {
       "platform": "web"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
     }
   }
 }

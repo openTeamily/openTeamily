@@ -11,7 +11,7 @@ import re
 
 SLUG = re.compile(r'[a-z0-9][a-z0-9-]{1,28}[a-z0-9]')
 RESERVED = {
-    'settings', 'team', 'members', 'v1', 'discover', 'agents', 'chat',
+    'settings', 'team', 'members', 'contacts', 'v1', 'discover', 'agents', 'chat',
     'messenger', 'space', 'artifacts', 'memory', 'automations', 'runtimes',
     'profile', 'download', 'install', 'shell', 'share', 'a', 'd', 'api',
     'login', 'logout', 'search', 'w', 'works', 'feed',

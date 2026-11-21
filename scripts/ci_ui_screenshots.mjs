@@ -560,9 +560,9 @@ async function main() {
       record(
         'settings_connectors_mcp_dialog',
         mcpText.includes('在智能体里添加自定义 MCP 服务器')
-          && mcpText.includes('打开你创建的智能体、Personal AI 或内置智能体的聊天。')
-          && mcpText.includes('点输入框里的「连接器」。')
-          && mcpText.includes('点搜索框旁的「+」。')
+          && mcpText.includes('公开 HTTPS 地址和可选 Bearer token')
+          && mcpText.includes('工具由你的 DS-Bot 加载')
+          && mcpText.includes('逐次批准')
           && mcpText.includes('知道了'),
         mcpText || 'mcp dialog empty',
       );
@@ -570,6 +570,21 @@ async function main() {
       await page.locator('#mcp-dialog-ack').click();
       await mcpDialog.waitFor({ state: 'hidden', timeout: 15000 });
       record('settings_connectors_mcp_dialog_closed', await mcpDialog.isHidden(), '知道了 closes the instruction dialog');
+      // Save/remove a synthetic configuration only: no upstream MCP request or action.
+      const customMcp = page.locator('#custom-mcp-form');
+      await customMcp.locator('[name="name"]').fill('CI custom MCP fixture');
+      await customMcp.locator('[name="url"]').fill('https://mcp.example.test/mcp');
+      await customMcp.locator('[name="bearer_token"]').fill('synthetic-ci-mcp-secret');
+      await customMcp.locator('button[type="submit"]').click();
+      await page.locator('#custom-mcp-list').getByText('CI custom MCP fixture', {exact: false}).waitFor({state: 'visible'});
+      record('settings_custom_mcp_saved',
+        (await customMcp.locator('[name="bearer_token"]').inputValue()) === ''
+          && !(await visibleText(page.locator('#custom-mcp-card'))).includes('synthetic-ci-mcp-secret'),
+        'Per-user custom MCP configuration saved; secret input cleared and no credential echoed');
+      await page.locator('#custom-mcp-list button').click();
+      await page.locator('#custom-mcp-list').getByText('尚未添加自定义 MCP 服务器。').waitFor({state: 'visible'});
+      record('settings_custom_mcp_removed', true, 'Synthetic configuration removed without any upstream action');
+
     } catch (error) {
       record('settings_connectors', false, String(error));
     }

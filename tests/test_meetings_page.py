@@ -15,10 +15,14 @@ class MeetingsPageTests(unittest.TestCase):
         for ident in ('main-panel', 'meeting-list', 'meeting-form', 'meeting-title',
                       'meeting-started-at', 'meeting-attendees', 'meeting-summary',
                       'meeting-transcript', 'action-list', 'add-action', 'save-meeting',
-                      'export-meeting'):
+                      'export-meeting', 'generate-meeting-draft', 'apply-meeting-draft'):
             self.assertIn('id="%s"' % ident, html)
         self.assertIn('href="/meetings/app.css"', html)
         self.assertEqual(self.raw.call('GET', '/meetings/app.mjs')['status'], 200)
+        self.assertEqual(self.raw.call('GET', '/meetings/audio.mjs')['status'], 200)
+        self.assertIn('microphone=(self)', page['headers']['Permissions-Policy'])
+        self.assertIn("media-src 'self' blob:", page['headers']['Content-Security-Policy'])
+        self.assertIn('microphone=()', self.raw.call('GET', '/settings')['headers']['Permissions-Policy'])
         self.assertEqual(self.raw.call('GET', '/meetings/app.css')['status'], 200)
         self.assertEqual(self.raw.call('GET', '/meetings', origin='https://evil.test')['status'], 403)
         self.assertEqual(self.raw.call('GET', '/meetings', query='x=1')['status'], 400)

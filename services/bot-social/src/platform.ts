@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { AuditLog, type AuditRecord } from "./audit.js";
 import { openDb } from "./db.js";
 import { ApiError, assert } from "./errors.js";
@@ -192,6 +192,19 @@ function ownerWriteBody(body: any): any {
 const SCOPED_CAPABILITIES = new Set(["calendar.freebusy.read"]);
 
 export class Platform {
+  sealChatAttachment(messageId: string, data: Buffer): Buffer {
+    return sealBytes(this.kmsKey, data, `chat-attachment:${messageId}`);
+  }
+
+  openChatAttachment(messageId: string, data: Buffer): Buffer {
+    return unsealBytes(this.kmsKey, data, `chat-attachment:${messageId}`);
+  }
+
+  meetingInviteCode(roomId: string): string {
+    return createHmac("sha256", this.kmsKey)
+      .update("openteamily/meeting-invite/v1:").update(roomId)
+      .digest("base64url").slice(0, 24);
+  }
   db: Database.Database;
   audit: AuditLog;
   platformKey = generateEd25519();

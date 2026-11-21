@@ -254,6 +254,10 @@ test('automation creation is opt-in, click-only and guarded against duplicate cl
   let finish;
   const creation = mountAutomationCreation(doc, async (...args) => {
     calls.push(args);
+    if (args[1] === '/v1/personal-agent') {
+      return {status: 201, body: {personal_agent: {workspace: {id: 'a'.repeat(32)}}}};
+    }
+    if (args[1] === '/v1/auth/session') return {status: 200, body: {user: {username: 'alice'}}};
     return new Promise(resolve => {finish = resolve;});
   });
   creation.render([{template_id: 'daily_brief', title: '每日工作简报', prompt: '真实模板'}]);
@@ -268,9 +272,12 @@ test('automation creation is opt-in, click-only and guarded against duplicate cl
   assert.deepEqual(calls, [], 'selection alone must not create anything');
   const pending = click();
   await click();
-  assert.equal(calls.length, 1);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 3);
   assert.equal(button.disabled, true);
-  assert.deepEqual(calls[0], ['POST', '/v1/onboarding/automations', {template_ids: ['daily_brief']}]);
+  assert.deepEqual(calls[0], ['POST', '/v1/personal-agent', {}]);
+  assert.deepEqual(calls[1], ['GET', '/v1/auth/session']);
+  assert.deepEqual(calls[2], ['POST', '/v1/onboarding/automations', {workspace_id: 'a'.repeat(32), template_ids: ['daily_brief'], username: 'alice'}]);
   finish({status: 201, body: {created: [{id: 'one'}], skipped: []}});
   await pending;
   assert.equal(button.disabled, false);

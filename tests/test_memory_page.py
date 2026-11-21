@@ -82,7 +82,7 @@ class MemoryPageServingTests(unittest.TestCase):
         self.assertIn('单击查看 · 双击打开 · 悬停预览', html)
         self.assertIn('id="graph-hover-card"', html)
         self.assertIn('class="graph-hover-title"', html)
-        self.assertIn('悬停预览卡的版式未经核实', html)
+        self.assertIn('也可以在编辑器里添加连接。', html)
         self.assertNotIn('尚未实现这些手势', html)
         self.assertIn('id="topic-list"', html)
         self.assertIn('id="memory-list"', html)

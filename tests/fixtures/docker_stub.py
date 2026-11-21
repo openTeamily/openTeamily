@@ -48,7 +48,7 @@ elif args[0] == 'inspect':
             binds.append(item['bind'])
     else:
         for volume in manifest['services']['flybot'].get('volumes', []):
-            if isinstance(volume, dict) and volume.get('type') == 'bind' and volume.get('target') in ('/run/secrets/openteamily-model-api.json', '/run/secrets/openteamily-bot-social.json', '/run/secrets/openteamily-runtime-key.json'):
+            if isinstance(volume, dict) and volume.get('type') == 'bind':
                 source = str((root / volume['source']).resolve()) if not Path(volume['source']).is_absolute() else volume['source']
                 mounts.append({'Type': 'bind', 'Source': source, 'Destination': volume['target'], 'RW': not volume.get('read_only', False)})
                 binds.append(source + ':' + volume['target'] + (':ro' if volume.get('read_only') else ''))
@@ -63,7 +63,7 @@ elif args[0] == 'inspect':
            'Labels': {'com.docker.compose.project': 'wrong' if ctrl.get('wrong_project') else state['project'], 'com.docker.compose.service': 'flybot'}},
            'HostConfig': {'Privileged': bool(ctrl.get('privileged')), 'ReadonlyRootfs': True, 'CapDrop': ['ALL'],
                           'SecurityOpt': ['no-new-privileges:true'], 'IpcMode': 'private', 'NetworkMode': state['project'] + '_default', 'PortBindings': {},
-                          'Binds': binds},
+                          'Binds': binds, 'Memory': state.get('memory_bytes', 0)},
            'State': {'Status': 'running' if running else 'exited', 'Running': running, 'Paused': False, 'Restarting': False,
                      'StartedAt': '2026-11-16T00:00:00.' + str(state.get('generation', 0)).zfill(9) + 'Z',
                      'Health': {'Status': 'starting' if ctrl.get('not_ready') else 'healthy'}},
@@ -83,9 +83,11 @@ elif args[0] == 'compose':
         if verb in ('create', 'up') and (force or 'binds' not in state):
             iid = project[3:]
             manifest = json.loads((root / ('compose-' + iid + '.json')).read_text())
+            memory = manifest['services']['flybot']['mem_limit']
+            state['memory_bytes'] = int(memory[:-1]) * {'g': 1024 ** 3, 'm': 1024 ** 2}[memory[-1]]
             snap = []
             for volume in manifest['services']['flybot'].get('volumes', []):
-                if isinstance(volume, dict) and volume.get('type') == 'bind' and volume.get('target') in ('/run/secrets/openteamily-model-api.json', '/run/secrets/openteamily-bot-social.json', '/run/secrets/openteamily-runtime-key.json'):
+                if isinstance(volume, dict) and volume.get('type') == 'bind':
                     source = str((root / volume['source']).resolve()) if not Path(volume['source']).is_absolute() else volume['source']
                     snap.append({'Type': 'bind', 'Source': source, 'Destination': volume['target'], 'RW': not volume.get('read_only', False),
                                  'bind': source + ':' + volume['target'] + (':ro' if volume.get('read_only') else '')})

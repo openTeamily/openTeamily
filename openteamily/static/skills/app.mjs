@@ -1,6 +1,8 @@
 import { mountImportedSkills } from './imports.mjs';
 import { mountSkillExecution } from './execution.mjs';
 import { csrfCookie } from '../agents/app.mjs';
+import { dsbotServed } from '../chat/dsbot.mjs';
+import { syncSkillsToDsBot } from '../shell/dsbot-skills.mjs';
 // Original content packages are loaded from the authenticated catalogue; no fake page-local installation.
 // The binding lifecycle below decides what a runtime may load. The reader's own
 // library membership ("我的技能库") is a separate per-account record: it never grants
@@ -71,6 +73,18 @@ export async function writeInstalled(skillId, wanted, options = {}) {
 export function mountSkills(document, {fetcher = globalThis.fetch.bind(globalThis), read, write, catalogue: given} = {}) {
   const list = document.getElementById('skills-list'), input = document.getElementById('skills-search');
   if (!list || !input) return null;
+  if (dsbotServed(document)) {
+    // Served by the user's own DS-Bot: every successful install/binding change is
+    // materialized there right away.
+    const base = fetcher;
+    const sync = () => syncSkillsToDsBot(base, {'X-CSRF-Token': csrfCookie(document.cookie)}).catch(() => null);
+    fetcher = async (path, init = {}) => {
+      const response = await base(path, init);
+      if ((init.method || 'GET') !== 'GET' && /^\/v1\/skills\/(bindings|installed)(?:$|[/?])/.test(String(path)) && response.ok) sync();
+      return response;
+    };
+    sync();
+  }
   const error = document.getElementById('skills-error');
   const scope = document.getElementById('skills-scope');
   const permission = document.getElementById('skills-permission');

@@ -1,4 +1,4 @@
-import { csrfCookie } from '../agents/app.mjs';
+import { AGENT_CATEGORIES, categoryFromSearch, categoryLabel, csrfCookie } from '../agents/app.mjs';
 import { renderThumb, thumbModel } from '../shell/thumb.mjs';
 
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
@@ -37,44 +37,34 @@ export function agentDiscoverPairs(agents, statuses) {
   return (agents || []).map((agent, index) => ({
     agent,
     discover: (statuses || [])[index] || {listed: false},
-  }));
+  })).filter(({agent, discover}) => !(agent.archived || agent.native_deleted) || discover.listed);
 }
 
-export function catalogQuery(text = '', cursor = '') {
+export function catalogQuery(text = '', cursor = '', category = 'all', creator = '') {
   const params = new URLSearchParams({limit: '12'});
   if (text.trim()) params.set('q', text.trim());
   if (cursor) params.set('cursor', cursor);
+  if (category !== 'all') params.set('category', category);
+  if (creator) params.set('creator', creator);
   return '/v1/discover/agents?' + params.toString();
 }
 
-export const FEED_CATEGORIES = [
-  '热门', '网页', '小游戏', '图片', '音乐', '幻灯片', '视频', '3D 作品',
-  '短剧', '文章', '教程', '看板', '行情', '小程序', '故事', '娱乐', 'AI 与科技', '美容',
-];
+export const FEED_CATEGORIES = ['网页', '图片', '音乐', '幻灯片', '视频'];
 
-export const CATALOG_CATEGORIES = [
-  'Content Creation', 'Customer Support', 'Data Analysis', 'Design',
-  'Education', 'Engineering', 'Finance', 'IT & Security', 'Investment',
-  'Legal', 'Life', 'Marketing',
-];
+export const CATALOG_CATEGORIES = AGENT_CATEGORIES.map(({label}) => label);
 
-export const TEAM_CATEGORIES = [
-  'Marketing', 'Engineering', 'IT & Security', 'Content Creation',
-  'Operations', 'Product', 'Data Analysis', 'Design', 'Research',
-  'Investment', 'Education', 'Life', 'Sales',
-];
+const TEAM_DIRECTORY_LIMIT = 100;
+const TEAM_DIRECTORY_ID = /^[A-Za-z0-9_-]{1,80}$/;
+const TEAM_MEMBERSHIP = {member: '已加入', pending: '等待审批', suspended: '已暂停'};
+const TEAM_SEARCH_LIMIT = 60;
 
-export const TEAMS_NOTE = '公开 AI 团队目录还没有接口，所以这里不会列出模板卡片。也不会复制对照里的团队名称或创建者品牌。';
-export const TEAMS_SEARCH_NOTE = '搜索 AI 团队尚未接通：没有对应的公开接口。';
-export const TEAMS_SEARCH_PLACEHOLDER = '搜索 AI 团队......';
-
-export const FEED_ACTIVITY_EMPTY_NOTE = '还没有公开作品，所以这里不会列出作品卡片。也不会展示奖励活动或推荐内容。支持点赞、收录和关注作者；其他分类尚未接通。';
-export const FEED_ACTIVITY_LISTED_NOTE = '以下是工作区自愿公开的作品，不是推荐或奖励内容。支持点赞、收录和关注作者；其他分类尚未接通。';
+export const FEED_ACTIVITY_EMPTY_NOTE = '暂时没有公开作品。';
+export const FEED_ACTIVITY_LISTED_NOTE = '';
 export const FEED_ACTIVITY_NOTE = FEED_ACTIVITY_EMPTY_NOTE;
 export const FEED_FOLLOWING_EMPTY_TITLE = '关注列表暂无动态';
 export const FEED_FOLLOWING_EMPTY_BODY = '你关注的人发布动态后会显示在这里。';
-export const FEED_FOLLOWING_NOTE = '这里只展示你关注的作者已公开的作品，不是推荐或奖励活动。';
-export const FEED_SEARCH_EMPTY_NOTE = '没有匹配的公开作品。支持点赞、收录和关注作者；其他分类尚未接通。';
+export const FEED_FOLLOWING_NOTE = '你关注的作者已公开的作品会显示在这里。';
+export const FEED_SEARCH_EMPTY_NOTE = '没有匹配的公开作品。';
 
 export const FEED_KINDS = ['', 'website', 'image', 'audio', 'slides', 'video'];
 
@@ -239,49 +229,56 @@ export function isTeamsCatalog(location) {
   return params.get('tab') === 'agents' && params.get('section') === 'groups';
 }
 
-export function renderTeamCard(document, item) {
+function teamDirectoryQuery(text) {
+  const params = new URLSearchParams({limit: String(TEAM_DIRECTORY_LIMIT)});
+  if (text) params.set('q', text);
+  return '/v1/team-directory?' + params.toString();
+}
+
+export function renderTeamCard(document, team, {joining = false, onJoin} = {}) {
   const card = document.createElement('article');
-  const category = document.createElement('p');
-  category.className = 'team-category';
-  category.textContent = item.category || '';
+  const heading = document.createElement('div');
+  heading.className = 'team-card-heading';
+  const mark = document.createElement('span');
+  mark.className = 'catalog-avatar';
+  mark.dataset.tone = catalogTone(team.name);
+  mark.setAttribute('aria-hidden', 'true');
+  mark.textContent = catalogMonogram(team.name);
   const name = document.createElement('h3');
-  name.textContent = item.name || item.slug || '';
-  const summary = document.createElement('p');
-  summary.className = 'summary';
-  summary.textContent = item.summary || '';
-  const tags = document.createElement('ul');
-  tags.className = 'team-tags';
-  for (const label of item.tags || []) {
-    const li = document.createElement('li');
-    li.textContent = label;
-    tags.append(li);
+  name.textContent = team.name;
+  heading.append(mark, name);
+  card.append(heading);
+  if (team.summary) {
+    const summary = document.createElement('p');
+    summary.className = 'team-summary';
+    summary.textContent = team.summary;
+    card.append(summary);
   }
   const foot = document.createElement('div');
   foot.className = 'team-foot';
-  const avatars = document.createElement('div');
-  avatars.className = 'team-avatars';
-  avatars.setAttribute('aria-hidden', 'true');
-  for (const member of item.members || []) {
-    const mark = document.createElement('span');
-    mark.textContent = catalogInitial(member);
-    avatars.append(mark);
+  const count = document.createElement('span');
+  count.className = 'team-size';
+  const members = Number(team.member_count);
+  count.textContent = Number.isInteger(members) && members >= 0 ? `${members} 位成员` : '';
+  foot.append(count);
+  const membership = Object.hasOwn(TEAM_MEMBERSHIP, team.membership) ? TEAM_MEMBERSHIP[team.membership] : '';
+  if (membership) {
+    const state = document.createElement('span');
+    state.className = 'team-membership';
+    state.dataset.state = team.membership;
+    state.textContent = membership;
+    foot.append(state);
+  } else if (onJoin && TEAM_DIRECTORY_ID.test(team.workspace_id || '')) {
+    const join = document.createElement('button');
+    join.type = 'button';
+    join.className = 'team-join';
+    join.disabled = joining;
+    join.textContent = joining ? '正在申请…' : '申请加入';
+    join.setAttribute('aria-label', `${join.textContent} ${team.name}`);
+    join.addEventListener('click', () => onJoin(team));
+    foot.append(join);
   }
-  foot.append(avatars);
-  if (item.extra) {
-    const extra = document.createElement('span');
-    extra.className = 'team-extra';
-    extra.textContent = item.extra;
-    foot.append(extra);
-  }
-  const create = document.createElement('button');
-  create.type = 'button';
-  create.className = 'team-create';
-  create.disabled = true;
-  create.textContent = '创建';
-  create.title = '未接通：没有从目录创建 AI 团队的接口。';
-  create.setAttribute('aria-label', (item.name || item.slug || '团队') + '：创建未接通');
-  foot.append(create);
-  card.append(category, name, summary, tags, foot);
+  card.append(foot);
   return card;
 }
 
@@ -301,14 +298,24 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const mainPanel = document.getElementById('main-panel');
   const workspaceSelect = document.getElementById('workspace');
   let currentUser = null;
-  // A refused workspace list and an empty one both leave the selector blank, but
-  // they are different states: only the second one means "you have no workspace".
-  let workspaceListFailed = false;
+  let workspaceListState = 'loading';
   let catalog = [];
   let cursor = '';
   let activeQuery = '';
+  let activeCategory = categoryFromSearch(location?.search);
+  let activeCreator = null;
+  let remix = null;
+  let remixLoading = false;
+  let manageRequest = 0;
   let catalogRequest = 0;
+  let directoryItems = [];
+  let directoryLoading = false;
+  let activeTeamQuery = '';
+  const joiningTeams = new Set();
   const agentsView = isAgentsCatalog(location);
+  const manageParams = new URLSearchParams(location?.search || '');
+  const manageWorkspace = manageParams.get('workspace');
+  const manageAgent = manageParams.get('agent');
   const teamsView = isTeamsCatalog(location);
   const catalogView = agentsView || teamsView;
   const initialFeed = catalogView
@@ -324,18 +331,20 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   function applyCatalogChrome() {
+    setCurrent('catalog-tab-feed', !catalogView);
     setCurrent('catalog-tab-agents', agentsView);
     setCurrent('catalog-tab-teams', teamsView);
     const agentFilters = document.getElementById('catalog-filters');
-    const teamFilters = document.getElementById('teams-filters');
     if (agentFilters) agentFilters.hidden = !agentsView;
-    if (teamFilters) teamFilters.hidden = !teamsView;
     const createAgent = document.getElementById('catalog-create-agent');
     const createTeam = document.getElementById('catalog-create-team');
     if (createAgent) createAgent.hidden = !agentsView;
     if (createTeam) createTeam.hidden = !teamsView;
     const query = document.getElementById('catalog-query');
-    if (query) query.placeholder = teamsView ? TEAMS_SEARCH_PLACEHOLDER : '搜索智能体…';
+    if (query) {
+      query.placeholder = teamsView ? '搜索 AI 团队…' : '搜索智能体…';
+      if (teamsView) query.maxLength = TEAM_SEARCH_LIMIT;
+    }
     if (typeof document.querySelector === 'function') {
       const queryLabel = document.querySelector('label[for="catalog-query"]');
       if (queryLabel) queryLabel.textContent = teamsView ? '搜索 AI 团队' : '搜索智能体';
@@ -349,24 +358,94 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
   }
 
-  function showTeamsUnconnected() {
+  function renderTeamDirectory() {
     const list = document.getElementById('discover-list');
-    if (list) list.replaceChildren();
-    const empty = document.getElementById('discover-empty');
-    if (empty) empty.hidden = true;
-    const more = document.getElementById('catalog-more');
-    if (more) more.hidden = true;
-    const count = document.getElementById('catalog-count');
-    if (count) count.textContent = '';
-    const error = document.getElementById('catalog-error');
-    if (error) error.hidden = true;
-    const note = document.getElementById('teams-note');
-    if (note) {
-      note.hidden = false;
-      note.textContent = TEAMS_NOTE;
+    list.replaceChildren();
+    for (const team of directoryItems) {
+      const row = document.createElement('li');
+      row.append(renderTeamCard(document, team, {
+        joining: joiningTeams.has(team.workspace_id),
+        onJoin: applyTeam,
+      }));
+      list.append(row);
     }
+  }
+
+  async function applyTeam(team) {
+    const id = team.workspace_id;
+    const user = currentUser;
+    if (!user || joiningTeams.has(id) || !TEAM_DIRECTORY_ID.test(id)) return;
+    joiningTeams.add(id);
+    renderTeamDirectory();
+    show('', '');
+    try {
+      const response = await request('POST', '/v1/team-directory/' + encodeURIComponent(id) + '/join', {});
+      const next = response.status === 202 ? 'pending' : response.status === 200 ? response.body.status : '';
+      if (currentUser !== user) return;
+      if (!Object.hasOwn(TEAM_MEMBERSHIP, next)) {
+        show('error', messageFor(response.body.error, '无法提交加入申请，请重试。'));
+        return;
+      }
+      directoryItems = directoryItems.map(item => item.workspace_id === id ? {...item, membership: next} : item);
+      show('ok', next === 'pending' ? '已提交申请，等待团队管理员审批。' : TEAM_MEMBERSHIP[next]);
+      // A search started before the write can return pre-application membership.
+      if (directoryLoading) void loadTeams(activeTeamQuery);
+    } catch {
+      if (currentUser === user) show('error', '连接失败，暂时无法确认申请结果。可刷新重试。');
+    } finally {
+      joiningTeams.delete(id);
+      if (currentUser === user) renderTeamDirectory();
+    }
+  }
+
+  async function loadTeams(query = document.getElementById('catalog-query').value.trim().slice(0, TEAM_SEARCH_LIMIT)) {
+    const seq = ++catalogRequest;
     const panel = document.getElementById('catalog-panel');
-    if (panel) panel.setAttribute('aria-busy', 'false');
+    const empty = document.getElementById('discover-empty');
+    const error = document.getElementById('catalog-error');
+    const retry = document.getElementById('teams-retry');
+    const count = document.getElementById('catalog-count');
+    activeTeamQuery = query;
+    directoryItems = [];
+    renderTeamDirectory();
+    document.getElementById('catalog-more').hidden = true;
+    empty.hidden = true;
+    error.hidden = true;
+    retry.hidden = true;
+    if (!currentUser) {
+      directoryLoading = false;
+      panel.setAttribute('aria-busy', 'false');
+      count.textContent = '';
+      empty.textContent = '登录后可查看并申请加入公开团队。';
+      empty.hidden = false;
+      return;
+    }
+    directoryLoading = true;
+    panel.setAttribute('aria-busy', 'true');
+    count.textContent = '正在加载团队…';
+    try {
+      const result = await request('GET', teamDirectoryQuery(query));
+      if (seq !== catalogRequest) return;
+      if (result.status !== 200) throw new Error(messageFor(result.body.error, '无法加载团队目录。'));
+      directoryItems = catalogItems(result.body);
+      renderTeamDirectory();
+      count.textContent = directoryItems.length >= TEAM_DIRECTORY_LIMIT
+        ? `已显示前 ${TEAM_DIRECTORY_LIMIT} 个团队，可用搜索缩小范围。`
+        : directoryItems.length ? `${directoryItems.length} 个团队` : '';
+      empty.textContent = query ? '没有匹配的团队。' : '暂无公开团队。';
+      empty.hidden = directoryItems.length > 0;
+    } catch (failure) {
+      if (seq !== catalogRequest) return;
+      count.textContent = '';
+      error.textContent = failure.message || '无法加载团队目录。';
+      error.hidden = false;
+      retry.hidden = false;
+    } finally {
+      if (seq === catalogRequest) {
+        directoryLoading = false;
+        panel.setAttribute('aria-busy', 'false');
+      }
+    }
   }
 
   function showDiscoverView() {
@@ -630,6 +709,138 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     return { status: response.status, body: parsed };
   }
 
+  function applyCatalogFilters() {
+    for (const chip of document.querySelectorAll('[data-catalog-category]')) {
+      chip.setAttribute('aria-pressed', String(chip.dataset.catalogCategory === activeCategory));
+    }
+    const filter = document.getElementById('catalog-creator-filter');
+    filter.hidden = !activeCreator;
+    document.getElementById('catalog-creator-label').textContent = activeCreator ? '创建者 · ' + activeCreator.name : '';
+  }
+
+  function setCategory(category) {
+    activeCategory = category;
+    if (history?.replaceState) {
+      const params = new URLSearchParams(location.search);
+      if (category === 'all') params.delete('category');
+      else params.set('category', category);
+      history.replaceState(null, '', '/discover?' + params.toString());
+    }
+    return loadCatalog();
+  }
+
+  const categoryDialog = document.getElementById('catalog-category-dialog');
+  const categoryQuery = document.getElementById('catalog-category-query');
+  function renderCategoryOptions() {
+    const options = document.getElementById('catalog-category-options');
+    const term = categoryQuery.value.trim().toLowerCase();
+    options.replaceChildren();
+    for (const {slug, label} of [{slug: 'all', label: '全部'}, ...AGENT_CATEGORIES]) {
+      if (term && !label.toLowerCase().includes(term)) continue;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.setAttribute('aria-pressed', String(slug === activeCategory));
+      button.addEventListener('click', () => {
+        categoryDialog.close();
+        setCategory(slug);
+      });
+      options.append(button);
+    }
+    document.getElementById('catalog-category-empty').hidden = options.childElementCount > 0;
+  }
+
+  const remixDialog = document.getElementById('catalog-remix-dialog');
+  const remixName = document.getElementById('catalog-remix-name');
+  const remixWorkspace = document.getElementById('catalog-remix-workspace');
+  const remixStatus = document.getElementById('catalog-remix-status');
+  const remixSubmit = document.getElementById('catalog-remix-submit');
+
+  function syncRemixWorkspaces() {
+    const previous = remixWorkspace.value || workspaceSelect.value;
+    remixWorkspace.replaceChildren(...Array.from(workspaceSelect.options, option => {
+      const choice = document.createElement('option');
+      choice.value = option.value;
+      choice.textContent = option.textContent;
+      return choice;
+    }));
+    if (Array.from(remixWorkspace.options).some(option => option.value === previous)) remixWorkspace.value = previous;
+    remixSubmit.disabled = !remix?.template || !remixWorkspace.value || remixLoading;
+    if (remix?.template && !remixWorkspace.value) {
+      remixStatus.textContent = {
+        loading: '正在读取可用工作区…', failed: '无法读取工作区。请刷新后重试。', ready: '暂无可用工作区。',
+      }[workspaceListState];
+    } else if (remix?.template && workspaceListState === 'ready' && remixStatus.textContent === '正在读取可用工作区…') {
+      remixStatus.textContent = '';
+    }
+  }
+
+  async function openRemix(item) {
+    if (!currentUser) {
+      show('error', '请登录后复制智能体。');
+      return;
+    }
+    const entry = {slug: item.slug, key: reuseKey(), template: null};
+    remix = entry;
+    remixName.value = item.name;
+    document.getElementById('catalog-remix-summary').textContent = item.summary || '';
+    const instructions = document.getElementById('catalog-remix-instructions');
+    instructions.hidden = true;
+    instructions.open = false;
+    const description = document.getElementById('catalog-remix-description');
+    description.textContent = '';
+    remixStatus.textContent = '正在读取发布内容…';
+    syncRemixWorkspaces();
+    if (!remixDialog.open) remixDialog.showModal();
+    try {
+      const result = await request('GET', '/v1/discover/agents/' + entry.slug + '/remix');
+      if (remix !== entry || !remixDialog.open) return;
+      if (result.status !== 200) throw new Error(messageFor(result.body.error, '无法读取发布内容。'));
+      const template = result.body.template;
+      entry.template = template;
+      remixName.value = template.name;
+      document.getElementById('catalog-remix-summary').textContent = template.summary;
+      document.getElementById('catalog-remix-prompt').textContent = template.instructions;
+      instructions.hidden = !template.instructions;
+      description.textContent = template.instructions
+        ? '副本包含发布的指令，可在自己的工作区修改。'
+        : '此发布只包含名称、简介和分类。创建后可补充自己的指令。';
+      remixStatus.textContent = '';
+      syncRemixWorkspaces();
+    } catch (error) {
+      if (remix === entry && remixDialog.open) remixStatus.textContent = error.message;
+    }
+  }
+
+  async function submitRemix(event) {
+    event.preventDefault();
+    const entry = remix;
+    if (remixLoading || !entry?.template || !remixWorkspace.value) return;
+    remixLoading = true;
+    remixSubmit.disabled = true;
+    remixStatus.textContent = '正在创建副本…';
+    try {
+      const result = await request('POST', '/v1/discover/agents/' + entry.slug + '/remix', {
+        revision: entry.template.revision, workspace_id: remixWorkspace.value, name: remixName.value.trim(),
+      }, {'Idempotency-Key': entry.key});
+      if (![200, 201].includes(result.status)) {
+        if (result.body.error?.code === 'listing_changed') {
+          entry.template = null;
+          throw new Error('发布内容已更新。关闭后重新预览。');
+        }
+        throw new Error(messageFor(result.body.error, '无法创建副本，请重试。'));
+      }
+      const agent = result.body.agent;
+      const hash = new URLSearchParams({workspace: agent.workspace_id, agent: agent.id});
+      location.assign('/chat#' + hash.toString());
+    } catch (error) {
+      if (remix === entry) remixStatus.textContent = error.message;
+    } finally {
+      remixLoading = false;
+      syncRemixWorkspaces();
+    }
+  }
+
   function renderCatalog(items) {
     const list = document.getElementById('discover-list');
     list.replaceChildren();
@@ -649,65 +860,45 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       const summary = document.createElement('p');
       summary.className = 'summary';
       summary.textContent = item.summary || '没有简介。';
-      const chat = document.createElement('button');
-      chat.type = 'button';
-      chat.disabled = true;
-      chat.textContent = '聊天';
-      chat.title = '未接通：公共目录没有发起聊天的接口';
-      chat.setAttribute('aria-label', (item.name || item.slug) + '：聊天未接通');
       copy.append(name, summary);
-      // Public catalog entries carry only a name and a summary (no prompts, no
-      // instructions), so 用这个智能体 really calls the existing workspace-agent
-      // create endpoint with those two fields and lands on /agents. It does not
-      // copy a prompt nobody published, and it does not fake a local receipt.
+      const meta = document.createElement('div');
+      meta.className = 'catalog-card-meta';
+      if (item.category) {
+        const tag = document.createElement('span');
+        tag.textContent = categoryLabel(item.category);
+        if (tag.textContent) meta.append(tag);
+      }
+      if (item.creator?.handle) {
+        const creator = document.createElement('button');
+        creator.type = 'button';
+        creator.className = 'catalog-author';
+        creator.textContent = item.creator.name || item.creator.handle;
+        creator.title = '查看此创建者的智能体';
+        creator.addEventListener('click', () => {
+          activeCreator = item.creator;
+          loadCatalog();
+        });
+        meta.append(creator);
+      }
+      if (meta.childElementCount) copy.append(meta);
       const use = document.createElement('button');
       use.type = 'button';
       use.className = 'catalog-use';
-      use.textContent = '用这个智能体';
-      use.title = '按公共目录里的名称和简介，在你的工作区里新建一个同名智能体；说明需要你之后自己补。';
-      use.setAttribute('aria-label', '用这个智能体：「' + (item.name || item.slug) + '」');
-      use.addEventListener('click', async () => {
-        const label = item.name || item.slug;
-        if (!currentUser) {
-          show('error', '请先登录，再把这个智能体放进你的工作区。');
-          return;
-        }
-        const space = workspaceSelect.value;
-        if (!space) {
-          // Never tell a user to create a workspace when the list simply failed to load.
-          show('error', workspaceListFailed
-            ? '工作区列表读取失败，请稍后重试。'
-            : '先创建一个工作区，才能放进这个智能体。');
-          return;
-        }
-        if (use.disabled) return;
-        use.disabled = true;
-        let result;
-        try {
-          result = await request('POST', `/v1/workspaces/${space}/agents`, {
-            name: label,
-            summary: item.summary || '',
-            instructions: '',
-          }, {'Idempotency-Key': reuseKey()});
-        } catch {
-          result = {status: 0, body: {}};
-        }
-        use.disabled = false;
-        if (result.status === 201 || result.status === 200) {
-          show('ok', '已创建「' + label + '」，正在打开智能体页。');
-          if (typeof location.assign === 'function') location.assign('/agents');
-          else location.href = '/agents';
-          return;
-        }
-        if (result.status === 409) {
-          show('error', '你的工作区里已有同名智能体；改名后再从目录创建。');
-          return;
-        }
-        show('error', messageFor(result.body && result.body.error, '无法创建智能体。'));
-      });
-      card.append(avatar, copy, chat, use);
-      // Slugs identify records, but no public detail route exists, so the card
-      // carries no hover text: a "/d/<slug>" tooltip would promise a 404.
+      use.textContent = '复制';
+      use.setAttribute('aria-label', '复制智能体：' + (item.name || item.slug));
+      use.addEventListener('click', () => openRemix(item));
+      card.append(avatar, copy);
+      if (item.chat_enabled && !item.own_agent && validSlug(item.slug)) {
+        const actions = document.createElement('div');
+        actions.className = 'catalog-agent-actions';
+        const chat = document.createElement('a');
+        chat.href = '/chat#public-agent=' + item.slug;
+        chat.className = 'catalog-chat';
+        chat.textContent = '聊天';
+        chat.setAttribute('aria-label', '和 ' + (item.name || item.slug) + ' 聊天');
+        actions.append(chat, use);
+        card.append(actions);
+      } else card.append(use);
       li.append(card);
       list.append(li);
     }
@@ -716,6 +907,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   async function loadCatalog(append = false) {
     const seq = ++catalogRequest;
     if (!append) {
+      applyCatalogFilters();
       activeQuery = document.getElementById('catalog-query').value.trim();
       catalog = [];
       cursor = '';
@@ -730,7 +922,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     count.textContent = append ? '正在加载更多…' : '正在加载…';
     document.getElementById('catalog-panel').setAttribute('aria-busy', 'true');
     try {
-      const listed = await request('GET', catalogQuery(activeQuery, cursor));
+      const listed = await request('GET', catalogQuery(activeQuery, cursor, activeCategory, activeCreator?.handle));
       if (seq !== catalogRequest) return;
       if (listed.status !== 200) throw new Error(messageFor(listed.body.error, '无法加载公共目录。'));
       const incoming = catalogItems(listed.body);
@@ -739,8 +931,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       cursor = listed.body.cursor || '';
       renderCatalog(catalog);
       more.hidden = !cursor;
-      document.getElementById('discover-empty').textContent = activeQuery
-        ? '没有匹配的智能体。试试其他关键词。' : '暂无公开智能体。';
+      document.getElementById('discover-empty').textContent = activeQuery || activeCategory !== 'all' || activeCreator
+        ? '没有匹配的智能体。' : '暂无公开智能体。';
       count.textContent = '已显示 ' + catalog.length + ' 个智能体' + (cursor ? '，还有更多' : '');
     } catch (failure) {
       if (seq !== catalogRequest) return;
@@ -769,34 +961,85 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       title.textContent = agent.name;
       const state = document.createElement('span');
       state.className = 'state';
-      state.textContent = discover.listed ? '已收录：' + discover.slug : '未收录';
+      const archived = Boolean(agent.archived || agent.native_deleted);
+      state.textContent = archived ? '已归档 · 仍公开' : discover.listed ? '已发布' : '未发布';
       const input = document.createElement('input');
       input.type = 'text';
       input.maxLength = 30;
-      input.placeholder = 'slug';
+      input.placeholder = '公开地址';
+      input.setAttribute('aria-label', agent.name + ' 的公开地址');
       input.value = discover.slug || '';
+      input.disabled = archived;
+      const options = document.createElement('div');
+      options.className = 'catalog-publish-options';
+      const label = document.createElement('label');
+      const allow = document.createElement('input');
+      allow.type = 'checkbox';
+      allow.disabled = archived || !agent.instructions;
+      allow.checked = Boolean(agent.instructions && discover.copy_instructions);
+      const preview = document.createElement('pre');
+      preview.textContent = agent.instructions || '';
+      preview.hidden = !allow.checked;
+      allow.addEventListener('change', () => { preview.hidden = !allow.checked; });
+      label.append(allow, document.createTextNode('公开完整指令，允许复制'));
+      const chatLabel = document.createElement('label');
+      const publicChat = document.createElement('input');
+      publicChat.type = 'checkbox';
+      publicChat.checked = discover.chat_enabled === true;
+      publicChat.disabled = archived;
+      chatLabel.append(publicChat, document.createTextNode('允许访客聊天'));
+      const chatNote = document.createElement('p');
+      chatNote.className = 'note';
+      chatNote.textContent = '自动回复使用已发布的简介、指令和当前对话。你可以查看访客的对话。';
+      chatNote.hidden = !publicChat.checked;
+      publicChat.addEventListener('change', () => { chatNote.hidden = !publicChat.checked; });
+      const quickLabel = document.createElement('label');
+      const quickStarts = document.createElement('input');
+      quickStarts.type = 'checkbox';
+      quickStarts.disabled = archived || !agent.quick_starts?.length;
+      quickStarts.checked = !quickStarts.disabled && discover.publish_quick_starts === true;
+      quickLabel.append(quickStarts, document.createTextNode('公开快捷开场'));
+      const quickNote = document.createElement('p');
+      quickNote.className = 'note';
+      quickNote.textContent = archived ? '取消发布后，访客将无法打开公开主页。'
+        : quickStarts.disabled ? '先在智能体编辑页添加开场。'
+          : '开场会显示在公开主页。访客选择后，可编辑再发送。';
+      options.append(label, preview, chatLabel, chatNote, quickLabel, quickNote);
       const publish = document.createElement('button');
       publish.type = 'button';
-      publish.textContent = '收录 / 更新';
+      publish.hidden = archived;
+      publish.textContent = discover.listed ? '更新发布' : '发布';
       publish.addEventListener('click', async () => {
+        if (archived || publish.disabled) return;
         if (!validSlug(input.value.trim())) {
           show('error', 'slug 需为 3–30 个字符的小写字母、数字或连字符。');
           return;
         }
-        const result = await request(
-          'POST', `/v1/workspaces/${workspaceSelect.value}/agents/${agent.id}/discover`,
-          {slug: input.value.trim()});
-        if (result.status !== 201 && result.status !== 200) {
-          show('error', messageFor(result.body.error, '无法收录。'));
-          return;
+        publish.disabled = true;
+        revoke.disabled = true;
+        publish.textContent = '正在发布…';
+        try {
+          const result = await request(
+            'POST', `/v1/workspaces/${workspaceSelect.value}/agents/${agent.id}/discover`,
+            {slug: input.value.trim(), revision: agent.revision, copy_instructions: allow.checked,
+              chat_enabled: publicChat.checked, publish_quick_starts: quickStarts.checked});
+          if (result.status !== 201 && result.status !== 200) {
+            show('error', messageFor(result.body.error, '无法发布。'));
+            return;
+          }
+          show('ok', '已发布。');
+          await Promise.all([loadCatalog(), loadManage()]);
+        } catch {
+          show('error', '连接中断，请重试发布。');
+        } finally {
+          publish.disabled = false;
+          revoke.disabled = !discover.listed;
+          publish.textContent = discover.listed ? '更新发布' : '发布';
         }
-        show('ok', '已收录。');
-        await loadCatalog();
-        await loadManage();
       });
       const revoke = document.createElement('button');
       revoke.type = 'button';
-      revoke.textContent = '取消收录';
+      revoke.textContent = '取消发布';
       revoke.disabled = !discover.listed;
       revoke.addEventListener('click', async () => {
         const result = await request(
@@ -805,44 +1048,65 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
           show('error', messageFor(result.body.error, '无法取消收录。'));
           return;
         }
-        show('ok', '已取消收录。');
+        show('ok', '已取消发布。');
         await loadCatalog();
         await loadManage();
       });
-      li.append(title, state, input, publish, revoke);
+      li.append(title, state, input, publish, revoke, options);
+      if (discover.listed && validSlug(discover.slug)) {
+        const homepage = document.createElement('a');
+        homepage.href = '/a/' + discover.slug;
+        homepage.textContent = '打开公开主页';
+        options.append(homepage);
+      }
       list.append(li);
     }
   }
 
   async function loadManage() {
+    const seq = ++manageRequest;
     const id = workspaceSelect.value;
     if (!id) {
       renderManage([]);
       return;
     }
-    const listed = await request('GET', `/v1/workspaces/${id}/agents?limit=100`);
+    const path = `/v1/workspaces/${id}/agents?limit=100&include_archived=1`;
+    const listed = await request('GET', path);
+    if (seq !== manageRequest) return;
     if (listed.status !== 200) {
       renderManage([]);
       return;
     }
-    const agents = listed.body.items || [];
+    const agents = [...(listed.body.items || [])];
+    if (/^[0-9a-f]{32}$/.test(listed.body.cursor || '')) {
+      const more = await request('GET', path + '&cursor=' + listed.body.cursor);
+      if (seq !== manageRequest) return;
+      if (more.status === 200) agents.push(...(more.body.items || []));
+    }
     const statuses = await Promise.all(agents.map(agent =>
       request('GET', `/v1/workspaces/${id}/agents/${agent.id}/discover`)
         .then(result => (result.status === 200 ? result.body.discover : {listed: false}))));
-    renderManage(agentDiscoverPairs(agents, statuses));
+    if (seq === manageRequest) {
+      const pairs = agentDiscoverPairs(agents, statuses);
+      const index = id === manageWorkspace ? pairs.findIndex(({agent}) => agent.id === manageAgent) : -1;
+      if (index > 0) pairs.unshift(...pairs.splice(index, 1));
+      renderManage(pairs);
+    }
   }
 
   async function load() {
     showDiscoverView();
-    if (agentsView) await loadCatalog();
-    if (teamsView) showTeamsUnconnected();
-    const session = await request('GET', '/v1/auth/session');
+    const sessionLoad = request('GET', '/v1/auth/session');
+    const directoryLoad = agentsView ? loadCatalog() : null;
+    const session = await sessionLoad;
     if (session.status !== 200) {
       currentUser = null;
       loginPanel.hidden = false;
       mainPanel.hidden = false;
       document.getElementById('catalog-manage').hidden = true;
       show('', '');
+      if (teamsView) await loadTeams();
+      await directoryLoad;
       return;
     }
     currentUser = session.body.user;
@@ -852,8 +1116,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     document.getElementById('whoami').textContent = currentUser.username;
     if (agentsView) {
       const listed = await request('GET', '/v1/workspaces?limit=100');
-      workspaceListFailed = listed.status !== 200;
-      const workspaces = workspaceListFailed ? [] : (listed.body.items || []);
+      workspaceListState = listed.status === 200 ? 'ready' : 'failed';
+      const workspaces = workspaceListState === 'ready' ? (listed.body.items || []) : [];
       workspaceSelect.replaceChildren();
       for (const space of workspaces) {
         const option = document.createElement('option');
@@ -861,9 +1125,15 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         option.textContent = space.name;
         workspaceSelect.append(option);
       }
-      await loadManage();
+      if (workspaces.some(space => space.id === manageWorkspace)) workspaceSelect.value = manageWorkspace;
+      syncRemixWorkspaces();
+      const manage = document.getElementById('catalog-manage');
+      if (manage.open) void loadManage();
+      else if (location?.hash === '#catalog-manage') manage.open = true;
     }
     show('', '');
+    if (teamsView) await loadTeams();
+    await directoryLoad;
   }
 
   document.getElementById('login-form').addEventListener('submit', async event => {
@@ -880,23 +1150,42 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   });
 
   workspaceSelect.addEventListener('change', loadManage);
+  const manage = document.getElementById('catalog-manage');
+  manage.addEventListener('toggle', () => { if (manage.open) void loadManage(); });
+  if (agentsView) {
+    for (const chip of document.querySelectorAll('[data-catalog-category]')) {
+      chip.addEventListener('click', () => setCategory(chip.dataset.catalogCategory));
+    }
+    document.getElementById('catalog-filter-search').addEventListener('click', () => {
+      categoryQuery.value = '';
+      renderCategoryOptions();
+      categoryDialog.showModal();
+      categoryQuery.focus();
+    });
+    categoryQuery.addEventListener('input', renderCategoryOptions);
+    document.getElementById('catalog-category-close').addEventListener('click', () => categoryDialog.close());
+    document.getElementById('catalog-clear-creator').addEventListener('click', () => {
+      activeCreator = null;
+      loadCatalog();
+    });
+    document.getElementById('catalog-remix-form').addEventListener('submit', submitRemix);
+    document.getElementById('catalog-remix-cancel').addEventListener('click', () => {
+      if (!remixLoading) remixDialog.close();
+    });
+    remixDialog.addEventListener('cancel', event => { if (remixLoading) event.preventDefault(); });
+    remixDialog.addEventListener('close', () => { remix = null; });
+  }
   document.getElementById('catalog-search').addEventListener('submit', event => {
     event.preventDefault();
     if (agentsView) return loadCatalog();
-    if (teamsView) {
-      const note = document.getElementById('teams-search-note');
-      if (note) {
-        note.hidden = false;
-        note.textContent = TEAMS_SEARCH_NOTE;
-      }
-    }
+    if (teamsView) return loadTeams();
   });
   document.getElementById('catalog-clear').addEventListener('click', () => {
     document.getElementById('catalog-query').value = '';
-    const note = document.getElementById('teams-search-note');
-    if (note) note.hidden = true;
     if (agentsView) return loadCatalog();
+    if (teamsView) return loadTeams();
   });
+  document.getElementById('teams-retry').addEventListener('click', () => loadTeams(activeTeamQuery));
   document.getElementById('catalog-more').addEventListener('click', () => {
     if (agentsView) return loadCatalog(true);
   });

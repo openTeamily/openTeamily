@@ -56,3 +56,21 @@ test('a closed non-200 handshake gets bounded recovery; stale timers and close c
  f.elements['workspace-events-retry'].click();f.instances.at(-1).readyState=2;f.instances.at(-1).emit('error');
  const stale=[...timers.values()][0].fn;mount.close();assert.equal(timers.size,0);const count=f.instances.length;stale();assert.equal(f.instances.length,count);
 });
+
+test('chat only shows its compact connection notice during a disruption',()=>{
+ const f=fixture();
+ const notice=f.elements['chat-connection-notice']={hidden:true};
+ const status=f.elements['workspace-events-status'];
+ const mount=mountWorkspaceEvents(f.document,{EventSource:f.FakeSource});
+ mount.start('1'.repeat(32));
+ const first=f.instances[0];
+ first.emit('open');
+ assert.equal(notice.hidden,true);
+ first.emit('error');
+ assert.equal(notice.hidden,false);
+ assert.match(status.textContent,/正在重新连接/);
+ f.elements['workspace-events-retry'].click();
+ f.instances[1].emit('open');
+ assert.equal(notice.hidden,true);
+ mount.close();
+});

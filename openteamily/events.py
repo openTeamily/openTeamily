@@ -82,7 +82,7 @@ class EventStream:
             yield b'retry: 3000\n: connected\n\n'
             previous=self.last_id
             for tick in range(self.ticks):
-                if monotonic()>=self.deadline:return
+                if monotonic()>=self.deadline:break
                 try:
                     uid,digest,state=self.initial if tick==0 else self.read()
                     if uid!=self.uid:raise PermissionError('Session changed')
@@ -98,6 +98,9 @@ class EventStream:
                     previous=digest
                 else:yield b': heartbeat\n\n'
                 if tick+1<self.ticks and self.wait(max(0,min(2,self.deadline-monotonic()))):return
+            # The bounded lease ended normally, not a transport failure.
+            # Let the browser renew without showing a spurious disconnection.
+            yield b'event: renew\ndata: {}\n\n'
         finally:
             # __next__/close own the reservation; generator finalization is safe too.
             if not self.closed:

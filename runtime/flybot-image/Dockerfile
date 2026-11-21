@@ -13,6 +13,14 @@
 # DSH transitive and base-image redistribution work is tracked as issue 3.
 
 ARG NODE_IMAGE=node:24-bookworm-slim
+# OpenTeamily pages served by each user's own DS-Bot (@openteamily/web). CI and
+# the deploy build pass the repository's openteamily/static with
+#   --build-context openteamily-static=openteamily/static
+# which replaces this stage. A plain build still works: the plugin then has no
+# pages and answers 404 for every page path.
+FROM scratch AS openteamily-static
+COPY openteamily-web/PAGES_NOT_BUNDLED.md /PAGES_NOT_BUNDLED.md
+
 FROM ${NODE_IMAGE} AS build
 
 ARG NPM_REGISTRY=https://registry.npmjs.org/
@@ -59,6 +67,8 @@ COPY third_party/anthropic-sdk /opt/licenses/anthropic-sdk
 COPY flybot-social-host /opt/openteamily/runtime/flybot-social-host
 COPY flybot-web-slots /opt/openteamily/runtime/flybot-web-slots
 COPY flybot-image /opt/openteamily/runtime/flybot-image
+COPY openteamily-web /opt/openteamily/runtime/openteamily-web
+COPY --from=openteamily-static / /opt/openteamily/runtime/openteamily-web/pages/
 # Place KaTeX and sharp-libvips notices beside the payloads they describe,
 # in addition to /opt/licenses. Related tracking remains open: issue 3.
 # The web profile (Playwright Codicon fonts) is installed later; the

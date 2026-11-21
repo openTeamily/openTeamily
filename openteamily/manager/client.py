@@ -6,6 +6,7 @@ import socket
 import threading
 from urllib.parse import urlsplit, urlencode
 
+from ..dsbot_bundle import FORMAT as BUNDLE_FORMAT
 from .safety import ManagerError, require, json_loads
 
 HEX = re.compile(r'[0-9a-f]{32}')
@@ -16,6 +17,19 @@ KEY = re.compile(r'[A-Za-z0-9_-]{16,64}')
 def check_id(value):
     require(isinstance(value, str) and HEX.fullmatch(value), 'invalid_id')
     return value
+
+
+def check_agent_bootstrap(iid, bundle):
+    if bundle is not None:
+        require(
+            isinstance(bundle, dict)
+            and set(bundle) == {'format', 'version', 'feature', 'instance_id', 'created', 'tables', 'manifest'}
+            and bundle['format'] == BUNDLE_FORMAT
+            and type(bundle['version']) is int and bundle['version'] == 1
+            and bundle['feature'] == 'agents' and bundle['instance_id'] == iid,
+            'agent_bootstrap_shape',
+        )
+    return bundle
 
 
 class ManagerClient:
@@ -92,6 +106,25 @@ class ManagerClient:
             nxt = data.get('cursor')
             if nxt is None:
                 raise ManagerError('not_found')
+            check_id(nxt)
+            require(nxt > cursor, 'cursor_not_advancing')
+            cursor = nxt
+        raise ManagerError('list_limit')
+
+    def assigned(self, max_items=1000):
+        """All instances the server currently authorizes for this manager (static + auto-assigned)."""
+        cursor, items = '', []
+        for _ in range(max_items // 100 + 1):
+            data = self.call('GET', '/v1/internal/instances?' + urlencode({'limit': 100, 'cursor': cursor}))
+            page = data.get('items')
+            require(isinstance(page, list) and len(page) <= 100, 'response_shape')
+            for item in page:
+                require(isinstance(item, dict), 'response_shape')
+                check_id(item.get('id'))
+                items.append(item)
+            nxt = data.get('cursor')
+            if nxt is None:
+                return items[:max_items]
             check_id(nxt)
             require(nxt > cursor, 'cursor_not_advancing')
             cursor = nxt
@@ -174,23 +207,31 @@ class ManagerClient:
         require(doc.get('source') in ('platform', 'workspace'), 'bot_social_shape')
         return doc
 
-    def runtime_agent_key(self, iid, claim):
-        """Lease-gated fetch of the instance runtime key. The token is written to a file and not logged."""
+    def runtime_agent_bootstrap(self, iid, claim):
+        """Fetch the personal-agent import bundle for this leased instance's startup."""
         check_id(iid)
         job = claim['job']
-        data = self.call('POST', f'/v1/internal/instances/{iid}/runtime-agent-key', {
+        data = self.call('POST', f'/v1/internal/instances/{iid}/runtime-agent-bootstrap', {
             'job_id': job['id'], 'observed_revision': job['revision'], 'lease': claim['lease']})
-        require(isinstance(data, dict) and set(data) == {'runtime_key_present', 'runtime_key'}, 'runtime_key_shape')
-        require(data['runtime_key_present'] in (True, False), 'runtime_key_shape')
-        if data['runtime_key_present'] is False:
-            require(data['runtime_key'] is None, 'runtime_key_shape')
-            return None
-        doc = data['runtime_key']
-        require(isinstance(doc, dict) and set(doc) == {'origin', 'token', 'hostname'}, 'runtime_key_shape')
-        for key in ('origin', 'token', 'hostname'):
-            require(isinstance(doc[key], str) and doc[key], 'runtime_key_shape')
-        return doc
+        require(isinstance(data, dict) and set(data) == {'agent_bootstrap'}, 'agent_bootstrap_shape')
+        return check_agent_bootstrap(iid, data['agent_bootstrap'])
 
+    def dsbot_upstream(self, iid, address, auth_cookie, process_ref):
+        """Report a running runtime's private address and DSH session cookie (never logged)."""
+        check_id(iid)
+        require(isinstance(process_ref, str) and HEX.fullmatch(process_ref), 'process_ref')
+        data = self.call('POST', f'/v1/internal/instances/{iid}/dsbot-upstream',
+                         {'address': address, 'auth_cookie': auth_cookie, 'process_ref': process_ref})
+        require(data.get('recorded') is True, 'response_shape')
+        return True
+
+    def dsbot_import(self, iid, seal_key_hex):
+        """Fetch this owner's sealed import bundles. seal_key_hex is 64 hex chars; never logged."""
+        check_id(iid)
+        require(isinstance(seal_key_hex, str) and re.fullmatch(r'[0-9a-f]{64}', seal_key_hex), 'seal_key')
+        data = self.call('POST', f'/v1/internal/instances/{iid}/dsbot-import', {'seal_key': seal_key_hex})
+        require(isinstance(data, dict) and data.get('owner_imported') is True, 'import_shape')
+        return data
 
     def recover(self, iid, revision, operation_id):
         check_id(iid)

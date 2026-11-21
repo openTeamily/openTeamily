@@ -1,0 +1,45 @@
+# Additive overlay for the isolated OpenTeamily site (compose project `openteamily`).
+# Does not name, join, or publish onto any FlyBot network, tenant, canary, or :3320.
+#
+#   docker compose -p openteamily \
+#     -f /srv/openteamily/deploy/compose.json \
+#     -f bot-social.compose.yml \
+#     up -d --no-deps bot-social
+#
+# The service joins the project default network only, so the existing edge
+# (network_mode: service:web) can reach it at http://bot-social:8787. The host
+# publishes 127.0.0.1:18783 for health checks; nothing listens on 0.0.0.0.
+# Public DS-Bot access is https://<existing-origin>/social/ via the edge path
+# rendered with --bot-social bot-social:8787. Do not add a new hostname or DNS record.
+services:
+  bot-social:
+    image: ${OT_BOT_SOCIAL_IMAGE:-openteamily-bot-social:local}
+    restart: unless-stopped
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8787"
+      DATA_DIR: /data
+      PUBLIC_BASE_URL: ${OT_BOT_SOCIAL_PUBLIC_URL:-https://openteamily.botawaken.com/social}
+      TRUST_PROXY: ${OT_BOT_SOCIAL_TRUST_PROXY:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,loopback}
+    volumes:
+      - /var/lib/openteamily/bot-social:/data
+    ports:
+      - "127.0.0.1:18783:8787"
+    expose:
+      - "8787"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 15s
+    # A KMS key is generated once into /data/kms.key (mode 0600) if unset.
+    # Back up the volume; do not put the key in this file or in logs.
+    # Membership migrate is operator-only and is disabled until a key file is mounted.
+    # Do not auto-generate this key, and do not put it in this file or in logs:
+    #   environment:
+    #     OPENTEAMILY_SOCIAL_MIGRATE_KEY_FILE: /run/secrets/openteamily-social-migrate.key
+    #   volumes:
+    #     - /var/lib/openteamily/secrets/openteamily-social-migrate.key:/run/secrets/openteamily-social-migrate.key:ro
+    # Create the host file (mode 0600, 32+ chars) before recreate. Recreate only bot-social
+    # after mounting; do not rotate KMS or wipe /data.

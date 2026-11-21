@@ -100,6 +100,8 @@ test('settingsViewFromLocation maps recorded paths and leftover hashes', () => {
   assert.equal(settingsViewFromLocation('/settings', '#send-shortcut'), 'shortcuts');
   assert.equal(settingsViewFromLocation('/settings', '#message-display'), 'message-folding');
   assert.equal(settingsViewFromLocation('/settings', '#model-api'), 'model-api');
+  assert.equal(settingsViewFromLocation('/settings', '#video-api'), 'model-api');
+  assert.equal(settingsViewFromLocation('/settings/model-api', '#video-api'), 'model-api');
 });
 
 test('applySettingsView shows one recorded page at a time', () => {
@@ -547,6 +549,53 @@ async function mountSettingsPage({secrets} = {}) {
     status: doc.getElementById('status'),
   };
 }
+
+test('the video model form saves and clears the write-only key using its own revision', async () => {
+  const {doc} = settingsDocument();
+  const api = makeSettingsApi({});
+  const changes = [];
+  let config = {provider: 'runway', model: 'gen4.5', has_api_key: false, revision: 2};
+  const fetcher = async (path, options) => {
+    if (path === '/v1/model-api/video') {
+      if (options.method === 'POST') {
+        const change = JSON.parse(options.body);
+        changes.push(change);
+        config = {...config, has_api_key: change.api_key !== null, revision: config.revision + 1};
+      }
+      return settingsJson(200, {video_api: config});
+    }
+    if (path === '/v1/model-api/image') return settingsJson(404, {});
+    return api.fetcher(path, options);
+  };
+  const previousLocation = globalThis.location;
+  globalThis.location = {pathname: '/settings/model-api', hash: '#video-api'};
+  const restoreListeners = stubWindowListeners();
+  stubFormData(doc.getElementById('settings-form'));
+  try {
+    await mount(doc, {fetcher});
+    const form = doc.getElementById('video-api-form');
+    const remove = doc.getElementById('clear-video-api');
+    assert.equal(doc.getElementById('video-api').disabled, false);
+    assert.equal(remove.hidden, true);
+    form.elements.api_key.value = 'synthetic-video-key';
+    doc.fire('submit', {target: form});
+    assert.equal(form.elements.api_key.value, '');
+    await settleSettings();
+    assert.equal(remove.hidden, false);
+    doc.fire('click', {target: remove});
+    await settleSettings();
+    assert.equal(remove.hidden, true);
+    assert.deepEqual(changes, [
+      {revision: 2, api_key: 'synthetic-video-key'},
+      {revision: 3, api_key: null},
+    ]);
+  } finally {
+    if (previousLocation === undefined) delete globalThis.location;
+    else globalThis.location = previousLocation;
+    globalThis.FormData = REAL_FORM_DATA;
+    restoreListeners();
+  }
+});
 
 function secretRow(list, name) {
   return list.children.find(row => row.children.some(child => child.tagName === 'button' && child.textContent === '删除')

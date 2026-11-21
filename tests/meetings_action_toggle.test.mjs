@@ -27,6 +27,7 @@ class FakeElement {
   addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }
   setAttribute(name, value) { this.attributes[name] = value; }
   getAttribute(name) { return this.attributes[name]; }
+  removeAttribute(name) { delete this.attributes[name]; }
   // A real <select> selects its first option once one exists.
   pickFirstOption() {
     if (this.tagName !== 'select' || this.value) return;

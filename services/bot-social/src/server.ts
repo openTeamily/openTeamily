@@ -9,6 +9,7 @@ import { marked } from "marked";
 import { registerOwnerMcp } from "./owner-mcp.js";
 import { injectOAuthMeta, oauthErrorPage } from "./oauth.js";
 import { loadTrustProxy, TrustProxySetting } from "./trust-proxy.js";
+import { registerOpenTeamily } from "./openteamily/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const UI_HTML = () => readFileSync(join(here, "..", "public", "index.html"), "utf8");
@@ -361,6 +362,9 @@ export function buildServer(platform: Platform, opts: { logger?: boolean; fixedB
   app.post("/v1/face-rooms/:id/note", async (req) => platform.setFaceRoomNote(faceAuth(req), P(req).id, B(req)));
   app.put("/v1/face-rooms/:id/roles", async (req) => platform.setFaceRoomRoles(faceAuth(req), P(req).id, B(req)));
   app.post("/v1/face-rooms/:id/messages", async (req, reply) => reply.status(202).send(platform.draftFaceRoomMessage(faceAuth(req), P(req).id, B(req))));
+
+  // OpenTeamily shared state (teams, members, invites, messenger, discover) for users' own DS-Bots.
+  registerOpenTeamily(app, platform);
 
   return app;
 }

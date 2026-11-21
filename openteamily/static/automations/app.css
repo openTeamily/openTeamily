@@ -40,6 +40,15 @@ body.app-workspace #main-panel {
   align-items: center;
 }
 
+#workspace-status {
+  color: var(--ot-muted);
+  font-size: 0.75rem;
+}
+
+#workspace-status:empty {
+  display: none;
+}
+
 .workspace-field,
 .pill-search {
   display: flex;
@@ -138,8 +147,10 @@ body.app-workspace #main-panel {
 }
 
 #automation-list button.link {
+  width: 100%;
   background: none;
   border: 0;
+  min-width: 0;
   padding: 0;
   color: var(--ot-ink);
   font: inherit;
@@ -147,6 +158,8 @@ body.app-workspace #main-panel {
   cursor: pointer;
   text-align: left;
   text-decoration: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 #automation-list button.link:hover {
@@ -537,4 +550,118 @@ body.app-workspace #main-panel {
   max-width: none;
   box-sizing: border-box;
   text-align: left;
+}
+
+#main-panel.is-editing > .page-top {
+  display: none;
+}
+
+#editor-form {
+  gap: 1rem;
+}
+
+.editor-head {
+  gap: 0.65rem;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.editor-head h1 {
+  margin: 0;
+  font-size: clamp(1.45rem, 4vw, 1.8rem);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+#cancel-editor {
+  color: var(--ot-muted);
+  min-height: 2.75rem;
+  box-shadow: none;
+}
+
+#editor-form .task-details textarea {
+  min-height: 6.5rem;
+  resize: vertical;
+}
+
+#editor-form fieldset,
+.editor-options {
+  min-width: 0;
+  padding: 0.85rem 1rem 1rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 0.8rem;
+  background: var(--ot-surface);
+}
+
+#editor-form legend {
+  color: var(--ot-ink);
+  font-size: 0.82rem;
+}
+
+.schedule-fields,
+.editor-option-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 0.75rem;
+}
+
+#editor-form .schedule-fields label[hidden] {
+  display: none;
+}
+
+#editor-form label.schedule-toggle {
+  align-items: center;
+  width: fit-content;
+  min-height: 2.75rem;
+  margin: 0;
+}
+
+.editor-options summary {
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+
+.editor-option-fields {
+  margin-top: 1rem;
+}
+
+.editor-actions {
+  padding-bottom: 0.35rem;
+}
+
+.editor-actions > button,
+#new-automation {
+  min-height: 2.75rem;
+  border-radius: 0.6rem;
+  padding-inline: 1rem;
+}
+
+#tick-automation {
+  font-weight: 600;
+}
+
+.run-toggle .status-pill[data-status="failed"],
+.run-toggle .status-pill[data-status="timeout"] {
+  color: var(--ot-danger);
+}
+
+@media (max-width: 480px) {
+  body.app-workspace #main-panel {
+    padding-inline: 0.85rem;
+  }
+
+  #editor-form input:not([type="checkbox"]),
+  #editor-form select,
+  #editor-form textarea {
+    font-size: 1rem;
+    min-height: 2.75rem;
+  }
+
+  .editor-option-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

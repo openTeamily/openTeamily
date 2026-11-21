@@ -124,10 +124,11 @@ clients cannot choose those paths. Request-selected mounts stay rejected.
 The files are written or refreshed before create, start or restart; when no
 key or server is configured the corresponding file is empty. The model API
 key and any Bot Social connector token are never placed in Compose
-environment, the image, or user or manager claim/observe JSON. A frozen `compose-*.json` file that differs from the current manifest only
-by missing the later, allowlisted Bot Social bind is upgraded in place: the
-manager rewrites that file and, on the next create/start, recreates the
-container with `--force-recreate` so the new bind attaches. The named volume
+environment, the image, or user or manager claim/observe JSON. The manager upgrades
+frozen `compose-*.json` files with missing allowlisted secret binds or the former 1 GiB
+memory limit. On the next create, start, or restart it recreates the container with
+`--force-recreate` to apply the updated manifest. The 1.5 GiB limit gives the local
+meeting recognizer room to run alongside DS-Bot. The named volume
 `ot-<instance-id>` and existing secret files are never deleted; `down`,
 `volume rm`, and `-v` stay off the allowlist. Operators can preview or apply
 this with `python3 -m openteamily.manager --config … migrate-manifest --instance-id …`

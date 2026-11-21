@@ -201,10 +201,7 @@ test('the graph create entry posts through the existing flow and opens the creat
   const fetcher = async (path, options = {}) => {
     calls.push({path, options});
     if (path === '/v1/workspaces/ws-1/memory' && options.method === 'POST') {
-      return json(201, {page: {id: 'pg-created'}});
-    }
-    if (path === '/v1/workspaces/ws-1/memory/pg-created') {
-      return json(200, {page: {id: 'pg-created', title: '未命名页面', body: '', topics: [], revision: 1,
+      return json(201, {page: {id: 'pg-created', title: '未命名页面', body: '', topics: [], revision: 1,
         created_by: 'user-1', updated_by: 'user-1'}});
     }
     return baseFetcher(path, options);
@@ -220,10 +217,34 @@ test('the graph create entry posts through the existing flow and opens the creat
   assert.deepEqual(JSON.parse(writes[0].options.body), {title: '未命名页面', body: ''});
   assert.equal(writes[0].options.headers['X-CSRF-Token'], 'fixture-csrf');
   assert.ok(writes[0].options.headers['Idempotency-Key']);
+  assert.equal(calls.some(call => call.path.endsWith('/pg-created')), false);
   assert.equal(el('editor-form').hidden, false);
   assert.equal(el('editor-form').elements.title.value, '未命名页面');
 });
 
+
+test('the graph finishing in the background leaves a newly created page open', async () => {
+  const {doc, el} = fakeDocument();
+  const fallback = graphFetcher(emptyGraph);
+  let finishGraph;
+  const fetcher = async (path, options = {}) => {
+    if (path.endsWith('/memory/graph')) return new Promise(resolve => { finishGraph = resolve; });
+    if (path === '/v1/workspaces/ws-1/memory' && options.method === 'POST') {
+      return json(201, {page: {id: 'new', title: '未命名页面', body: '', topics: [], revision: 1}});
+    }
+    return fallback(path, options);
+  };
+  const loaded = mount(doc, {fetcher});
+  await tick();
+  assert.equal(typeof finishGraph, 'function');
+  el('new-page').click();
+  await tick();
+  assert.equal(el('editor-form').hidden, false);
+  finishGraph(json(200, {graph: emptyGraph}));
+  await loaded;
+  assert.equal(el('editor-form').hidden, false);
+  assert.equal(el('list-panel').dataset.view, 'page');
+});
 
 test('narrow stacking overrides the shell panel grid only while the list is visible', () => {
   const css = readFileSync(new URL('../openteamily/static/memory/app.css', import.meta.url), 'utf8');

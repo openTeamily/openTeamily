@@ -2,15 +2,16 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
   <title>发现 · OpenTeamily</title>
   <link rel="stylesheet" href="/shell/app.css">
   <link rel="stylesheet" href="/discover/app.css">
   <script type="module" src="/shell/app.mjs"></script>
+  <script type="module" src="/shell/dsbot-api.mjs"></script>
   <script type="module" src="/discover/app.mjs"></script>
 </head>
-<body class="app-workspace">
+<body class="app-workspace app-primary">
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
     <a class="brand-mark" href="/" title="OpenTeamily 首页" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
@@ -23,6 +24,7 @@
     <a href="/space" title="作品" aria-label="作品"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg><span class="rail-label">作品</span></a>
     <a href="/meetings" title="会议" aria-label="会议"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v14H4z M8 3v4 M16 3v4 M4 10h16"/></svg><span class="rail-label">会议</span></a>
     <a href="/discover" title="发现" aria-label="发现"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg><span class="rail-label">发现</span></a>
+    <a href="/contacts" title="联系人" aria-label="联系人"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z M3 21v-2a7 7 0 0 1 14 0v2 M17 4a3.5 3.5 0 0 1 0 7 M19 14a6 6 0 0 1 3 5v2"/></svg><span class="rail-label">联系人</span></a>
     <span class="rail-spacer"></span>
     <a href="/profile" class="rail-signed-in" hidden title="我的资料" aria-label="我"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7a4 4 0 1 0 8 0 4 4 0 0 0-8 0 M4 21v-2a8 8 0 0 1 16 0v2"/></svg><span class="rail-label">我</span></a>
     <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换浅色或深色。会写入已有外观设置；按钮在深色下显示「深色」。点击后的标签变化未经 Teamily 核实。">浅色</button>
@@ -64,9 +66,14 @@
   </section>
   <section id="main-panel" hidden>
     <p id="whoami" class="visually-hidden"></p>
+    <h1 class="discover-title">发现</h1>
+      <nav class="catalog-tabs" aria-label="发现板块">
+        <a id="catalog-tab-feed" href="/discover" aria-current="page">动态</a>
+        <a id="catalog-tab-agents" href="/discover?tab=agents">智能体</a>
+        <a id="catalog-tab-teams" href="/discover?tab=agents&amp;section=groups">AI 团队</a>
+      </nav>
     <section id="feed-panel">
       <header class="feed-toolbar">
-        <h1 class="visually-hidden">发现</h1>
         <form id="feed-search" role="search">
           <label class="visually-hidden" for="feed-query">搜索动态、创作者</label>
           <button type="submit" class="search-submit"><svg class="search-icon" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.75" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.6 10.6 14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><span class="visually-hidden">搜索</span></button>
@@ -80,25 +87,11 @@
       </header>
       <div class="feed-filters" aria-label="内容分类">
         <button type="button" class="feed-filter-all" id="feed-kind-all" aria-current="true" title="显示全部已公开作品。">全部</button>
-        <button type="button" disabled title="未接通：没有动态分类接口">热门</button>
         <button type="button" id="feed-kind-website" aria-current="false" title="筛选已公开的网页作品">网页</button>
-        <button type="button" disabled title="未接通：没有动态分类接口">小游戏</button>
         <button type="button" id="feed-kind-image" aria-current="false" title="筛选已公开的图片作品">图片</button>
         <button type="button" id="feed-kind-audio" aria-current="false" title="筛选已公开的音乐作品">音乐</button>
         <button type="button" id="feed-kind-slides" aria-current="false" title="筛选已公开的幻灯片作品">幻灯片</button>
         <button type="button" id="feed-kind-video" aria-current="false" title="筛选已公开的视频作品">视频</button>
-        <button type="button" disabled title="未接通：没有动态分类接口">3D 作品</button>
-        <button type="button" disabled title="未接通：没有动态分类接口">短剧</button>
-        <button type="button" disabled title="未接通：没有动态分类接口">文章</button>
-        <button type="button" disabled title="未接通：没有动态分类接口">教程</button>
-        <button type="button" disabled title="未接通：没有动态分类接口">看板</button>
-        <button type="button" disabled title="未接通：没有动态分类接口">行情</button>
-        <button type="button" disabled title="未接通：没有动态分类接口">小程序</button>
-        <button type="button" disabled title="未接通：没有动态分类接口">故事</button>
-        <button type="button" disabled title="未接通：没有动态分类接口">娱乐</button>
-        <button type="button" disabled title="未接通：没有动态分类接口">AI 与科技</button>
-        <button type="button" disabled title="未接通：没有动态分类接口">美容</button>
-        <button type="button" id="feed-filter-more" disabled aria-label="更多分类" title="未接通：对照里还有未展开的分类。">›</button>
       </div>
       <section id="feed-following-empty" class="feed-following-empty" hidden>
         <h2>关注列表暂无动态</h2>
@@ -110,97 +103,102 @@
       <p id="feed-count" role="status" aria-live="polite"></p>
       <p id="feed-error" role="alert" hidden></p>
       <button type="button" id="feed-more" hidden>加载更多</button>
-      <p id="feed-note" class="note">还没有公开作品，所以这里不会列出作品卡片。也不会展示奖励活动或推荐内容。支持点赞、收录和关注作者；其他分类尚未接通。</p>
+      <p id="feed-note" class="note">暂时没有公开作品。</p>
       <p id="feed-search-note" class="note" hidden></p>
-      <p class="note">公共智能体目录在 <a href="/discover?tab=agents">/discover?tab=agents</a>。</p>
     </section>
     <section id="catalog-view" hidden>
     <header class="catalog-toolbar">
-      <h1 class="visually-hidden">发现</h1>
-      <nav class="catalog-tabs" aria-label="目录类型">
-        <a id="catalog-tab-agents" href="/discover?tab=agents" aria-current="page">智能体</a>
-        <a id="catalog-tab-teams" href="/discover?tab=agents&amp;section=groups">AI 团队</a>
-      </nav>
       <form id="catalog-search" role="search">
         <label class="visually-hidden" for="catalog-query">搜索智能体</label>
         <button type="submit" class="search-submit"><svg class="search-icon" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.75" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.6 10.6 14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><span class="visually-hidden">搜索</span></button>
-        <input type="search" id="catalog-query" placeholder="搜索智能体…" data-teams-placeholder="搜索 AI 团队......" maxlength="80" autocomplete="off">
+        <input type="search" id="catalog-query" placeholder="搜索智能体…" maxlength="80" autocomplete="off">
         <button type="button" id="catalog-clear">清除</button>
       </form>
       <a class="catalog-create" id="catalog-create-agent" href="/agents">+ 创建我的智能体</a>
-      <button type="button" class="catalog-create" id="catalog-create-team" hidden disabled title="未接通：没有从目录创建 AI 团队的接口。">+ 创建我的 AI 团队</button>
+      <a class="catalog-create" id="catalog-create-team" href="/team" hidden>+ 创建团队</a>
     </header>
-    <div id="catalog-filters" class="catalog-filters" aria-label="分类" aria-describedby="catalog-filter-note">
+    <div id="catalog-filters" class="catalog-filters" aria-label="分类">
       <div class="catalog-filter-scroll">
-      <button type="button" class="catalog-filter-all" aria-current="true" disabled title="这是未筛选的完整目录。分类筛选未接通：公共目录没有分类字段。">全部</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">Content Creation</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">Customer Support</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">Data Analysis</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">Design</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">Education</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">Engineering</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">Finance</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">IT &amp; Security</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">Investment</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">Legal</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">Life</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">Marketing</button>
+        <button type="button" data-catalog-category="all" aria-pressed="true">全部</button>
+        <button type="button" data-catalog-category="content-creation" aria-pressed="false">Content Creation</button>
+        <button type="button" data-catalog-category="customer-support" aria-pressed="false">Customer Support</button>
+        <button type="button" data-catalog-category="data-analysis" aria-pressed="false">Data Analysis</button>
+        <button type="button" data-catalog-category="design" aria-pressed="false">Design</button>
+        <button type="button" data-catalog-category="education" aria-pressed="false">Education</button>
+        <button type="button" data-catalog-category="engineering" aria-pressed="false">Engineering</button>
+        <button type="button" data-catalog-category="finance" aria-pressed="false">Finance</button>
+        <button type="button" data-catalog-category="it-security" aria-pressed="false">IT &amp; Security</button>
+        <button type="button" data-catalog-category="investment" aria-pressed="false">Investment</button>
+        <button type="button" data-catalog-category="legal" aria-pressed="false">Legal</button>
+        <button type="button" data-catalog-category="life" aria-pressed="false">Life</button>
+        <button type="button" data-catalog-category="marketing" aria-pressed="false">Marketing</button>
+        <button type="button" data-catalog-category="operations" aria-pressed="false">Operations</button>
+        <button type="button" data-catalog-category="product" aria-pressed="false">Product</button>
+        <button type="button" data-catalog-category="recruiting" aria-pressed="false">Recruiting</button>
+        <button type="button" data-catalog-category="research" aria-pressed="false">Research</button>
+        <button type="button" data-catalog-category="sales" aria-pressed="false">Sales</button>
       </div>
-      <button type="button" id="catalog-filter-search" class="catalog-filter-search" disabled aria-label="搜索分类" title="对照里可以看到搜索分类控件，但没有打开面板，所以这里不发明搜索弹层。">
-        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
-          <circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/>
-          <path d="M10.5 10.5 L14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      <button type="button" id="catalog-filter-search" class="catalog-filter-search" aria-label="搜索分类" aria-haspopup="dialog" title="搜索分类">
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 4 4"/>
         </svg>
       </button>
-      <button type="button" id="catalog-filter-more" class="catalog-filter-more" disabled aria-label="更多分类" title="对照里未展开其余分类，所以这里不发明更多分类。">›</button>
     </div>
-    <div id="teams-filters" class="catalog-filters" hidden aria-label="分类" aria-describedby="teams-filter-note">
-      <div class="catalog-filter-scroll">
-      <button type="button" class="catalog-filter-all" aria-current="true" disabled title="这是未筛选的完整目录。分类筛选未接通：没有公共 AI 团队目录接口。">All</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Marketing</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Engineering</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">IT &amp; Security</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Content Creation</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Operations</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Product</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Data Analysis</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Design</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Research</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Investment</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Education</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Life</button>
-      <button type="button" disabled title="未接通：没有公共 AI 团队目录接口。">Sales</button>
-      </div>
-      <button type="button" id="teams-filter-more" class="catalog-filter-more" disabled aria-label="更多分类" title="对照里未展开其余分类，所以这里不发明更多分类。">›</button>
-    </div>
-    <div class="catalog-creator-row">
-      <button type="button" id="catalog-creator" class="catalog-creator" disabled aria-haspopup="listbox" title="未接通：公共目录没有创建者字段。">创建者 <span aria-hidden="true">▾</span></button>
-    </div>
-    <p id="catalog-filter-note" class="visually-hidden">分类和创建者筛选未接通：公共目录没有对应字段。</p>
-    <p id="teams-filter-note" class="visually-hidden">分类和创建者筛选未接通：没有公共 AI 团队目录接口，对照里的创建者品牌也没有复制。</p>
+    <p id="catalog-creator-filter" class="catalog-creator-row" hidden>
+      <span id="catalog-creator-label"></span><button type="button" id="catalog-clear-creator" aria-label="清除创建者筛选">清除</button>
+    </p>
     <section aria-label="公共目录" id="catalog-panel">
       <h2 id="catalog-heading" class="visually-hidden">公共智能体</h2>
       <p id="catalog-count" role="status" aria-live="polite"></p>
       <p id="catalog-error" role="alert" hidden></p>
+      <button type="button" id="teams-retry" hidden>重试</button>
       <p id="discover-empty" class="note" hidden>暂无公开智能体。</p>
-      <p id="teams-note" class="note" hidden>公开 AI 团队目录还没有接口，所以这里不会列出模板卡片。也不会复制对照里的团队名称或创建者品牌。</p>
-      <p id="teams-search-note" class="note" hidden>搜索 AI 团队尚未接通：没有对应的公开接口。</p>
       <ul id="discover-list" class="catalog"></ul>
       <button type="button" id="catalog-more" hidden>加载更多</button>
     </section>
     <details id="catalog-manage" hidden>
-      <summary>收录管理（OpenTeamily）</summary>
-      <p class="note">公共目录只显示自愿收录的名称和简介。没有推荐信息流或公共智能体聊天接口。</p>
-      <p class="note"><a href="/discover">返回发现动态</a>。这是 OpenTeamily 的目录入口，对照里的智能体目录页没有这个返回链接。</p>
+      <summary>发布管理</summary>
+      <p class="note">发布后所有人都能看到名称、简介和分类。可选择公开完整指令，供其他用户复制。</p>
       <label class="workspace-pick">工作区
         <select id="workspace"></select>
       </label>
-      <p class="note">只有工作区所有者或管理员可以改动收录。slug 需为 3–30 个字符的小写字母、数字或连字符。</p>
+      <p class="note">为自己创建的智能体填写公开地址，使用 3–30 个小写字母、数字或连字符。</p>
       <p id="manage-empty" class="note" hidden>这个工作区还没有智能体。</p>
       <ul id="manage-list" class="manage-list"></ul>
     </details>
     </section>
   </section>
   </main>
+  <dialog id="catalog-category-dialog" class="catalog-dialog" aria-labelledby="catalog-category-title">
+    <h2 id="catalog-category-title">分类</h2>
+    <label>搜索分类 <input type="search" id="catalog-category-query" maxlength="60" autocomplete="off"></label>
+    <div id="catalog-category-options"></div>
+    <p id="catalog-category-empty" hidden>没有匹配的分类。</p>
+    <button type="button" id="catalog-category-close">关闭</button>
+  </dialog>
+  <dialog id="catalog-remix-dialog" class="catalog-dialog" aria-labelledby="catalog-remix-title">
+    <h2 id="catalog-remix-title">复制智能体</h2>
+    <p id="catalog-remix-summary"></p>
+    <details id="catalog-remix-instructions" hidden>
+      <summary>查看发布的指令</summary>
+      <pre id="catalog-remix-prompt"></pre>
+    </details>
+    <p id="catalog-remix-description"></p>
+    <form id="catalog-remix-form">
+      <label>智能体名称 <input id="catalog-remix-name" type="text" required maxlength="80"></label>
+      <label>复制到 <select id="catalog-remix-workspace" required></select></label>
+      <p id="catalog-remix-status" role="status"></p>
+      <div class="catalog-dialog-actions">
+        <button type="button" id="catalog-remix-cancel">关闭</button>
+        <button type="submit" id="catalog-remix-submit" disabled>创建副本</button>
+      </div>
+    </form>
+  </dialog>
+  <nav class="mobile-primary-nav" aria-label="主导航">
+    <a href="/chat"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 4h16v12H9l-5 4V4Z"/></svg>聊天</a>
+    <a href="/discover" aria-current="page"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg>发现</a>
+    <a href="/contacts"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z M3 21v-2a7 7 0 0 1 14 0v2 M17 4a3.5 3.5 0 0 1 0 7 M19 14a6 6 0 0 1 3 5v2"/></svg>联系人</a>
+    <a href="/settings"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 6h16 M4 12h16 M4 18h16 M9 4v4 M15 10v4 M9 16v4"/></svg>设置</a>
+  </nav>
 </body>
 </html>

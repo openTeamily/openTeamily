@@ -1,0 +1,5 @@
+# Mount OpenTeamily's DS-Bot plugin (pages + /api/openteamily) in the web profile.
+# Server-only: no browser half yet (phase A). Never mounts a second ds-bot.
+- insert:
+    - id: openteamily-web
+      name: '@openteamily/web'

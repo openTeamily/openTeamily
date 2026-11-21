@@ -121,6 +121,7 @@ class FakeNode {
       this._elements[name] = new FakeNode('input');
     }
     this._elements.template_id = new FakeNode('select');
+    this._elements.kind = new FakeNode('select');
     return this._elements;
   }
   addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }
@@ -167,6 +168,7 @@ async function mountList(items) {
   const fetcher = async (path, options = {}) => {
     calls.push(`${options.method || 'GET'} ${path}`);
     if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    if (path === '/v1/workspaces?scope=personal') return {status: 200, json: async () => ({items: []})};
     if (path === '/v1/workspaces?limit=100') return {status: 200, json: async () => ({items: [{id: 'ws1', name: '团队'}]})};
     if (path === '/v1/automation-templates') return {status: 200, json: async () => ({items: []})};
     if (path === '/v1/workspaces/ws1/automations?category=mine') return {status: 200, json: async () => ({items})};
@@ -181,6 +183,41 @@ async function mountList(items) {
   }
   return {list: elements.get('automation-list'), calls};
 }
+
+test('personal automations are available while the team workspaces and templates load', async () => {
+  const {doc, elements} = fakeDocument();
+  const {promise: catalog, resolve: resolveCatalog} = Promise.withResolvers();
+  const {promise: teams, resolve: resolveTeams} = Promise.withResolvers();
+  const respond = body => ({status: 200, json: async () => body});
+  const fetcher = async path => {
+    if (path === '/v1/auth/session') return respond({user: {username: 'alice'}});
+    if (path === '/v1/workspaces?scope=personal') return respond({items: [{id: 'ws1', name: '个人工作区'}]});
+    if (path === '/v1/workspaces?limit=100') return teams;
+    if (path === '/v1/automation-templates') return catalog;
+    if (path === '/v1/workspaces/ws1/automations?category=mine') {
+      return respond({items: [{id: 'a1', title: '每日简报', schedule: {kind: 'now'}}]});
+    }
+    throw new Error('unexpected ' + path);
+  };
+  const saved = globalThis.document;
+  globalThis.document = doc;
+  const mounted = mount(doc, {fetcher});
+  try {
+    await flush();
+    assert.equal(elements.get('new-automation').disabled, false);
+    assert.match(elements.get('automation-list').textContent, /每日简报/);
+    resolveTeams(respond({items: [{id: 'team', name: '团队'}]}));
+    await flush();
+    const picker = elements.get('workspace');
+    assert.equal(picker.value, 'ws1');
+    assert.deepEqual(picker.options.map(option => option.value), ['ws1', 'team']);
+  } finally {
+    resolveTeams(respond({items: []}));
+    resolveCatalog(respond({items: []}));
+    await mounted;
+    if (saved === undefined) delete globalThis.document; else globalThis.document = saved;
+  }
+});
 
 test('scheduleSummary writes the editor wording for every recorded schedule kind', () => {
   assert.equal(scheduleSummary({kind: 'now', time_zone: 'Asia/Shanghai'}, true), '立即运行 · 已启用');
@@ -231,23 +268,22 @@ function postCount(calls, fragment) {
   return calls.filter(entry => entry.startsWith('POST ') && entry.includes(fragment)).length;
 }
 
-// A queued run starts a 3 s poll through globalThis.setInterval. Stub it while a
-// test drives the editor so `node --test` can exit, and restore it afterwards.
-function holdRunPolling() {
-  const saved = {setInterval: globalThis.setInterval, clearInterval: globalThis.clearInterval};
-  globalThis.setInterval = () => 0;
-  globalThis.clearInterval = () => {};
+// Stub poll timers while the editor is mounted in Node.
+function holdRunPolling(schedule = () => 0) {
+  const saved = {setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout};
+  globalThis.setTimeout = schedule;
+  globalThis.clearTimeout = () => {};
   return () => {
-    globalThis.setInterval = saved.setInterval;
-    globalThis.clearInterval = saved.clearInterval;
+    globalThis.setTimeout = saved.setTimeout;
+    globalThis.clearTimeout = saved.clearTimeout;
   };
 }
 
 async function mountEditor({items = [AUTOMATION], runs = [], workspaces = [{id: 'ws1', name: '团队'}],
-  search = '', pushes = [], windowHandlers = {}} = {}) {
+  search = '', pushes = [], windowHandlers = {}, schedulePoll, getRuns} = {}) {
   // The click handlers resolve `document` and the run poll from globals, so both
   // stay installed until the test calls restore().
-  const restorePolling = holdRunPolling();
+  const restorePolling = holdRunPolling(schedulePoll);
   const {doc, elements} = fakeDocument();
   const view = {
     location: {search},
@@ -260,6 +296,7 @@ async function mountEditor({items = [AUTOMATION], runs = [], workspaces = [{id: 
     const method = options.method || 'GET';
     calls.push(`${method} ${path}`);
     if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    if (path === '/v1/workspaces?scope=personal') return {status: 200, json: async () => ({items: []})};
     if (path === '/v1/workspaces?limit=100') return {status: 200, json: async () => ({items: workspaces})};
     if (path === '/v1/automation-templates') return {status: 200, json: async () => ({items: []})};
     const listed = path.match(/^\/v1\/workspaces\/([^/]+)\/automations\?category=mine$/);
@@ -267,7 +304,8 @@ async function mountEditor({items = [AUTOMATION], runs = [], workspaces = [{id: 
     const listedRuns = path.match(/^\/v1\/workspaces\/([^/]+)\/automations\/([^/]+)\/runs\?limit=20(?:&status=([a-z]+))?$/);
     if (method === 'GET' && listedRuns) {
       const wanted = listedRuns[3] || '';
-      const rows = runs.filter(item => !wanted || item.status === wanted);
+      const allRows = getRuns ? await getRuns() : runs;
+      const rows = allRows.filter(item => !wanted || item.status === wanted);
       return {status: 200, json: async () => ({items: listedRuns[2] === 'a1' ? rows : []})};
     }
     if (method === 'POST' && /^\/v1\/workspaces\/[^/]+\/automations\/[^/]+\/remove$/.test(path)) {
@@ -308,6 +346,38 @@ async function openFirst(elements) {
   openButtonIn(list.children[0]).handlers.click[0]();
   await flush();
 }
+
+test('run polling waits for the current request and keeps watching an enabled schedule', async () => {
+  const timers = [];
+  const {promise: nextRuns, resolve: resolveNext} = Promise.withResolvers();
+  let requests = 0;
+  const queued = {id: 'r1', status: 'queued', started: 1795085700};
+  const succeeded = {...queued, status: 'succeeded'};
+  const {elements, restore} = await mountEditor({
+    schedulePoll(callback, delay) {
+      timers.push({callback, delay});
+      return timers.length;
+    },
+    getRuns: () => ++requests === 1 ? [queued] : nextRuns,
+  });
+  try {
+    await openFirst(elements);
+    assert.equal(timers.length, 1);
+    assert.equal(timers[0].delay, 3000);
+    timers.shift().callback();
+    await flush();
+    assert.equal(requests, 2);
+    assert.equal(timers.length, 0, 'a slow request must have time to finish');
+    resolveNext([succeeded]);
+    await flush();
+    assert.match(elements.get('run-list').textContent, /已完成/);
+    assert.equal(timers.length, 1);
+    assert.equal(timers[0].delay, 12000, 'an enabled task still watches for scheduled runs');
+  } finally {
+    resolveNext([succeeded]);
+    restore();
+  }
+});
 
 function alertdialogIn(parent) {
   return parent.children.find(node => node.getAttribute('role') === 'alertdialog');
@@ -688,6 +758,7 @@ async function mountRuns({runs = RETRY_RUNS, retry = 'ok'} = {}) {
     const method = options.method || 'GET';
     calls.push(`${method} ${path}`);
     if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    if (path === '/v1/workspaces?scope=personal') return {status: 200, json: async () => ({items: []})};
     if (path === '/v1/workspaces?limit=100') return {status: 200, json: async () => ({items: [{id: 'ws1', name: '团队'}]})};
     if (path === '/v1/automation-templates') return {status: 200, json: async () => ({items: []})};
     if (path === '/v1/workspaces/ws1/automations?category=mine') {

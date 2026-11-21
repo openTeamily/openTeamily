@@ -1,3 +1,5 @@
+import { readWorkspaceChoices } from '../shell/dsbot-api.mjs';
+
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
@@ -225,7 +227,7 @@ function clampNumber(value, low, high, fallback) {
   return Math.min(Math.max(Math.trunc(number), low), high);
 }
 
-// The list row says the same thing as the editor radios, and never leaks the
+// The list row says the same thing as the schedule picker, and never leaks the
 // stored kind (`now`, `once`, `daily`, ...) to the reader.
 export function scheduleSummary(schedule, enabled) {
   const state = enabled ? '已启用' : '未启用';
@@ -250,7 +252,7 @@ export function scheduleSummary(schedule, enabled) {
   return `已安排 · ${state}`;
 }
 
-function fillEditor(form, item, templates, username) {
+function fillEditor(form, item, username) {
   const schedule = (item && item.schedule) || {kind: 'now', time_zone: 'Asia/Shanghai'};
   const kind = kindOf(schedule);
   form.elements.template_id.value = (item && item.template_id) || 'custom';
@@ -260,9 +262,7 @@ function fillEditor(form, item, templates, username) {
     ? item.participants.map(row => row.username || row).join(', ')
     : (username || '');
   form.elements.agents.value = item && item.agents ? item.agents.join(', ') : '';
-  for (const option of form.querySelectorAll('[name="kind"]')) {
-    option.checked = option.value === kind;
-  }
+  form.elements.kind.value = kind;
   form.elements.date.value = schedule.date || '';
   form.elements.time.value = schedule.time || '09:00';
   form.elements.weekday.value = String(schedule.weekday || 1);
@@ -270,9 +270,18 @@ function fillEditor(form, item, templates, username) {
   form.elements.time_zone.value = schedule.time_zone || 'Asia/Shanghai';
   form.elements.prompt.value = (item && item.prompt) || '';
   form.elements.enabled.checked = Boolean(item && item.enabled);
-  form.elements.title.value = (item && item.title) || (templates.find(row => row.id === form.elements.template_id.value) || {}).title || '';
+  form.elements.title.value = item?.title || '';
+  syncScheduleFields(form);
 }
 
+function syncScheduleFields(form) {
+  const kind = form.elements.kind.value;
+  for (const field of form.querySelectorAll('[data-schedule-kind]')) {
+    const fieldKind = field.dataset.scheduleKind;
+    field.hidden = fieldKind !== kind && !(fieldKind === 'timed' && kind !== 'now');
+  }
+  form.elements.date.required = kind === 'later';
+}
 
 function setBusy(node, busy) {
   if (!node) return;
@@ -358,12 +367,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const listPanel = document.getElementById('list-panel');
   const workspaceSelect = document.getElementById('workspace');
   const search = document.getElementById('search');
+  const runButton = document.getElementById('tick-automation');
+  const newButton = document.getElementById('new-automation');
+  const saveButton = document.getElementById('save-automation');
+  const backButton = document.getElementById('cancel-editor');
+  const tabs = document.querySelectorAll('.tabs [data-category]');
+  const workspaceStatus = document.getElementById('workspace-status');
   let currentUser = null;
-  let workspaces = [];
+  let loadRequest = 0;
   let templates = [];
+  let templateState = 'loading';
   let current = null;
+  let draftSave = null;
   let category = 'mine';
   let runTimer = 0;
+  let runRequest = 0;
+  let listRequest = 0;
+  let recentRuns = [];
+  const manualKeys = new Map();
+  const manualPending = new Set();
   const view = document.defaultView;
   const readSearch = () => (view && view.location && view.location.search) || '';
   let runFilter = runFilterFromSearch(readSearch());
@@ -466,7 +488,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function stopRunPoll() {
     if (runTimer) {
-      globalThis.clearInterval(runTimer);
+      globalThis.clearTimeout(runTimer);
       runTimer = 0;
     }
   }
@@ -476,6 +498,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const empty = document.getElementById('run-empty');
     const panel = document.getElementById('run-panel');
     if (!list || !panel) return;
+    recentRuns = items;
     panel.hidden = false;
     list.textContent = '';
     const visible = items.filter(item => matchesRunFilter(item, runFilter));
@@ -495,17 +518,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       toggle.className = 'run-toggle';
       const open = expandedRuns.has(item.id);
       toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-      const status = document.createElement('strong');
-      status.textContent = runStatusLabel(item);
+      const when = document.createElement('strong');
+      when.textContent = item.started ? new Date(item.started * 1000).toLocaleString('zh-CN', {
+        month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
+      }) : '运行';
       const pill = document.createElement('span');
       pill.className = 'status-pill' + (item.status === 'succeeded' ? ' is-on' : '');
-      pill.textContent = item.status || '';
-      const meta = document.createElement('span');
-      meta.className = 'note';
-      meta.textContent = item.error_code ? item.error_code : '';
-      toggle.appendChild(status);
+      pill.dataset.status = item.status || '';
+      pill.textContent = runStatusLabel(item);
+      toggle.appendChild(when);
       toggle.appendChild(pill);
-      toggle.appendChild(meta);
       const detail = document.createElement('div');
       detail.className = 'run-detail';
       detail.hidden = !open;
@@ -620,27 +642,39 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadRuns();
   }
 
+  function scheduleRunPoll(pending) {
+    if (!pending && !current?.enabled) return;
+    runTimer = globalThis.setTimeout(() => {
+      runTimer = 0;
+      void loadRuns();
+    }, pending ? 3000 : 12000);
+  }
+
   async function loadRuns() {
+    stopRunPoll();
     const panel = document.getElementById('run-panel');
     if (!panel) return;
     if (!current || !current.id || !workspaceId()) {
       panel.hidden = true;
-      stopRunPoll();
       return;
     }
+    const workspace = workspaceId(), automation = current.id;
+    const seq = ++runRequest;
     const wanted = runFilter === 'all' ? '' : `&status=${runFilter}`;
-    const listed = await request('GET', `/v1/workspaces/${workspaceId()}/automations/${current.id}/runs?limit=20${wanted}`);
+    const listed = await request('GET', `/v1/workspaces/${workspace}/automations/${automation}/runs?limit=20${wanted}`)
+      .catch(() => ({status: 0, body: {}}));
+    if (seq !== runRequest || workspaceId() !== workspace || current?.id !== automation || form.hidden) return;
     if (listed.status !== 200) {
       show('error', messageFor(listed.body.error, '无法读取运行记录。'));
+      scheduleRunPoll(recentRuns.some(item => item.status === 'queued'));
       return;
     }
     const items = listed.body.items || [];
     renderRuns(items);
     const pending = items.some(item => item.status === 'queued');
-    if (pending && !runTimer) {
-      runTimer = globalThis.setInterval(() => { loadRuns(); }, 3000);
-    }
-    if (!pending) stopRunPoll();
+    runButton.disabled = pending || manualPending.has(automation);
+    runButton.textContent = pending ? '运行中…' : '运行一次';
+    scheduleRunPoll(pending);
   }
 
   async function renderProviders() {
@@ -667,13 +701,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function fillTemplates() {
     const select = form.elements.template_id;
+    const selected = select.value;
     select.textContent = '';
-    for (const item of templates) {
+    const available = templates.some(item => item.id === 'custom')
+      ? templates : [{id: 'custom', title: '自定义'}, ...templates];
+    for (const item of available) {
       const option = document.createElement('option');
       option.value = item.id;
       option.textContent = item.title;
       select.appendChild(option);
     }
+    if (available.some(item => item.id === selected)) select.value = selected;
+  }
+
+  async function loadTemplates(seq) {
+    templateState = 'loading';
+    const catalog = await request('GET', '/v1/automation-templates').catch(() => ({status: 0}));
+    if (seq !== loadRequest) return;
+    templateState = catalog.status === 200 ? 'ready' : 'failed';
+    templates = catalog.status === 200 ? (catalog.body.items || []) : [];
+    fillTemplates();
+    if (category !== 'mine' && !listPanel.hidden) await loadList();
   }
 
   function openEditor(item) {
@@ -681,22 +729,40 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     // drops the question instead of showing it again above a different item.
     closeConfirm({restoreFocus: false});
     current = item;
+    draftSave = null;
+    recentRuns = [];
+    stopRunPoll();
     listPanel.hidden = true;
     form.hidden = false;
     mainPanel.classList.add('is-editing');
-    fillEditor(form, item, templates, currentUser && currentUser.username);
+    fillEditor(form, item, currentUser && currentUser.username);
+    form.elements.template_id.disabled = Boolean(item?.id);
+    const heading = document.getElementById('editor-heading');
+    if (heading) heading.textContent = item?.id ? item.title : '新建自动化';
     document.getElementById('remove-automation').hidden = !item || !item.id;
-    document.getElementById('tick-automation').hidden = !item || !item.id;
+    runButton.hidden = !item?.id;
+    runButton.disabled = Boolean(item?.id && manualPending.has(item.id));
+    runButton.textContent = '运行一次';
     loadRuns();
+  }
+
+  function selectCategory(value) {
+    category = value;
+    for (const tab of tabs) {
+      tab.setAttribute('aria-selected', tab.dataset.category === category ? 'true' : 'false');
+    }
   }
 
   async function loadList() {
     const id = workspaceId();
     if (!id) return;
+    const seq = ++listRequest;
     const list = document.getElementById('automation-list');
     const empty = document.getElementById('list-empty');
     if (category === 'work' || category === 'life') {
-      empty.textContent = '没有匹配的模板。';
+      empty.textContent = {
+        loading: '正在加载模板…', failed: '无法加载模板。', ready: '没有匹配的模板。',
+      }[templateState];
       renderCatalog(
         catalogItems(templates, category, search.value),
         list,
@@ -711,6 +777,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     setBusy(empty, true);
     empty.textContent = '正在加载自动化…';
     const listed = await request('GET', `/v1/workspaces/${id}/automations${listQuery(category, search.value)}`);
+    if (seq !== listRequest || workspaceId() !== id) return;
     setBusy(empty, false);
     setBusy(list, false);
     if (listed.status !== 200) {
@@ -723,8 +790,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderList(listed.body.items || [], list, empty, item => openEditor(item));
   }
 
+  function fillWorkspaces(items) {
+    const previous = workspaceId();
+    workspaceSelect.textContent = '';
+    for (const item of items) {
+      const option = document.createElement('option');
+      option.value = item.id;
+      option.textContent = item.name;
+      workspaceSelect.appendChild(option);
+    }
+    if (items.some(item => item.id === previous)) workspaceSelect.value = previous;
+  }
+
   async function load() {
+    const seq = ++loadRequest;
+    newButton.disabled = true;
+    workspaceStatus.textContent = '';
     const session = await request('GET', '/v1/auth/session');
+    if (seq !== loadRequest) return;
     if (session.status === 401) {
       loginPanel.hidden = false;
       mainPanel.hidden = true;
@@ -740,39 +823,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     loginPanel.hidden = true;
     mainPanel.hidden = false;
     document.getElementById('whoami').textContent = currentUser.username;
-    const [space, catalog] = await Promise.all([
-      request('GET', '/v1/workspaces?limit=100'),
-      request('GET', '/v1/automation-templates'),
-    ]);
+    const catalog = loadTemplates(seq);
+    const {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100');
+    if (seq !== loadRequest) return;
     if (space.status !== 200) {
       show('error', messageFor(space.body.error, '无法读取工作区。'));
-      return;
+      return catalog;
     }
-    workspaces = space.body.items || [];
-    templates = catalog.status === 200 ? (catalog.body.items || []) : [];
-    fillTemplates();
-    const previous = workspaceSelect.value;
-    workspaceSelect.textContent = '';
-    for (const item of workspaces) {
-      const option = document.createElement('option');
-      option.value = item.id;
-      option.textContent = item.name;
-      workspaceSelect.appendChild(option);
-    }
-    if (previous && [...workspaceSelect.options].some(option => option.value === previous)) {
-      workspaceSelect.value = previous;
-    }
-    if (!workspaces.length) {
+    const items = space.body.items || [];
+    fillWorkspaces(items);
+    if (!items.length) {
       document.getElementById('automation-list').textContent = '';
       document.getElementById('list-empty').hidden = false;
       document.getElementById('list-empty').textContent = '还没有工作区。';
-      return;
+      return catalog;
     }
+    newButton.disabled = false;
     document.getElementById('list-empty').textContent = '这个分类下还没有自动化。';
     form.hidden = true;
     listPanel.hidden = false;
     mainPanel.classList.remove('is-editing');
-    await loadList();
+    void supplemental?.then(result => {
+      if (seq !== loadRequest) return;
+      if (result.status === 200) fillWorkspaces(result.body.items);
+      else workspaceStatus.textContent = '团队工作区暂时无法加载。';
+    });
+    await Promise.all([loadList(), catalog]);
   }
 
   document.getElementById('login-form').addEventListener('submit', async event => {
@@ -815,12 +891,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       loadRuns();
     });
   }
-  for (const tab of document.querySelectorAll('.tabs [data-category]')) {
+  for (const tab of tabs) {
     tab.addEventListener('click', async () => {
-      category = tabCategory(tab.dataset.category);
-      for (const button of document.querySelectorAll('.tabs [data-category]')) {
-        button.setAttribute('aria-selected', button === tab ? 'true' : 'false');
-      }
+      selectCategory(tabCategory(tab.dataset.category));
       form.hidden = true;
       listPanel.hidden = false;
       closeConfirm({restoreFocus: false});
@@ -832,17 +905,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
 
-  document.getElementById('new-automation').addEventListener('click', () => {
-    const selected = (category === 'work' || category === 'life')
-      ? templates.find(item => item.category === category)
-      : null;
-    openEditor(selected ? draftFromTemplate(selected, currentUser && currentUser.username) : null);
-    form.elements.kind.value = form.elements.kind.value || 'now';
-    const kind = (form.elements.kind.value) || 'now';
-    for (const option of form.querySelectorAll('[name="kind"]')) option.checked = option.value === kind;
+  newButton.addEventListener('click', () => {
+    openEditor(null);
   });
+  form.elements.kind.addEventListener('change', () => syncScheduleFields(form));
 
-  document.getElementById('cancel-editor').addEventListener('click', async () => {
+  backButton.addEventListener('click', async () => {
     closeConfirm({restoreFocus: false});
     current = null;
     form.hidden = true;
@@ -856,8 +924,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
+    if (saveButton.disabled) return;
     const values = readEditor(form);
-    if (!workspaceId()) {
+    const workspace = workspaceId();
+    if (!workspace) {
       show('error', '先选择一个工作区。');
       return;
     }
@@ -865,26 +935,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', '请填写标题和至少一名参与成员。');
       return;
     }
+    const item = current?.id ? current : null;
+    const path = `/v1/workspaces/${workspace}/automations`;
+    const {template_id, ...changes} = values;
+    saveButton.disabled = true;
+    backButton.disabled = true;
+    saveButton.textContent = '保存中…';
     let result;
-    if (current && current.id) {
-      const changes = {
-        title: values.title, prompt: values.prompt, schedule: values.schedule,
-        participants: values.participants, enabled: values.enabled,
-        intent: values.intent, scope: values.scope, agents: values.agents,
-      };
-      result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${current.id}`,
-                             {revision: current.revision, changes});
-    } else {
-      result = await request('POST', `/v1/workspaces/${workspaceId()}/automations`, {
-        title: values.title, prompt: values.prompt, template_id: values.template_id,
-        schedule: values.schedule, participants: values.participants,
-        intent: values.intent, scope: values.scope, agents: values.agents,
-      }, {'Idempotency-Key': idempotencyKey()});
-      if (result.status === 201 && values.enabled && result.body.automation) {
-        const created = result.body.automation;
-        result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${created.id}`,
-                               {revision: created.revision, changes: {enabled: true}});
+    try {
+      if (item) {
+        result = await request('POST', `${path}/${item.id}`, {revision: item.revision, changes});
+      } else {
+        const content = JSON.stringify([workspace, values]);
+        if (draftSave?.content !== content) draftSave = {content, key: idempotencyKey()};
+        result = await request('POST', path, {...changes, template_id}, {'Idempotency-Key': draftSave.key});
       }
+    } catch {
+      show('error', '暂时无法确认是否保存成功，请重试。');
+      return;
+    } finally {
+      saveButton.disabled = false;
+      backButton.disabled = false;
+      saveButton.textContent = '保存';
     }
     if (result.status === 409) {
       show('error', '自动化已在别处更新，请重新打开后再保存。');
@@ -896,23 +968,53 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     current = result.body.automation;
+    if (!item) {
+      selectCategory('mine');
+      search.value = '';
+    }
     closeConfirm({restoreFocus: false});
-    fillEditor(form, current, templates, currentUser && currentUser.username);
+    fillEditor(form, current, currentUser && currentUser.username);
+    form.elements.template_id.disabled = true;
+    const heading = document.getElementById('editor-heading');
+    if (heading) heading.textContent = current.title;
     document.getElementById('remove-automation').hidden = false;
-    document.getElementById('tick-automation').hidden = false;
-    show('ok', '已保存。若已启用，后台会在到期时运行。');
+    runButton.hidden = false;
+    show('ok', current.enabled ? '已保存，自动运行已启用。' : '已保存，自动运行未启用。');
     await loadRuns();
   });
 
-  document.getElementById('tick-automation').addEventListener('click', async () => {
-    if (!workspaceId()) return;
-    const result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/tick`, {});
-    if (result.status !== 200) {
-      show('error', messageFor(result.body.error, '触发失败。'));
-      return;
+  runButton.addEventListener('click', async () => {
+    const workspace = workspaceId(), automation = current?.id;
+    if (!workspace || !automation || runButton.disabled) return;
+    const isCurrent = () => workspaceId() === workspace && current?.id === automation && !form.hidden;
+    if (!manualKeys.has(automation)) manualKeys.set(automation, idempotencyKey());
+    manualPending.add(automation);
+    runButton.disabled = true;
+    runButton.textContent = '正在提交…';
+    try {
+      const result = await request('POST', `/v1/workspaces/${workspace}/automations/${automation}/run`,
+        {}, {'Idempotency-Key': manualKeys.get(automation)});
+      if (result.status !== 200 && result.status !== 202) {
+        if (isCurrent()) show('error', messageFor(result.body.error, '无法启动这条自动化。'));
+        return;
+      }
+      manualKeys.delete(automation);
+      if (!isCurrent()) return;
+      runFilter = 'all';
+      syncRunFilters();
+      pushRunFilter(runFilter);
+      renderRuns([result.body.run, ...recentRuns.filter(run => run.id !== result.body.run.id)]);
+      show('ok', '已提交，结果会出现在运行记录中。');
+    } catch {
+      if (isCurrent()) show('error', '暂时无法确认是否提交成功，可以重试。');
+    } finally {
+      manualPending.delete(automation);
+      if (isCurrent()) {
+        runButton.disabled = recentRuns.some(run => run.status === 'queued');
+        runButton.textContent = runButton.disabled ? '运行中…' : '运行一次';
+        await loadRuns();
+      }
     }
-    show('ok', '已请求触发一次。若已有在线代理，结果会出现在下方运行记录里。假提供方的输出不能当成真实模型已经验证。');
-    await loadRuns();
   });
 
   const removeButton = document.getElementById('remove-automation');
@@ -963,7 +1065,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   return load().then(() => {
     const view = document.defaultView;
     const wanted = templateFromSearch(view && view.location && view.location.search);
-    if (!wanted || mainPanel.hidden || !workspaceId()) return;
+    if (!wanted || mainPanel.hidden || !workspaceId() || !form.hidden) return;
     const template = templates.find(item => item.id === wanted);
     if (!template) return;
     openEditor(draftFromTemplate(template, currentUser && currentUser.username));

@@ -20,9 +20,9 @@ export const CATALOG = [
   {id: 'send-shortcut', category: 'chat', title: '发送快捷键', body: '在设置里选择用 Enter 还是 Ctrl+Enter 发送消息。换行键会随这项自动互补显示。', path: ['设置', '发送快捷键']},
   {id: 'chat-previews', category: 'chat', title: '会话列表预览', body: '会话列表会显示该会话最近一条已授权消息的摘要，方便扫读。', path: ['聊天', '会话列表']},
   {id: 'open-agents', category: 'agents', title: '打开智能体', body: '在「智能体」页管理本工作区的智能体，包括创建和对话入口。', path: ['应用栏', '智能体']},
-  {id: 'agent-homepage', category: 'agents', title: '公开主页', body: '可以把智能体发布为可撤销的公开主页，或随时撤回。', path: ['智能体', '公开主页']},
+  {id: 'agent-homepage', category: 'agents', title: '公开主页', body: '在「发现 → 发布管理」发布智能体，复制主页地址分享。开启公开聊天后，访客登录即可聊天。选择公开快捷开场后，访客可以点选开场白，编辑后再发送。', path: ['智能体', '公开主页']},
   {id: 'discover-feed', category: 'discover', title: '关注与动态', body: '「发现」默认是关注和动态布局。这是 OpenTeamily 自己的信息流页，不是 Teamily 的完整推荐实现。', path: ['应用栏', '发现']},
-  {id: 'discover-catalog', category: 'discover', title: '发现里的智能体目录', body: '打开发现页的智能体目录，浏览可收录的公开智能体。会创建会话的「聊天」入口仍标明未接通。', path: ['发现', '智能体']},
+  {id: 'discover-catalog', category: 'discover', title: '发现里的智能体目录', body: '在智能体目录浏览公开智能体。作者开启公开聊天后，可通过卡片的「聊天」打开与你的独立会话。', path: ['发现', '智能体']},
   {id: 'open-automations', category: 'automations', title: '打开自动化', body: '在「自动化」页查看工作/生活模板和已有自动化。创建或运行仍须按现有表单，不在指引里代为执行。', path: ['应用栏', '自动化']},
   {id: 'memory-overview', category: 'memory', title: '记忆总览', body: '记忆页左侧是目录，中间是图谱，右侧是话题和最近更新。新建记忆页会立即落盘。', path: ['应用栏', '记忆']},
   {id: 'memory-profile', category: 'memory', title: '我的资料', body: '记忆里的「我的资料」已摆出三个小节标题。画像正文还没有接口，不能在这里保存对照账户里的内容。', path: ['记忆', '我的资料']},
@@ -37,10 +37,10 @@ export const CATALOG = [
   {id: 'settings-language', category: 'settings', title: '语言', body: '设置系统语言、聊天语言，以及是否自动翻译消息。', path: ['设置', '语言']},
   {id: 'settings-folding', category: 'settings', title: '消息折叠', body: '选择长消息预览长度，以及是否把长文档收成卡片。', path: ['设置', '消息折叠']},
   {id: 'settings-privacy', category: 'settings', title: '隐私设置', body: '控制点赞列表和收藏列表是否对他人可见。未改动时「保存更改」保持禁用。', path: ['设置', '隐私设置']},
-  {id: 'settings-runtimes', category: 'settings', title: '运行时', body: '查看托管项、本机运行时和连接一台机器。托管云端 Agent 和托管电脑仍标明未接通。', path: ['设置', '运行时']},
+  {id: 'settings-runtimes', category: 'settings', title: '运行时', body: '账号使用独立的 DS-Bot，从个人工作区切到团队工作区时继续使用同一个 DS-Bot。', path: ['设置', '运行时']},
   {id: 'account-menu', category: 'account-menu', title: '打开账户菜单', body: '点击应用栏底部的账户按钮，查看资料、创建团队、帮助和退出登录。积分和套餐入口不会出现。', path: ['应用栏', '账户']},
   {id: 'create-team', category: 'account-menu', title: '创建团队', body: '从账户菜单打开创建团队向导。填写和提交前请先确认，指引页不会代为创建。', path: ['账户菜单', '创建团队']},
-  {id: 'download-runtime', category: 'other', title: '下载', body: '下载页提供网页管理面说明和 flybot.pyz 运行时。没有 OpenTeamily 的官方 iOS、Android、macOS 或 Windows 客户端。', path: ['应用栏', '下载']},
+  {id: 'download-runtime', category: 'other', title: '下载', body: '下载页提供浏览器网页入口。对话、技能和自动化在你的 DS-Bot 上运行。', path: ['应用栏', '下载']},
 ];
 
 export function categoryLabel(id) {

@@ -267,6 +267,14 @@ def material(db, task_id):
         item = resolve(row['skill_id'],db,owner['user_id'])
         if item and item['version']==row['version'] and item['digest']==row['digest']:
             result[item['id']] = item
+    # The merged per-account skill-library UI is an installation surface too.
+    # Its bundled installs must reach the same digest-verified native material;
+    # automation tasks still never inherit private account instructions.
+    if inherited == 'account':
+        for library in db.execute('SELECT skill_id FROM skill_installs WHERE user_id=?', (owner['user_id'],)):
+            item = resolve(library['skill_id'], db, owner['user_id'])
+            if item and item['source'] == 'bundled-original':
+                result[item['id']] = item
     expected = selection(db,task_id)
     if expected is not None:
         if any(result.get(i['id']) != i for i in expected):

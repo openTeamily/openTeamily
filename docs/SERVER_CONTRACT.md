@@ -8,20 +8,20 @@
 
 最新生命周期规则：重复 start/stop 按 desired 复用当前 revision/operation_id（包括 pending）；restart 是独立操作，同 operation_id 重试复用，新 id 产生新意图并验证进程重启，不展开为 stop+start。此规则在本 PR **仅为后续实现契约**，尚未执行验收。
 
-## 0. 评审结论（工程建议，不是用户指定的唯一选型）
+## 0. 评审结论与当前架构
 
-以下为可替换的第一实现路径。下列条款**采纳为第一刀工作默认**（可替换，须在实现与文档标明假设），不是用户已经指定的唯一技术选型。
+现行架构为每个用户一个独立 DS-Bot 实例。下表同时记录生命周期首期实现的工程选型。
 
 | 建议 | 评审 | 第一刀处理 |
 | --- | --- | --- |
 | 抽象 `RuntimeBackend`：`create/start/stop/restart/inspect/logs/backup/restore/upgrade/reclaim` | 采纳。与 bootstrap「显式生命周期接口、编排未选定」一致。 | 接口全定义；MVP 必须实现 create/start/stop/inspect/logs（logs 可最小）；backup/restore/upgrade/reclaim（及 purge）允许 `unsupported`，但要在响应与文档写清缺口，不得假装已交付。 |
-| `instance_id` 独立建模；owner/workspace 映射可替换 | 采纳。与「容器粒度未定、不得写成已定」一致。 | 实例主键是 `instance_id`。owner、workspace 只是映射，不把「每用户一容器」或「每工作区一容器」写进接口类型。 |
+| 每个用户一个 DS-Bot 实例 | 已确定的实例分配规则。 | 实例主键为 `instance_id`，生产实例由 `owner_id` 唯一归属。工作区用于共享资源授权。 |
 | `desired` + `revision`；观测绑定该 revision | 采纳。避免把过期观测当成当前意图已达成。 | 仅当意图本身变化时才递增 `revision`（例如 desired 从 stopped 变为 running，或一次新的 restart `operation_id`）。`desired` 未变且仅为重复的 start/stop（含尚未观测到的 pending）必须复用当前意图，**不得** `revision++`。`inspect` / 状态 API 必须带回 `desired`、`revision`、`observed_revision`、`observed` 以及当前 `operation`（含 `type` 与 `operation_id`）。仅当 `observed_revision == revision` 时，才可把观测状态视为该次意图的结果。 |
 | 幂等、实例互斥；`stop` 保卷；`purge` 单独授权 | 采纳。 | 同一 `instance_id` 的生命周期操作互斥（串行）。重复的 start/stop：只要目标 `desired` 与当前记录相同（无论是否已观测到），一律复用当前 pending/已完成意图并返回同一 `revision` 与 `operation_id`，不另开任务。`stop` 不删数据卷。删除卷 / 销毁实例走 `purge`（或 `reclaim` 的破坏性路径），需单独授权，默认不开放给普通会话。 |
 | `inspect` 禁止返回 token | 采纳，硬性。 | inspect、logs、list、status 均不得返回登录 cookie、运行时令牌、模型密钥、Bot Social 凭证或任何 secret 明文 / 可恢复密文。 |
 | 首后端：Compose **命令规划** + fake adapter 测试；Web 不挂 Docker socket、不接受任意镜像/命令/挂载；特权操作由 CLI manager 白名单执行 | 采纳，硬性安全边界。 | 管理 **Web/API 进程**不得挂载或持有 Docker socket，不得把调用方传入的 image/command/bind-mount 当参数执行。计划中的第一刀「Compose 路径」是：管理面只改 desired 状态；由本机 **CLI manager** 按白名单执行预先登记的 compose 命令（项目名、服务名、卷名来自配置，不来自请求体）。单元测试用 in-process **fake** backend；fake 通过 ≠ 真实容器部署成功。 |
 | 管理 cookie + CSRF；内部 manager 鉴权；运行容器保留自身登录；管理 DB 不存明文 token | 采纳，硬性。 | 三套凭证分离，见 §3。 |
-| Social 现有协议若适配须先许可审计；**不**默认作为必须的第三独立服务 | 采纳，与可选适配边界一致。 | 用户目标是「管理 server + FlyBot 容器」。MVP **不**把 Bot Social 列为必选依赖。跨实例社交作为后续可选适配，且须通过 [复用政策](REUSE_POLICY.md) 审计后才能引入源码或协议实现。 |
+| 专用 Bot Social | 管理跨用户共享状态。 | 工作区、成员、群消息和公开分享见[架构](ARCHITECTURE.md)。复用仍遵守[复用政策](REUSE_POLICY.md)。 |
 
 未采纳或仍开放：编排器不锁定 Docker Compose（它只是第一条自托管验证路径）；数据库不锁定 Postgres/SQLite；不引入 Traefik / 公网入口 / 特定云厂商；不把任一现有控制面实现当规范源码。
 
@@ -43,13 +43,13 @@
 
 | 数据 | 所有权 | MVP 落点 | 说明 |
 | --- | --- | --- | --- |
-| 用户账号、密码哈希、管理会话、CSRF、工作区记录、成员角色 | 管理面 | 管理存储（选型未定，须可迁移） | 密码只存不可逆哈希 |
-| 实例登记：`instance_id`、映射、desired、revision、观测摘要、审计 | 管理面 | 管理存储 | 映射可替换，见 §2.2 |
+| 用户账号、密码哈希、管理会话、CSRF | 管理面 | 管理存储（选型未定，须可迁移） | 密码只存不可逆哈希 |
+| 实例登记：`instance_id`、映射、desired、revision、观测摘要、审计 | 管理面 | 管理存储 | 按用户分配，见 §2.2 |
 | 管理↔manager、manager↔实例的控制凭证 | 管理面签发，manager / 实例持有 | 密钥文件或密封存储，**管理 DB 不存明文 token** | 可存单向哈希、密钥标识或密封信封，不得可逆写回明文 |
 | 运行实例登录会话、实例内用户偏好 | **运行实例自己** | 实例数据卷 | 管理登录不能冒充实例内登录；MVP 不强行打通单点登录 |
 | 对话、记忆、任务、附件、Project State 等运行时状态 | 运行实例 | 实例数据卷（stop 后仍在） | 跨实例可见性 / 工作区隔离策略待后续设计 |
 | 模型密钥等用户密钥 | 待设计 | 目标 MVP：留在实例卷或由用户在实例内配置；管理面若代存只能密封，且不得出现在 inspect | 现有 FlyBot `docs/docker.md` 把凭证放在 `/data` 卷，仅作历史证据，不是本仓已导入实现 |
-| 社交图、跨实例 grant / 审批 | 非 MVP | 不预设独立第三服务 | 若后续复用 Bot Social，须先许可审计 |
+| 社交图、跨实例 grant / 审批 | 专用 Bot Social | Bot Social 共享存储 | 用户自己的 DS-Bot 执行个人及智能体任务。 |
 
 备份、恢复、升级、purge 的物理落点随生命周期接口定义，但 MVP 实现可声明 `unsupported`。
 
@@ -62,8 +62,8 @@
 ```
 Instance {
   instance_id: string          // 主键，独立于用户与工作区
-  owner_id: string | null      // 映射，可替换
-  workspace_id: string | null  // 映射，可替换
+  owner_id: string             // 生产实例的唯一用户归属
+  workspace_id: string | null  // 历史兼容字段
   image_ref: string            // 来自**服务端配置/允许列表**，不是请求任意指定
   volume_ref: string           // 由 backend 分配并登记，不是调用方传入任意路径
   desired: "running" | "stopped"
@@ -81,10 +81,9 @@ Instance {
 `ObservedState`：`pending | starting | running | stopping | stopped | failed | unknown`，以及可选的健康摘要（无 secret）、最近心跳时间。
 **判定意图已达成**：`observed_revision == revision` 且 `observed` 与 `desired` 一致（running↔running，stopped↔stopped）。revision 落后时只能报告「观测过期 / 调和中」，不能当成功。
 
-### 2.2 映射策略（可替换假设，不是用户已定）
+### 2.2 每用户一个实例
 
-第一刀建议默认：创建一个 workspace 记录后，再创建一个 `instance_id`，并把 `(owner_id, workspace_id)` 指过去。允许 1:1，也允许日后改为每账号多实例或每 Agent 一实例，而不改 `instance_id` 主键。
-接口禁止写死「一个 owner 只能有一个 instance」为类型约束；若第一刀实现做了数量上限，必须是配置项并写进文档。
+管理面按 `owner_id` 分配并查找该用户唯一的 DS-Bot 实例。重复分配请求应复用已有实例。同一用户加入或切换工作区时沿用该实例。跨用户共享的工作区与成员权限由专用 Bot Social 管理。早期按工作区组织的实例接口保留为兼容入口，平台托管请求按用户路由。
 
 ### 2.3 生命周期语义
 

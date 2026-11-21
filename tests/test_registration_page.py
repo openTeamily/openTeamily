@@ -36,6 +36,19 @@ class RegistrationPageTests(unittest.TestCase):
             self.assertEqual(self.raw.call('GET', path)['status'], 200)
         self.assertEqual(self.raw.call('GET', '/register/missing')['status'], 404)
 
+    def test_login_is_public_with_registration_closed(self):
+        self.api.config = replace(self.api.config, allow_registration=False)
+        login = self.raw.call('GET', '/login')
+        self.assertEqual(login['status'], 200)
+        self.assertIn(b'action="/v1/auth/login"', login['body'])
+        self.assertEqual(login['headers']['Cache-Control'], 'no-store')
+        self.assertEqual(self.raw.call('HEAD', '/login')['body'], b'')
+        self.assertEqual(self.raw.call('POST', '/login')['status'], 405)
+        self.assertEqual(self.raw.call('GET', '/login', query='next=https://example.com')['status'], 400)
+        register = self.raw.call('GET', '/register/')
+        self.assertEqual(register['status'], 200)
+        self.assertIn(b'href="/login"', register['body'])
+
     def test_page_policy_not_weakened(self):
         self.assertEqual(self.raw.call('GET', '/register', origin='https://evil.test')['status'], 403)
         self.assertEqual(self.raw.call('GET', '/register', host='evil.test')['status'], 403)
@@ -48,7 +61,7 @@ class RegistrationPageTests(unittest.TestCase):
         self.assertEqual(result['status'], 201)
         self.assertNotIn(PASSWORD, str(result))
         self.assertEqual(self.client.call('GET', '/v1/auth/session')['status'], 200)
-        self.assertEqual(self.client.call('POST', '/v1/settings', {}, csrf=False)['status'], 403)
+        self.assertEqual(self.client.call('POST', '/v1/auth/logout', {}, csrf=False)['status'], 403)
 
     def test_api_origin_registration_policy_and_validation(self):
         body = {'username': 'test-user', 'password': PASSWORD}
@@ -70,41 +83,6 @@ class RegistrationPageTests(unittest.TestCase):
         self.assertEqual(self.client.register('not-created')['body']['error']['code'],'registration_closed')
         with self.api.store.connect() as db:self.assertEqual(db.execute('SELECT COUNT(*) FROM users').fetchone()[0],0)
 
-    def test_new_account_session_settings_personal_workspace_agent_actual_controlled_model_and_restart(self):
-        # HTTP API + actual local controlled provider. NOT real-vendor/remote acceptance.
-        from tests import test_message_utilities as provider_helpers
-        from tests import test_skill_packages as skill_helpers
-        from openteamily.flybot import handle_task
-        import json
-        registered=self.client.register('newuser');self.assertEqual(registered['status'],201,registered)
-        uid=registered['body']['user']['id'];self.assertIsNone(self.api.operator_admin)
-        self.assertEqual(self.client.call('GET','/v1/auth/session')['body']['user']['id'],uid)
-        self.assertEqual(self.client.call('POST','/v1/settings',{'revision':0,'changes':{'appearance':'dark'}})['status'],200)
-        personal=self.client.call('POST','/v1/personal-agent');self.assertEqual(personal['status'],201,personal)
-        data=personal['body']['personal_agent'];wid=data['workspace']['id'];aid=data['agent']['id']
-        self.assertIn(wid,[row['id'] for row in self.client.call('GET','/v1/workspaces?limit=100')['body']['items']])
-        # A normal user owns only their own workspace, never another tenant or operator role.
-        other=Client(self.api,peer='127.0.0.2');other.register('unrelated')
-        self.assertEqual(other.call('GET',f'/v1/workspaces/{wid}/agents')['status'],404)
-        self.assertEqual(other.call('POST',f'/v1/workspaces/{wid}/agents',{'name':'forbidden','summary':'','instructions':''},{'HTTP_IDEMPOTENCY_KEY':'registration-foreign001'})['status'],404)
-        self.app,self.alice=self.api,self.client
-        agent,seen=provider_helpers.UtilityTests.start_provider(self)
-        base=f'/v1/workspaces/{wid}/agents/{aid}/conversations'
-        conv=self.client.call('GET',base)['body']['items'][0]['id']
-        made=self.client.call('POST',base+'/'+conv+'/messages',{'body':'Controlled onboarding fixture: summarize supplied data.'},{'HTTP_IDEMPOTENCY_KEY':'registration-infer001'})
-        self.assertEqual(made['status'],201,made)
-        task=agent.call('GET','/v1/agent/tasks')['body']['items'][0]
-        self.assertEqual(agent.call('POST',f'/v1/agent/tasks/{task["id"]}/claim',{})['status'],200)
-        status,result=handle_task(task,ORIGIN,'synthetic-fixture-only',requester=skill_helpers.SkillPackageTests.requester(self,agent))
-        self.assertEqual(status,'succeeded',result)
-        self.assertEqual(agent.call('POST',f'/v1/agent/tasks/{task["id"]}/result',{'status':status,'result':result})['status'],200)
-        history=self.client.call('GET',base+'/'+conv)['body']['items']
-        self.assertTrue(any(row['body']==result['text'] for row in history),history);self.assertEqual(seen['count'],1)
-        self.client.call('POST','/v1/auth/logout',{});self.assertEqual(self.client.call('GET','/v1/auth/session')['status'],401)
-        reopened=Client(App(Store(self.api.store.data_dir),self.api.config))
-        self.assertEqual(reopened.call('POST','/v1/auth/login',{'username':'newuser','password':PASSWORD})['status'],200)
-        self.assertEqual(reopened.call('GET','/v1/settings')['body']['settings']['values']['appearance'],'dark')
-        self.assertEqual(reopened.call('POST','/v1/personal-agent')['body']['personal_agent']['agent']['id'],aid)
 
     def test_root_and_settings_have_prominent_registration_entry_and_matching_explicit_text_input(self):
         for path in ('/','/settings'):

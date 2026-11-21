@@ -1,7 +1,6 @@
 import { request as httpRequest } from 'node:http'
-// Capability for the authenticated task transport, not a general HTTP/SDK opt-in.
+// An operator grant for the DS-Bot model proxy's exact HTTP endpoint.
 export const MODEL_HTTP_FORMAT = 'openteamily.exact-http-task.v1'
-export const MODEL_HTTP_HEADER = 'X-Openteamily-Model-HTTP'
 const denied = [
   [[0,0,0,0],8], [[10,0,0,0],8], [[100,64,0,0],10], [[127,0,0,0],8],
   [[169,254,0,0],16], [[172,16,0,0],12], [[192,0,0,0],24], [[192,0,2,0],24],
@@ -45,35 +44,27 @@ export function validateModelEndpoint(base, grant) {
   throw new Error('Model endpoint requires an operator-issued HTTP task grant')
 }
 
-// Unlike global fetch, node:http does not consult an inherited environment proxy
-// or a global Undici dispatcher. No redirect machinery or reusable cookie jar.
-// The injected requester exists solely for loopback-only wire tests.
-export function fetchHttpTask(base, grant, init, requester = httpRequest) {
+// The loopback model proxy uses node:http without redirects or inherited proxies.
+// The grant permits only POST to the exact IPv4 base's /chat/completions.
+// The injected requester exists for loopback wire tests.
+export const STREAM_LIMIT = 32 * 1024 * 1024
+export function streamHttpTask(base, grant, init, onResponse, requester = httpRequest) {
   if (!validHttpGrant(base, grant) || init.method !== 'POST' || init.redirect !== 'error') {
     return Promise.reject(new Error('HTTP model task transport rejected'))
   }
-  const target = base + '/chat/completions'
-  const url = new URL(target)
+  const url = new URL(base + '/chat/completions')
   return new Promise((resolve, reject) => {
-    const fail = () => reject(new Error('HTTP model task request failed'))
     let req
+    const fail = () => reject(new Error('HTTP model task request failed'))
     try {
-      req = requester({hostname:url.hostname, port:url.port || 80,
-        path:url.pathname, method:'POST', headers:init.headers, agent:false,
-        family:4, signal:init.signal}, response => {
+      req = requester({hostname:url.hostname, port:url.port || 80, path:url.pathname, method:'POST',
+        headers:init.headers, agent:false, family:4, signal:init.signal}, response => {
         if (response.statusCode >= 300 && response.statusCode < 400) {
           response.destroy(); reject(new Error('Model redirect rejected')); return
         }
-        const chunks=[]; let length=0
-        response.on('error', fail)
-        response.on('data', chunk => {
-          length += chunk.length
-          if (length > 65536) { response.destroy(); fail(); return }
-          chunks.push(chunk)
-        })
-        response.on('end', () => resolve({ok:response.statusCode >= 200 && response.statusCode < 300,
-          status:response.statusCode, redirected:false, url:target,
-          json:async()=>JSON.parse(Buffer.concat(chunks).toString('utf8'))}))
+        let length = 0
+        response.on('data', chunk => { length += chunk.length; if (length > STREAM_LIMIT) response.destroy() })
+        resolve(onResponse(response.statusCode, response.headers, response))
       })
       req.on('error', fail)
       req.end(init.body)

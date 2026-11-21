@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/shell/app.css">
   <link rel="stylesheet" href="/memory/app.css">
   <script type="module" src="/shell/app.mjs"></script>
+  <script type="module" src="/shell/dsbot-api.mjs"></script>
   <script type="module" src="/memory/app.mjs"></script>
 </head>
 <body class="app-workspace">
@@ -74,7 +75,6 @@
       </label>
       <p id="graph-counts" class="memory-counts"></p>
     </header>
-    <details class="note memory-disclaimer"><summary>对照说明</summary><p>对照里的记忆总览是左侧目录、中间图谱和右侧话题。新建会立即落盘。空图谱说明、新建入口和窄屏图谱优先布局是 OpenTeamily 补充，未经目标站对照。画像和分享尚未实现；导出只把当前这一页已保存的标题、话题和正文下载成 Markdown 文件，没有整库导出。我的会议进入已有的作品库会议空态，仍没有会议作品接口。还不能写成已经功能对等，也还没有浏览器端到端验收。</p></details>
     <section id="list-panel" class="memory-workspace" data-view="overview">
       <aside class="memory-dir" id="memory-dir">
         <div class="dir-header">
@@ -83,7 +83,7 @@
             <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5 5h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm4 1.5H5v11h4v-11z"/></svg>
           </button>
         </div>
-        <button type="button" id="new-page">+ 新建</button>
+        <button type="button" id="new-page" disabled>+ 新建</button>
         <label class="dir-search">
           <span class="visually-hidden">搜索主题</span>
           <input id="search" type="text" maxlength="80" autocomplete="off" placeholder="搜索主题……">
@@ -94,11 +94,11 @@
           <button type="button" data-filter="topics">标签 <span class="filter-caret" aria-hidden="true">▾</span></button>
         </div>
         <div id="topic-filter-box" hidden>
-          <p class="note">对照里没有打开标签下拉，这里用已有话题做筛选，交互未经核实。</p>
           <div id="topic-filter-chips"></div>
         </div>
         <nav class="memory-views" aria-label="记忆视图">
           <a href="/memory" data-view="overview" aria-current="page"><span class="view-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M4 4h7v7H4V4zm9 0h7v7h-7V4zM4 13h7v7H4v-7zm9 0h7v7h-7v-7z"/></svg></span>总览</a>
+          <a href="/memory?page=candidates" data-view="candidates">记忆建议</a>
           <a href="/memory?page=profile" data-view="profile"><span class="view-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 4a4 4 0 1 1 0 8 4 4 0 0 1 0-8zm0 10c4.4 0 8 2.1 8 4.7V21H4v-2.3C4 16.1 7.6 14 12 14z"/></svg></span>我的资料</a>
           <a href="/memory?page=todos" data-view="actions"><span class="view-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M5 5h14v2H5V5zm0 4h14v2H5V9zm0 4h9v2H5v-2zm0 4h9v2H5v-2zm11.2-3.2 1.4-1.4 2.1 2.1 3.5-3.5 1.4 1.4-4.9 4.9-3.5-3.5z"/></svg></span>下一步行动</a>
           <a href="/space"><span class="view-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M4 8.5 12 5l8 3.5-8 3.5L4 8.5zm0 4.2 8 3.5 8-3.5v1.8L12 18 4 14.5v-1.8z"/></svg></span>我的作品</a>
@@ -129,7 +129,7 @@
             <button type="button" id="graph-zoom-reset" title="重置缩放">重置</button>
           </div>
         </div>
-        <p class="note">正文里的 [[标题]] 会连到同工作区已有页面，也可以手动添加连接。悬停预览卡的版式未经核实。</p>
+        <p class="note">正文里的 [[标题]] 会连到同工作区已有页面，也可以在编辑器里添加连接。</p>
       </section>
       <aside class="memory-side" id="memory-side">
         <div class="side-tabs" role="tablist">
@@ -144,7 +144,7 @@
       <section id="actions-panel" hidden>
         <header class="memory-page-head">
           <h2>下一步行动</h2>
-          <button type="button" id="dream-actions" disabled title="未实现：对照里未点开「做梦」。OpenTeamily 还没有整理记忆的接口。">做梦</button>
+          <button type="button" id="dream-actions" disabled title="个人资料整理暂不可用">做梦</button>
         </header>
         <p id="action-empty" class="note" hidden>当前没有可预期的事项。</p>
         <button type="button" id="new-action-open">新建行动</button>
@@ -168,12 +168,37 @@
           <button type="submit" id="new-action">新建行动</button>
         </form>
       </section>
+      <section id="memory-candidates" hidden>
+        <header class="memory-page-head">
+          <h2>记忆建议</h2>
+          <button type="button" id="memory-capture-toggle" aria-label="自动提炼私聊记忆" aria-pressed="false" disabled>开启私聊提炼</button>
+        </header>
+        <p class="note">核对从私聊和群聊提炼的要点，保存后供同一工作区的智能体私聊检索。</p>
+        <p id="memory-candidates-status" role="status"></p>
+        <ul id="memory-candidates-list"></ul>
+        <dialog id="memory-candidate-review" class="profile-dream-dialog" aria-labelledby="memory-review-title">
+          <form id="memory-candidate-form">
+            <h2 id="memory-review-title">核对记忆建议</h2>
+            <p><a id="memory-review-source">查看原消息</a></p>
+            <blockquote id="memory-review-excerpt"></blockquote>
+            <label>标题<input id="memory-review-name" maxlength="80" required></label>
+            <label>正文<textarea id="memory-review-body" maxlength="8000" rows="6" required></textarea></label>
+            <p id="memory-review-error" role="status"></p>
+            <footer class="profile-dream-actions">
+              <button type="button" id="memory-review-close">取消</button>
+              <button type="button" id="memory-review-ignore">忽略</button>
+              <button type="submit" id="memory-review-save" class="primary">保存到记忆</button>
+            </footer>
+          </form>
+        </dialog>
+      </section>
       <section id="profile-panel" hidden>
         <header class="memory-page-head">
           <h2>我的资料</h2>
-          <button type="button" id="dream-profile" disabled title="未实现：对照里未点开「做梦」。OpenTeamily 还没有整理记忆的接口。">做梦</button>
+          <button type="button" id="dream-profile" disabled aria-haspopup="dialog" title="根据当前资料和偏好生成整理建议">做梦</button>
         </header>
-        <p class="note">这些资料仅属于当前工作区中的你，可编辑并保存。尚未自动注入模型；做梦整理尚未实现。</p><form id="memory-profile-form">
+        <p class="note">在当前工作区的智能体私聊中开启记忆后，回复会参考这里保存的资料和偏好。</p>
+        <form id="memory-profile-form">
         <article class="memory-profile-section">
           <h3>Professional Profile</h3>
           <label>编辑正文<textarea id="profile-professional" maxlength="10000" rows="5"></textarea></label>
@@ -187,9 +212,17 @@
           <label>编辑正文<textarea id="profile-communication" maxlength="10000" rows="5"></textarea></label>
         </article>
         <button type="submit" id="save-memory-profile">保存画像</button><p id="memory-profile-status" role="status"></p></form>
+        <dialog id="profile-dream-dialog" class="profile-dream-dialog" aria-labelledby="profile-dream-title">
+          <h2 id="profile-dream-title" tabindex="-1">整理建议</h2>
+          <p class="note">选择要应用的栏目，检查编辑框后再保存。</p>
+          <div id="profile-dream-changes"></div>
+          <footer class="profile-dream-actions">
+            <button type="button" id="profile-dream-cancel">取消</button>
+            <button type="button" id="profile-dream-apply" class="primary">应用到编辑框</button>
+          </footer>
+        </dialog>
         <section id="preference-panel" aria-labelledby="preference-title">
           <h3 id="preference-title">偏好</h3>
-          <p class="note">这些偏好属于当前工作区中的你，会随工作区记忆保存，刷新或换会话后仍在；尚未自动注入模型。</p>
           <ul id="preference-list"></ul>
           <p id="preferences-empty" class="note">还没有偏好，加一条试试</p>
           <label>新偏好 <input id="preference-input" maxlength="120" placeholder="例如：回复用中文" autocomplete="off"></label>
@@ -202,12 +235,13 @@
         <p id="editor-saved" class="editor-saved" hidden></p>
         <div class="editor-top-actions">
           <button type="button" id="dream-page" title="找出这一页可以合并的重复段落；不接受不会改动原文">做梦</button>
-          <button type="button" disabled title="未接通：还没有分享记忆页的接口。">分享</button>
+          <button type="button" id="memory-share-group" aria-haspopup="dialog" hidden>分享到来源群</button>
           <button type="button" id="page-history-open" title="查看此页的历史版本">历史</button>
           <button type="button" id="page-export" disabled title="打开一页记忆后才能导出为 Markdown。">导出</button>
           <p id="page-export-status" class="note editor-export-status" hidden></p>
         </div>
       </div>
+      <p id="memory-page-chat-source" class="note" hidden><a id="memory-page-chat-link">查看来源消息</a></p>
       <section id="page-history" class="page-history" aria-labelledby="page-history-title" hidden>
         <header class="page-history-head">
           <h2 id="page-history-title">历史</h2>
@@ -282,6 +316,19 @@
         </div>
       </div>
     </form>
+    <dialog id="memory-share-dialog" class="profile-dream-dialog" aria-labelledby="memory-share-heading">
+      <form id="memory-share-form">
+        <h2 id="memory-share-heading">分享到来源群</h2>
+        <p class="note">群成员和群内智能体可以查看以下已保存的内容。</p>
+        <h3 id="memory-share-title"></h3>
+        <p id="memory-share-body"></p>
+        <p id="memory-share-status" role="status"></p>
+        <div class="profile-dream-actions">
+          <button type="button" id="memory-share-cancel">取消</button>
+          <button type="submit" id="memory-share-submit">确认分享</button>
+        </div>
+      </form>
+    </dialog>
     <form id="action-editor-form" method="post" action="/v1/workspaces" hidden>
       <label>标题 <input type="text" name="title" maxlength="80" required autocomplete="off"></label>
       <label>备注 <textarea name="notes" maxlength="2000" rows="4"></textarea></label>

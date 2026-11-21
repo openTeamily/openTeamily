@@ -21,6 +21,8 @@ TOKEN = 'A' * 43
 class ParseServerUrlTests(unittest.TestCase):
     def test_accepts_https_and_loopback_http(self):
         self.assertEqual(bot_social.parse_server_url('https://social.example/team'), 'https://social.example/team')
+        self.assertEqual(bot_social.parse_server_url('https://openteamily.botawaken.com/social'),
+                         'https://openteamily.botawaken.com/social')
         self.assertEqual(bot_social.parse_server_url('http://127.0.0.1:8787'), 'http://127.0.0.1:8787')
         self.assertEqual(bot_social.parse_server_url('localhost:8787'), 'http://localhost:8787')
         self.assertEqual(bot_social.parse_server_url(''), None)

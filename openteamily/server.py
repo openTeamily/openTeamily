@@ -6,7 +6,7 @@ from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 from .app import App, Config
 from .store import Store
 from .lifecycle import Lifecycle, RuntimePolicy
-from .operator_config import load_manager_auth, load_operator_admin
+from .operator_config import load_auto_provision, load_manager_auth, load_operator_admin
 from .oidc import load_oidc_providers
 from .settings_page import SettingsPage
 from .model_http_policy import load_model_http_policy
@@ -44,6 +44,7 @@ def main():
     parser.add_argument('--operator-admin', help='Operator-owned private JSON file with a credential_hash for admin APIs (platform model API)')
     parser.add_argument('--model-http-policy', help='Private operator file of exact public IPv4 HTTP task-model bases; HTTPS default unchanged')
     parser.add_argument('--oidc-providers', help='Operator-owned private JSON file of OIDC/OAuth client credentials; secrets are never logged')
+    parser.add_argument('--auto-provision', help='Private operator JSON enabling one capped, isolated runtime per user personal workspace (default off)')
     parser.add_argument('--no-automation-worker', action='store_true',
                         help='Do not start the background automation worker; explicit tick still works')
     args = parser.parse_args()
@@ -51,6 +52,8 @@ def main():
         parser.error('Choose simulation OR explicit Compose execution')
     if args.manager_grants and not (args.simulation or args.compose_image):
         parser.error('Manager grants require an explicit runtime profile')
+    if args.auto_provision and not args.manager_grants:
+        parser.error('Auto-provisioning requires manager grants with an auto_provisioned manager')
     if not 1 <= args.port <= 65535:
         parser.error('Port must be in 1..65535')
     try:
@@ -61,8 +64,9 @@ def main():
         operator_admin = load_operator_admin(args.operator_admin) if args.operator_admin else None
         oidc_registry = load_oidc_providers(args.oidc_providers) if args.oidc_providers else None
         http_policy = load_model_http_policy(args.model_http_policy) if args.model_http_policy else None
+        auto_provision = load_auto_provision(args.auto_provision) if args.auto_provision else None
         app = App(store, Config(origin=args.origin, insecure_local=args.insecure_local,
-                                allow_registration=args.open_registration), lifecycle=lifecycle, manager_auth=manager_auth, operator_admin=operator_admin, oidc_registry=oidc_registry, model_http_policy=http_policy)
+                                allow_registration=args.open_registration), lifecycle=lifecycle, manager_auth=manager_auth, operator_admin=operator_admin, oidc_registry=oidc_registry, model_http_policy=http_policy, auto_provision=auto_provision)
     except (OSError, ValueError, TypeError):
         parser.error('Cannot initialize private storage or origin configuration')
     page = SettingsPage(app)

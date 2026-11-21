@@ -320,11 +320,11 @@ async function onboardError(response, displayName) {
 }
 
 // One call to the server's FlyBot onboarding; returns { token, home } to keep.
-export async function onboard({ server, displayName, webhookUrl, fetch: fetchImpl = globalThis.fetch }) {
+export async function onboard({ server, displayName, botHandle, webhookUrl, fetch: fetchImpl = globalThis.fetch }) {
   const response = await fetchImpl(`${server.replace(/\/+$/, '')}/v1/onboard/flybot`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ display_name: displayName, ...(webhookUrl ? { webhook_url: webhookUrl } : {}) }),
+    body: JSON.stringify({ display_name: displayName, ...(botHandle ? { bot_handle: botHandle } : {}), ...(webhookUrl ? { webhook_url: webhookUrl } : {}) }),
   })
   if (!response.ok) throw await onboardError(response, displayName)
   const body = await response.json()
@@ -339,7 +339,12 @@ export async function onboardHome({ server, displayName, webhookUrl, fetch: fetc
   for (let attempt = 1; attempt <= ONBOARD_TRIES; attempt++) {
     const name = nextOnboardDisplayName(base, attempt)
     try {
-      return { ...(await onboard({ server, displayName: name, webhookUrl, fetch: fetchImpl })), displayName: name }
+      // The dedicated server truncates the derived home stem to 20 chars.
+      // An explicit collision candidate keeps the suffix inside that limit;
+      // changing an overlong display name alone repeatedly retries one handle.
+      const suffix=String(attempt),stem=base.toLowerCase().replace(/[^a-z0-9]+/g,'') || 'flybot'
+      const botHandle=attempt>1 ? `${stem.slice(0,20-suffix.length)}${suffix}.home` : undefined
+      return { ...(await onboard({ server, displayName: name, botHandle, webhookUrl, fetch: fetchImpl })), displayName: name }
     } catch (error) {
       last = error
       if (error?.code !== 'handle_taken') throw error

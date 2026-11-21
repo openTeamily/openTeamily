@@ -28,7 +28,7 @@ test('filterCatalog matches title, body, path and category', () => {
   assert.deepEqual(filterCatalog(CATALOG, {category: 'calls'}).map((item) => item.id), []);
   const chat = filterCatalog(CATALOG, {category: 'chat'});
   assert.ok(chat.every((item) => item.category === 'chat'));
-  const found = filterCatalog(CATALOG, {query: 'flybot.pyz'});
+  const found = filterCatalog(CATALOG, {query: '浏览器网页入口'});
   assert.deepEqual(found.map((item) => item.id), ['download-runtime']);
   const pathHit = filterCatalog(CATALOG, {query: '收起侧边栏'});
   assert.ok(pathHit.some((item) => item.id === 'memory-dir-collapse'));

@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/shell/app.css">
   <link rel="stylesheet" href="/artifacts/app.css">
   <script type="module" src="/shell/app.mjs"></script>
+  <script type="module" src="/shell/dsbot-api.mjs"></script>
   <script type="module" src="/artifacts/app.mjs"></script>
 </head>
 <body class="app-workspace">
@@ -75,6 +76,7 @@
       </nav>
       <div id="meetings-chrome" hidden>
         <h1 class="meetings-title" id="meetings-title">我的会议</h1>
+        <a id="new-meeting-in-space" href="/meetings" hidden>新建会议</a>
         <p id="meetings-caption">这个工作区的会议纪要，最新的在前。</p>
         <div class="meeting-scopes" role="tablist" aria-label="会议范围">
           <button type="button" data-meeting-scope="joined">我参加的</button>
@@ -168,6 +170,7 @@
           <div id="new-menu" role="menu" hidden>
             <button type="button" id="new-artifact" role="menuitem">云文档</button>
             <button type="button" id="new-slides" role="menuitem">幻灯片</button>
+            <button type="button" id="new-spreadsheet" role="menuitem">电子表格</button>
             <button type="button" id="new-dashboard" role="menuitem">看板</button>
             <button type="button" id="new-board" role="menuitem">白板</button>
             <button type="button" id="new-media" role="menuitem">上传</button>
@@ -246,11 +249,13 @@
             <button type="button" id="new-website">新建网站</button>
           </div>
           <p id="meetings-error" class="note" role="alert" hidden></p>
+          <button type="button" id="retry-meetings" hidden>重新加载</button>
+          <p id="meetings-loading" class="note" role="status" hidden>正在加载会议…</p>
+          <p id="meetings-no-match" class="note" hidden>没有符合当前条件的会议。</p>
           <div id="empty-meetings" hidden>
             <div class="empty-hero" aria-hidden="true"><span class="empty-cta-icon" data-tone="wave" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M11 7h2v10h-2V7z"/><path fill="currentColor" d="M8.1 9.2c1.15 1.05 1.15 4.55 0 5.6l-1.25-1.05c.7-.8.7-2.7 0-3.5l1.25-1.05zm7.8 0 1.25 1.05c-.7.8-.7 2.7 0 3.5l-1.25 1.05c-1.15-1.05-1.15-4.55 0-5.6zM5.6 7.3c2.05 1.85 2.05 7.55 0 9.4l-1.35-1.1c1.55-1.55 1.55-5.65 0-7.2l1.35-1.1zm12.8 0 1.35 1.1c-1.55 1.55-1.55 5.65 0 7.2l-1.35 1.1c-2.05-1.85-2.05-7.55 0-9.4z"/></svg></span></div>
             <h2>还没有会议纪要</h2>
             <p>在「会议」页记下纪要后，这里会按时间倒序列出。</p>
-            <p class="note">这里只列这个工作区已有的会议纪要，不生成、不录音。</p>
           </div>
           <p id="list-empty-message" class="note" hidden>这个工作区还没有作品。</p>
         </div>
@@ -291,13 +296,58 @@
         <audio id="media-audio" controls hidden></audio>
         <video id="media-video" controls hidden></video>
       </div>
-      <div id="slides-editor" hidden>
+      <section id="slides-editor" aria-label="幻灯片编辑器" hidden>
+        <div class="artifact-editor-actions">
+          <button type="button" id="slides-back">返回列表</button>
+          <button type="button" id="download-slides" hidden>下载 PPTX</button>
+          <button type="button" id="send-saved-slides" hidden>发送到聊天</button>
+          <button type="submit" id="slides-save">保存</button>
+        </div>
+        <details id="slide-draft">
+          <summary>让智能体起草</summary>
+          <label for="slide-prompt">幻灯片主题或素材</label>
+          <textarea id="slide-prompt" maxlength="1600" rows="3" placeholder="例如，按下面的项目进度起草一份周会简报"></textarea>
+          <label id="slide-context-option" for="slide-context" hidden>
+            <input id="slide-context" type="checkbox" aria-describedby="slide-context-title"> 参考原会话最近消息
+          </label>
+          <p id="slide-context-title" class="note" hidden></p>
+          <button type="button" id="slide-draft-submit">生成草稿</button>
+        </details>
+        <p id="slide-draft-status" role="status" class="note"></p>
         <div class="slides-toolbar">
           <button type="button" id="add-slide">添加一页</button>
-          <span class="note">最多 30 页；每页最多 10 条要点。</span>
+          <span id="slides-count" class="note"></span>
         </div>
         <ol id="slide-list" class="slide-list"></ol>
-      </div>
+      </section>
+      <section id="spreadsheet-editor" aria-label="电子表格编辑器" hidden>
+        <div class="artifact-editor-actions">
+          <button type="button" id="sheet-back">返回列表</button>
+          <button type="button" id="download-spreadsheet" hidden>下载 Excel</button>
+          <button type="button" id="send-saved-spreadsheet" hidden>发送到聊天</button>
+          <button type="submit" id="sheet-save">保存</button>
+        </div>
+        <div class="sheet-toolbar">
+          <label>工作表 <select id="sheet-switch"></select></label>
+          <label>工作表名称 <input id="sheet-name" maxlength="31" autocomplete="off"></label>
+          <button type="button" id="sheet-add">新增工作表</button>
+          <button type="button" id="sheet-remove">删除工作表</button>
+        </div>
+        <details id="sheet-draft" hidden>
+          <summary>让智能体起草</summary>
+          <label>表格描述 <textarea id="sheet-prompt" maxlength="1600" rows="3" placeholder="例如，根据下面的名单制作出勤表"></textarea></label>
+          <button type="button" id="sheet-draft-submit">生成草稿</button>
+        </details>
+        <div class="sheet-grid-wrap">
+          <table id="sheet-grid" aria-label="工作表单元格"></table>
+        </div>
+        <div class="sheet-toolbar">
+          <button type="button" id="sheet-add-row">增加行</button>
+          <button type="button" id="sheet-add-column">增加列</button>
+        </div>
+        <p class="note">可粘贴单元格区域。SUM、AVERAGE、MIN、MAX、COUNT 区域公式在导出的 Excel 中计算。</p>
+        <p id="sheet-status" role="status" class="note"></p>
+      </section>
       <div id="dashboard-editor" hidden>
         <div class="slides-toolbar">
           <button type="button" id="add-widget">添加组件</button>
@@ -322,7 +372,7 @@
         <p class="note">每次保存会留下一版，可以导出或恢复到某一版。恢复会生成新的修订，不会改写历史。</p>
         <ul id="version-list"></ul>
         <p id="version-empty" class="note" hidden>还没有历史版本。</p>
-        <label for="export-format">当前版本导出格式</label><select id="export-format"><option value="original">原格式</option><option value="docx">Word DOCX（文档）</option><option value="pdf">文本 PDF（文档 / 幻灯片提纲 / 看板数据）</option><option value="xlsx">Excel XLSX（看板数据）</option><option value="pptx">PowerPoint PPTX（幻灯片标题与条目）</option></select><p class="note">DOCX 保留文本与标题，非完整 Office 编辑器；PDF 是分页文字，不是页面 / 媒体截图，暂不支持 emoji 等非 BMP 字符。XLSX 为实际数据，任何公式均按文本导出。PPTX 是实际幻灯片包，含标题与条目，不含宏、媒体或外部链接，也不是渲染缩略图或完整编辑器。历史版本下载仍为其原格式。</p>
+        <label for="export-format">当前版本导出格式</label><select id="export-format"><option value="original">原格式</option><option value="docx">Word DOCX（文档）</option><option value="pdf">文本 PDF（文档 / 幻灯片提纲 / 看板数据）</option><option value="xlsx">Excel XLSX（电子表格 / 看板）</option><option value="pptx">PowerPoint PPTX（幻灯片标题与条目）</option></select><p class="note">DOCX 保留文本与标题，非完整 Office 编辑器；PDF 是分页文字，不是页面 / 媒体截图，暂不支持 emoji 等非 BMP 字符。电子表格导出保留支持的公式。PPTX 是实际幻灯片包，含标题与条目，不含宏、媒体或外部链接，也不是渲染缩略图或完整编辑器。历史版本下载仍为其原格式。</p>
         <p id="artifact-live-update" class="note" hidden>服务器作品版本已变化；本地草稿不会自动覆盖。<button type="button" id="artifact-live-load">读取服务器版本（需确认覆盖草稿）</button></p>
         <button type="button" id="export-artifact">导出当前版本</button>
       </section>
@@ -356,8 +406,11 @@
       <p id="send-to-chat-lead" class="note"></p>
       <ul id="send-to-chat-list"></ul>
       <p id="send-to-chat-empty" class="empty-state" hidden>这个工作区还没有可发送的群或单聊。</p>
-      <p id="send-to-chat-error" class="note" hidden></p>
-      <button type="button" id="send-to-chat-cancel">取消</button>
+      <p id="send-to-chat-error" class="note" role="status" hidden></p>
+      <div class="send-dialog-actions">
+        <button type="button" id="send-to-chat-cancel">取消</button>
+        <button type="button" class="primary" id="send-to-chat-confirm" disabled>确认发送</button>
+      </div>
     </div>
   </div>
   </main>

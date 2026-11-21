@@ -43,15 +43,15 @@ class ManagerWorker:
                 if action in ('create', 'start', 'restart'):
                     self.engine.install_secret(iid, self.client.runtime_secret(iid, claim), heartbeat=guard)
                     self.engine.install_bot_social(iid, self.client.runtime_bot_social(iid, claim))
-                    self.engine.install_runtime_key(iid, self.client.runtime_agent_key(iid, claim))
+                    bundle = self.client.runtime_agent_bootstrap(iid, claim)
+                    self.engine.install_agent_bootstrap(iid, bundle)
                 before = self.engine.inspect(iid, guard)
                 if action == 'restart':
                     require(before['present'] and (before['stopped'] or before['process_ref'] is not None), 'restart_requires_container')
                 if action == 'create':
                     require(before['stopped'], 'create_requires_stopped')
-                # A container from a previous compose file may be missing new
-                # allowlisted secret binds. Recreate the container only; never
-                # pass -v or delete the named volume.
+                # Apply a supported Compose upgrade by recreating the container.
+                # The same named volume is mounted again.
                 if action == 'create' and before.get('needs_recreate'):
                     action = 'create-recreate'
                 elif action in ('start', 'restart') and before.get('needs_recreate'):

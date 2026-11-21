@@ -10,6 +10,7 @@ from .client import ManagerClient, check_id
 from .engine import Registry, Runner, ComposeEngine, manifest
 from .safety import ManagerError, require, trusted_path, write_new, instance_lock, redact
 from .worker import ManagerWorker
+from . import dsbot_import, dsbot_route
 
 
 def initialize(args):
@@ -29,6 +30,48 @@ def initialize(args):
     write_new(state / 'grants.json', [{'id': args.manager_id, 'credential_hash': digest(token),
               'instance_ids': [args.instance_id], 'backend_mode': 'compose'}])
     return {'status': 'initialized_disabled', 'config': str(state / 'manager.json'), 'server_grants': str(state / 'grants.json')}
+
+
+def poll_once(args):
+    """One supervisor pass. New server-assigned instances are found through the
+    authenticated listing, so neither the Web nor this manager needs a restart.
+    Each instance still goes through the single-claim/lease/observe worker; an
+    uncertain job is reported, never replayed."""
+    require(bool(args.config), 'config_required')
+    registry = Registry(args.config)
+    require(args.execute and registry.config['execution_enabled'] is True, 'execution_disabled')
+    cfg = registry.config
+    client = ManagerClient(cfg['base_url'], cfg['manager_id'], cfg['token'], enabled=True, host_header=cfg['server_host'])
+    results = []
+    for item in client.assigned():
+        iid = item['id']
+        try:
+            if iid not in cfg['instances']:
+                if item.get('provisioning') != 'auto' or cfg.get('auto_instances') is None:
+                    results.append({'status': 'skipped', 'instance_id': iid, 'reason': 'instance_not_registered'})
+                    continue
+                registry.adopt(iid, item)
+            registry.entry(iid, item)
+            engine = ComposeEngine(registry, Runner(registry, enabled=True))
+            result = ManagerWorker(client, registry, engine).run_once(iid)
+            results.append(result)
+            if registry.config.get('dsbot_gateway') is not None and result.get('status') in ('observed', 'no_claim'):
+                # Route the owner's browser to this DS-Bot (platform gateway). A refusal
+                # here never changes the job receipt above.
+                try:
+                    results.append(dsbot_route.publish(engine, client, iid))
+                except ManagerError as error:
+                    results.append({'status': 'route_refused', 'instance_id': iid, 'reason': error.code})
+                if args.import_legacy:
+                    try:
+                        with instance_lock(registry.root, iid):
+                            results.append(dsbot_import.deliver(engine, client, iid))
+                    except ManagerError as error:
+                        results.append({'status': 'import_refused', 'instance_id': iid, 'reason': error.code})
+        except ManagerError as error:
+            results.append({'status': 'refused', 'instance_id': iid, 'reason': error.code})
+    uncertain = any(r.get('status') == 'uncertain' for r in results)
+    return {'status': 'uncertain' if uncertain else 'polled', 'results': results}
 
 
 def main(argv=None):
@@ -59,10 +102,14 @@ def main(argv=None):
             cmd.add_argument('--operation-id', help='Fresh 16..64 character operator key; reuse this key on uncertain HTTP retry')
         if name == 'migrate-manifest':
             cmd.add_argument('--apply', action='store_true', help='Rewrite a compatible frozen compose file; never deletes the named volume or secret files')
+    poll = sub.add_parser('poll-once', help='Discover every instance the server assigns to this manager and run one fenced job each')
+    poll.add_argument('--import-legacy', action='store_true', help='Deliver a retained platform bundle when explicitly migrating accounts')
     args = parser.parse_args(argv)
     try:
         if args.command == 'init':
             result = initialize(args)
+        elif args.command == 'poll-once':
+            result = poll_once(args)
         else:
             require(bool(args.config), 'config_required')
             iid = check_id(args.instance_id)
@@ -75,13 +122,19 @@ def main(argv=None):
                         engine.install_secret(iid, None)
                     if not engine.bot_social_path(iid).exists():
                         engine.install_bot_social(iid, None)
-                    if not engine.runtime_key_path(iid).exists():
-                        engine.install_runtime_key(iid, None)
+                    if not engine.agent_bootstrap_path(iid).exists():
+                        engine.install_agent_bootstrap(iid, None)
                     preview['secret_files'] = 'created_if_missing'
                 preview['executed'] = False
                 preview['volume_deleted'] = False
                 result = preview
             else:
+                if iid not in registry.config['instances'] and registry.config.get('auto_instances') is not None:
+                    # Auto-provisioned: adopt only from the server's authenticated listing.
+                    require(args.execute and registry.config['execution_enabled'] is True, 'execution_disabled')
+                    cfg = registry.config
+                    registry.adopt(iid, ManagerClient(cfg['base_url'], cfg['manager_id'], cfg['token'], enabled=True,
+                                                      host_header=cfg['server_host']).snapshot(iid))
                 entry, path = registry.entry(iid)
                 if args.command == 'plan':
                     result = {'status': 'plan_only', 'instance_id': iid, 'compose_file': str(path), 'image': entry['image'], 'executed': False, 'volume': 'ot-' + iid}
