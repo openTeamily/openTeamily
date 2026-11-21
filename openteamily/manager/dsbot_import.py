@@ -49,7 +49,14 @@ def _container(engine, iid):
 
 
 def deliver(engine, client, iid, heartbeat=lambda: None):
-    """Install the seal key, fetch sealed bundles, copy them into the volume."""
+    """Install the seal key, fetch sealed bundles, copy them into the volume.
+
+    `.copied-<feature>-v1` is only a copy marker, never proof of import. The
+    runtime removes a bundle file only after a verified import, so a marker plus
+    a still-present bundle means the import was rejected or not yet consumed;
+    the next poll copies that feature again. A real import receipt is a
+    follow-up; until then marker + missing bundle is the retry boundary.
+    """
     require(re.fullmatch(r'[0-9a-f]{32}', iid or ''), 'instance_id')
     _, key = engine.install_seal_key(iid)
     # Additive compose bind; a later no-delete recreate attaches it. The job still
@@ -61,22 +68,25 @@ def deliver(engine, client, iid, heartbeat=lambda: None):
     container = _container(engine, iid)
     inspect, _ = engine.runner.run(['inspect', '-f', '{{.State.Running}}', container], heartbeat=heartbeat, timeout=10)
     require(inspect.strip() == 'true', 'instance_not_running')
-    def delivered(name):
-        bundle = f'{IMPORT_DIR}/{name}-v{VERSION}.bundle'
-        marker = f'{IMPORT_DIR}/.delivered-{name}-v{VERSION}'
+    def exists(path):
         try:
-            # Older managers could mark a root-owned bundle as delivered.
-            # An absent bundle was already consumed, but an unreadable one must be recopied.
-            engine.runner.run(
-                ['exec', '-u', '1000:1000', container, 'sh', '-c',
-                 'test -f "$1" && { test ! -e "$2" || test -r "$2"; }',
-                 'check-delivery', marker, bundle],
-                heartbeat=heartbeat, timeout=10)
+            engine.runner.run(['exec', '-u', '1000:1000', container, 'test', '-f', path], heartbeat=heartbeat, timeout=10)
             return True
         except ManagerError:
             return False
 
-    if all(delivered(name) for name in FEATURES):
+    def copied(name):
+        return exists(f'/data/openteamily/import/.copied-{name}-v{VERSION}')
+
+    def present(name):
+        return exists(f'/data/openteamily/import/{name}-v{VERSION}.bundle')
+
+    def settled(name):
+        # The runtime deletes the bundle only after import, so a copy marker with
+        # no bundle left is the best available completion signal.
+        return copied(name) and not present(name)
+
+    if all(settled(name) for name in FEATURES):
         return {'status': 'already-imported', 'instance_id': iid, 'version': VERSION, 'features': list(FEATURES)}
     try:
         data = client.dsbot_import(iid, key.hex())
@@ -92,13 +102,13 @@ def deliver(engine, client, iid, heartbeat=lambda: None):
         require(isinstance(item, dict) and set(item) >= {'name', 'bundle'}, 'import_shape')
         name = item['name']
         require(isinstance(name, str) and (name in FEATURES or re.fullmatch(r'[a-z][a-z0-9-]{0,39}', name)), 'import_feature')
-        if delivered(name):
+        if settled(name):
             continue
         filename = f'{name}-v{VERSION}.bundle'
         require(BUNDLE_NAME.fullmatch(filename), 'import_feature')
         raw = (json.dumps(item['bundle'], ensure_ascii=False, separators=(',', ':')) + '\n').encode()
         checksum = hashlib.sha256(raw).hexdigest()
-        marker = f'.delivered-{name}-v{VERSION}'
+        marker = f'.copied-{name}-v{VERSION}'
         # Receive as the runtime UID so the bundle is private and readable in a
         # managed read-only container. A truncated stream never reaches its final name.
         with TemporaryFile() as source:
@@ -109,4 +119,4 @@ def deliver(engine, client, iid, heartbeat=lambda: None):
                  'receive-bundle', filename, checksum, marker],
                 heartbeat=heartbeat, timeout=60, stdin=source)
         written.append(filename)
-    return {'status': 'imported', 'instance_id': iid, 'features': written, 'seal_key': 'installed'}
+    return {'status': 'delivered', 'instance_id': iid, 'features': written, 'seal_key': 'installed'}

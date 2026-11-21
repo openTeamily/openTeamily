@@ -15,9 +15,36 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.bundle$/
 const IDENT = /^[a-z_][a-z0-9_]{0,63}$/
 const sha256 = (text) => createHash('sha256').update(text, 'utf8').digest('hex')
 
-export function verifyBundle(bundle, feature) {
+// Target binding policy: a bundle carrying instance_id must match this host.
+// Missing instance_id is rejected by default (requireInstanceId !== false).
+// Only the private-volume boot importer explicitly passes requireInstanceId:false
+// so pre-binding v1 files can still be read there; all manager/featurekit/B4
+// import paths require the id. Error text matches src/pending-import.js.
+function targetOptions(options) {
+  if (typeof options === 'string') return { instanceId: options }
+  if (!options || typeof options !== 'object') return {}
+  return {
+    ...options,
+    requireInstanceId: options.requireInstanceId ?? (options.allowLegacy === true ? false : true),
+  }
+}
+
+export function verifyBundleTarget(bundle, options = {}) {
+  const { instanceId, requireInstanceId = true } = targetOptions(options)
+  const target = bundle?.instance_id
+  if (target === undefined || target === null) {
+    if (requireInstanceId) throw Object.assign(new Error('import target missing'), { code: 'import-target-missing' })
+    return
+  }
+  if (typeof target !== 'string' || typeof instanceId !== 'string' || !instanceId || target !== instanceId) {
+    throw Object.assign(new Error('import target mismatch'), { code: 'import-target-mismatch' })
+  }
+}
+
+export function verifyBundle(bundle, feature, options = {}) {
   if (!bundle || bundle.format !== BUNDLE_FORMAT || bundle.version !== 1) throw new Error('unsupported bundle format')
   if (bundle.feature !== feature.name) throw new Error('bundle feature mismatch')
+  verifyBundleTarget(bundle, options)
   const declared = feature.importTables ?? {}
   const tables = bundle.tables ?? {}
   const manifest = bundle.manifest ?? {}
@@ -32,8 +59,8 @@ export function verifyBundle(bundle, feature) {
   return out
 }
 
-export function importBundle(store, feature, bundle, digest, paths = {}) {
-  const tables = verifyBundle(bundle, feature)
+export function importBundle(store, feature, bundle, digest, paths = {}, options = {}) {
+  const tables = verifyBundle(bundle, feature, options)
   // Media objects (and any other side files) are written first: they are
   // content-addressed, and a failed row import must not already be marked done.
   if (typeof feature.afterImport === 'function') feature.afterImport(bundle, { store, ...paths })
@@ -73,7 +100,7 @@ function importRows(store, feature, tables, digest) {
 }
 
 // Import pending bundles for one feature; bundles for other features stay put.
-export function importBundles({ store, dataDir, feature }) {
+export function importBundles({ store, dataDir, feature, instanceId, requireInstanceId = true }) {
   store.exec('CREATE TABLE IF NOT EXISTS ot_imports (digest TEXT PRIMARY KEY, feature TEXT NOT NULL, rows INTEGER NOT NULL, imported INTEGER NOT NULL)')
   const dir = join(dataDir, 'openteamily', 'import')
   let names = []
@@ -85,7 +112,7 @@ export function importBundles({ store, dataDir, feature }) {
       const text = readFileSync(file, 'utf8')
       const bundle = JSON.parse(text)
       if (bundle?.feature !== feature.name) continue
-      const result = importBundle(store, feature, bundle, sha256(text), { dataDir, featureDir: join(dataDir, 'openteamily', 'features', feature.name) })
+      const result = importBundle(store, feature, bundle, sha256(text), { dataDir, featureDir: join(dataDir, 'openteamily', 'features', feature.name) }, { instanceId, requireInstanceId })
       unlinkSync(file)
       results.push({ name, status: result.skipped ? 'already-imported' : 'imported', rows: result.rows })
     } catch (error) {

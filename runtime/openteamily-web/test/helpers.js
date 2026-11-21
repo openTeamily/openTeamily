@@ -21,12 +21,16 @@ export function fakeCtx() {
   }
 }
 
+export const INSTANCE_ID = 'f'.repeat(32)
+
 export function volume() {
   const root = mkdtempSync(join(tmpdir(), 'ot-feature-'))
   const pages = join(root, 'pages')
   const data = join(root, 'data')
   mkdirSync(pages)
   mkdirSync(data)
+  mkdirSync(join(data, 'openteamily'), { recursive: true })
+  writeFileSync(join(data, 'openteamily', 'instance.json'), JSON.stringify({ version: 1, instance_id: INSTANCE_ID }) + '\n')
   return { root, pages, data }
 }
 
@@ -59,7 +63,15 @@ export function legacyBundles(features) {
 export function deliverBundle(vol, name, text) {
   const dir = join(vol.data, 'openteamily', 'import')
   mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, name), text)
+  let payload = text
+  try {
+    const bundle = JSON.parse(text)
+    if (bundle && typeof bundle === 'object' && !Array.isArray(bundle) && bundle.instance_id === undefined) {
+      bundle.instance_id = INSTANCE_ID
+      payload = JSON.stringify(bundle)
+    }
+  } catch { /* keep malformed fixtures byte-for-byte for rejection tests */ }
+  writeFileSync(join(dir, name), payload)
 }
 
 export const WS = 'a'.repeat(32)

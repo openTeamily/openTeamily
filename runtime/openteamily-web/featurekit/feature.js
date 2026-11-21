@@ -17,7 +17,8 @@ export function defineFeature(spec) {
     const store = openStore(join(host.featureDir(), `${spec.name}.sqlite3`))
     store.migrate(spec.name, spec.migrations ?? [])
     store.exec('CREATE TABLE IF NOT EXISTS ot_imports (digest TEXT PRIMARY KEY, feature TEXT NOT NULL, rows INTEGER NOT NULL, imported INTEGER NOT NULL)')
-    const imported = spec.importTables ? importBundles({ store, dataDir: host.dataDir, feature: spec }) : []
+    const instanceId = host.identity?.routingInstanceId || host.identity?.instanceId
+    const imported = spec.importTables ? importBundles({ store, dataDir: host.dataDir, feature: spec, instanceId }) : []
     for (const item of imported) if (item.status === 'rejected') host.log(`import ${item.name} rejected: ${item.reason}`)
     const context = { store, host, identity: host.identity, owner: ownerId(), log: host.log, feature: spec.name }
     const endpoints = {
@@ -40,7 +41,7 @@ export function defineFeature(spec) {
       imported,
       async migrate(bundle) {
         const digest = createHash('sha256').update(JSON.stringify(bundle), 'utf8').digest('hex')
-        return importBundle(store, spec, bundle, digest, { dataDir: host.dataDir, featureDir: host.featureDir() })
+        return importBundle(store, spec, bundle, digest, { dataDir: host.dataDir, featureDir: host.featureDir() }, { instanceId })
       },
     }
   }

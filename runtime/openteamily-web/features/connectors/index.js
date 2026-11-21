@@ -15,7 +15,7 @@ export default function connectors(host) {
   const dir = host.featureDir()
   const sealKey = loadSealKey({ fallbackFile: join(dir, 'seal.key'), preferFallback: true })
   const api = createConnectors({ dir, sealKey, identity: host.identity })
-  const imported = importJsonBundles({ dataDir: host.dataDir, feature: { name: 'connectors', importTables: IMPORT_TABLES }, store: api.store, sealKey: loadImportSealKey(), apply: importApplier(sealKey), log: host.log })
+  const imported = importJsonBundles({ dataDir: host.dataDir, feature: { name: 'connectors', importTables: IMPORT_TABLES }, store: api.store, sealKey: loadImportSealKey(), apply: importApplier(sealKey), log: host.log, instanceId: host.identity?.routingInstanceId || host.identity?.instanceId })
   let version = 0
   let sync = async () => {}
   if (process.env.OPENTEAMILY_APPS_MCP !== '0') {

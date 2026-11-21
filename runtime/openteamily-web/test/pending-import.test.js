@@ -21,5 +21,9 @@ test('boot imports only its feature; foreign targets retained; redelivery is ide
     writeFileSync(file, JSON.stringify({ feature: 'agents', instance_id: 'b'.repeat(32) }))
     const rejected = await importPending({ host, db, migrate })
     assert.equal(rejected[0].status, 'rejected'); assert.equal(existsSync(file), true); assert.equal(calls, 1)
+    // This private-volume boot surface explicitly accepts pre-binding legacy files.
+    writeFileSync(file, JSON.stringify({ feature: 'agents' }))
+    const legacy = await importPending({ host, db, migrate })
+    assert.equal(legacy[0].status, 'imported'); assert.equal(existsSync(file), false); assert.equal(calls, 2)
   } finally { db.close(); rmSync(dataDir, { recursive: true, force: true }) }
 })
