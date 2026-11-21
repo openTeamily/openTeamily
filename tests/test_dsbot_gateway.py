@@ -1,10 +1,12 @@
 """Platform → own DS-Bot gateway decisions (docs/DSBOT_PLUGIN_ARCHITECTURE.md §4)."""
 import json
 import os
+import re
 import secrets
 import tempfile
 import time
 import unittest
+from urllib.parse import quote
 
 from openteamily import dsbot_gateway as gw
 from openteamily import lifecycle
@@ -15,6 +17,16 @@ from openteamily.store import Store
 ORIGIN = 'https://openteamily.example'
 COOKIE = '__Host-ot_session'
 KEY = 'k' * 40
+
+
+def forwarding_patterns(conf):
+    """Regexes of the generated moved-/v1 418 locations, in config order."""
+    patterns = []
+    for line in conf.splitlines():
+        match = re.fullmatch(r'  location ~ (.+) \{ return 418; \}', line)
+        if match and match.group(1).startswith('^/v1/'):
+            patterns.append(match.group(1))
+    return patterns
 
 
 def seed(store):
@@ -145,6 +157,22 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.target_for('/', routes), '/api/openteamily/page?path=%2F')
         self.assertIsNone(gw.target_for('/privacy/', routes))
 
+    def test_moved_page_query_deep_links_drop_the_browser_query(self):
+        routes = gw.load_routes()
+        for uri, path in (
+            ('/artifacts?workspace=w1', '/artifacts'),
+            ('/discover?tab=agents', '/discover'),
+            ('/agents?category=legal', '/agents'),
+            ('/memory?page=profile', '/memory'),
+            ('/automations?runs=failed', '/automations'),
+        ):
+            expected = gw.PAGE_ROUTE + '?path=' + quote(path, safe='')
+            self.assertEqual(gw.target_for(uri, routes), expected, uri)
+            status, headers = self.call(self.tokens['a' * 32], uri=uri)
+            self.assertEqual(status, 204, uri)
+            self.assertEqual(headers['X-OT-Upstream-Path'], expected, uri)
+        self.assertIsNone(gw.target_for('/privacy/?next=%2Fartifacts', routes))
+
     def test_shipped_routes_move_private_chat(self):
         self.assertTrue({'chat', 'meetings', 'skills', 'memory', 'settings', 'onboarding', 'automations', 'agents', 'artifacts'} <= gw.load_routes()['moved_pages'])
         self.assertTrue({'members', 'team', 'messenger', 'discover'} <= gw.load_routes()['moved_pages'])
@@ -238,7 +266,7 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('absolute_redirect off;', conf)
         self.assertIn('location @ot_login { return 302 /login; }', conf)
         self.assertNotIn('location = /login { return 418; }', conf)
-        self.assertIn('location ^~ /v1/discover/ { return 418; }', conf)
+        self.assertIn('location ~ ^/v1/discover/(?:agents|works|me/works)$ { return 418; }', conf)
 
     def test_nginx_config_optional_social_path(self):
         routes = gw.load_routes()
@@ -380,15 +408,64 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(headers['X-OT-Instance'], '1' * 32)
         self.assertIn('feature=automations', headers['X-OT-Upstream-Path'])
 
-    def test_nginx_forwards_moved_v1_apis_except_platform_exceptions(self):
+    def test_nginx_locations_are_derived_from_moved_apis(self):
         conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)
-        self.assertIn('location = /v1/settings { return 418; }', conf)
-        self.assertIn('location = /space { return 418; }', conf)
-        self.assertEqual(conf.count('location = /v1/onboarding/automations'), 1)
-        self.assertIn('location = /v1/onboarding/automations { return 418; }', conf)
-        self.assertIn('location = /v1/composio/callback', conf)
-        # Exceptions must appear before the prefix locations that would catch them.
-        self.assertLess(conf.index('location = /v1/composio/callback'), conf.index('location ^~ /v1/composio/'))
+        patterns = forwarding_patterns(conf)
+        # Exactly one forwarding location per MOVED_APIS matcher, in table order.
+        self.assertEqual(patterns, [pattern.pattern for pattern, _ in gw.MOVED_APIS])
+        ws, ident = 'a' * 32, 'b' * 32
+        for path, feature in (
+            (f'/v1/workspaces/{ws}/members', 'members'),
+            (f'/v1/workspaces/{ws}/invites', 'invites'),
+            (f'/v1/workspaces/{ws}/join-requests', 'invites'),
+            ('/v1/team-directory', 'teams'),
+            (f'/v1/workspaces/{ws}/social/conversations', 'messenger'),
+            ('/v1/discover/agents', 'discover'),
+            (f'/v1/workspaces/{ws}/agents/{ident}/discover', 'discover'),
+            ('/v1/automation-templates', 'automations'),
+            (f'/v1/workspaces/{ws}/automations', 'automations'),
+            (f'/v1/workspaces/{ws}/agents/{ident}/api-keys', 'agent-api'),
+            (f'/v1/workspaces/{ws}/agents', 'agents'),
+            (f'/v1/workspaces/{ws}/meetings', 'meetings'),
+            (f'/v1/workspaces/{ws}/memory', 'memory'),
+            (f'/v1/workspaces/{ws}/search/messages', 'search'),
+            (f'/v1/workspaces/{ws}/artifacts', 'artifacts'),
+            ('/v1/settings', 'settings'),
+            ('/v1/model-api', 'model-api'),
+            ('/v1/composio', 'connectors'),
+            ('/v1/mcp/servers', 'connectors'),
+        ):
+            self.assertEqual(gw.moved_api(path), feature, path)
+            self.assertTrue(any(re.fullmatch(p, path) for p in patterns), path)
+
+    def test_platform_owned_routes_are_not_fenced(self):
+        ws, ident = 'a' * 32, 'b' * 32
+        conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)
+        patterns = forwarding_patterns(conf)
+        # Upstream platform exceptions stay in front of the generated fences.
+        self.assertIn('location = /v1/agent-homepages/start { return 410; }', conf)
+        self.assertIn('location = /v1/composio/callback { proxy_pass', conf)
+        # onboarding/automations moved to the DS-Bot automations feature upstream,
+        # so it is fenced by the generated table instead of proxied to the platform.
+        self.assertNotIn('location = /v1/onboarding/automations { proxy_pass', conf)
+        self.assertIn('location ~ ^/v1/(?:automation-templates|onboarding/automations)$ { return 418; }', conf)
+        self.assertEqual(conf.count('onboarding/automations'), 1)
+        for path in (
+            '/v1/composio/callback',
+            f'/v1/workspaces/{ws}/agents/{ident}/runtime',
+            f'/v1/workspaces/{ws}/agents/{ident}/runtime/unbind',
+            f'/v1/workspaces/{ws}/agents/{ident}/homepage',
+            f'/v1/workspaces/{ws}/agents/{ident}/homepage/revoke',
+        ):
+            self.assertIsNone(gw.moved_api(path), path)
+            self.assertFalse(any(re.fullmatch(p, path) for p in patterns), path)
+            self.assertEqual(self.call(self.tokens['a' * 32], uri=path)[0], 404, path)
+        # The moved agent routes themselves remain fenced.
+        for path in (f'/v1/workspaces/{ws}/agents',
+                     f'/v1/workspaces/{ws}/agents/{ident}',
+                     f'/v1/workspaces/{ws}/agents/{ident}/archive',
+                     f'/v1/workspaces/{ws}/agents/{ident}/conversations'):
+            self.assertTrue(any(re.fullmatch(p, path) for p in patterns), path)
 
 
     def test_manager_import_bundles_are_scoped_to_the_granted_owner(self):

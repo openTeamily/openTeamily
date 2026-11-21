@@ -104,45 +104,17 @@ MOVED_APIS = (
     (re.compile(r'^/v1/mcp/servers(?:/[0-9a-f]{32})?$'), 'connectors'),
 )
 
-# Nginx locations that send a moved /v1 API to the owner's DS-Bot. More-specific
-# platform exceptions (automations, composio callback) are emitted first.
+# Nginx locations that send a moved /v1 API to the owner's DS-Bot. The
+# platform-owned exceptions are emitted first. The 418 locations are generated
+# one-to-one from MOVED_APIS, in table order, so the edge cannot drift from
+# moved_api(): anything else, including an agent's runtime/homepage, falls
+# through to the platform location.
 MOVED_API_LOCATIONS = (
-    'location ^~ /v1/skills/ { return 418; }',
-    'location = /v1/skill-secrets { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/overview$ { return 418; }',
-    'location = /v1/team-templates { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/(?:team-templates|notifications)(?:/|$) { return 418; }',
-    'location = /v1/invites/accept { return 418; }',
-    'location = /v1/join-requests { return 418; }',
-    'location ~ ^/v1/skills/(?:scopes|readiness|runs)$ { return 418; }',
-    'location ^~ /v1/runtime/ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts/[0-9a-f]{32}/discover(?:/revoke)?$ { return 418; }',
-    'location = /v1/workspaces { return 418; }',
     'location = /v1/agent-homepages/start { return 410; }',
-    'location = /v1/teams { return 418; }',
-    'location = /v1/team-directory { return 418; }',
-    'location ^~ /v1/team-directory/ { return 418; }',
-    'location ~ ^/v1/meeting-calls/(?:create|preview|join|poll|signal|leave|end)$ { return 418; }',
-    'location ^~ /v1/discover/ { return 418; }',
-    'location ~ ^/v1/contacts(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/(?:members|invites|join-requests|directory|social)(?:/|$) { return 418; }',
     'location = /v1/composio/callback { proxy_pass http://__PLATFORM__; proxy_set_header Host $host; proxy_set_header X-OT-Gateway-Key ""; }',
-    'location = /v1/settings { return 418; }',
-    'location = /v1/notification-prefs { return 418; }',
-    'location = /v1/onboarding { return 418; }',
-    'location ^~ /v1/onboarding/ { return 418; }',
-    'location = /v1/model-api { return 418; }',
-    'location = /v1/composio { return 418; }',
-    'location ^~ /v1/composio/ { return 418; }',
-    'location ^~ /v1/mcp/servers { return 418; }',
-    'location = /v1/automation-templates { return 418; }',
-    'location = /v1/onboarding/automations { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/automations(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/agents(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/meetings(?:/(?:draft|speech|transcribe)|/[0-9a-f]{32}(?:/(?:remove|export))?)?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/memory(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/search/(?:messages|resources)$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$ { return 418; }',
+) + tuple(
+    f'location ~ {pattern.pattern} {{ return 418; }}'
+    for pattern, _feature in MOVED_APIS
 )
 
 
@@ -211,6 +183,9 @@ def target_for(uri, routes):
         path = '/artifacts'
     first = path.split('/')[1] if path != '/' else 'home'
     if first in routes['moved_pages']:
+        # Match on the path only. Query parameters are browser-side page state
+        # (/discover?tab=agents, /agents?category=legal, ...), so the page shim
+        # needs just `path`; the browser keeps its original URL and search.
         return PAGE_ROUTE + '?path=' + quote(path, safe='')
     return None
 
