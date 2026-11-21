@@ -10,8 +10,9 @@ import { MIGRATE_SCHEMA, registerMigrate } from "./migrate.js";
 import { CALLS_SCHEMA, registerCalls } from "./calls.js";
 
 import { CONTACTS_SCHEMA, registerContacts } from "./contacts.js";
+import { POLLS_SCHEMA, registerPolls } from "./polls.js";
 
-export const OT_SCHEMAS = [CORE_SCHEMA, TEAMS_SCHEMA, MESSENGER_SCHEMA, DISCOVER_SCHEMA, SHARES_SCHEMA, MIGRATE_SCHEMA, CALLS_SCHEMA, CONTACTS_SCHEMA];
+export const OT_SCHEMAS = [CORE_SCHEMA, TEAMS_SCHEMA, MESSENGER_SCHEMA, DISCOVER_SCHEMA, SHARES_SCHEMA, MIGRATE_SCHEMA, CALLS_SCHEMA, CONTACTS_SCHEMA, POLLS_SCHEMA];
 
 export function registerOpenTeamily(app: FastifyInstance, platform: Platform) {
   for (const schema of OT_SCHEMAS) platform.db.exec(schema);
@@ -24,5 +25,6 @@ export function registerOpenTeamily(app: FastifyInstance, platform: Platform) {
   registerDiscover(app, ot);
   registerShares(app, ot);
   registerMigrate(app, ot);
+  registerPolls(app, ot);
   return ot;
 }

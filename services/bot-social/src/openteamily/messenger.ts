@@ -199,7 +199,7 @@ function requireOrdinaryGroup(conv: any) {
   assert(!fixedPublicThread(conv), 409, "public_chat_fixed", "公开智能体会话使用固定成员。");
 }
 
-function memberOf(ot: OtContext, convId: string, ownerId: string) {
+export function memberOf(ot: OtContext, convId: string, ownerId: string) {
   const conv = ot.get<any>("SELECT c.* FROM ot_conversations c JOIN ot_conversation_members m ON m.conversation_id = c.id WHERE c.id = ? AND m.owner_id = ?", convId, ownerId);
   assert(conv && publicParticipant(ot, conv, ownerId), 404, "conversation_not_found", "no such conversation");
   return conv;
