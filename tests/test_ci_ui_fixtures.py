@@ -133,6 +133,18 @@ class CiUiFixtureTests(unittest.TestCase):
         self.assertTrue(data.startswith(b'\x89PNG\r\n\x1a\n'))
         self.assertGreater(len(data), 40)
 
+    def test_fixture_helpers_import_without_deleted_central_test_modules(self):
+        import importlib
+        import inspect
+        fixtures = importlib.import_module('openteamily.ci_ui_fixtures')
+        self.assertTrue(callable(fixtures.multipart))
+        source = inspect.getsource(fixtures)
+        self.assertNotIn('tests.test_artifact_media', source)
+        runner = Path(__file__).resolve().parents[1] / 'scripts' / 'ci_ui_screenshots.py'
+        script = runner.read_text()
+        self.assertNotIn('tests.test_runtime_infer', script)
+        self.assertIn('def start_fake_provider', script)
+
 
 class CiUiReadyHandoffTests(unittest.TestCase):
     def test_ready_json_carries_every_seed_key_the_browser_harness_reads(self):

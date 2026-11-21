@@ -6,6 +6,7 @@ Does not print passwords, session cookies, invite tokens, or runtime keys.
 Does not change firewall, proxy, or port-forwarding rules. Not for production.
 """
 import argparse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -26,7 +28,44 @@ if str(ROOT) not in sys.path:
 from openteamily.ci_ui_fixtures import (  # noqa: E402
     PROVIDER_TEXT, USERNAME, seed_fixtures,
 )
-from tests.test_runtime_infer import start_fake_provider  # noqa: E402
+
+def start_fake_provider(secret, body_text='hello from fake provider'):
+    """Loopback OpenAI-compatible chat completions server for CI fixtures."""
+    seen = {'authorization': None, 'body': None, 'count': 0}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get('Content-Length', '0'))
+            raw = self.rfile.read(length)
+            seen['authorization'] = self.headers.get('Authorization')
+            seen['body'] = raw
+            seen['count'] += 1
+            if self.path.rstrip('/') != '/v1/chat/completions':
+                self.send_response(404)
+                self.end_headers()
+                return
+            if self.headers.get('Authorization') != 'Bearer ' + secret:
+                self.send_response(401)
+                self.end_headers()
+                self.wfile.write(b'{"error":"unauthorized"}')
+                return
+            payload = json.dumps({
+                'choices': [{'message': {'role': 'assistant', 'content': body_text}}],
+                'model': 'fake-model',
+            }).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, format, *args):
+            return
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': 0.01}, daemon=True)
+    thread.start()
+    return server, thread, seen
 
 
 def _free_port(preferred):

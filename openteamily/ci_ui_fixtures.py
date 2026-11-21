@@ -14,8 +14,23 @@ import zlib
 
 from .app import App, Config
 from .store import Store
-from tests.test_artifact_media import multipart
 from tests.test_management import Client
+
+
+def multipart(fields, files, boundary='----OTTestBoundary9f3a'):
+    """Build a multipart/form-data body for the CI screenshot media upload."""
+    parts = []
+    for name, value in fields:
+        parts.append(
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode()
+        )
+    for name, filename, mime, data in files:
+        parts.append(
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'
+            f'Content-Type: {mime}\r\n\r\n'.encode() + data + b'\r\n'
+        )
+    parts.append(f'--{boundary}--\r\n'.encode())
+    return b''.join(parts), 'multipart/form-data; boundary=' + boundary
 
 
 USERNAME = 'cifixture'

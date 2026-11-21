@@ -24,6 +24,24 @@ class FakeElement {
     if (this._text === '') this.children = [];
   }
   get innerText() { return this._text; }
+  get classList() {
+    const element = this;
+    const names = () => element.className.split(/\s+/).filter(Boolean);
+    return {
+      add(name) {
+        if (!names().includes(name)) element.className = [...names(), name].join(' ');
+      },
+      remove(name) { element.className = names().filter((item) => item !== name).join(' '); },
+      contains(name) { return names().includes(name); },
+      toggle(name, force) {
+        if (force === true) { this.add(name); return true; }
+        if (force === false) { this.remove(name); return false; }
+        if (this.contains(name)) { this.remove(name); return false; }
+        this.add(name);
+        return true;
+      },
+    };
+  }
   addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }
   setAttribute(name, value) { this.attributes[name] = value; }
   getAttribute(name) { return this.attributes[name]; }

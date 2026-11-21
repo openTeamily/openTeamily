@@ -174,12 +174,43 @@ function installChatGlobals() {
     history: globalThis.history,
     addEventListener: globalThis.addEventListener,
     matchMedia: globalThis.matchMedia,
+    setTimeout: globalThis.setTimeout,
+    clearTimeout: globalThis.clearTimeout,
+    setInterval: globalThis.setInterval,
+    clearInterval: globalThis.clearInterval,
   };
-  globalThis.location = {hash: '', pathname: '/chat'};
+  const timeouts = new Set();
+  const intervals = new Set();
+  // mount() starts a 2s reply poll after a queued assistant message. Clear
+  // those timers before deleting the location stub, or the poll throws
+  // "location is not defined" after the test has already passed.
+  globalThis.location = {hash: '', pathname: '/chat', search: ''};
   globalThis.history = {replaceState() {}};
   globalThis.addEventListener = () => {};
   globalThis.matchMedia = () => ({matches: false});
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    const id = saved.setTimeout(fn, ms, ...args);
+    timeouts.add(id);
+    return id;
+  };
+  globalThis.clearTimeout = (id) => {
+    timeouts.delete(id);
+    return saved.clearTimeout(id);
+  };
+  globalThis.setInterval = (fn, ms, ...args) => {
+    const id = saved.setInterval(fn, ms, ...args);
+    intervals.add(id);
+    return id;
+  };
+  globalThis.clearInterval = (id) => {
+    intervals.delete(id);
+    return saved.clearInterval(id);
+  };
   return () => {
+    for (const id of timeouts) saved.clearTimeout(id);
+    for (const id of intervals) saved.clearInterval(id);
+    timeouts.clear();
+    intervals.clear();
     for (const key of Object.keys(saved)) {
       if (saved[key] === undefined) delete globalThis[key];
       else globalThis[key] = saved[key];

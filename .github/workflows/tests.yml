@@ -51,6 +51,9 @@ jobs:
       - run: node --test tests/discover_page.test.mjs
       - run: node --test tests/profile_page.test.mjs
       - run: node --test tests/profile_avatar.test.mjs
+      - run: node --test tests/public_agent_share.test.mjs
+      - run: node --test tests/system_locale.test.mjs
+      - run: node --test tests/system_locale_chat.test.mjs
       - run: node --test tests/meetings_page.test.mjs
       - run: node --test tests/meetings_action_toggle.test.mjs
       - run: node --test tests/meetings_attendee_complete.test.mjs
