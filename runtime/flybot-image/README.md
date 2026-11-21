@@ -15,7 +15,8 @@ service:
   and tmpfs `/tmp` need to be writable.
 - Listens on **8080**, which is the port `openteamily.manager.engine.manifest`
   publishes to `127.0.0.1`.
-- Ships a Docker HEALTHCHECK.
+- Uses Docker Engine 25 or newer to probe the web listener every second during
+  startup and every ten seconds once healthy.
 - Loads `@openteamily/flybot-runtime`, which calls upstream `createRuntime()`
   and then `applyOnRuntime()` from `runtime/flybot-social-host/` so
   `@flybot/social` injects a `flybot` service. The vendor tree is not edited.

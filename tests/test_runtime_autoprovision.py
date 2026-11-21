@@ -11,6 +11,7 @@ import threading
 import unittest
 
 from openteamily.app import App, Config
+from openteamily.dsbot_gateway import ensure_schema, record_upstream
 from openteamily.lifecycle import Lifecycle, ManagerAuth, ManagerIdentity, RuntimePolicy
 from openteamily.operator_config import load_auto_provision, load_manager_auth
 from openteamily.runtime_autoprovision import AutoProvisionPolicy
@@ -121,6 +122,29 @@ class AutoProvisionTests(unittest.TestCase):
         ids = {item['id'] for item in self.listed()}
         self.assertEqual(ids, {iid, bob_state['instance_id']})
         self.assertTrue(all(item['provisioning'] == 'auto' for item in self.listed()))
+
+    def test_first_chat_waits_for_the_owners_confirmed_upstream(self):
+        self.make_app()
+        with self.store.transaction() as db:
+            ensure_schema(db)
+        alice, bob = self.user('alice', '127.0.0.1'), self.user('bob', '127.0.0.2')
+        path = '/v1/auth/runtime-readiness'
+        self.assertEqual(Client(self.app).call('GET', path)['status'], 401)
+        self.assertEqual(alice.call('GET', path)['body'], {'state': 'setup'})
+        provision = self.ensure(alice)['runtime_provisioning']
+        iid = provision['instance_id']
+        self.assertEqual(provision['readiness'], 'starting')
+        self.assertEqual(alice.call('GET', path)['body'], {'state': 'starting'})
+        self.run_job(iid, 'stopped')
+        self.run_job(iid, 'running', process_ref='a' * 32)
+        self.assertEqual(alice.call('GET', path)['body'], {'state': 'starting'})
+        with self.store.transaction() as db:
+            record_upstream(db, iid, '10.0.0.1:8788', 'dsh-auth-test=' + 'x' * 20, self.now)
+        self.assertEqual(alice.call('GET', path)['body'], {'state': 'ready'})
+        self.assertEqual(bob.call('GET', path)['body'], {'state': 'setup'})
+        with self.store.transaction() as db:
+            db.execute("UPDATE instances SET desired='stopped' WHERE id=?", (iid,))
+        self.assertEqual(alice.call('GET', path)['body'], {'state': 'unavailable'})
 
     def test_auto_provision_returns_personal_bootstrap_without_minting_key(self):
         self.make_app()

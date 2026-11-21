@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
   <title>自动化 · OpenTeamily</title>
   <link rel="stylesheet" href="/shell/app.css">
@@ -11,7 +11,7 @@
   <script type="module" src="/shell/dsbot-api.mjs"></script>
   <script type="module" src="/automations/app.mjs"></script>
 </head>
-<body class="app-workspace">
+<body class="app-workspace app-primary">
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
     <a class="brand-mark" href="/" title="OpenTeamily 首页" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
@@ -95,6 +95,7 @@
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>
       <header class="editor-head">
         <button type="button" id="cancel-editor">‹ 自动化</button>
+        <button type="button" id="show-run-history" aria-controls="run-panel" hidden>运行记录</button>
         <h1 id="editor-heading">新建自动化</h1>
       </header>
       <fieldset class="task-details">
@@ -165,17 +166,29 @@
       </div>
     </form>
     <section id="run-panel" hidden>
-      <h2>运行记录</h2>
-      <nav class="run-filters" aria-label="运行状态">
-        <button type="button" id="run-filter-all" data-run-filter="all" aria-current="true">全部</button>
-        <button type="button" id="run-filter-succeeded" data-run-filter="succeeded" aria-current="false">成功</button>
-        <button type="button" id="run-filter-failed" data-run-filter="failed" aria-current="false">失败</button>
-      </nav>
+      <h2 id="run-heading" tabindex="-1">运行记录</h2>
+      <div class="run-history-tools">
+        <nav class="run-filters" aria-label="运行状态">
+          <button type="button" id="run-filter-all" data-run-filter="all" aria-current="true">全部</button>
+          <button type="button" id="run-filter-succeeded" data-run-filter="succeeded" aria-current="false">成功</button>
+          <button type="button" id="run-filter-failed" data-run-filter="failed" aria-current="false">失败</button>
+        </nav>
+        <nav class="run-pages" id="run-pages" aria-label="运行记录分页" hidden>
+          <button type="button" id="run-newer">较新记录</button>
+          <button type="button" id="run-older">更早记录</button>
+        </nav>
+      </div>
       <ul id="run-list"></ul>
       <p id="run-empty" class="empty-state" hidden>还没有运行记录。</p>
       <p id="run-filter-empty" class="empty-state" hidden>没有符合这个筛选的运行记录。</p>
     </section>
   </section>
   </main>
+  <nav class="mobile-primary-nav" aria-label="主导航">
+    <a href="/chat"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 4h16v12H9l-5 4V4Z"/></svg>聊天</a>
+    <a href="/space"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg>作品</a>
+    <a href="/automations" aria-current="page"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg>自动化</a>
+    <a href="/settings"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 6h16 M4 12h16 M4 18h16 M9 4v4 M15 10v4 M9 16v4"/></svg>设置</a>
+  </nav>
 </body>
 </html>

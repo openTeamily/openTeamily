@@ -7,10 +7,15 @@ export const CHAT_FILE_BODY_LIMIT = Math.ceil(CHAT_FILE_MAX_BYTES / 3) * 4 + 32 
 const LIMITS = {...DEFAULT_ATTACHMENT_LIMITS, maxBytes: CHAT_FILE_MAX_BYTES};
 const MEDIA: Record<string, string> = {
   mp4: "video/mp4", webm: "video/webm", mp3: "audio/mpeg", wav: "audio/wav",
-  ogg: "audio/ogg", m4a: "audio/mp4",
+  ogg: "audio/ogg", m4a: "audio/mp4", glb: "model/gltf-binary",
 };
 const mediaTypes = new Set(Object.values(MEDIA));
+const resourceKinds = new Set(["document", "website", "slides", "spreadsheet", "dashboard", "whiteboard", "media"]);
+const RESOURCE_COLUMN = "resource TEXT CHECK (resource IS NULL OR json_valid(resource))";
 const sniffMedia = (data: Buffer, mime: string) => {
+  if (mime === "model/gltf-binary") return data.length >= 28 &&
+    data.toString("ascii", 0, 4) === "glTF" && data.readUInt32LE(4) === 2 &&
+    data.readUInt32LE(8) === data.length && data.toString("ascii", 16, 20) === "JSON";
   if (mime === "video/mp4" || mime === "audio/mp4") return data.toString("ascii", 4, 8) === "ftyp";
   if (mime === "video/webm") return data.subarray(0, 4).toString("hex") === "1a45dfa3";
   if (mime === "audio/ogg") return data.toString("ascii", 0, 4) === "OggS";
@@ -28,16 +33,48 @@ export const CHAT_FILES_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_message_attachments (
   message_id TEXT PRIMARY KEY REFERENCES ot_messages(id) ON DELETE CASCADE,
   owner_id TEXT NOT NULL, title TEXT NOT NULL, mime TEXT NOT NULL,
-  bytes INTEGER NOT NULL, sealed BLOB NOT NULL
+  bytes INTEGER NOT NULL, sealed BLOB NOT NULL, ${RESOURCE_COLUMN}
 );
 CREATE INDEX IF NOT EXISTS ot_message_attachments_owner ON ot_message_attachments(owner_id);
 `;
 
-type ChatFile = {title: string; mime: string; data: Buffer};
-type StoredFile = {title: string; mime: string; bytes: number; sealed: Buffer};
+type ChatResource = {kind: string; title: string; revision: number};
+type ChatFile = {title: string; mime: string; data: Buffer; resource?: ChatResource};
+export type ChatFileMetadata = {title: string; mime: string; bytes: number; resource: string | null};
+
+export function migrateChatFiles(ot: OtContext) {
+  const columns = ot.all<{name: string}>("PRAGMA table_info(ot_message_attachments)");
+  if (!columns.some(column => column.name === "resource")) {
+    ot.run(`ALTER TABLE ot_message_attachments ADD COLUMN ${RESOURCE_COLUMN}`);
+  }
+}
+
+function decodeChatResource(value: unknown): ChatResource | undefined {
+  if (value === undefined) return undefined;
+  assert(value && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).every(key => ["kind", "title", "revision"].includes(key)),
+  400, "invalid_request", "Invalid shared resource metadata");
+  const {kind, title, revision} = value as Record<string, unknown>;
+  assert(typeof kind === "string" && resourceKinds.has(kind)
+    && typeof title === "string" && title.length <= 80 && title.trim() && !/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(title)
+    && typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 1,
+  400, "invalid_request", "Invalid shared resource metadata");
+  return {kind, title, revision};
+}
+
+function resourceView(resource: string | null) {
+  if (!resource) return {};
+  const {kind, title, revision} = JSON.parse(resource) as ChatResource;
+  return {resource: {kind, title, revision}};
+}
+
+export function chatFileView({title, mime, bytes, resource}: ChatFileMetadata) {
+  return {title, mime, bytes, ...resourceView(resource)};
+}
 
 export function decodeChatFile(input: any): ChatFile {
   assert(typeof input?.title === "string" && typeof input?.data === "string", 400, "invalid_request", "Provide a file");
+  const resource = decodeChatResource(input.resource);
   assert(input.data.length <= Math.ceil(CHAT_FILE_MAX_BYTES / 3) * 4,
     413, "attachment_too_large", "Files can contain up to 8 MiB");
   const data = decodeCanonicalBase64(input.data);
@@ -52,12 +89,12 @@ export function decodeChatFile(input: any): ChatFile {
   const type = media || checked.mime;
   if (media) assert(sniffMedia(data, media), 400, "attachment_type_blocked", "The media bytes do not match the file type");
   if (type.startsWith("image/")) assert(sniffImage(data, type), 400, "attachment_type_blocked", "The image bytes do not match the file type");
-  return {title: checked.name, mime: type, data};
+  return {title: checked.name, mime: type, data, resource};
 }
 
 export function attachmentView(ot: OtContext, messageId: string) {
-  return ot.get<{title: string; mime: string; bytes: number}>(
-    "SELECT title,mime,bytes FROM ot_message_attachments WHERE message_id=?", messageId);
+  const file = ot.get<ChatFileMetadata>("SELECT title,mime,bytes,resource FROM ot_message_attachments WHERE message_id=?", messageId);
+  return file && chatFileView(file);
 }
 
 export function saveAttachment(ot: OtContext, messageId: string, ownerId: string, file: ChatFile) {
@@ -65,14 +102,15 @@ export function saveAttachment(ot: OtContext, messageId: string, ownerId: string
     "SELECT COALESCE(SUM(bytes),0) AS bytes FROM ot_message_attachments WHERE owner_id=?", ownerId);
   assert((used?.bytes ?? 0) + file.data.length <= LIMITS.ownerBudgetBytes,
     413, "attachment_storage_full", "Your conversation attachment storage is full");
-  ot.run("INSERT INTO ot_message_attachments VALUES(?,?,?,?,?,?)", messageId, ownerId, file.title,
-    file.mime, file.data.length, ot.platform.sealChatAttachment(messageId, file.data));
+  ot.run(`INSERT INTO ot_message_attachments (message_id,owner_id,title,mime,bytes,sealed,resource) VALUES(?,?,?,?,?,?,?)`,
+    messageId, ownerId, file.title, file.mime, file.data.length, ot.platform.sealChatAttachment(messageId, file.data),
+    file.resource ? JSON.stringify(file.resource) : null);
 }
 
 export function readAttachment(ot: OtContext, conversationId: string, messageId: string) {
-  const file = ot.get<StoredFile>(`SELECT a.title,a.mime,a.bytes,a.sealed FROM ot_message_attachments a
+  const file = ot.get<Omit<ChatFileMetadata, "bytes"> & {sealed: Buffer}>(`SELECT a.title,a.mime,a.sealed,a.resource FROM ot_message_attachments a
     JOIN ot_messages m ON m.id=a.message_id WHERE m.conversation_id=? AND m.id=? AND m.retracted=0`,
     conversationId, messageId);
   assert(file, 404, "message_not_found", "Attachment is no longer available");
-  return {title: file.title, mime: file.mime, data: ot.platform.openChatAttachment(messageId, file.sealed)};
+  return {title: file.title, mime: file.mime, data: ot.platform.openChatAttachment(messageId, file.sealed), ...resourceView(file.resource)};
 }

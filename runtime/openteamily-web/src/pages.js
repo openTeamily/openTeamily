@@ -5,6 +5,7 @@
 // signed-in owner's runtime only.
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { extname, join, sep } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 export const PAGE_PATH = '/api/openteamily/page'
 export const SERVED_BY_HEADER = 'x-openteamily-served-by'
@@ -56,16 +57,16 @@ export function markHtml(text, identity) {
   return /<head[^>]*>/i.test(text) ? text.replace(/<head[^>]*>/i, (head) => head + meta) : meta + text
 }
 
-export function createPageHandler({ pagesDir, identity }) {
-  let root
+export function createPageHandler({ pagesDir, identity, getSystemLanguage }) {
+  let root, localeModule, chatMessages
   return async (request) => {
     const url = new URL(request.url)
     const parts = resolvePagePath(url.searchParams.get('path'))
     if (!parts) return notFound(identity)
     try {
-      root ??= await realpath(pagesDir)
-      const file = await realpath(join(root, ...parts))
-      if (!file.startsWith(root + sep)) return notFound(identity)
+      const pageRoot = root ??= await realpath(pagesDir)
+      const file = await realpath(join(pageRoot, ...parts))
+      if (!file.startsWith(pageRoot + sep)) return notFound(identity)
       if (!(await stat(file)).isFile()) return notFound(identity)
       const type = TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream'
       const headers = {
@@ -81,7 +82,25 @@ export function createPageHandler({ pagesDir, identity }) {
         const microphone = audioPage ? '(self)' : '()'
         const camera = audioPage && parts[0] === 'chat' ? '(self)' : '()'
         headers['permissions-policy'] = `camera=${camera}, microphone=${microphone}, geolocation=()`
-        return new Response(markHtml(await readFile(file, 'utf8'), identity), { status: 200, headers })
+        let html = await readFile(file, 'utf8')
+        if (getSystemLanguage && parts.length === 2 && parts[1] === 'index.html' && ['chat', 'settings'].includes(parts[0])) {
+          localeModule ??= import(pathToFileURL(join(pageRoot, 'shell', 'system-locale.mjs')).href).catch(() => null)
+          const renderer = await localeModule
+          if (renderer) {
+            const requested = await Promise.resolve().then(getSystemLanguage).catch(() => null)
+            let locale = renderer.systemLocale(requested)
+            let pageMessages
+            if (locale === 'en' && parts[0] === 'chat') {
+              chatMessages ??= import(pathToFileURL(join(pageRoot, 'shell', 'system-locale-chat.mjs')).href)
+                .then(module => module.CHAT_MESSAGES).catch(() => undefined)
+              pageMessages = await chatMessages
+              if (!pageMessages) locale = 'zh-CN'
+            }
+            html = renderer.renderSystemLocale(html, locale, pageMessages)
+            headers['content-language'] = locale
+          }
+        }
+        return new Response(markHtml(html, identity), { status: 200, headers })
       }
       return new Response(await readFile(file), { status: 200, headers })
     } catch {

@@ -144,7 +144,7 @@ export function runView(row) {
   return out
 }
 
-export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, log = console.error, personalBinding }) {
+export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, log = console.error, personalBinding, saveArtifact }) {
   db.exec(SCHEMA)
   const inflight = new Map() // run id -> promise
   let timer = null
@@ -201,9 +201,12 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
           ds_bot: { engine: 'ds-bot', session_id: reply.session_id ?? null, turn_id: reply.turn_id ?? null, bot_id: reply.bot_id ?? null, model_calls: reply.model_calls ?? null },
         })
       } catch (error) {
-        const code = /runtime-unavailable$/.test(String(error?.code)) ? 'runtime_unavailable'
+        const code = error?.code === 'agents/model-unconfigured' ? 'model_unconfigured'
+          : /runtime-unavailable$/.test(String(error?.code)) ? 'runtime_unavailable'
           : /timed out/i.test(String(error?.message)) ? 'timeout' : 'runtime_failed'
-        finish(runId, 'failed', code, { result: { error: code === 'timeout' ? 'DS-Bot turn timed out' : 'DS-Bot turn failed; no automatic retry' } })
+        const message = code === 'model_unconfigured' ? '这个运行时缺少模型 API 配置。'
+          : code === 'timeout' ? 'DS-Bot turn timed out' : 'DS-Bot turn failed; no automatic retry'
+        finish(runId, 'failed', code, { result: { error: message } })
         log(`openteamily-web: automation run ${runId} failed (${code})`)
       }
     })().finally(() => inflight.delete(runId))
@@ -389,7 +392,20 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     if (status) { filter += ' AND status=?'; params.push(status) }
     if (after) { filter += ' AND (started,id)<(?,?)'; params.push(after.started, after.id) }
     const rows = all(`SELECT * FROM ot_automation_runs WHERE ${filter} ORDER BY started DESC, id DESC LIMIT ?`, ...params, limit + 1)
-    return { items: rows.slice(0, limit).map(runView), cursor: rows.length > limit ? rows[limit - 1].id : null }
+    const pending = Boolean(one("SELECT 1 FROM ot_automation_runs WHERE automation_id=? AND status='queued'", row.id))
+    return { items: rows.slice(0, limit).map(runView), cursor: rows.length > limit ? rows[limit - 1].id : null, has_pending: pending }
+  }
+
+  async function saveRun(payload) {
+    const row = load(workspaceOf(payload), payload.id)
+    const saved = runView(loadRun(row, payload.run_id))
+    if (saved.status !== 'succeeded' || typeof saved.result?.text !== 'string' || !saved.result.text.trim()) {
+      refuse(409, 'result_unavailable', '这次运行没有可保存的结果。')
+    }
+    return saveArtifact({
+      workspace_id: row.workspace_id, automation_id: row.id, automation_title: row.title,
+      run_id: saved.id, body: saved.result.text,
+    })
   }
 
   function runNow(payload) {
@@ -489,6 +505,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       return { removed: view(row) }
     },
     'automations/runs': runs,
+    'automations/saveRun': saveRun,
     'automations/runNow': runNow,
     'automations/run': (p) => ({ run: runView(loadRun(load(workspaceOf(p), p?.id), p?.run_id)) }),
     'automations/cancel': cancel,
@@ -511,7 +528,8 @@ export default async function automations(host) {
   const { openDatabase } = await import('../../src/store.js')
   const db = await openDatabase(host, 'automations.sqlite3')
   const feature = createAutomations({ db, turn: dsBotTurn(host), log: host.log,
-    personalBinding: () => host.call('agents/personal-binding', {}) })
+    personalBinding: () => host.call('agents/personal-binding', {}),
+    saveArtifact: payload => host.call('artifacts/saveAutomationRun', payload) })
   const imported = await importPending({ host, db, migrate: feature.migrate })
   // The clock starts once this user's DS-Bot is attached, so no slot fires into a
   // runtime that is still booting.

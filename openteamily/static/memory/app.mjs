@@ -418,6 +418,191 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
   }
 
+  const actionDrafts = new Map();
+  const actionDraftOpener = document.getElementById('dream-actions');
+  const actionDraftPanel = document.getElementById('action-draft-panel');
+  const actionDraftSources = document.getElementById('action-draft-sources');
+  const actionDraftItems = document.getElementById('action-draft-items');
+  const actionDraftGenerate = document.getElementById('action-draft-generate');
+  const actionDraftSave = document.getElementById('action-draft-save');
+  let actionDraftPageScope = '';
+
+  function actionDraftScope() {
+    const id = workspaceId();
+    return currentUser?.id && id ? currentUser.id + ':' + id : '';
+  }
+
+  function actionDraftState() {
+    return actionDrafts.get(actionDraftScope());
+  }
+
+  function updateActionDraftControls(state) {
+    const blocked = Boolean(state.busy || state.saveAttempt);
+    const choices = Array.from(actionDraftSources.children).map(label => label.children[0]);
+    for (const box of choices) box.disabled = blocked || (!box.checked && state.selected.size >= 5);
+    actionDraftGenerate.disabled = blocked || !choices.some(box => box.checked);
+    actionDraftSave.disabled = Boolean(state.busy) ||
+      (!state.saveAttempt && (!state.items.some(item => item.selected)
+        || state.items.some(item => item.selected && (!item.title.trim() || item.title.trim().length > 80))));
+    actionDraftSave.textContent = state.saveAttempt && !state.busy ? '重新保存所选行动' : '保存所选行动';
+  }
+
+  function renderActionDrafts() {
+    if (!actionDraftPanel) return;
+    const scope = actionDraftScope();
+    const state = actionDrafts.get(scope);
+    const pagesReady = scope && actionDraftPageScope === scope;
+    const opened = currentView === 'actions' && Boolean(state?.open);
+    actionDraftOpener.disabled = !pagesReady && !state;
+    actionDraftOpener.setAttribute('aria-expanded', String(opened));
+    actionDraftPanel.hidden = !opened;
+    actionDraftSources.replaceChildren();
+    actionDraftItems.replaceChildren();
+    if (!opened) return;
+
+    const pages = pagesReady ? pageChoices : [];
+    if (pagesReady) {
+      const available = new Set(pages.map(page => page.id));
+      for (const id of state.selected) if (!available.has(id)) state.selected.delete(id);
+    }
+    document.getElementById('action-draft-empty').hidden = !pagesReady || pages.length > 0;
+    for (const page of [...pages].sort((a, b) => (b.updated || 0) - (a.updated || 0))) {
+      const label = document.createElement('label');
+      const pick = document.createElement('input');
+      pick.type = 'checkbox';
+      pick.value = page.id;
+      pick.checked = state.selected.has(page.id);
+      pick.addEventListener('change', () => {
+        if (actionDraftState() !== state || pick.disabled) return;
+        if (pick.checked) state.selected.add(page.id);
+        else state.selected.delete(page.id);
+        updateActionDraftControls(state);
+      });
+      label.append(pick, document.createTextNode(page.title));
+      actionDraftSources.append(label);
+    }
+    const locked = Boolean(state.busy || state.saveAttempt);
+    for (const item of state.items) {
+      const row = document.createElement('li');
+      const include = document.createElement('label');
+      include.className = 'action-draft-pick';
+      const pick = document.createElement('input');
+      pick.type = 'checkbox';
+      pick.checked = item.selected;
+      pick.disabled = locked;
+      pick.addEventListener('change', () => {
+        if (actionDraftState() !== state || pick.disabled) return;
+        item.selected = pick.checked;
+        updateActionDraftControls(state);
+      });
+      include.append(pick, document.createTextNode('保存此行动'));
+      const heading = document.createElement('label');
+      const title = document.createElement('input');
+      title.type = 'text';
+      title.maxLength = 80;
+      title.value = item.title;
+      title.disabled = locked;
+      title.addEventListener('input', () => {
+        if (actionDraftState() !== state || title.disabled) return;
+        item.title = title.value;
+        updateActionDraftControls(state);
+      });
+      heading.append(document.createTextNode('标题'), title);
+      const label = document.createElement('label');
+      const source = document.createElement('select');
+      source.disabled = locked;
+      for (const page of state.sources) {
+        const option = document.createElement('option');
+        option.value = page.id;
+        option.textContent = page.title;
+        source.append(option);
+      }
+      source.value = item.memory_page_id;
+      source.addEventListener('change', () => {
+        if (actionDraftState() === state && !source.disabled) item.memory_page_id = source.value;
+      });
+      label.append(document.createTextNode('关联记忆页'), source);
+      row.append(include, heading, label);
+      actionDraftItems.append(row);
+    }
+    document.getElementById('action-draft-review').hidden = !state.items.length;
+    document.getElementById('action-draft-status').textContent = state.message;
+    updateActionDraftControls(state);
+  }
+
+  actionDraftOpener?.addEventListener('click', () => {
+    const scope = actionDraftScope();
+    if (!scope) return;
+    let state = actionDrafts.get(scope);
+    if (!state) actionDrafts.set(scope, state = {selected:new Set(), items:[], sources:[], message:''});
+    state.open = !state.open;
+    renderActionDrafts();
+  });
+  document.getElementById('action-draft-close')?.addEventListener('click', () => {
+    const state = actionDraftState();
+    if (state) state.open = false;
+    renderActionDrafts();
+    actionDraftOpener.focus?.();
+  });
+  document.getElementById('action-draft-form')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const state = actionDraftState();
+    const workspace = workspaceId();
+    if (!state?.open || actionDraftGenerate.disabled || actionDraftPageScope !== actionDraftScope()) return;
+    const sources = pageChoices.filter(page => state.selected.has(page.id)).map(({id, revision}) => ({id, revision}));
+    if (!sources.length || sources.length > 5) return;
+    const fingerprint = JSON.stringify(sources);
+    if (state.generateAttempt?.fingerprint !== fingerprint) state.generateAttempt = {fingerprint, key:randomKey()};
+    state.busy = true;
+    state.message = '正在根据所选记忆页生成行动建议…';
+    renderActionDrafts();
+    const result = await request('POST', `/v1/workspaces/${workspace}/memory/actions/draft`, {sources},
+      {'Idempotency-Key':state.generateAttempt.key}).catch(() => ({status:0, body:{}}));
+    state.busy = false;
+    if (result.status === 200 && Array.isArray(result.body.sources) && Array.isArray(result.body.suggestions)) {
+      state.generateAttempt = null;
+      state.sources = result.body.sources;
+      state.items = result.body.suggestions.map(item => ({...item, selected:true}));
+      state.message = state.items.length ? '' : '所选记忆页中没有明确的下一步行动。';
+    } else {
+      if (result.status >= 400 && result.status < 500 && result.status !== 429) state.generateAttempt = null;
+      state.message = messageFor(result.body.error, '无法生成行动建议，请重试。');
+    }
+    if (actionDraftState() === state) renderActionDrafts();
+  });
+  actionDraftSave?.addEventListener('click', async () => {
+    const state = actionDraftState();
+    const workspace = workspaceId();
+    if (!state?.open || actionDraftSave.disabled) return;
+    if (!state.saveAttempt) {
+      const chosen = state.items.filter(item => item.selected);
+      const revisions = new Map(state.sources.map(page => [page.id, page.revision]));
+      const items = chosen.map(({title, memory_page_id}) => ({
+        title:title.trim(), memory_page_id, source_revision:revisions.get(memory_page_id),
+      }));
+      state.saveAttempt = {chosen, items, key:randomKey()};
+    }
+    const attempt = state.saveAttempt;
+    state.busy = true;
+    state.message = '正在保存所选行动…';
+    renderActionDrafts();
+    const result = await request('POST', `/v1/workspaces/${workspace}/memory/actions/draft/save`, {items:attempt.items},
+      {'Idempotency-Key':attempt.key}).catch(() => ({status:0, body:{}}));
+    state.busy = false;
+    const confirmed = [200, 201].includes(result.status) && Array.isArray(result.body.items);
+    if (confirmed) {
+      state.saveAttempt = null;
+      state.items = state.items.filter(item => !attempt.chosen.includes(item));
+      state.message = `已保存 ${attempt.items.length} 条行动。`;
+    } else {
+      if (result.status >= 400 && result.status < 500) state.saveAttempt = null;
+      state.message = messageFor(result.body.error, '无法确认保存结果，请重试保存。');
+    }
+    if (actionDraftState() !== state) return;
+    renderActionDrafts();
+    if (confirmed) await loadActions();
+  });
+
   function visiblePages(items) {
     const rows = [...(items || [])];
     if (listFilter === 'updated') {
@@ -714,6 +899,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (side) side.hidden = currentView !== 'overview';
     if (actions) actions.hidden = currentView !== 'actions';
     if (profile) profile.hidden = currentView !== 'profile';
+    renderActionDrafts();
     candidates.show(currentView === 'candidates');
     if (currentView === 'profile') loadMemoryProfile();
     if (currentView === 'profile') loadPreferences();
@@ -1004,6 +1190,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (seq !== sessionRequest) return;
     if (session.status !== 200 || !session.body.user) {
       currentUser = null;
+      actionDrafts.clear();
+      actionDraftPageScope = '';
+      renderActionDrafts();
       candidates.show(false);
       loginPanel.hidden = false;
       mainPanel.hidden = true;
@@ -1011,6 +1200,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (actionEditor) actionEditor.hidden = true;
       await renderProviders();
       return;
+    }
+    if (currentUser?.id !== session.body.user.id) {
+      actionDrafts.clear();
+      actionDraftPageScope = '';
     }
     currentUser = session.body.user;
     loginPanel.hidden = true;
@@ -1082,6 +1275,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     closeDeleteConfirm({restoreFocus: false});
     const id = workspaceId();
     const seq = ++workspaceRequest;
+    actionDraftPageScope = '';
     newPageButton.disabled = true;
     currentPage = null;
     currentAction = null;
@@ -1110,6 +1304,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     pageChoices = listed.body.items || [];
+    actionDraftPageScope = actionDraftScope();
+    renderActionDrafts();
     renderDirectory();
     renderRecent(pageChoices);
     fillPageSelect(document.getElementById('new-action-page'), '');

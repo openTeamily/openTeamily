@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {registerAccount, mountRegistration} from '../openteamily/static/register/app.mjs';
+import {takeSignupSession} from '../openteamily/static/home/runtime-readiness.mjs';
 
 const synthetic = 'synthetic fixture only';
 test('registration posts JSON only to same-origin existing API', async () => {
@@ -42,7 +43,7 @@ test('successful form clears password and navigates only to fixed home destinati
   await all.submit({preventDefault() {}});
   assert.equal(destination, '/');
   assert.equal(all['register-password'].value, '');
-  assert.equal(all['register-submit'].disabled, false);
+  assert.equal(all['register-submit'].disabled, true);
 });
 test('invalid forms do not send and failure does not navigate', async () => {
   for (const valid of [false, true]) {
@@ -62,4 +63,38 @@ test('201 without actual session is not claimed as a successful login',async()=>
   const result=await registerAccount('synthetic',synthetic,async url=>url==='/v1/auth/register'?{status:201}:response);
   assert.equal(result.ok,false);assert.equal(result.created,true);assert.ok(!JSON.stringify(result).includes(synthetic));
  }
+});
+
+test('registration hands off cookie confirmation without a duplicate session read when the tab can carry the account ID', async () => {
+  const values = new Map();
+  const view = {sessionStorage: {
+    setItem: (key, value) => values.set(key, value), getItem: key => values.get(key), removeItem: key => values.delete(key),
+  }};
+  const id = 'a'.repeat(32);
+  const result = await registerAccount('SYNTHETIC', synthetic, async url => {
+    assert.equal(url, '/v1/auth/register');
+    return {status: 201, json: async () => ({user: {id, username: 'synthetic'}})};
+  }, view);
+  assert.deepEqual(result, {ok: true, pendingSession: true});
+  assert.doesNotMatch([...values.values()].join(''), /synthetic/);
+  assert.equal(takeSignupSession(view), id);
+  assert.equal(takeSignupSession(view), null);
+});
+
+test('denied tab storage or missing signup identity keeps the same-origin cookie confirmation', async () => {
+  for (const [view, user] of [
+    [{get sessionStorage() { throw new Error('storage denied'); }}, {id: 'a'.repeat(32), username: 'synthetic'}],
+    [{sessionStorage: {setItem() { assert.fail('an invalid identity must not be carried'); }}}, {username: 'synthetic'}],
+  ]) {
+    const reads = [];
+    const result = await registerAccount('synthetic', synthetic, async url => {
+      reads.push(url);
+      return url === '/v1/auth/register'
+        ? {status: 201, json: async () => ({user})}
+        : {status: 401, json: async () => ({})};
+    }, view);
+    assert.equal(result.created, true);
+    assert.equal(result.ok, false);
+    assert.deepEqual(reads, ['/v1/auth/register', '/v1/auth/session']);
+  }
 });

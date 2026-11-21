@@ -66,8 +66,8 @@
   </section>
   <section id="main-panel" hidden>
     <p id="whoami" class="visually-hidden"></p>
-    <h1 class="discover-title">发现</h1>
-      <nav class="catalog-tabs" aria-label="发现板块">
+    <h1 class="discover-title" id="discover-title" tabindex="-1">发现</h1>
+      <nav class="catalog-tabs" id="discover-tabs" aria-label="发现板块">
         <a id="catalog-tab-feed" href="/discover" aria-current="page">动态</a>
         <a id="catalog-tab-agents" href="/discover?tab=agents">智能体</a>
         <a id="catalog-tab-teams" href="/discover?tab=agents&amp;section=groups">AI 团队</a>
@@ -86,12 +86,15 @@
         </nav>
       </header>
       <div class="feed-filters" aria-label="内容分类">
+        <button type="button" id="feed-creator-filter" hidden>清除作者筛选</button>
         <button type="button" class="feed-filter-all" id="feed-kind-all" aria-current="true" title="显示全部已公开作品。">全部</button>
+        <button type="button" id="feed-sort-popular" aria-current="false">热门</button>
         <button type="button" id="feed-kind-website" aria-current="false" title="筛选已公开的网页作品">网页</button>
         <button type="button" id="feed-kind-image" aria-current="false" title="筛选已公开的图片作品">图片</button>
         <button type="button" id="feed-kind-audio" aria-current="false" title="筛选已公开的音乐作品">音乐</button>
         <button type="button" id="feed-kind-slides" aria-current="false" title="筛选已公开的幻灯片作品">幻灯片</button>
         <button type="button" id="feed-kind-video" aria-current="false" title="筛选已公开的视频作品">视频</button>
+        <button type="button" id="feed-kind-model3d" aria-current="false">3D 作品</button>
       </div>
       <section id="feed-following-empty" class="feed-following-empty" hidden>
         <h2>关注列表暂无动态</h2>
@@ -106,6 +109,30 @@
       <p id="feed-note" class="note">暂时没有公开作品。</p>
       <p id="feed-search-note" class="note" hidden></p>
     </section>
+    <section id="work-detail" class="work-detail-view" aria-labelledby="work-detail-title" hidden>
+      <header class="work-detail-toolbar">
+        <button type="button" id="work-detail-back">返回发现</button>
+        <nav class="work-detail-navigation" aria-label="浏览作品">
+          <button type="button" id="work-detail-previous" disabled>上一件</button>
+          <button type="button" id="work-detail-next" disabled>下一件</button>
+        </nav>
+      </header>
+      <article class="work-detail-paper" id="work-detail-paper" aria-busy="false">
+        <h2 id="work-detail-title" tabindex="-1">作品详情</h2>
+        <p id="work-detail-meta" class="work-detail-meta"></p>
+        <p id="work-detail-status" role="status"></p>
+        <button type="button" id="work-detail-retry" hidden>重试</button>
+        <div id="work-detail-preview" class="work-detail-content"></div>
+        <div class="work-detail-actions" id="work-detail-actions" hidden>
+          <a class="feed-detail-open" id="work-detail-open" href="/discover">打开原作品</a>
+          <button type="button" id="work-detail-share" aria-haspopup="dialog" aria-controls="work-share-dialog">分享</button>
+          <button type="button" id="work-detail-comments" aria-haspopup="dialog" aria-controls="feed-comments-dialog">评论</button>
+          <button type="button" id="work-detail-like" aria-pressed="false" hidden>点赞</button>
+          <button type="button" id="work-detail-collect" aria-pressed="false" hidden>收录</button>
+          <button type="button" id="work-detail-follow" aria-pressed="false" hidden>关注作者</button>
+        </div>
+      </article>
+    </section>
     <section id="catalog-view" hidden>
     <header class="catalog-toolbar">
       <form id="catalog-search" role="search">
@@ -114,7 +141,7 @@
         <input type="search" id="catalog-query" placeholder="搜索智能体…" maxlength="80" autocomplete="off">
         <button type="button" id="catalog-clear">清除</button>
       </form>
-      <a class="catalog-create" id="catalog-create-agent" href="/agents">+ 创建我的智能体</a>
+      <a class="catalog-create" id="catalog-create-agent" href="/agents">+ 创建智能体</a>
       <a class="catalog-create" id="catalog-create-team" href="/team" hidden>+ 创建团队</a>
     </header>
     <div id="catalog-filters" class="catalog-filters" aria-label="分类">
@@ -169,6 +196,45 @@
     </section>
   </section>
   </main>
+  <dialog class="catalog-dialog work-share-dialog" id="work-share-dialog" aria-labelledby="work-share-title">
+    <h2 id="work-share-title">分享作品</h2>
+    <label>公开链接 <input type="url" id="work-share-url" readonly></label>
+    <p id="work-share-status" role="status"></p>
+    <div class="catalog-dialog-actions">
+      <button type="button" id="work-share-close">关闭</button>
+      <button type="button" id="work-share-native" hidden>更多分享方式</button>
+      <button type="button" id="work-share-copy" autofocus>复制链接</button>
+    </div>
+  </dialog>
+  <dialog id="feed-comments-dialog" class="feed-comments-dialog" aria-labelledby="feed-comments-title">
+    <header class="feed-comments-header">
+      <div>
+        <h2 id="feed-comments-title">评论</h2>
+        <a id="feed-comments-work" href="/discover"></a>
+      </div>
+      <button type="button" id="feed-comments-close" autofocus>关闭</button>
+    </header>
+    <div class="feed-comments-scroll">
+      <p id="feed-comments-read-status" role="status"></p>
+      <p id="feed-comments-empty" hidden>还没有评论。</p>
+      <ul id="feed-comments-list" class="feed-comments-thread" aria-label="作品评论"></ul>
+      <button type="button" id="feed-comments-more" hidden>加载更多评论</button>
+    </div>
+    <p id="feed-comments-status" role="status"></p>
+    <a id="feed-comments-login" class="feed-comments-login" href="/login" hidden>登录后发表评论</a>
+    <form id="feed-comments-form" hidden>
+      <div id="feed-comments-reply-target" class="feed-comments-reply-target" hidden>
+        <span id="feed-comments-reply-name"></span>
+        <button type="button" id="feed-comments-cancel-reply">取消回复</button>
+      </div>
+      <label for="feed-comments-input" class="visually-hidden">写公开评论</label>
+      <textarea id="feed-comments-input" rows="2" maxlength="2000" placeholder="写公开评论…" required></textarea>
+      <div class="feed-comments-form-actions">
+        <button type="button" id="feed-comments-retry-post" hidden>重试上条</button>
+        <button type="submit" id="feed-comments-submit" disabled>发送</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="catalog-category-dialog" class="catalog-dialog" aria-labelledby="catalog-category-title">
     <h2 id="catalog-category-title">分类</h2>
     <label>搜索分类 <input type="search" id="catalog-category-query" maxlength="60" autocomplete="off"></label>

@@ -45,7 +45,7 @@ class SettingsPageTests(unittest.TestCase):
         page = self.raw.call('GET', '/settings')
         self.assertEqual(page['status'], 200)
         html = page['body'].decode()
-        self.assertIn('<h1>设置</h1>', html)
+        self.assertIn('<h1 data-ui-text="shell.settings">设置</h1>', html)
         self.assertIn('id="settings-index"', html)
         self.assertIn('账户与资料', html)
         self.assertIn('AI 与智能体设置', html)
@@ -308,7 +308,7 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('系统语言', language)
         self.assertIn('聊天语言', language)
         self.assertIn('自动翻译消息', language)
-        self.assertIn('跟随界面语言', language)
+        self.assertIn('根据消息语言回复', language)
         self.assertIn('class="settings-field"', language)
 
         folding = self.raw.call('GET', '/settings/message-folding')['body'].decode()

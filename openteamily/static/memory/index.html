@@ -144,8 +144,28 @@
       <section id="actions-panel" hidden>
         <header class="memory-page-head">
           <h2>下一步行动</h2>
-          <button type="button" id="dream-actions" disabled title="个人资料整理暂不可用">做梦</button>
+          <button type="button" id="dream-actions" disabled aria-controls="action-draft-panel" aria-expanded="false" title="从记忆页生成行动建议">做梦</button>
         </header>
+        <section id="action-draft-panel" class="action-draft-panel" aria-labelledby="action-draft-title" hidden>
+          <header class="memory-page-head">
+            <h3 id="action-draft-title">行动建议</h3>
+            <button type="button" id="action-draft-close">关闭</button>
+          </header>
+          <form id="action-draft-form">
+            <fieldset id="action-draft-source-field">
+              <legend>选择来源记忆页（最多 5 个）</legend>
+              <div id="action-draft-sources"></div>
+              <p id="action-draft-empty" class="note" hidden>先在此工作区创建记忆页。</p>
+            </fieldset>
+            <button type="submit" id="action-draft-generate" disabled>生成建议</button>
+          </form>
+          <div id="action-draft-review" hidden>
+            <p class="note">编辑并勾选要保存的行动。</p>
+            <ol id="action-draft-items"></ol>
+            <button type="button" id="action-draft-save" disabled>保存所选行动</button>
+          </div>
+          <p id="action-draft-status" class="note" role="status"></p>
+        </section>
         <p id="action-empty" class="note" hidden>当前没有可预期的事项。</p>
         <button type="button" id="new-action-open">新建行动</button>
         <label id="action-filter-label">筛选

@@ -129,14 +129,13 @@
           <label class="wizard-field">同事的邮箱（可选）
             <input type="email" id="invite-email" name="invite_email" maxlength="254" autocomplete="off" placeholder="teammate@example.com">
           </label>
-          <p class="wizard-hint">邮箱只用来拼一封由你本机邮件客户端发出的邀请；服务器不发送邮件，也不接收这个输入。邀请由服务端生成一次性令牌，点下面的按钮之后才出现，且只显示这一次。</p>
-          <p class="note">邀请接口 <code>POST /v1/workspaces/&lt;id&gt;/invites</code> 只接受角色、有效期、使用次数与是否需要审批，不接受邮箱；把令牌复制给同事，对方在 <a href="/members">成员页</a> 的「接受邀请」里粘贴即可。</p>
+          <p class="wizard-hint">填邮箱可在本机邮件客户端打开邀请草稿。</p>
           <section id="invite-result" hidden>
             <h3>邀请已生成</h3>
             <p id="invite-summary" class="wizard-hint"></p>
-            <p><code id="invite-token"></code></p>
+            <label class="wizard-field">邀请链接 <input id="invite-token" type="url" readonly autocomplete="off" spellcheck="false"></label>
             <div class="actions">
-              <button type="button" id="copy-invite">复制令牌</button>
+              <button type="button" id="copy-invite">复制邀请链接</button>
               <a id="invite-mailto" href="#" hidden>写邮件邀请</a>
               <a id="finish-members" href="/members">打开成员页</a>
             </div>
@@ -144,7 +143,7 @@
         </div>
         <div id="step-3" class="step" hidden>
           <h2>下一步</h2>
-          <p class="note">第 3 步（团队内的角色与批量邀请）还没有对照过 Teamily，这里不会编造版式。团队已经建好，可以去 <a href="/members">成员页</a> 管理成员和邀请，或去 <a href="/chat">聊天</a> 开始工作。</p>
+          <p class="note">团队已创建。可以前往成员页管理邀请，或打开聊天开始协作。</p>
         </div>
         <div class="actions">
           <button type="button" id="back" hidden>上一步</button>

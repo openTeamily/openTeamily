@@ -356,3 +356,13 @@ body.app-workspace #main-panel {
   width: auto;
   flex: 0 0 auto;
 }
+.invite-link { display: flex; align-items: flex-end; flex-wrap: wrap; gap: .625rem; margin-top: .75rem; }
+.invite-link label { flex: 1 1 12rem; min-width: 0; }
+.invite-link input { width: 100%; min-height: 2.75rem; }
+#invitation-preview { margin: .25rem 0; color: var(--ot-ink); }
+#accept-form[data-linked="true"] { max-width: 34rem; margin-top: 0; }
+#accept-form[data-linked="true"] #confirm-invite {
+  min-height: 2.75rem;
+  background: var(--ot-accent);
+  color: var(--ot-on-accent);
+}

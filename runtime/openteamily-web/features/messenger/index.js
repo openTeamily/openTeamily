@@ -43,7 +43,12 @@ export default function messenger(host) {
         // #358: the first message after the viewer's read cursor is the "new messages" divider.
         return { ...page, first_unread_seq: page.read_seq < page.last_seq ? page.read_seq + 1 : null }
       },
-      send: async (p) => bs().post(`${conv(p)}/messages`, { body: p?.body, voice: p?.voice, attachment: p?.attachment, workspace: p?.workspace_id, mentions: p?.mentions, agent_mentions: p?.agent_mentions, reply_to: p?.reply_to, client_key: p?.client_key }),
+      send: async (p) => {
+        const file = p?.attachment
+        const attachment = file === undefined ? undefined : {title:file?.title,mime:file?.mime,data:file?.data}
+        return bs().post(`${conv(p)}/messages`, {body:p?.body,voice:p?.voice,attachment,workspace:p?.workspace_id,
+          mentions:p?.mentions,agent_mentions:p?.agent_mentions,reply_to:p?.reply_to,client_key:p?.client_key})
+      },
       read: async (p) => bs().post(`${conv(p)}/read`, p?.seq === undefined ? {} : { seq: p.seq }),
       edit: async (p) => bs().patch(msg(p), { body: p?.body }),
       retract: async (p) => bs().del(msg(p)),
@@ -51,7 +56,7 @@ export default function messenger(host) {
       pin: async (p) => bs().post(`${msg(p)}/pin`, { on: p?.on !== false }),
       setAgent: async (p) => bs().put(`${conv(p)}/agents/${seg(p?.agent_ref, 'agent_ref')}`, { name: p?.name, auto_reply: p?.auto_reply === true }),
       removeAgent: async (p) => bs().del(`${conv(p)}/agents/${seg(p?.agent_ref, 'agent_ref')}`),
-      // Runs one agent-inbox pass now (the background loop does the same every 10 s).
+      // An explicit wake can run an inbox pass before the next background poll.
       agentsTick: async () => agentReplier().once(),
     },
   }

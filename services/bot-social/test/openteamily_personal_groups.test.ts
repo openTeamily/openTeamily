@@ -78,17 +78,40 @@ test("group mentions retry individual replies after the inbox cursor moves", asy
   assert.equal((await sender.ok("GET", "/v1/ot/agent-inbox?managed=1")).jobs.length, 0);
   const later = "/v1/ot/agent-inbox?managed=1&after=" + inbox.cursor;
   const change = (job: any) => "/v1/ot/agent-reply-jobs/" + job.job_id;
+  const progress = (job: any) => change(job) + "/progress";
+  const listProgress = room + "/reply-progress";
   const retry = room + "/messages/" + message.id + "/agent-retry";
   const answer = (job: any) => ({agent_ref: job.agent_ref, body: "Checked", reply_to: message.id,
     job_id: job.job_id, attempt: job.attempt});
+  const draftSnapshot = (attempt: number, text: string) => ({id: draft.job_id, message_id: message.id, attempt, text});
+  const view = () => sender.ok("GET", listProgress);
 
   assert.equal((await sender.call("POST", change(draft), {action: "start", attempt: 1})).status, 404);
+  assert.equal((await owner.call("POST", progress(draft), {attempt: 1, revision: 1, text: "Too early"})).status, 409);
+  assert.equal((await fetch(S.base + listProgress)).status, 401);
   await owner.ok("POST", change(draft), {action: "start", attempt: 1});
   await owner.ok("POST", change(review), {action: "start", attempt: 1});
   assert.equal((await owner.call("POST", change(draft), {action: "start", attempt: 1})).status, 409);
   assert.deepEqual((await owner.ok("GET", later)).jobs, []);
+  const activity = root + "?scope=personal&view=activity";
+  const before = await sender.ok("GET", activity);
+  assert.equal((await sender.call("POST", progress(draft), {attempt: 1, revision: 1, text: "Wrong owner"})).status, 404);
+  assert.equal((await owner.call("POST", progress(draft), {attempt: 1, revision: 1, text: "🤖".repeat(2001)})).status, 400);
+  await owner.ok("POST", progress(draft), {attempt: 1, revision: 1, text: "Starting a draft"});
+  await owner.ok("POST", progress(review), {attempt: 1, revision: 1, text: "Starting a review"});
+  assert.deepEqual((await view()).items, [
+    {id: review.job_id, message_id: message.id, attempt: 1, text: "Starting a review"},
+    draftSnapshot(1, "Starting a draft"),
+  ]);
+  assert.deepEqual(await sender.ok("GET", activity + "&since=" + before.version), {version: before.version});
+  assert.equal((await owner.call("POST", progress(draft), {attempt: 1, revision: 1, text: "Late duplicate"})).status, 409);
+  await owner.ok("POST", progress(draft), {attempt: 1, revision: 2, text: ""});
+  assert.deepEqual((await view()).items.at(-1), draftSnapshot(1, ""));
   const posted = await owner.ok("POST", room + "/agent-messages", answer(review));
+  assert.deepEqual((await view()).items, [draftSnapshot(1, "")]);
+  assert.equal((await owner.call("POST", progress(review), {attempt: 1, revision: 2, text: "Late final update"})).status, 409);
   await owner.ok("POST", change(draft), {action: "fail", attempt: 1});
+  assert.deepEqual((await view()).items, []);
   assert.equal((await owner.call("POST", retry, {job_id: draft.job_id})).status, 404);
   const senderPage = await sender.ok("GET", room + "/messages");
   const ownerPage = await owner.ok("GET", room + "/messages");
@@ -96,16 +119,22 @@ test("group mentions retry individual replies after the inbox cursor moves", asy
   assert.equal(ownerPage.messages[0].reply_jobs.find((job: any) => job.id === draft.job_id).can_retry, false);
   const retried = await sender.ok("POST", retry, {job_id: draft.job_id});
   assert.deepEqual(retried.reply_jobs.map((job: any) => job.status), ["queued", "replied"]);
+  assert.deepEqual(retried.reply_jobs.map((job: any) => job.attempt), [2, 1]);
+  assert.deepEqual((await view()).items, [draftSnapshot(2, "")]);
   assert.equal((await sender.call("POST", retry, {job_id: draft.job_id})).status, 409);
   const next = (await owner.ok("GET", later)).jobs;
   assert.deepEqual(next.map((job: any) => [job.job_id, job.attempt]), [[draft.job_id, 2]]);
   await owner.ok("POST", change(draft), {action: "start", attempt: 2});
+  assert.equal((await owner.call("POST", progress(draft), {attempt: 1, revision: 3, text: "Stale attempt"})).status, 409);
+  await owner.ok("POST", progress(draft), {attempt: 2, revision: 1, text: "New draft"});
+  assert.deepEqual((await view()).items, [draftSnapshot(2, "New draft")]);
   assert.equal((await owner.call("POST", room + "/agent-messages", answer(draft))).status, 409);
   const completed = await owner.ok("POST", room + "/agent-messages", answer(next[0]));
   assert.equal((await owner.ok("POST", room + "/agent-messages", answer(next[0]))).id, completed.id);
   const history = (await sender.ok("GET", room + "/messages")).messages;
   assert.deepEqual(history.map((row: any) => row.id), [message.id, posted.id, completed.id]);
   assert.deepEqual(history[0].reply_jobs.map((job: any) => job.status), ["replied", "replied"]);
+  assert.deepEqual((await view()).items, []);
 });
 
 test("activity snapshots are scoped and skip message content until the client needs it", async () => {

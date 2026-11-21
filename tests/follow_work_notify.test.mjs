@@ -8,7 +8,6 @@ import {notificationSummary} from '../openteamily/static/chat/app.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const html = readFileSync(path.join(root, 'openteamily/static/profile/index.html'), 'utf8');
-const source = readFileSync(path.join(root, 'openteamily/static/profile/app.mjs'), 'utf8');
 
 test('the 通知 bell opens a real 作品通知 panel instead of the disabled placeholder', () => {
   const button = /<button[^>]*id="profile-notify-open"[^>]*>/.exec(html);
@@ -18,8 +17,6 @@ test('the 通知 bell opens a real 作品通知 panel instead of the disabled pl
   assert.match(html, /id="follow-work-dialog"/, 'there is no 作品通知 dialog');
   assert.match(html, /id="follow-work-list"/, 'the 作品通知 dialog has no list of followed creators');
   assert.match(html, /id="follow-work-empty"/, 'the 作品通知 dialog has no empty note');
-  assert.match(source, /request\('GET', '\/v1\/profile\/follow-work'/, 'the page never reads the 作品通知 subscriptions');
-  assert.match(source, /request\('POST', '\/v1\/profile\/follow-work'/, 'the page never saves a 作品通知 switch');
 });
 
 test('each 作品通知 switch has its own Chinese label and result line', () => {

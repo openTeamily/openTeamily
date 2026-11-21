@@ -161,6 +161,7 @@ function fakeTeamDocument(html) {
   const body = new TeamNode('BODY');
   const doc = {
     cookie: '',
+    defaultView: {location: {origin: 'https://workspace.test'}},
     body,
     handlers: {},
     getElementById(id) { return byId.get(id) || null; },
@@ -214,7 +215,7 @@ async function mountWizard(values, options) {
 
 const posted = (requests) => requests.filter((item) => item.method !== 'GET').map((item) => `${item.method} ${item.path}`);
 
-test('the wizard ships a real invite step and an honest placeholder for step 3', () => {
+test('the wizard ships a real invitation link and a final success step', () => {
   const {el} = fakeTeamDocument(teamHtml);
   assert.ok(el('step-2'), 'the wizard must ship a #step-2 invite step');
   assert.ok(el('invite-role'), 'step 2 must offer a role for the invited member');
@@ -226,7 +227,7 @@ test('the wizard ships a real invite step and an honest placeholder for step 3',
   assert.match(teamHtml, /id="submit"[^>]*>[^<]*邀请/, 'the step 2 submit must say it also invites');
   assert.match(teamHtml, /id="invite-expiry"[\s\S]*?value="604800"/, 'the seven-day expiry must be offered');
   assert.doesNotMatch(teamHtml, /第 2 步和第 3 步还没有截图/, 'the page must stop claiming step 2 was never opened');
-  assert.match(teamHtml, /id="step-3"[\s\S]*?还没有对照/, 'step 3 must stay an honest placeholder');
+  assert.match(teamHtml, /id="step-3"[\s\S]*?团队已创建/);
 });
 
 test('step one advances to the invite step without touching the server', async () => {
@@ -256,7 +257,8 @@ test('creating the team and inviting posts once each with the chosen role and ex
   const [, invite] = requests.filter((item) => item.method === 'POST');
   assert.deepEqual(invite.body, {role: 'member', expires_in: 604800});
   assert.equal(el('invite-result').hidden, false, 'a created invite must be shown in place');
-  assert.equal(el('invite-token').textContent, TEAM_TOKEN, 'the real one-time token must be shown verbatim');
+  const link = 'https://workspace.test/login#team-invite=' + TEAM_TOKEN;
+  assert.equal(el('invite-token').value, link);
   assert.match(el('invite-summary').textContent, /成员/);
   assert.match(el('invite-summary').textContent, /2026-11-26/);
   assert.match(el('invite-summary').textContent, /1 次/);
@@ -264,8 +266,8 @@ test('creating the team and inviting posts once each with the chosen role and ex
   assert.match(el('status').textContent, /团队已创建/);
   const mail = el('invite-mailto');
   assert.equal(mail.hidden, false, 'a valid address must offer a ready-to-send message');
-  assert.match(mail.getAttribute('href'), /^mailto:bob@example\.com\?/);
-  assert.match(decodeURIComponent(mail.getAttribute('href')), new RegExp(TEAM_TOKEN), 'the message must carry the real token');
+  assert.match(mail.getAttribute('href'), /^mailto:bob%40example\.com\?/);
+  assert.ok(decodeURIComponent(mail.getAttribute('href')).includes(link));
   assert.equal(invite.body.email, undefined, 'the invite body must not invent an email field');
 });
 
@@ -279,7 +281,7 @@ test('a failed invite keeps the invite step, shows the server error and shows no
   assert.equal(el('step-2').hidden, false, 'a failed invite must not advance');
   assert.equal(el('step-3').hidden, true);
   assert.equal(el('invite-result').hidden, true, 'no invite panel without a created invite');
-  assert.equal(el('invite-token').textContent, '');
+  assert.equal(el('invite-token').value, '');
   assert.equal(el('invite-mailto').hidden, true);
 });
 

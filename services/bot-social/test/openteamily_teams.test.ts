@@ -56,7 +56,10 @@ test("team lifecycle: create, invite, accept, roles, suspend, leave", async () =
   await A.ok("PATCH", `/v1/ot/teams/${team.id}/invites/${inv.invite.id}`, { frozen: true });
   assert.equal((await C.call("POST", "/v1/ot/invites/accept", { code: inv.code })).status, 410);
   await A.ok("PATCH", `/v1/ot/teams/${team.id}/invites/${inv.invite.id}`, { frozen: false });
-  await C.ok("POST", "/v1/ot/invites/accept", { code: inv.code });
+  const direct = await C.ok("POST", "/v1/ot/invites/accept", { code: inv.code });
+  assert.equal(direct.workspace_id, team.workspace_id);
+  assert.equal(direct.role, "member");
+  assert.deepEqual(await C.ok("POST", "/v1/ot/invites/accept", { code: inv.code }), direct);
   const D = await home(S.base, "dee");
   assert.equal((await D.call("POST", "/v1/ot/invites/accept", { code: inv.code })).status, 410, "used up");
   assert.equal((await D.call("POST", "/v1/ot/invites/accept", { code: "x".repeat(32) })).status, 404);
@@ -66,9 +69,10 @@ test("approval invites and the team directory queue join requests for owners and
   const A = await home(S.base, "lead");
   const B = await home(S.base, "joiner");
   const team = await A.ok("POST", "/v1/ot/teams", { name: "Open Research Guild" });
-  const inv = await A.ok("POST", `/v1/ot/teams/${team.id}/invites`, { requires_approval: true });
+  const inv = await A.ok("POST", `/v1/ot/teams/${team.id}/invites`, { requires_approval: true, max_uses: 1 });
   const pending = await B.ok("POST", "/v1/ot/invites/accept", { code: inv.code });
   assert.equal(pending.status, "pending");
+  assert.deepEqual(await B.ok("POST", "/v1/ot/invites/accept", { code: inv.code }), pending);
   const notes = await A.ok("GET", "/v1/ot/notifications");
   assert.ok(notes.notifications.some((x: any) => x.kind === "team.join_request" && x.data.member.handle === B.handle));
   const queue = await A.ok("GET", `/v1/ot/teams/${team.id}/join-requests`);

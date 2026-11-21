@@ -8,23 +8,54 @@ import { DatabaseSync } from 'node:sqlite'
 import { dueAt, validSchedule, zonedEpoch } from '../features/automations/schedule.js'
 import { createAutomations, dsBotTurn } from '../features/automations/automations.js'
 import { TEMPLATES } from '../features/automations/templates.js'
-import { loadFeatures } from '../src/features.js'
+import { featureHost, loadFeatures, registerFeature } from '../src/features.js'
+import artifactsFeature from '../features/artifacts/index.js'
 import { attachRuntime, detachRuntime } from '../src/host.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const W = 'a'.repeat(32)
 const flush = () => new Promise((r) => setImmediate(r))
 
-function fixture(turn, at = 1_800_000_000) {
+function fixture(turn, at = 1_800_000_000, saveArtifact) {
   const clock = { now: at }
   const calls = []
   const feature = createAutomations({
     personalBinding: async () => ({workspace_id: W}),
+    saveArtifact,
     db: new DatabaseSync(join(mkdtempSync(join(tmpdir(), 'ot-auto-')), 'a.sqlite3')), clock: () => clock.now, log: () => {},
     turn: turn ?? (async (args) => { calls.push(args); return { text: 'DS-Bot did it', model: 'm', session_id: 's1', turn_id: 't1', bot_id: 'bot1', model_calls: 1 } }),
   })
   return { feature, clock, calls, e: feature.endpoints }
 }
+
+test('a successful native run saves a durable, idempotent document from its own output', async () => {
+  const table = {}
+  const host = featureHost({name: 'artifacts', identity: {instanceId: W},
+    dataDir: mkdtempSync(join(tmpdir(), 'ot-auto-artifacts-')), table})
+  const artifacts = artifactsFeature(host)
+  registerFeature(table, 'artifacts', artifacts)
+  const {e, feature} = fixture(undefined, undefined, payload => host.call('artifacts/saveAutomationRun', payload))
+  const {automation} = e['automations/create']({workspace_id: W, title: '保存工作简报', participants: ['alice'],
+    template_id: 'custom', schedule: {kind: 'now', time_zone: 'UTC'},
+    prompt: 'Summarize the day.', idempotency_key: 'create-save-run-001'})
+  const {run} = e['automations/runNow']({workspace_id: W, id: automation.id, idempotency_key: 'start-save-run-001'})
+  await feature.inflight.get(run.id)
+  const path = `/v1/workspaces/${W}/automations/${automation.id}/runs/${run.id}/artifact`
+  const save = () => e['automations/v1']({method: 'POST', path, body: {body: 'caller cannot override output'}})
+  const first = await save()
+  assert.equal(first.status, 201)
+  const {artifact} = first.body
+  assert.equal(artifact.body, 'DS-Bot did it')
+  assert.equal(artifact.source.kind, 'automation_run')
+  assert.equal(artifact.source.id, run.id)
+  assert.equal(artifact.source.automation_id, automation.id)
+  const repeat = await save()
+  assert.equal(repeat.status, 200)
+  assert.equal(repeat.body.artifact.id, artifact.id)
+  assert.equal((await e['automations/v1']({method: 'GET', path})).status, 405)
+  assert.equal((await e['automations/v1']({method: 'POST', path: path.replace(W, 'b'.repeat(32))})).status, 404)
+  await assert.rejects(() => artifacts.endpoints.saveAutomationRun({}, {internal: false}), /Save results/)
+})
 
 test('schedule slots match the server rules across time zones', () => {
   const zone = 'Asia/Shanghai'

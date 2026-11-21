@@ -72,14 +72,11 @@
         <p class="note">这里汇总你最近的对话、作品和会议；所有数字都来自本实例的真实记录，不生成推荐内容。</p>
       </div>
       <label class="home-workspace">工作区
-        <select id="home-workspace"></select>
+        <select id="home-workspace" disabled></select>
       </label>
     </header>
     <p id="home-status" role="status"></p>
-    <p id="home-onboarding" class="note home-banner" hidden>完善<strong>工作背景</strong>，让首页和自动化更贴合你。<a href="/onboarding">去设置</a></p>
-    <a id="home-notifications" class="home-banner home-notifications" href="/chat" hidden></a>
-
-    <section id="home-personal" class="home-personal" aria-labelledby="home-personal-title">
+    <section id="home-personal" class="home-personal" aria-labelledby="home-personal-title" hidden>
       <span id="home-personal-avatar" class="home-avatar" aria-hidden="true"></span>
       <div class="home-personal-copy">
         <p class="home-kicker">我的个人智能体</p>
@@ -93,6 +90,8 @@
       </div>
     </section>
 
+    <p id="home-onboarding" class="note home-banner" hidden>完善<strong>工作背景</strong>，让首页和自动化更贴合你。<a href="/onboarding">去设置</a></p>
+    <a id="home-notifications" class="home-banner home-notifications" href="/chat" hidden></a>
     <section id="home-stats" class="home-stats" aria-label="工作区概览" hidden></section>
 
     <nav id="home-actions" class="home-actions" aria-label="快捷操作">

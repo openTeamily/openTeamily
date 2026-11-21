@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { teamInviteCode, teamInviteFromHash, teamInviteUrl } from '../openteamily/static/shell/team-invite-link.mjs';
 import {
   addableRoles, canAdd, canChange, canInvite, canRemove, mount,
   readAccept, readAddMember, readInvite,
@@ -462,4 +463,15 @@ test('发消息 reports an error when the conversation cannot be opened', async 
   await settle();
   assert.equal(assigned.length, 0);
   assert.equal(status.textContent, '无法创建会话');
+});
+test('invitation links are fragment-only and belong to the current instance', () => {
+  const token = 'abc_123-next-test'.repeat(2);
+  const origin = 'https://workspace.test';
+  const link = teamInviteUrl(token, origin);
+  assert.equal(link, origin + '/login#team-invite=' + token);
+  assert.equal(teamInviteCode(link, origin), token);
+  assert.equal(teamInviteCode('  ' + token + ' ', origin), token);
+  assert.equal(teamInviteCode(link, 'https://other.test'), '');
+  assert.equal(teamInviteCode(origin + '/login?source=unsafe#team-invite=' + token, origin), '');
+  assert.equal(teamInviteFromHash('#team-invite=' + token + '&redirect=/chat'), '');
 });

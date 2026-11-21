@@ -1,3 +1,6 @@
+import { bindModel3dPreview } from '../shell/model3d-preview.mjs';
+import { artifactVersionLabel } from '../shell/thumb.mjs';
+
 export const MAX_CHAT_FILE_BYTES = 8 * 1024 * 1024;
 export const AGENT_FILE_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp,.pdf,.txt,.md,.csv,.tsv,.json,.docx,.xlsx,.pptx';
 const AGENT_FILE_EXT = new Set(['png','jpg','jpeg','gif','webp','pdf','txt','md','csv','tsv','json','docx','xlsx','pptx']);
@@ -36,10 +39,22 @@ function mediaElement(document, mime, url, title, pending) {
   return null;
 }
 
+export function chatFileDownload(document, attachment) {
+  if (!attachment.path) return null;
+  const title = attachment.title || '附件';
+  const link = document.createElement('a');
+  const separator = attachment.path.includes('?') ? '&' : '?';
+  link.href = attachment.path + (attachment.bytes === undefined ? '' : separator + 'download=1');
+  if (attachment.bytes !== undefined) link.download = title;
+  link.textContent = '下载';
+  link.setAttribute('aria-label', '下载' + title);
+  return link;
+}
+
 export function renderChatFile(document, attachment, {pending = false} = {}) {
   const card = document.createElement('article');
   card.className = 'chat-file';
-  const title = attachment.title || '附件';
+  const title = attachment.resource?.title || attachment.title || '附件';
   const media = mediaElement(document, attachment.mime, attachment.path, title, pending);
   if (media) card.append(media);
   const details = document.createElement('div');
@@ -49,21 +64,36 @@ export function renderChatFile(document, attachment, {pending = false} = {}) {
   const name = document.createElement('strong');
   name.textContent = title;
   info.append(name);
+  const version = artifactVersionLabel(attachment.resource, attachment.mime);
+  if (version) {
+    const meta = document.createElement('small');
+    meta.textContent = version;
+    info.append(meta);
+  }
   if (Number.isSafeInteger(attachment.bytes)) {
     const size = document.createElement('small');
     size.textContent = formatBytes(attachment.bytes);
     info.append(size);
   }
   details.append(info);
-  if (!pending && attachment.path) {
-    const link = document.createElement('a');
-    link.href = attachment.path + (attachment.bytes === undefined ? '' : '?download=1');
-    if (attachment.bytes !== undefined) link.download = title;
-    link.textContent = '下载';
-    link.setAttribute('aria-label', '下载' + title);
-    details.append(link);
-  }
+  const download = pending ? null : chatFileDownload(document, attachment);
+  if (download) details.append(download);
   card.append(details);
+  if (!pending && attachment.path && attachment.mime === 'model/gltf-binary') {
+    card.classList.add('chat-file-model3d');
+    card.dataset.model3dSource = attachment.path;
+    const button = document.createElement('button');
+    button.className = 'chat-file-model3d-toggle';
+    button.type = 'button';
+    const status = document.createElement('p');
+    status.className = 'model3d-preview-status';
+    status.setAttribute('role', 'status');
+    const preview = document.createElement('div');
+    preview.className = 'chat-file-model3d-preview model3d-preview-frame';
+    details.append(button);
+    card.append(status, preview);
+    bindModel3dPreview(button, preview, status).setSource(attachment.path);
+  }
   return card;
 }
 
@@ -87,6 +117,7 @@ function uploadForm(view, url, headers, body, onProgress, timeout = 180_000) {
 export function sendPrivateAttachmentMessage(view, path, message, files, headers, onProgress) {
   const form = new view.FormData();
   form.set('body', message.body || '');
+  if (message.chat_language) form.set('chat_language', message.chat_language);
   if (message.reply_language) form.set('reply_language', message.reply_language);
   for (const file of files) form.append('file',file);
   return uploadForm(view,path,headers,form,onProgress,240_000);

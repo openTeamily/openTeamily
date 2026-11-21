@@ -37,6 +37,7 @@ seal keys are never rotated by deploys.
 
 ## Public homepage conversations
 
-A visitor on `/a/<slug>` follows "开始对话" to `/messenger/#start=<slug>` on
-their own DS-Bot, which asks Bot Social to open a thread with the creator's
-agent. The creator's DS-Bot answers from its agent inbox (one native turn).
+A visitor on `/a/<slug>` can compose a message before sign-in. After sign-in,
+`/chat` on the visitor's DS-Bot asks Bot Social to open a thread with the
+published agent and restores the draft for the visitor to send. The creator's
+DS-Bot answers from its agent inbox.

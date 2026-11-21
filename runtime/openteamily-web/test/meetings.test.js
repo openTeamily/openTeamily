@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { boot, deliverBundle, key, legacyBundles, volume, WS } from './helpers.js'
 import { attachRuntime, detachRuntime } from '../src/host.js'
+import { setSharedBotSocial } from '../lib/c/bot-social.js'
 import {waveBase64} from '../../../openteamily/static/meetings/audio.mjs'
 
 const base = (id = '', ws = WS) => `/v1/workspaces/${ws}/meetings${id ? '/' + id : ''}`
@@ -57,6 +58,55 @@ test('meetings run inside this DS-Bot: create, idempotent replay, list, read, up
 
   assert.equal((await call('POST', base(meeting.id) + '/remove', {})).status, 200)
   assert.equal((await call('GET', base(meeting.id))).status, 404)
+})
+
+test('meeting shares publish only the saved summary and action items through the selected workspace', async t => {
+  const bot = await boot()
+  const call = (method, path, payload, sendKey) => bot.call('meetings',method,base(path),payload,sendKey)
+  const created = await call('POST','',body,key())
+  const meeting = created.body.meeting
+  const receiptId = 'd'.repeat(32)
+  const receipt = {id:receiptId,title:meeting.title,revision:1,started_at:meeting.started_at,
+    organizer:'组织者',summary:body.summary,action_items:[{...body.action_items[0],done:false}],shared:true}
+  const calls = []
+  let sent = false
+  setSharedBotSocial({async request(method,path,input) {
+    calls.push({method,path,input})
+    if (path.includes('/meeting-share-recipients')) return {items:[{id:'recipient-a',name:'参会人'}]}
+    if (path.endsWith('/revoke')) return {revoked:true}
+    if (method === 'POST') {
+      const replayed = sent
+      sent = true
+      return {meeting:receipt,replayed}
+    }
+    if (path.endsWith(receiptId)) return {meeting:receipt}
+    return {items:[receipt],cursor:null}
+  }})
+  t.after(() => setSharedBotSocial(undefined))
+  const path = `${meeting.id}/shares`
+  const recipients = {revision:1,conversation_id:'otc_group',recipient_ids:['recipient-a']}
+  const shareKey = key()
+  assert.equal((await call('POST',path,{...recipients,transcript:'never send this'},shareKey)).status,400)
+  assert.equal((await call('POST',path,{...recipients,revision:2},shareKey)).status,409)
+  assert.equal((await bot.call('meetings','POST',base(path,'b'.repeat(32)),recipients,shareKey)).status,404)
+  assert.equal(calls.length,0)
+  assert.deepEqual((await call('GET','share-recipients?conversation_id=otc_group')).body.items,[{id:'recipient-a',name:'参会人'}])
+  assert.equal(calls.at(-1).path,`/v1/ot/workspaces/${WS}/meeting-share-recipients?conversation_id=otc_group`)
+  assert.equal((await call('POST',path,recipients,shareKey)).status,201)
+  assert.deepEqual(calls.at(-1),{method:'POST',path:`/v1/ot/workspaces/${WS}/meeting-shares`,input:{
+    title:body.title,started_at:meeting.started_at,summary:body.summary,action_items:receipt.action_items,
+    source_id:meeting.id,client_key:shareKey,...recipients,
+  }})
+  assert.equal((await call('POST',path,recipients,shareKey)).status,200)
+  assert.equal((await call('GET',path)).body.items[0].id,receiptId)
+  assert.match(calls.at(-1).path,new RegExp('source_id='+meeting.id))
+  assert.equal((await call('GET','shared?limit=100')).body.items[0].id,receiptId)
+  assert.equal((await call('GET',`shared/${receiptId}`)).body.meeting.summary,body.summary)
+  assert.equal((await call('POST',`${meeting.id}/remove`,{})).status,200)
+  assert.equal((await call('GET','shared?sent=1')).body.items[0].id,receiptId)
+  assert.equal(calls.at(-1).path,`/v1/ot/workspaces/${WS}/meeting-shares?limit=20&sent=1`)
+  assert.deepEqual((await call('POST',`shared/${receiptId}/revoke`,{})).body,{revoked:true})
+  assert.equal((await call('GET','shared?source_id='+meeting.id)).status,400)
 })
 
 test('meeting speech prepares and uses the local provider in the signed-in runtime', async (t) => {

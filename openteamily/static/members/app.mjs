@@ -1,4 +1,5 @@
 import { conversationChatHref } from '../shell/thumb.mjs';
+import { teamInviteCode, teamInviteFromHash, teamInviteHash, teamInviteUrl } from '../shell/team-invite-link.mjs';
 
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
@@ -131,6 +132,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
   const workspaceSelect = document.getElementById('workspace');
+  const view = document.defaultView;
+  const receiveForm = document.getElementById('accept-form');
+  const receiveToken = document.getElementById('receive-invite-token');
+  const receiveField = document.getElementById('receive-invite-field');
+  const receivePreview = document.getElementById('invitation-preview');
+  const receiveButton = document.getElementById('confirm-invite');
+  let linkedInvite = teamInviteFromHash(view?.location?.hash);
+  let previewed = '';
+  let inviteRequest = 0;
+  let accepting = false;
   let currentUser = null;
   let actor = null;
   let workspaces = [];
@@ -530,13 +541,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     const addForm = document.getElementById('add-form');
     const inviteForm = document.getElementById('invite-form');
     const invitesPanel = document.getElementById('invites-panel');
+    const membersPanel = document.getElementById('members-panel');
+    const workspaceField = document.getElementById('member-workspace-field');
+    if (membersPanel) membersPanel.hidden = !id;
+    if (workspaceField) workspaceField.hidden = !id;
     if (!id) {
       actor = null;
       renderMembers([]);
-      document.getElementById('role-note').textContent = '还没有工作区。';
+      document.getElementById('role-note').textContent = '加入或创建团队后，可以在这里管理成员。';
       addForm.hidden = true;
       inviteForm.hidden = true;
       invitesPanel.hidden = true;
+      for (const panelId of ['join-requests-panel', 'directory-listing-form']) {
+        const panel = document.getElementById(panelId);
+        if (panel) panel.hidden = true;
+      }
       return;
     }
     const listed = await request('GET', `/v1/workspaces/${id}/members`);
@@ -649,9 +668,47 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     show('ok', result.body.listing.listed ? '已在团队目录中公开。' : '已从团队目录移除。');
   });
 
-  async function load() {
+  function resetInvitePreview() {
+    inviteRequest++;
+    previewed = '';
+    receivePreview.textContent = '';
+    receivePreview.hidden = true;
+    if (receiveField) receiveField.hidden = false;
+    receiveButton.textContent = '查看邀请';
+  }
+
+  async function previewInvite(token) {
+    const sequence = ++inviteRequest;
+    previewed = '';
+    receivePreview.hidden = false;
+    receivePreview.textContent = '正在查看邀请…';
+    receiveButton.disabled = true;
+    try {
+      const result = await request('POST', '/v1/invites/preview', {token}).catch(() => null);
+      if (sequence !== inviteRequest) return;
+      const invitation = result?.body?.invitation;
+      if (result?.status !== 200 || !invitation?.team_name) {
+        receivePreview.textContent = result?.status === 404 || result?.status === 410
+          ? '这条邀请已失效。' : '暂时无法读取邀请，请重试。';
+        return;
+      }
+      previewed = token;
+      receivePreview.textContent = `团队：${invitation.team_name} · ${ROLE_LABELS[invitation.role] || '成员'}`;
+      if (receiveField && receiveToken.type === 'password') receiveField.hidden = true;
+      receiveButton.textContent = invitation.requires_approval ? '提交加入申请' : '确认加入';
+    } finally {
+      if (sequence === inviteRequest) receiveButton.disabled = false;
+    }
+  }
+
+  async function load(preferred = '') {
     const session = await request('GET', '/v1/auth/session');
     if (session.status === 401) {
+      currentUser = null;
+      receiveForm.reset();
+      receiveToken.type = 'text';
+      resetInvitePreview();
+      receiveButton.disabled = false;
       loginPanel.hidden = false;
       mainPanel.hidden = true;
       show('', '');
@@ -666,13 +723,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     loginPanel.hidden = true;
     mainPanel.hidden = false;
     document.getElementById('whoami').textContent = currentUser.username;
+    if (linkedInvite) {
+      const token = linkedInvite;
+      linkedInvite = '';
+      receiveForm.dataset.linked = 'true';
+      mainPanel.querySelector('.page-toolbar')?.before(receiveForm);
+      receiveToken.type = 'password';
+      receiveToken.value = token;
+      view.history.replaceState(null, '', view.location.pathname + view.location.search);
+      void previewInvite(token);
+    }
     const space = await request('GET', '/v1/workspaces?limit=100');
     if (space.status !== 200) {
       show('error', messageFor(space.body.error, '无法读取工作区。'));
       return;
     }
-    workspaces = space.body.items || [];
-    const previous = workspaceSelect.value;
+    workspaces = (space.body.items || []).filter(workspace => workspace.kind !== 'personal');
+    const previous = preferred || workspaceSelect.value;
     workspaceSelect.textContent = '';
     for (const item of workspaces) {
       const option = document.createElement('option');
@@ -702,6 +769,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
 
   workspaceSelect.addEventListener('change', async () => {
     document.getElementById('issued-token').hidden = true;
+    document.getElementById('issued-invite-link').value = '';
     await loadWorkspace();
   });
 
@@ -742,33 +810,67 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       return;
     }
     const box = document.getElementById('issued-token');
-    box.hidden = false;
-    box.textContent = result.body.token
-      ? `邀请令牌只显示一次：${result.body.token}`
-      : '已生成邀请，但响应里没有令牌。';
-    show('ok', '已生成邀请。令牌只显示这一次。');
+    const url = teamInviteUrl(result.body.token, view?.location?.origin);
+    box.hidden = !url;
+    document.getElementById('issued-invite-link').value = url;
+    show(url ? 'ok' : 'error', url ? '已生成邀请链接，请现在复制。' : '无法显示这次生成的邀请链接。');
     await loadWorkspace();
   });
 
-  document.getElementById('accept-form').addEventListener('submit', async event => {
+  document.getElementById('copy-issued-invite')?.addEventListener('click', async () => {
+    const field = document.getElementById('issued-invite-link');
+    if (!field.value) return;
+    try {
+      await view.navigator.clipboard.writeText(field.value);
+      show('ok', '已复制邀请链接。');
+    } catch {
+      field.select();
+      show('error', '请复制选中的链接。');
+    }
+  });
+
+  receiveToken?.addEventListener('input', () => {
+    if (accepting) return;
+    resetInvitePreview();
+    receiveButton.disabled = false;
+  });
+  receiveForm.addEventListener('submit', async event => {
     event.preventDefault();
-    const values = readAccept(event.currentTarget);
-    if (!values.token) {
-      show('error', '请填写邀请令牌。');
+    if (accepting || receiveButton.disabled) return;
+    const token = teamInviteCode(readAccept(event.currentTarget).token, view?.location?.origin);
+    if (!token) {
+      receivePreview.hidden = false;
+      receivePreview.textContent = '请输入当前站点的有效邀请链接或邀请码。';
       return;
     }
-    const result = await request('POST', '/v1/invites/accept', values);
-    if (![200, 201, 202].includes(result.status)) {
-      show('error', messageFor(result.body.error, '无法接受邀请。'));
-      return;
+    if (token !== previewed) return previewInvite(token);
+    const viewer = currentUser;
+    accepting = true;
+    receiveToken.readOnly = true;
+    receiveButton.disabled = true;
+    try {
+      const result = await request('POST', '/v1/invites/accept', {token}).catch(() => null);
+      if (viewer !== currentUser) return;
+      if (![200, 201, 202].includes(result?.status)) {
+        if (result?.status === 404 || result?.status === 410) {
+          resetInvitePreview();
+          receivePreview.hidden = false;
+          receivePreview.textContent = '这条邀请已失效。';
+        } else receivePreview.textContent = '暂时无法接受邀请，请重试。';
+        return;
+      }
+      receiveForm.reset();
+      receiveToken.type = 'text';
+      resetInvitePreview();
+      receivePreview.hidden = false;
+      const pending = result.status === 202 || result.body.join_request?.status === 'pending';
+      receivePreview.textContent = pending ? '已提交加入申请，等待审批。' : '已加入工作区。';
+      if (!pending) await load(result.body.workspace?.id);
+    } finally {
+      accepting = false;
+      receiveToken.readOnly = false;
+      receiveButton.disabled = false;
     }
-    event.currentTarget.reset();
-    if (result.status === 202 || (result.body.join_request && result.body.join_request.status === 'pending')) {
-      show('ok', '已提交加入申请，等待所有者或管理员审批。');
-      return;
-    }
-    show('ok', '已加入工作区。');
-    await load();
   });
 
   document.getElementById('logout-form').addEventListener('submit', async event => {

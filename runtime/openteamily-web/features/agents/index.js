@@ -11,7 +11,7 @@ import { importPending } from '../../src/pending-import.js'
 import { createHash } from 'node:crypto'
 import { openDatabase, newId } from '../../src/store.js'
 import { agentsV1 } from './v1.js'
-import { privateFiles, fingerprintAttachments } from './files.js'
+import { PRIVATE_FILE_COUNT, privateFiles, fingerprintAttachments } from './files.js'
 import { importOfficialBundle } from './migrate.js'
 import { rank, noteBlock, personalizationBlock } from '../chat/recall.js'
 
@@ -22,6 +22,7 @@ const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/
 const ID = /^[0-9a-f]{32}$/
 const IDEM = /^[A-Za-z0-9_-]{16,64}$/
 const sha = (t) => createHash('sha256').update(String(t)).digest('hex')
+const sendId = (kind, role, conversationId, key) => sha(`${kind}-${role}:${conversationId}:${key}`).slice(0,32)
 const now = () => Math.floor(Date.now() / 1000)
 const CONTEXT_LIMIT = 20_000
 
@@ -42,6 +43,8 @@ CREATE TABLE IF NOT EXISTS agent_conversation_memory (
 CREATE TABLE IF NOT EXISTS agent_messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES agent_conversations(id) ON DELETE CASCADE,
   role TEXT NOT NULL CHECK(role IN ('user','assistant')), text TEXT NOT NULL, status TEXT NOT NULL, created INTEGER NOT NULL, meta TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS agent_messages_by_conversation ON agent_messages(conversation_id, created, id);
+CREATE INDEX IF NOT EXISTS agent_messages_with_files ON agent_messages(conversation_id, created)
+  WHERE role='user' AND json_type(meta,'$.files')='array';
 `
 
 export function fail(code, message, status) { throw Object.assign(new Error(message), { code: `agents/${code}`, status }) }
@@ -78,6 +81,7 @@ export function createAgents({ db, host }) {
     UPDATE agent_messages SET meta=json_remove(meta,'$.nativePending')
     WHERE role='user' AND json_extract(meta,'$.requestHash') IS NOT NULL;`)
   const activeTurns = new Map()
+  const liveReplies = new Map()
   db.function('ot_search_fold', { deterministic: true }, text => text.toLocaleLowerCase('en-US'))
   const native = nativeAgents({ host, db })
   const one = (sql, ...a) => db.prepare(sql).get(...a)
@@ -171,7 +175,7 @@ export function createAgents({ db, host }) {
   }
 
   // One DS-Bot turn as this agent. Shared by the external API and team runs.
-  async function turn({ agent_id: agentId, key, text, request_id: requestId, reply_language: lang, context }, attachments) {
+  async function turn({ agent_id: agentId, key, text, request_id: requestId, reply_language: lang, context }, options) {
     const agent = await native.ensure(loadAny(agentId))
     if (agent.archived) fail('archived', 'Agent is archived', 409)
     if (typeof text !== 'string' || !text.trim() || text.length > LIMITS.text) fail('invalid', 'text must be 1–20000 characters', 400)
@@ -183,7 +187,7 @@ export function createAgents({ db, host }) {
     if (typeof services.nativeTurn !== 'function') fail('runtime-unavailable', 'Native Bot turn service unavailable', 503)
     const prompt = [typeof context === 'string' ? context.slice(0, CONTEXT_LIMIT) : '', lang ? `Reply in ${lang}.\n\n${text}` : text].filter(Boolean).join('\n\n')
     const args = [mapping.native_bot_id, mapping.native_session_id, prompt, requestId || `ot-agent:${newId()}`]
-    if (attachments) args.push(attachments)
+    if (options) args.push(options)
     const reply = await services.nativeTurn(...args)
     const out = String(reply?.text ?? '').trim()
     if (!out) fail('empty-reply', 'DS-Bot turn ended without a reply', 502)
@@ -195,18 +199,53 @@ export function createAgents({ db, host }) {
     return {...row, meta:JSON.parse(row.meta)}
   }
 
-  async function sendWithAttachments(p, agent, convo, text) {
+  async function trackSend(userId, replyId, perform, onAccepted) {
+    const progress = {text: '', ...(onAccepted ? {onAccepted:new Set([onAccepted])} : {})}
+    liveReplies.set(replyId, progress)
+    const promise = perform(text => {
+      if (typeof text === 'string') progress.text = text.slice(0, LIMITS.text)
+    })
+    activeTurns.set(userId, promise)
+    try { return await promise } finally {
+      liveReplies.delete(replyId)
+      activeTurns.delete(userId)
+    }
+  }
+
+  async function sendWithAttachments(p, agent, convo, text, work) {
     const key = p.idempotency_key
     if (typeof key !== 'string' || !IDEM.test(key)) fail('invalid', 'Attachment send key required', 400)
-    const files = privateFiles(p.attachments)
-    const hash = fingerprintAttachments(text, p.reply_language, files)
-    const userId = sha('attachment-user:' + convo.id + ':' + key).slice(0,32)
-    const replyId = sha('attachment-reply:' + convo.id + ':' + key).slice(0,32)
+    let files = work ? undefined : privateFiles(p.attachments)
+    const hash = work ? sha(JSON.stringify(['saved-work',work.artifact_id,work.revision,text,p.reply_language || '']))
+      : fingerprintAttachments(text, p.reply_language, files)
+    const userId = sendId('attachment', 'user', convo.id, key)
+    const replyId = sendId('attachment', 'reply', convo.id, key)
     const result = () => ({message:messageRow(userId),reply:messageRow(replyId)})
-    const prior = one('SELECT meta FROM agent_messages WHERE id=?', userId)
-    if (prior) {
-      if (JSON.parse(prior.meta).requestHash !== hash) fail('conflict', 'Attachment send key was used for a different message', 409)
-      return activeTurns.get(userId) || result()
+    const accepted = work && typeof p.onAccepted === 'function' ? () => p.onAccepted(result()) : null
+    function replay() {
+      const prior = one('SELECT meta FROM agent_messages WHERE id=?', userId)
+      if (!prior) return null
+      const meta = JSON.parse(prior.meta)
+      if (meta.requestHash !== hash) fail('conflict', 'Attachment send key was used for a different message', 409)
+      const running = activeTurns.get(userId)
+      if (running && accepted) {
+        if (meta.files?.length) accepted()
+        else {
+          const progress = liveReplies.get(replyId)
+          progress.onAccepted ??= new Set()
+          progress.onAccepted.add(accepted)
+        }
+      }
+      return running || result()
+    }
+    const previous = replay()
+    if (previous) return previous
+    if (work) {
+      const snapshot = await host.call('artifacts/chatAttachment', {workspace_id:agent.workspace_id,...work})
+      const concurrent = replay()
+      if (concurrent) return concurrent
+      files = privateFiles([snapshot.attachment], {savedWork:true})
+      text ||= snapshot.body
     }
     const userMeta = {requestHash:hash,clientKey:key,nativePending:true}
     db.exec('BEGIN')
@@ -217,7 +256,7 @@ export function createAgents({ db, host }) {
       run('UPDATE agent_conversations SET updated=? WHERE id=?', now(), convo.id)
       db.exec('COMMIT')
     } catch (error) { db.exec('ROLLBACK'); throw error }
-    const perform = async () => {
+    return trackSend(userId, replyId, async onProgress => {
       let staged = []
       let remaining = 12_000
       const excerpts = []
@@ -235,9 +274,15 @@ export function createAgents({ db, host }) {
         const reply = await turn({agent_id:agent.id, key:convo.id, text:prompt, request_id:`ot-agent:${userId}`,
           reply_language:p.reply_language, context}, {
           files,
+          onProgress,
           onStaged(value) {
-            staged = value
+            staged = value.map((file, index) => files[index]?.resource ? {...file,resource:files[index].resource} : file)
             run('UPDATE agent_messages SET meta=? WHERE id=?', JSON.stringify({...userMeta,files:staged}), userId)
+            const listeners = liveReplies.get(replyId)?.onAccepted
+            if (staged.length && listeners) {
+              for (const listener of listeners) listener()
+              listeners.clear()
+            }
           },
         })
         run('UPDATE agent_messages SET text=?, status=?, meta=? WHERE id=?', reply.text, 'succeeded',
@@ -258,10 +303,7 @@ export function createAgents({ db, host }) {
         run('UPDATE agent_conversations SET updated=? WHERE id=?', now(), convo.id)
       }
       return result()
-    }
-    const promise = perform()
-    activeTurns.set(userId,promise)
-    try { return await promise } finally { activeTurns.delete(userId) }
+    }, accepted)
   }
 
   const endpoints = {
@@ -384,7 +426,7 @@ export function createAgents({ db, host }) {
     async conversations(p) {
       const agent = load(ws(p), p.id)
       const rows = all('SELECT * FROM agent_conversations WHERE agent_id=? ORDER BY updated DESC, id LIMIT 200', agent.id)
-      return { items: await Promise.all(rows.map(async c => ({ ...c, ...await native.session(agent, `agent:${agent.id}:${c.id}`, c.title) }))) }
+      return { items: await Promise.all(rows.map(async c => ({ ...c, ...await native.readSession(agent, `agent:${agent.id}:${c.id}`, c.title) }))) }
     },
     async conversationSummaries(p) {
       const workspaceId = ws(p)
@@ -421,9 +463,14 @@ export function createAgents({ db, host }) {
     async openConversation(p) {
       const agent = load(ws(p), p.id)
       const row = conversation(agent, p.conversation_id)
-      const {native_name, ...mapping} = await native.session(agent, `agent:${agent.id}:${row.id}`, row.title)
+      const {native_name, ...mapping} = await native.readSession(agent, `agent:${agent.id}:${row.id}`, row.title)
+      const current = load(agent.workspace_id, agent.id)
+      // An already-bound Session stays readable while a turn holds the native lock.
+      // Honour a recent roster archive without taking that lock to reconcile it.
+      const rosterBot = host.currentRuntime?.()?.rt?.botOf(mapping.native_bot_id)
       return {
-        agent: view({...load(agent.workspace_id, agent.id), native_bot_id: mapping.native_bot_id, native_name}),
+        agent: view({...current, archived: current.archived || Number(Boolean(rosterBot?.hidden)),
+          native_bot_id: mapping.native_bot_id, native_name}),
         conversation: {...row, ...mapping, ...memorySetting(memoryMode(row,await privateProfile(agent)))},
         items: conversationMessages(row.id),
       }
@@ -489,7 +536,7 @@ export function createAgents({ db, host }) {
     async messages(p) {
       const agent = load(ws(p), p.id)
       const convo = conversation(agent, p.conversation_id)
-      await native.session(agent, `agent:${agent.id}:${convo.id}`, convo.title)
+      await native.readSession(agent, `agent:${agent.id}:${convo.id}`, convo.title)
       return { items: conversationMessages(convo.id) }
     },
     async saveMessage(p) {
@@ -509,6 +556,13 @@ export function createAgents({ db, host }) {
       const agent = load(ws(p), p.id)
       const convo = conversation(agent, p.conversation_id)
       const text = typeof p.text === 'string' ? p.text.trim() : ''
+      if (p.artifact_id !== undefined) {
+        if (typeof p.artifact_id !== 'string' || !ID.test(p.artifact_id) || !Number.isSafeInteger(p.artifact_revision)
+            || p.artifact_revision < 1 || p.attachments !== undefined || text.length > LIMITS.text) {
+          fail('invalid', '请选择作品的已保存版本。', 400)
+        }
+        return sendWithAttachments(p, agent, convo, text, {artifact_id:p.artifact_id,revision:p.artifact_revision})
+      }
       if (p.attachments !== undefined) {
         if (text.length > LIMITS.text) fail('invalid', 'text must be 1–20000 characters', 400)
         return sendWithAttachments(p, agent, convo, text)
@@ -517,8 +571,8 @@ export function createAgents({ db, host }) {
       const key = p.idempotency_key
       if (key != null && (typeof key !== 'string' || !IDEM.test(key))) fail('invalid', 'Invalid message send key', 400)
       const hash = key && sha(JSON.stringify([text, p.reply_language || '']))
-      const userId = key ? sha(`text-user:${convo.id}:${key}`).slice(0,32) : newId()
-      const replyId = key ? sha(`text-reply:${convo.id}:${key}`).slice(0,32) : newId()
+      const userId = key ? sendId('text', 'user', convo.id, key) : newId()
+      const replyId = key ? sendId('text', 'reply', convo.id, key) : newId()
       const result = () => ({message:messageRow(userId),reply:messageRow(replyId)})
       const prior = key && one('SELECT meta FROM agent_messages WHERE id=?', userId)
       if (prior) {
@@ -535,10 +589,11 @@ export function createAgents({ db, host }) {
         db.exec('COMMIT')
       } catch (error) { db.exec('ROLLBACK'); throw error }
 
-      const perform = async () => {
+      return trackSend(userId, replyId, async onProgress => {
         try {
           const {context, refs, personalWorkspace, remember} = await privateContext(agent, convo, text, p.context)
-          const reply = await turn({agent_id:agent.id,key:convo.id,text,request_id:`ot-agent:${userId}`,reply_language:p.reply_language,context})
+          const reply = await turn({agent_id:agent.id,key:convo.id,text,request_id:`ot-agent:${userId}`,reply_language:p.reply_language,context},
+            {onProgress})
           run('UPDATE agent_messages SET meta=? WHERE id=?', JSON.stringify({...userMeta,session_id:reply.session_id}), userId)
           run('UPDATE agent_messages SET text=?, status=?, meta=? WHERE id=?', reply.text, 'succeeded',
             JSON.stringify({...keyed,engine:'ds-bot',session_id:reply.session_id,turn_id:reply.turn_id,memory_refs:refs,memory_profile_workspace:personalWorkspace}), replyId)
@@ -552,10 +607,19 @@ export function createAgents({ db, host }) {
           run('UPDATE agent_conversations SET updated=? WHERE id=?', now(), convo.id)
         }
         return result()
-      }
-      const promise = perform()
-      activeTurns.set(userId,promise)
-      try { return await promise } finally { activeTurns.delete(userId) }
+      })
+    },
+    async replyProgress(p) {
+      const agent = load(ws(p), p.id)
+      const convo = conversation(agent, p.conversation_id)
+      const key = p.key
+      if (typeof key !== 'string' || !IDEM.test(key)) fail('invalid', 'Invalid message send key', 400)
+      const reply = one(`SELECT id,status FROM agent_messages
+        WHERE conversation_id=? AND role='assistant' AND id IN (?,?) ORDER BY rowid DESC LIMIT 1`,
+        convo.id, sendId('text', 'reply', convo.id, key), sendId('attachment', 'reply', convo.id, key))
+      if (!reply) fail('not-found', 'Reply not found', 404)
+      if (reply.status === 'running') return {state: 'running', text: liveReplies.get(reply.id)?.text || ''}
+      return {state: reply.status}
     },
     turn,
     async publicReply(p) {
@@ -577,6 +641,39 @@ export function createAgents({ db, host }) {
       const service = await host.runtime()
       if (typeof service.readNativeAttachment !== 'function') fail('runtime-unavailable', 'Attachment store unavailable', 503)
       return {title:file.title, mime:file.mime, data:await service.readNativeAttachment(file)}
+    },
+    async listAttachments(p) {
+      const agent = load(ws(p), p.id)
+      const convo = conversation(agent, p.conversation_id)
+      const { kind, q, cursor, limit } = p
+      if (!['photo','file','resource'].includes(kind) || typeof q !== 'string' || q.length > 80 || CONTROL.test(q)
+          || !Number.isInteger(limit) || limit < 1 || limit > 50
+          || typeof cursor !== 'string' || (cursor && !/^[0-9a-f]{32}\.[0-3]$/.test(cursor))) {
+        fail('invalid', 'Invalid attachment search', 400)
+      }
+      const [messageId, slot] = cursor.split('.')
+      const anchor = cursor ? one("SELECT created,rowid AS position FROM agent_messages WHERE conversation_id=? AND id=? AND role='user'", convo.id, messageId) : null
+      if (cursor && !anchor) fail('invalid', 'Invalid attachment cursor', 400)
+      const filter = kind === 'resource' ? `json_type(f.value,'$.resource')='object'
+          AND instr(ot_search_fold(COALESCE(json_extract(f.value,'$.resource.title'),'')),ot_search_fold(?))>0`
+        : `(substr(mime,1,6)='image/')=${kind === 'photo' ? 1 : 0}
+          AND instr(ot_search_fold(title),ot_search_fold(?))>0`
+      const rows = all(`SELECT m.id AS message_id, m.created AS created_at, CAST(f.key AS INTEGER) AS slot,
+          json_extract(f.value,'$.title') AS title, json_extract(f.value,'$.mime') AS mime,
+          json_extract(f.value,'$.bytes') AS bytes, json_extract(f.value,'$.resource') AS resource_json
+        FROM agent_messages m CROSS JOIN json_each(m.meta,'$.files') f
+        WHERE m.conversation_id=? AND m.role='user' AND json_type(m.meta,'$.files')='array'
+          AND f.type='object' AND CAST(f.key AS INTEGER) BETWEEN 0 AND ?
+          AND title IS NOT NULL AND mime IS NOT NULL AND ${filter}
+          AND (? IS NULL OR (m.created,m.rowid,-CAST(f.key AS INTEGER)) < (?,?,?))
+        ORDER BY m.created DESC,m.rowid DESC,slot ASC LIMIT ?`,
+        convo.id, PRIVATE_FILE_COUNT - 1, q.trim(),
+        anchor?.created ?? null, anchor?.created ?? null, anchor?.position ?? null, -Number(slot ?? 0), limit + 1)
+      const items = rows.slice(0, limit).map(({resource_json,...row}) => ({
+        ...row, ...(resource_json ? {resource:JSON.parse(resource_json)} : {}),
+      }))
+      const last = items.at(-1)
+      return {items, next_cursor: rows.length > limit ? `${last.message_id}.${last.slot}` : null}
     },
 
     async importHistory(bundle) {
@@ -642,5 +739,9 @@ export default async function agents(host) {
   timer.unref?.()
   const wrapped = {}
   for (const [name, fn] of Object.entries(endpoints)) wrapped[name] = async (payload) => fn(payload ?? {})
+  wrapped.groupTurn = async (payload, call) => {
+    if (!call?.internal || typeof payload?.onProgress !== 'function') fail('not-found', 'Internal endpoint', 404)
+    return endpoints.turn(payload, {onProgress:payload.onProgress})
+  }
   return { pages: ['agents'], endpoints: wrapped, migrate }
 }

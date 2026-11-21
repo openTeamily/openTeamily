@@ -7,10 +7,12 @@
 import { Fault } from './http.js'
 
 const METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE'])
+const QUERY_LIMIT = 512
 const error = (status, code, message) => ({ status, body: { error: { code, message } } })
 
 export function compatHandler(routes) {
-  return async (payload) => {
+  const maxQuery = Math.max(QUERY_LIMIT, ...routes.map(route => route.queryLimit ?? QUERY_LIMIT))
+  return async (payload, call) => {
     const method = String(payload?.method ?? '').toUpperCase()
     const rawPath = payload?.path
     const embedded = typeof rawPath === 'string' ? rawPath.indexOf('?') : -1
@@ -18,7 +20,7 @@ export function compatHandler(routes) {
     const explicitQuery = typeof payload?.query === 'string' ? payload.query.replace(/^\?/, '') : ''
     if (embedded >= 0 && explicitQuery) return error(400, 'invalid', 'Ambiguous compat query')
     const query = embedded >= 0 ? rawPath.slice(embedded + 1) : explicitQuery
-    if (!METHODS.has(method) || typeof path !== 'string' || !path.startsWith('/v1/') || path.includes('#') || query.includes('#') || path.length > 256 || query.length > 512) {
+    if (!METHODS.has(method) || typeof path !== 'string' || !path.startsWith('/v1/') || path.includes('#') || query.includes('#') || path.length > 256 || query.length > maxQuery) {
       return error(400, 'invalid', 'Invalid compat request')
     }
     if (method !== 'GET' && query) return error(400, 'invalid', 'Query parameters are not accepted for writes')
@@ -27,9 +29,10 @@ export function compatHandler(routes) {
       const match = route.path.exec(path)
       if (!match || match.index !== 0 || match[0] !== path) continue
       pathMatched = true
+      if (query.length > (route.queryLimit ?? QUERY_LIMIT)) return error(400, 'invalid', 'Invalid compat request')
       if (route.method !== method) continue
       try {
-        const [status, body, download] = await route.handle({ match, query, body: payload.body, method, idempotency_key: payload.idempotency_key })
+        const [status, body, download] = await route.handle({ match, query, body: payload.body, method, idempotency_key: payload.idempotency_key }, call)
         return { status, body, ...(download ? {download} : {}) }
       } catch (caught) {
         if (caught instanceof Fault) {
@@ -40,6 +43,7 @@ export function compatHandler(routes) {
         return error(500, 'internal', 'Internal service error')
       }
     }
+    if (query.length > QUERY_LIMIT) return error(400, 'invalid', 'Invalid compat request')
     return pathMatched ? error(405, 'method', 'Method not supported') : error(404, 'not_moved', 'Route is not served by this DS-Bot')
   }
 }

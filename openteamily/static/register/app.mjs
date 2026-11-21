@@ -1,5 +1,8 @@
 // Credentials stay in form memory and the existing same-origin auth API only.
 import {publicAgentIntentFromHash, publicAgentContinuation} from '../shell/public-agent-link.mjs';
+import {publicWorkIntentFromHash} from '../shell/public-work-link.mjs';
+import {teamInviteFromHash, teamInviteHash} from '../shell/team-invite-link.mjs';
+import {rememberSignupSession, signupSessionError} from '../home/runtime-readiness.mjs';
 const MESSAGES = {
   registration_closed: '本实例尚未开放注册，请联系实例管理员。',
   conflict: '此用户名不可用，请选择其他用户名。',
@@ -8,7 +11,7 @@ const MESSAGES = {
   quota: '本实例账户数量已达上限。',
 };
 
-export async function registerAccount(username, password, fetcher = globalThis.fetch) {
+export async function registerAccount(username, password, fetcher = globalThis.fetch, view) {
   try {
     const response = await fetcher('/v1/auth/register', {
       method: 'POST', credentials: 'same-origin', mode: 'same-origin', redirect: 'error',
@@ -16,12 +19,23 @@ export async function registerAccount(username, password, fetcher = globalThis.f
       body: JSON.stringify({username, password}),
     });
     if (response.status === 201) {
+      const expectedName = username.trim().toLowerCase();
+      // Let the destination's existing session read confirm the account when the
+      // browser can pass a short-lived ID to the next same-tab document.
+      if (view) {
+        try {
+          const {user} = await response.json();
+          if (user?.username === expectedName && rememberSignupSession(view, user.id)) {
+            return {ok: true, pendingSession: true};
+          }
+        } catch {}
+      }
       try {
         const session=await fetcher('/v1/auth/session',{method:'GET',credentials:'same-origin',mode:'same-origin',redirect:'error',headers:{Accept:'application/json'}});
         const data=await session.json();
-        if(session.status===200&&data?.user?.id&&data.user.username===username.trim().toLowerCase())return {ok:true};
+        if(session.status===200&&data?.user?.id&&data.user.username===expectedName)return {ok:true};
       }catch{}
-      return {ok:false,created:true,message:'账户已创建，但登录会话尚未确认。请使用本实例 HTTPS 地址，允许同源 Cookie，然后尝试登录；不要重复注册。'};
+      return {ok:false,created:true,message:signupSessionError};
     }
     const body = await response.json().catch(() => ({}));
     // Never render arbitrary backend bodies or exceptions (which may echo input).
@@ -38,7 +52,10 @@ export function mountRegistration(document, navigate, fetcher = globalThis.fetch
   const status = document.getElementById('register-status');
   const username = document.getElementById('register-username');
   const password = document.getElementById('register-password');
-  const continuation = publicAgentContinuation(publicAgentIntentFromHash(document.defaultView?.location?.hash));
+  const hash = document.defaultView?.location?.hash;
+  const work = publicWorkIntentFromHash(hash);
+  const continuation = teamInviteHash(teamInviteFromHash(hash)) ||
+    (work?.continuation ?? publicAgentContinuation(publicAgentIntentFromHash(hash)));
   const login = document.querySelector?.('a[href="/login"]');
   if (login && continuation) login.href = '/login' + continuation;
   const helpButton=document.getElementById('help-menu-button'),helpMenu=document.getElementById('help-menu');
@@ -49,7 +66,7 @@ export function mountRegistration(document, navigate, fetcher = globalThis.fetch
     const data=await response.json();
     if(attempted)return;
     if(response.status!==200||typeof data.registration_open!=='boolean')throw new Error('policy');
-    policy.textContent=data.registration_open?'本实例已开放注册。创建的是普通账户；个人工作区在登录后初始化。':'本实例当前关闭公开注册。请联系管理员确认 --open-registration；此页面不会绕过注册策略。';
+    policy.textContent=data.registration_open?'本实例已开放注册。注册后可打开你的个人工作区。':'本实例尚未开放注册，请联系管理员。';
   }).catch(()=>{if(!attempted)policy.textContent='无法读取注册策略。请检查实例 HTTPS / 反向代理配置，或联系管理员。';});
   form.addEventListener('submit', async event => {
     event.preventDefault();
@@ -57,11 +74,11 @@ export function mountRegistration(document, navigate, fetcher = globalThis.fetch
     attempted=true;
     button.disabled = true;
     status.textContent = '正在创建账户…';
-    const result = await registerAccount(username.value, password.value, fetcher);
+    const result = await registerAccount(username.value, password.value, fetcher, document.defaultView);
     password.value = '';
-    button.disabled = false;
+    button.disabled = result.ok || result.created === true;
     if (result.ok) {
-      status.textContent = '账户和登录会话已确认，正在初始化个人工作区…';
+      status.textContent = result.pendingSession ? '账户已创建，正在打开个人工作区…' : '账户和登录会话已确认，正在初始化个人工作区…';
       navigate(continuation ? '/login' + continuation : '/');
     } else {
       status.textContent = result.message;

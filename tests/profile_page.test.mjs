@@ -31,10 +31,15 @@ class FakeElement {
     this.textContent = '';
     this.href = '';
     this.submits = 0;
+    this.children = [];
   }
   addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }
   setAttribute(name, value) { this.attributes[name] = value; }
   getAttribute(name) { return this.attributes[name]; }
+  removeAttribute(name) { delete this.attributes[name]; }
+  get childElementCount() { return this.children.length; }
+  showModal() { this.open = true; }
+  close() { this.open = false; for (const handler of this.handlers.close || []) handler(); }
   requestSubmit() { this.submits += 1; }
   replaceChildren(...nodes) { this.children = nodes; }
   append(...nodes) { (this.children ||= []).push(...nodes); }
@@ -130,6 +135,13 @@ async function mountProfile(options = {}) {
   const postCalls = () => calls.filter(([path, method]) => path === '/v1/profile' && method === 'POST').length;
   const fetcher = async (path, init) => {
     calls.push([path, init && init.method]);
+    if (path.startsWith('/v1/profile/social') || path.startsWith('/v1/profile/follow-work')) {
+      const result = await options.social?.(new URL(path, 'https://example.test'), init);
+      return {
+        status: result?.status ?? 200,
+        json: async () => result?.body ?? {items: [], following: 0, followers: 0},
+      };
+    }
     if (path === '/v1/auth/session') {
       if (options.session401) return {status: 401, json: async () => ({error: {message: 'not signed in'}})};
       return {status: 200, json: async () => ({user: {username: 'alice'}})};
@@ -148,6 +160,7 @@ async function mountProfile(options = {}) {
       }
       return {status: 200, json: async () => ({profile: {name: 'Alice', handle: 'alice', revision: 4}})};
     }
+    if (profileCalls() === 1 && options.holdInitial) await gate;
     if (profileCalls() > 1) {
       if (options.holdRepeat) await gate;
       if (options.failRepeat) return {status: 500, json: async () => ({error: {message: options.failRepeat}})};
@@ -427,4 +440,90 @@ test('剪贴板不可用时把链接显示出来让人手动复制', async () =>
         'https://teamily.ai/p/alice.smith');
     } finally { restore(); }
   } finally { env.restore(); }
+});
+
+test('编辑表单等资料加载完成才可输入，昵称更新同步显示在主页', async () => {
+  const env = installShareGlobals({pathname: '/profile/edit'});
+  try {
+    const {doc, release, restore} = await mountProfile({tag: 'edit-first-load', home: true, holdInitial: true});
+    try {
+      const form = doc.getElementById('profile-form');
+      assert.equal(form.hidden, true);
+      assert.equal(doc.getElementById('profile-edit-initial').hidden, false);
+      release();
+      await flush();
+      assert.equal(form.hidden, false);
+      assert.equal(doc.getElementById('profile-edit-initial').hidden, true);
+      assert.equal(doc.getElementById('profile-username').textContent, 'Alice');
+      assert.equal(doc.getElementById('whoami').textContent, 'alice');
+    } finally { restore(); }
+  } finally { env.restore(); }
+});
+
+test('switching profile feeds aborts the stale view and replacing a failed next page preserves earlier results', async () => {
+  const env = installShareGlobals();
+  let releaseLiked;
+  const liked = new Promise(resolve => { releaseLiked = resolve; });
+  let likedSignal;
+  let attempts = 0;
+  const work = slug => ({slug, title: slug, kind: 'work'});
+  const {doc, restore} = await mountProfile({
+    tag: 'profile-feeds',
+    home: true,
+    social(url, init) {
+      const view = url.searchParams.get('view');
+      if (view === 'liked') {
+        likedSignal = init.signal;
+        return liked;
+      }
+      if (view !== 'collected') return;
+      if (!url.searchParams.has('cursor')) return {body: {items: [work('work-first')], next_cursor: 'page2'}};
+      if (++attempts === 1) return {status: 503, body: {}};
+      return {body: {items: [work('work-second')], next_cursor: null}};
+    },
+  });
+  try {
+    const click = id => doc.getElementById(id).handlers.click[0]();
+    const list = doc.getElementById('profile-feed-list');
+    const delayed = click('tab-liked');
+    assert.equal(doc.getElementById('profile-feed-empty').textContent, '正在加载…');
+    await click('tab-saved');
+    assert.equal(likedSignal.aborted, true);
+    releaseLiked({body: {items: [work('stale-like')]}});
+    await delayed;
+    assert.equal(list.children[0].children[0].href, '/discover?work=work-first');
+    await click('profile-feed-more');
+    assert.equal(list.children.length, 1);
+    assert.equal(doc.getElementById('profile-feed-retry').hidden, false);
+    await click('profile-feed-retry');
+    assert.equal(list.children[1].children[0].href, '/discover?work=work-second');
+    assert.equal(doc.getElementById('profile-feed-more').hidden, true);
+  } finally { restore(); env.restore(); }
+});
+
+test('作品通知 reads the current followed creator and saves by Bot Social handle', async () => {
+  const env = installShareGlobals();
+  const changes = [];
+  const {doc, restore} = await mountProfile({
+    tag: 'profile-work-notices', home: true,
+    social(url, init) {
+      if (url.pathname !== '/v1/profile/follow-work') return;
+      if (init.method === 'POST') {
+        changes.push(JSON.parse(init.body));
+        return {body: {enabled: false}};
+      }
+      return {body: {items: [{handle: 'vera.home', display_name: 'Vera', enabled: true}]}};
+    },
+  });
+  try {
+    await doc.getElementById('profile-notify-open').handlers.click[0]();
+    await flush();
+    const toggle = doc.getElementById('follow-work-list').children[0].children[0].children[1];
+    assert.equal(toggle.checked, true);
+    assert.equal(toggle.getAttribute('aria-label'), 'Vera 的作品通知');
+    toggle.checked = false;
+    await toggle.handlers.change[0]();
+    assert.deepEqual(changes, [{handle: 'vera.home', enabled: false}]);
+    assert.equal(doc.getElementById('follow-work-status').textContent, '已关闭作品通知。');
+  } finally { restore(); env.restore(); }
 });

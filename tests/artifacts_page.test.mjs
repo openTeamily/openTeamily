@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import {artifactNoticeTarget, mountArtifactNotifications} from '../openteamily/static/artifacts/notifications.mjs';
 import {
   websiteTitle, websiteStub, websitePrompt, saveableSocialMessage, saveableAgentMessage,
   socialSavePath, agentSavePath, defaultSaveTitle, conversationChatHref, messengerHref,
@@ -10,6 +11,7 @@ import {
   csrfCookie, listQuery, visibleArtifacts, artifactMatchesType,
   artifactMatchesModified, viewFromSearch, queryForView, FILE_TYPE_LABELS,
   sessionFilterChoices, applyDirectoryCollapsed, artifactDeletePrompt, mount,
+  createArtifactActivity,
   meetingRows, meetingActionLabel, meetingTimeLabel, meetingsForScope,
 } from '../openteamily/static/artifacts/app.mjs';
 
@@ -22,6 +24,87 @@ test('csrfCookie reads host-bound and development cookie names only', () => {
 test('listQuery encodes search and omits empty q', () => {
   assert.equal(listQuery(''), '');
   assert.equal(listQuery('  brief '), '?q=brief');
+});
+
+function activityFixture(options = {}) {
+  const delays = new Map();
+  const reports = [];
+  const commits = [];
+  let visible = true;
+  const activity = createArtifactActivity({
+    visible: () => visible,
+    report: state => reports.push(state),
+    read: async () => ({version: 'a'.repeat(64)}),
+    apply: async (snapshot, context) => { commits.push({snapshot, ...context}); },
+    ...options,
+    setTimer(callback, delay) {
+      const key = Symbol('activity timer');
+      delays.set(key, {callback, delay});
+      return key;
+    },
+    clearTimer: key => delays.delete(key),
+  });
+  return {activity, delays, reports, commits, setVisible: value => { visible = value; }};
+}
+
+test('Space activity seeds the list version and suppresses hidden-tab requests', async () => {
+  const {activity, delays, commits, reports, setVisible} = activityFixture();
+  activity.setScope('workspace-one');
+  activity.seed('workspace-one', 'a'.repeat(64));
+  assert.deepEqual([...delays.values()].map(timer => timer.delay), [8000]);
+  await activity.check();
+  assert.equal(commits[0].changed, false);
+  setVisible(false);
+  activity.resume();
+  await activity.check();
+  assert.equal(commits.length, 1);
+  assert.equal(delays.size, 0);
+  setVisible(true);
+  await activity.check();
+  assert.equal(commits.length, 2);
+  assert.equal(reports.at(-1), 'ready');
+  activity.setScope('');
+  assert.equal(delays.size, 0);
+});
+
+test('Space activity fences late replies and retries deferred or temporarily invalid snapshots', async () => {
+  const stale = Promise.withResolvers();
+  const calls = [];
+  const commits = [];
+  const currentVersion = 'b'.repeat(64);
+  let mode = 'defer';
+  const {activity, delays, reports} = activityFixture({
+    read(workspace, signal) {
+      calls.push({workspace, signal});
+      if (workspace === 'old') return stale.promise;
+      return Promise.resolve({version: mode === 'broken' ? null : currentVersion});
+    },
+    async apply(snapshot, context) {
+      commits.push({version: snapshot.version, workspace: context.workspace, changed: context.changed});
+      return mode === 'defer' ? 'defer' : undefined;
+    },
+  });
+  activity.setScope('old');
+  const oldResult = activity.check();
+  await activity.check();
+  assert.equal(calls.length, 1, 'coalesce overlapping reads');
+  activity.setScope('new');
+  assert.equal(calls[0].signal.aborted, true);
+  activity.seed('new', 'a'.repeat(64));
+  await activity.check();
+  stale.resolve({version: 'c'.repeat(64)});
+  await oldResult;
+  assert.deepEqual(commits.map(item => item.workspace), ['new']);
+  mode = 'broken';
+  await activity.check();
+  assert.equal(reports.at(-1), 'error');
+  assert.deepEqual([...delays.values()].map(timer => timer.delay), [16000]);
+  mode = 'apply';
+  await activity.check();
+  await activity.check();
+  assert.deepEqual(commits.map(item => item.changed), [true, true, false]);
+  assert.equal(reports.at(-1), 'ready');
+  activity.setScope('');
 });
 
 test('visibleArtifacts filters by kind, saved messages and creator', () => {
@@ -50,10 +133,12 @@ test('visibleArtifacts maps recorded filters onto existing fields', () => {
     {title: 'Clip', kind: 'document', created_by: 'alice', updated: now / 1000 - 60,
       source: {kind: 'agent_message', conversation_id: 'c2'}},
   ];
-  assert.equal(FILE_TYPE_LABELS.length, 13);
+  assert.equal(FILE_TYPE_LABELS.length, 14);
   assert.equal(artifactMatchesType(items[0], '云文档'), true);
   assert.equal(artifactMatchesType(items[5], '云文档'), false);
   assert.equal(artifactMatchesType(items[2], '图片'), true);
+  assert.equal(artifactMatchesType(items[2], '3D 模型'), false);
+  assert.equal(artifactMatchesType({kind: 'media', media: {mime: 'model/gltf-binary'}}, '3D 模型'), true);
   assert.equal(artifactMatchesType(items[0], 'Markdown'), false);
   assert.equal(artifactMatchesType({kind: 'slides'}, '幻灯片'), true);
   assert.equal(artifactMatchesType({kind: 'document'}, '幻灯片'), false);
@@ -262,9 +347,115 @@ function reply({status = 200, body = {}} = {}) {
   return {status, json: async () => body};
 }
 
+const noticeWorkspace = 'a'.repeat(32);
+const noticeConversation = 'otc_' + 'B'.repeat(26);
+const noticeMessage = 'otm_' + 'C'.repeat(26);
+const sharedNotice = {
+  id: 'notice-one', kind: 'artifact.shared', title: '路线图', actor_username: 'Lin',
+  workspace_id: noticeWorkspace, conversation_id: noticeConversation, message_id: noticeMessage, read: false,
+};
+const publishedNotice = {id: 'notice-two', kind: 'discover.published', listing_kind: 'work', slug: 'design-brief', read: true};
+const noticeChat = '/chat#' + new URLSearchParams({workspace: noticeWorkspace, social: noticeConversation, message: noticeMessage});
+
+function notificationFixture(request) {
+  const {doc} = fakeDocument();
+  const element = id => doc.getElementById(id);
+  const dialog = element('artifact-notifications');
+  dialog.showModal = () => { dialog.open = true; element('artifact-notifications-close').focus(); };
+  dialog.close = () => { dialog.open = false; void dialog.dispatch('close'); };
+  const routes = [];
+  let scheduled = 0;
+  doc.defaultView = {
+    setTimeout: () => ++scheduled,
+    clearTimeout() {}, addEventListener() {},
+    location: {assign: target => routes.push(target)},
+  };
+  return {doc, element, dialog, routes, ...mountArtifactNotifications(doc, {request})};
+}
+
+test('Space notification links reject foreign paths and open verified work or chat deep links', () => {
+  assert.equal(artifactNoticeTarget(sharedNotice, noticeWorkspace), noticeChat);
+  assert.equal(artifactNoticeTarget({...sharedNotice, path: '//example.test'}, noticeWorkspace), null);
+  assert.equal(artifactNoticeTarget(sharedNotice, 'b'.repeat(32)), null);
+  assert.equal(artifactNoticeTarget(publishedNotice, noticeWorkspace), '/discover?work=design-brief');
+  assert.equal(artifactNoticeTarget({...publishedNotice, slug: '../account'}, noticeWorkspace), null);
+  assert.equal(artifactNoticeTarget({...publishedNotice, listing_kind: 'agent'}, noticeWorkspace), null);
+});
+
+test('Space bell fetches a scoped badge, retries loading, and marks only work notices read', async () => {
+  const calls = [];
+  let openReads = 0;
+  const scoped = '/v1/workspaces/' + noticeWorkspace + '/notifications';
+  const page = notificationFixture(async (method, url, body, options) => {
+    calls.push({method, url, body, options});
+    if (method === 'POST') return {status: 200, body: {unread_count: 0}};
+    if (url.endsWith('limit=1')) return {status: 200, body: {unread_count: 1}};
+    if (!openReads++) return {status: 503};
+    return {status: 200, body: {items: [sharedNotice, publishedNotice, {kind: 'messenger.mention'}], unread_count: 1}};
+  });
+  const bell = page.element('artifact-notify');
+  const badge = page.element('artifact-notify-count');
+  const retry = page.element('artifact-notifications-retry');
+  const list = page.element('artifact-notifications-list');
+  page.setWorkspace(noticeWorkspace);
+  await new Promise(setImmediate);
+  assert.deepEqual(calls.map(call => call.url), [scoped + '?kind=work&limit=1']);
+  assert.equal(badge.textContent, '1');
+  await bell.dispatch('click');
+  await new Promise(setImmediate);
+  assert.equal(retry.hidden, false);
+  await retry.dispatch('click');
+  await new Promise(setImmediate);
+  assert.equal(retry.hidden, true);
+  assert.deepEqual(list.children.map(row => row.children[0].href), [noticeChat, '/discover?work=design-brief']);
+  await page.element('artifact-notifications-read-all').dispatch('click');
+  await new Promise(setImmediate);
+  assert.deepEqual(calls.at(-1).body, {all: true, kind: 'work'});
+  assert.equal(calls.at(-1).url, scoped + '/read');
+  assert.equal(badge.hidden, true);
+  assert.equal(list.children[0].dataset.unread, 'false');
+  page.dialog.close();
+  assert.equal(page.doc.activeElement, bell);
+});
+
+test('Space ignores a delayed notice read after switching workspace and acknowledges unread links before opening', async () => {
+  const calls = [];
+  const slow = deferred();
+  const acknowledgment = deferred();
+  const laterWorkspace = 'b'.repeat(32);
+  const page = notificationFixture(async (method, url, body, options) => {
+    calls.push({method, url, body, options});
+    if (url.includes(noticeWorkspace)) return slow.promise;
+    if (method === 'POST') return acknowledgment.promise;
+    return {status: 200, body: {items: [{...publishedNotice, read: false}], unread_count: 1}};
+  });
+  page.setWorkspace(noticeWorkspace);
+  const old = calls[0];
+  page.setWorkspace(laterWorkspace);
+  slow.finish({status: 200, body: {items: [sharedNotice], unread_count: 40}});
+  await new Promise(setImmediate);
+  assert.equal(old.options.signal.aborted, true);
+  assert.equal(page.element('artifact-notify-count').textContent, '1');
+  await page.element('artifact-notify').dispatch('click');
+  await new Promise(setImmediate);
+  const link = page.element('artifact-notifications-list').children[0].children[0];
+  const opened = link.dispatch('click', {button: 0});
+  await link.dispatch('click', {button: 0});
+  assert.equal(calls.filter(call => call.method === 'POST').length, 1);
+  assert.deepEqual(page.routes, []);
+  assert.deepEqual(calls.at(-1).body, {notification_id: publishedNotice.id, kind: 'work'});
+  assert.equal(calls.at(-1).options.keepalive, true);
+  assert.ok(calls.at(-1).options.signal instanceof AbortSignal);
+  acknowledgment.finish({status: 200, body: {unread_count: 0}});
+  await opened;
+  assert.deepEqual(page.routes, ['/discover?work=design-brief']);
+});
+
 async function openArtifactsPage({items = [], artifact, meetings = [], meetingsStatus = 200, meetingsError = null,
-                                  withKinds = false, workspaces = [{id: 'w1', name: 'Desk'}], tasks = [], saveReply = null} = {}) {
+                                  withKinds = false, workspaces = [{id: 'w1', name: 'Desk'}], tasks = [], saveReply = null,
+                                  native = false, extraRequest} = {}) {
   const {doc, elements, created, form} = fakeDocument();
+  if (native) doc.querySelector = selector => selector === 'meta[name="openteamily-served-by"][content="ds-bot"]' ? {} : null;
   if (withKinds) {
     doc.kindButtons = ['all', 'website', 'document', 'media', 'messages', 'meetings'].map((kind) => {
       const node = new FakeNode('button');
@@ -280,6 +471,8 @@ async function openArtifactsPage({items = [], artifact, meetings = [], meetingsS
   const fetcher = async (path, options = {}) => {
     const method = options.method || 'GET';
     calls.push({method, path, headers: options.headers || {}, body: options.body});
+    const extra = extraRequest?.(path, options);
+    if (extra) return extra;
     if (path === '/v1/auth/session') return reply({body: {user: {id: 'u1', username: 'alice'}}});
     if (path === '/v1/auth/providers') return reply({body: {items: []}});
     if (path === '/v1/workspaces?limit=100') return reply({body: {items: workspaces}});
@@ -355,6 +548,69 @@ async function openEditorOn(page, index = 0) {
   assert.ok(row, `the list must render artifact row ${index} first`);
   await row.children[0].dispatch('click');
 }
+
+test('Space sends the saved version to the selected private or group conversation', async () => {
+  const item = {id: 'a1', title: '交付原件', kind: 'document', revision: 4, created_by: 'alice'};
+  const socialPath = '/v1/workspaces/w1/social/conversations/shared-id/messages';
+  const privatePath = '/v1/workspaces/w1/agents/assistant/conversations/shared-id/messages';
+  const sends = [];
+  let staged;
+  const page = await openArtifactsPage({items: [item], native: true, extraRequest(path, options) {
+    if (path === '/v1/workspaces/w1/social/conversations?limit=100') return reply({body: {items: [
+      {id: 'shared-id', kind: 'group', title: '交付群', updated: 1},
+      {id: 'public', title: '公开会话', public_agent: true},
+      {id: 'closed', title: '已关闭单聊', direct: {open: false}},
+    ]}});
+    if (path === '/v1/workspaces/w1/agents?limit=100&include=conversations') return reply({body: {
+      items: [{id: 'assistant', name: '资料助手'}, {id: 'archived', name: '旧助手', archived: true}],
+      conversations: [{id: 'shared-id', agent_id: 'assistant', title: '项目讨论', updated: 2},
+        {id: 'old', agent_id: 'archived', title: '归档对话'}],
+    }});
+    if (path === privatePath || path === socialPath) {
+      sends.push({path, body: JSON.parse(options.body), key: options.headers['Idempotency-Key']});
+      if (sends.length === 1) return reply({status: 503});
+      if (path === privatePath) return new Promise(resolve => { staged = resolve; });
+      return reply({status: 201});
+    }
+  }});
+  try {
+    const menuItem = page.created.find(node => node.className === 'artifact-menu-send');
+    const dialog = page.elements.get('send-to-chat-dialog');
+    const list = page.elements.get('send-to-chat-list');
+    const confirm = page.elements.get('send-to-chat-confirm');
+    list.querySelectorAll = () => list.children.map(row => row.children[0]);
+    const open = async () => {
+      await menuItem.dispatch('click');
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(dialog.hidden, false);
+      return list.querySelectorAll('button');
+    };
+    const [privateChoice, groupChoice] = await open();
+    assert.deepEqual(list.querySelectorAll('button').map(button => button.textContent),
+      ['智能体 · 资料助手 · 项目讨论', '交付群']);
+    item.revision = 5;
+    await privateChoice.dispatch('click');
+    assert.match(page.elements.get('send-to-chat-lead').textContent, /智能体会读取这份附件/);
+    await confirm.dispatch('click');
+    assert.equal(dialog.hidden, false);
+    assert.match(page.elements.get('send-to-chat-error').textContent, /发送失败/);
+    const pending = confirm.dispatch('click');
+    assert.equal(confirm.disabled, true);
+    staged(reply({status: 202, body: {message: {id: 'staged'}}}));
+    await pending;
+    assert.equal(dialog.hidden, true, 'a durably staged private send closes without waiting for a model reply');
+    assert.deepEqual(sends[1], sends[0], 'retry retains the private destination and write identity');
+    assert.deepEqual(sends[0].body, {artifact_id: item.id, artifact_revision: 4});
+
+    const choices = await open();
+    await choices.find(button => button.textContent === groupChoice.textContent).dispatch('click');
+    await confirm.dispatch('click');
+    assert.equal(dialog.hidden, true);
+    assert.equal(sends[2].path, socialPath);
+    assert.equal(sends[2].body.artifact_revision, 5);
+    assert.notEqual(sends[2].key, sends[1].key);
+  } finally { page.close(); }
+});
 
 test('artifactDeletePrompt names the artifact and never echoes an empty title', () => {
   assert.deepEqual(artifactDeletePrompt({title: 'Doc'}), {
@@ -668,6 +924,35 @@ test('meetingsForScope keeps the workspace list unless the joined scope is selec
   const local = [{id: 'm4', title: '独立容器的会议', attendees: [], created_by: 'owner'}];
   assert.deepEqual(meetingsForScope(local, {scope: 'joined', userId: 'u1'}).map(row => row.id), ['m4']);
   assert.deepEqual(meetingsForScope(local, {scope: 'joined'}), []);
+  const receipt = {id: 'received', title: '收到的纪要', organizer: '组织者', shared: true};
+  assert.deepEqual(meetingsForScope([local[0], receipt], {scope: 'joined'}), [receipt]);
+});
+
+test('the Space meetings list keeps local notes and pages received read-only copies separately', async () => {
+  const sent = query => ({id: query, title: '收到的 ' + query, shared: true, organizer: '会议主持人',
+    started_at: 1710000000, action_count: 1, done_count: 1});
+  const page = await openArtifactsPage({withKinds: true, native: true,
+    meetings: [{id: 'local', title: '本人纪要', started_at: 1700000000}],
+    extraRequest(path) {
+      if (path.endsWith('/meetings/shared?limit=100')) return reply({body: {items: [sent('first')], cursor: 'second-page'}});
+      if (path.endsWith('/meetings/shared?limit=100&cursor=second-page')) return reply({body: {items: [sent('second')], cursor: null}});
+    },
+  });
+  try {
+    await page.openKind('meetings');
+    const list = page.elements.get('artifact-list');
+    const more = page.elements.get('more-shared-meetings');
+    assert.deepEqual(list.children.map(row => row.children[0].href), [
+      '/meetings#workspace=w1&shared=first', '/meetings#workspace=w1&meeting=local',
+    ]);
+    assert.equal(list.children[0].dataset.meetingShared, 'true');
+    assert.match(list.children[0].textContent, /收到的 first共享纪要.*会议主持人/);
+    assert.equal(more.hidden, false);
+    await more.dispatch('click');
+    assert.equal(list.children.length, 3);
+    assert.equal(more.hidden, true);
+    assert.equal(page.meetingCalls().length, 1, 'receipt pagination does not reload the owner notes');
+  } finally { page.close(); }
 });
 
 test('the meetings kind renders the workspace meetings from the existing endpoint', async () => {
@@ -858,8 +1143,227 @@ test('saved result deep links require an exact authorized workspace and artifact
   const {artifactTargetFromSearch}=await import('../openteamily/static/artifacts/app.mjs');
   const wid='a'.repeat(32),aid='b'.repeat(32);
   assert.deepEqual(artifactTargetFromSearch('?workspace='+wid+'&artifact='+aid),{workspace:wid,artifact:aid});
+  assert.deepEqual(artifactTargetFromSearch('?workspace='+wid),{workspace:wid});
   assert.equal(artifactTargetFromSearch('?new=document'),null);
-  for(const query of ['?artifact='+aid,'?workspace='+wid,'?workspace=../private&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&new=document','?workspace='+wid+'&artifact='+aid+'&x=1'])assert.deepEqual(artifactTargetFromSearch(query),{invalid:true});
+  for(const query of ['?artifact='+aid,'?workspace='+wid+'&artifact=','?workspace='+wid+'&workspace='+wid,'?workspace=../private&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&new=document','?workspace='+wid+'&artifact='+aid+'&x=1'])assert.deepEqual(artifactTargetFromSearch(query),{invalid:true});
+});
+
+const linkedWorkspace = 'a'.repeat(32);
+const linkedArtifact = 'b'.repeat(32);
+const linkedCatalog = `/v1/workspaces/${linkedWorkspace}/artifacts`;
+const linkedDetail = linkedCatalog + '/' + linkedArtifact;
+const linkedSearch = `?workspace=${linkedWorkspace}&artifact=${linkedArtifact}`;
+const linkedRecord = {id: linkedArtifact, workspace_id: linkedWorkspace, title: '资料直链', body: '原始内容',
+  kind: 'document', revision: 1, created_by: 'alice'};
+const nextTask = () => new Promise(resolve => setImmediate(resolve));
+
+function deferred() {
+  let finish;
+  return {promise: new Promise(resolve => { finish = resolve; }), finish: value => finish(value)};
+}
+
+function linkFixture(respond, search = linkedSearch) {
+  const page = fakeDocument();
+  page.form.hidden = true;
+  const view = new FakeNode();
+  view.location = {search, hash: '', pathname: '/space'};
+  view.history = {
+    replaceState(_state, _title, relative) {
+      const url = new URL(relative, 'https://example.test');
+      view.location = {search: url.search, hash: url.hash, pathname: url.pathname};
+    },
+  };
+  page.doc.defaultView = view;
+  const calls = [];
+  const fetcher = async (path, options) => {
+    calls.push({path, method: options.method, signal: options.signal, body: options.body});
+    const result = respond(path, options);
+    if (result) return result;
+    if (path === '/v1/auth/session') return reply({body: {user: {id: 'u1', username: 'alice'}}});
+    if (path === '/v1/workspaces?limit=100') {
+      return reply({body: {items: [{id: linkedWorkspace, name: '本工作区'}, {id: 'w2', name: '其他工作区'}]}});
+    }
+    if (path === '/v1/workspaces?scope=personal') return reply({body: {items: []}});
+    if (path === linkedDetail) return reply({body: {artifact: linkedRecord}});
+    throw new Error(path);
+  };
+  return {...page, view, calls, mounted: mount(page.doc, {fetcher})};
+}
+
+test('an authorized direct link opens editable content with the catalog and optional panels held', async () => {
+  const session = deferred();
+  const choices = deferred();
+  const directory = deferred();
+  const versions = deferred();
+  const page = linkFixture(path => ({
+    '/v1/auth/session': session.promise,
+    '/v1/workspaces?limit=100': choices.promise,
+    [linkedCatalog]: directory.promise,
+    [linkedDetail + '/versions']: versions.promise,
+  })[path]);
+  assert.deepEqual(page.calls.map(call => call.path), ['/v1/auth/session']);
+  session.finish(reply({body: {user: {id: 'u1', username: 'alice'}}}));
+  await nextTask();
+  assert.equal(page.calls.some(call => call.path.startsWith(linkedCatalog)), false);
+  choices.finish(reply({body: {items: [{id: linkedWorkspace, name: '本工作区'}]}}));
+  await page.mounted;
+  assert.deepEqual(page.calls.filter(call => call.path.startsWith(linkedCatalog)).map(call => call.path),
+    [linkedDetail, linkedCatalog]);
+  assert.equal(page.elements.get('list-panel').hidden, true);
+  assert.equal(page.form.hidden, false);
+  assert.equal(page.form.elements.body.value, linkedRecord.body);
+  const version = page.elements.get('version-panel');
+  assert.equal(version.open, false);
+  version.open = true;
+  await version.dispatch('toggle');
+  assert.equal(page.calls.at(-1).path, linkedDetail + '/versions');
+  page.form.elements.body.value = '持续写入的草稿';
+  versions.finish(reply({body: {items: [{revision: 1, title: '资料直链'}]}}));
+  await nextTask();
+  assert.equal(page.form.elements.body.value, '持续写入的草稿');
+  assert.equal(page.elements.get('version-list').children[0].children[1].href,
+    linkedDetail + '/versions/1/export');
+  await page.elements.get('cancel-editor').dispatch('click');
+  assert.equal(page.view.location.search, '');
+  assert.equal(page.elements.get('list-panel').hidden, false);
+  assert.equal(page.calls.filter(call => call.path === linkedCatalog).length, 1);
+  directory.finish(reply({body: {items: [linkedRecord]}}));
+  await nextTask();
+  assert.equal(artifactRows(page.elements.get('artifact-list')).length, 1);
+});
+
+test('an unauthorized direct link reports its error while the authorized catalog is pending', async () => {
+  const directory = deferred();
+  const page = linkFixture(path => {
+    if (path === '/v1/workspaces?limit=100') return reply({body: {items: [{id: 'w2', name: '其他工作区'}]}});
+    if (path === '/v1/workspaces/w2/artifacts') return directory.promise;
+  });
+  await page.mounted;
+  assert.equal(page.calls.filter(call => call.path.includes(linkedArtifact)).length, 0);
+  assert.equal(page.form.hidden, true);
+  assert.equal(page.elements.get('status').textContent, '文档链接无效，或你没有访问该工作区的权限。');
+  directory.finish(reply({status: 503}));
+  await nextTask();
+  assert.equal(page.elements.get('retry-artifact-list').hidden, false);
+  assert.equal(page.elements.get('status').textContent, '文档链接无效，或你没有访问该工作区的权限。');
+});
+
+test('late direct detail and catalog replies cannot restore the previous workspace after a switch', async () => {
+  const earlierDetail = deferred();
+  const earlierCatalog = deferred();
+  const page = linkFixture(path => {
+    if (path === linkedDetail) return earlierDetail.promise;
+    if (path === linkedCatalog) return earlierCatalog.promise;
+    if (path === '/v1/workspaces/w2/artifacts') {
+      return reply({body: {items: [{id: 'new', title: '第二个工作区', kind: 'document'}]}});
+    }
+  });
+  await nextTask();
+  const firstDetail = page.calls.find(call => call.path === linkedDetail);
+  const picker = page.elements.get('workspace');
+  picker.value = 'w2';
+  await picker.dispatch('change');
+  await nextTask();
+  assert.equal(firstDetail.signal.aborted, true);
+  earlierDetail.finish(reply({status: 404}));
+  earlierCatalog.finish(reply({status: 503}));
+  await page.mounted;
+  assert.equal(page.calls.some(call => call.path === '/v1/workspaces/w2/artifacts/' + linkedArtifact), false);
+  assert.equal(page.elements.get('status').textContent, '');
+  assert.equal(page.elements.get('artifact-list-status').hidden, true);
+  assert.equal(page.form.hidden, true);
+  assert.equal(artifactRows(page.elements.get('artifact-list'))[0].children[0].textContent, '第二个工作区');
+});
+
+test('an older save cannot replace a new draft after returning from the direct editor', async () => {
+  const save = deferred();
+  const page = linkFixture((path, {method}) => {
+    if (path === linkedDetail && method === 'POST') return save.promise;
+    if (path === linkedCatalog) return reply({body: {items: [linkedRecord]}});
+  });
+  await page.mounted;
+  page.form.elements.body.value = '首次修改';
+  const saving = page.form.dispatch('submit');
+  assert.equal(page.elements.get('mobile-editor-save').disabled, true);
+  assert.equal(page.elements.get('mobile-editor-save').textContent, '保存中…');
+  assert.deepEqual(JSON.parse(page.calls.at(-1).body), {revision: 1, changes: {title: '资料直链', body: '首次修改'}});
+  await page.elements.get('cancel-editor').dispatch('click');
+  await page.elements.get('new-artifact').dispatch('click');
+  page.form.elements.title.value = '另一份新文档';
+  page.form.elements.body.value = '另一份草稿';
+  save.finish(reply({body: {artifact: {...linkedRecord, revision: 2, body: '首次修改'}}}));
+  await saving;
+  assert.equal(page.form.elements.title.value, '另一份新文档');
+  assert.equal(page.form.elements.body.value, '另一份草稿');
+  assert.equal(page.elements.get('save-artifact').disabled, false);
+  assert.equal(page.elements.get('mobile-editor-save').disabled, false);
+  assert.equal(page.elements.get('mobile-editor-save').textContent, '保存');
+});
+
+test('the compact editor opens existing panels and keeps an unsaved draft when dismissing actions', async () => {
+  const page = await openArtifactsPage({items: [{id: 'a1', title: 'Doc', kind: 'document'}]});
+  try {
+    await artifactRows(page.elements.get('artifact-list'))[0].children[0].dispatch('click');
+    const el = id => page.elements.get(id);
+    const menu = el('mobile-editor-menu');
+    assert.equal(menu.hidden, false);
+    assert.equal(el('mobile-editor-delete').hidden, false);
+    assert.equal(el('mobile-editor-markdown').hidden, false);
+    assert.equal(el('version-panel').open, false);
+    assert.equal(page.calls.some(call => call.path.endsWith('/versions')), false);
+    menu.open = true;
+    await el('mobile-editor-version').dispatch('click');
+    assert.equal(menu.open, false);
+    assert.equal(el('version-panel').open, true);
+    await el('version-panel').dispatch('toggle');
+    assert.equal(page.calls.at(-1).path, '/v1/workspaces/w1/artifacts/a1/versions');
+
+    page.form.elements.body.value = '未保存的正文';
+    menu.open = true;
+    const deleting = el('mobile-editor-delete').dispatch('click');
+    const [confirmation] = page.alertdialog();
+    assert.ok(confirmation);
+    await page.doc.dispatch('keydown', {key: 'Escape'});
+    await deleting;
+    assert.equal(page.removeCalls().length, 0);
+    assert.equal(page.form.elements.body.value, '未保存的正文');
+    assert.equal(page.doc.activeElement, el('mobile-editor-delete'));
+
+    await menu.dispatch('keydown', {key: 'Escape'});
+    assert.equal(menu.open, false);
+    assert.equal(page.doc.activeElement, el('mobile-editor-more'));
+    await el('cancel-editor-load').dispatch('click');
+    assert.equal(el('list-panel').hidden, false);
+    assert.equal(page.doc.activeElement, el('new-menu-button'));
+    await el('new-artifact').dispatch('click');
+    assert.equal(el('mobile-editor-delete').hidden, true);
+    assert.equal(el('mobile-editor-version').hidden, true);
+  } finally {
+    page.close();
+  }
+});
+
+test('wrapping editor titles stay on one stored line and respect IME Enter', async () => {
+  const page = await openArtifactsPage();
+  try {
+    await page.elements.get('new-artifact').dispatch('click');
+    const title = page.form.elements.title;
+    title.value = '开头\n\n下半段';
+    await title.dispatch('input');
+    assert.equal(title.value, '开头 下半段');
+    let prevented = false;
+    let submissions = 0;
+    page.form.requestSubmit = () => { submissions++; };
+    const preventDefault = () => { prevented = true; };
+    await title.dispatch('keydown', {key: 'Enter', isComposing: true, preventDefault});
+    assert.equal(prevented, false);
+    assert.equal(submissions, 0);
+    await title.dispatch('keydown', {key: 'Enter', isComposing: false, preventDefault});
+    assert.equal(prevented, true);
+    assert.equal(submissions, 1);
+  } finally {
+    page.close();
+  }
 });
 
 test('website helpers keep titles and escaped stubs bounded and honest', () => {

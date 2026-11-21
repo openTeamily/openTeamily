@@ -11,7 +11,7 @@
   <script type="module" src="/shell/dsbot-api.mjs"></script>
   <script type="module" src="/artifacts/app.mjs"></script>
 </head>
-<body class="app-workspace">
+<body class="app-workspace app-primary">
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
     <a class="brand-mark" href="/" title="OpenTeamily 首页" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
@@ -66,6 +66,21 @@
   </section>
   <section id="main-panel" hidden>
     <header class="artifacts-top">
+      <button type="button" id="cancel-editor-load">← 返回列表</button>
+      <div class="mobile-editor-actions">
+        <details id="mobile-editor-menu" hidden>
+          <summary id="mobile-editor-more">更多</summary>
+          <div class="mobile-editor-popover">
+            <button type="button" id="mobile-editor-markdown" aria-controls="document-source" hidden>切换 Markdown</button>
+            <button type="button" id="mobile-editor-version" aria-controls="version-panel" hidden>版本与导出</button>
+            <button type="button" id="mobile-editor-share" aria-controls="share-panel" hidden>只读分享</button>
+            <button type="button" id="mobile-editor-discover" aria-controls="discover-panel" hidden>公开到发现页</button>
+            <button type="button" id="mobile-editor-reconnect">检查更新</button>
+            <button type="button" id="mobile-editor-delete" class="danger" hidden>删除作品</button>
+          </div>
+        </details>
+        <button type="submit" form="editor-form" id="mobile-editor-save">保存</button>
+      </div>
       <button type="button" id="dir-expand" class="dir-expand" hidden aria-label="展开侧边栏" title="展开侧边栏（收起后的版式未经对照核实）">展开侧边栏</button>
       <h1 class="visually-hidden" id="space-title">作品库</h1>
       <nav class="artifact-scopes" id="artifact-scopes" aria-label="作品范围">
@@ -83,10 +98,16 @@
           <button type="button" data-meeting-scope="all" aria-current="page">全部</button>
         </div>
       </div>
-      <label class="workspace-picker">工作区
-        <select id="workspace"></select>
-      <span id="workspace-events-status" class="note" role="status" aria-live="polite">实时更新未连接</span><button type="button" id="workspace-events-retry">重连更新</button>
-      </label>
+      <div class="workspace-picker">
+        <div class="workspace-selection">
+          <label for="workspace">工作区</label>
+          <select id="workspace"></select>
+        </div>
+        <div class="workspace-recovery">
+          <span id="workspace-events-status" class="note" role="status"></span>
+          <button type="button" id="workspace-events-retry">检查更新</button>
+        </div>
+      </div>
       <div class="filter-wrap">
         <button type="button" id="filter-button" aria-expanded="false" aria-haspopup="dialog" aria-controls="filter-panel">筛选</button>
         <div id="filter-panel" role="dialog" aria-label="筛选" hidden>
@@ -105,6 +126,7 @@
               <label><input type="checkbox" name="file-type" value="图片"> 图片</label>
               <label><input type="checkbox" name="file-type" value="视频"> 视频</label>
               <label><input type="checkbox" name="file-type" value="音频"> 音频</label>
+              <label><input type="checkbox" name="file-type" value="3D 模型"> 3D 模型</label>
               <label><input type="checkbox" name="file-type" value="白板"> 白板</label>
               <label><input type="checkbox" name="file-type" value="消息"> 消息</label>
             </div>
@@ -147,12 +169,12 @@
           <span class="visually-hidden">列表视图</span>
         </button>
       </div>
-      <button type="button" id="artifact-notify" disabled title="未实现：还没有作品通知接口" aria-label="通知">
+      <button type="button" id="artifact-notify" disabled title="作品通知" aria-label="作品通知" aria-haspopup="dialog" aria-controls="artifact-notifications">
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3.5A5.3 5.3 0 0 1 17.3 8.8v3.1l1.5 2.7H5.2l1.5-2.7V8.8A5.3 5.3 0 0 1 12 3.5zm-2.6 14.2h5.2a2.6 2.6 0 0 1-5.2 0z"/></svg>
-        <span class="visually-hidden">通知</span>
+        <span id="artifact-notify-count" aria-hidden="true" hidden></span>
       </button>
     </header>
-    <p id="layout-note" class="note" hidden>封面由作品自身内容生成：文档首行、网页标题、白板笔画、幻灯片首页、看板组件和图片原图；音视频只显示类型。所有作品类型都可以将已保存的修订通过菜单发送到群或单聊；接收成员可以下载该版本。</p>
+    <p id="layout-note" class="note" hidden>封面由作品自身内容生成：文档首行、网页标题、白板笔画、幻灯片首页、看板组件和图片原图；音视频只显示类型。作品菜单可将已保存的版本发送到群聊、单聊或智能体会话。</p>
     <p id="whoami" class="visually-hidden"></p>
     <section id="list-panel" class="artifacts-workspace">
       <aside class="artifact-dir" id="artifact-dir">
@@ -192,7 +214,12 @@
         </nav>
       </aside>
       <section class="artifact-main">
+        <div id="artifact-list-status" hidden>
+          <span id="artifact-list-note" class="note" role="status"></span>
+          <button type="button" id="retry-artifact-list" hidden>重试</button>
+        </div>
         <ul id="artifact-list"></ul>
+        <button type="button" id="more-shared-meetings" class="secondary" hidden>加载更多共享纪要</button>
         <div id="list-empty" hidden>
           <div id="empty-all">
             <div class="empty-hero" aria-hidden="true"><span class="empty-cta-icon" data-tone="stack" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 8.5 12 5l8 3.5-8 3.5L4 8.5zm0 4.2 8 3.5 8-3.5v1.8L12 18 4 14.5v-1.8z"/></svg></span></div>
@@ -261,9 +288,16 @@
         </div>
       </section>
     </section>
+    <div id="editor-loading" hidden>
+      <p role="status">正在打开作品…</p>
+    </div>
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>
-      <label>标题 <input type="text" name="title" maxlength="80" required autocomplete="off"></label>
+      <label for="editor-title">标题 <textarea id="editor-title" name="title" rows="1" maxlength="80" required autocomplete="off" enterkeyhint="done" placeholder="输入标题"></textarea></label>
       <p id="editor-meta" class="note"></p>
+      <div id="artifact-live-update" hidden>
+        <p id="artifact-live-message" role="status"></p>
+        <button type="button" id="artifact-live-load">读取服务器版本</button>
+      </div>
       <section id="document-editor" hidden aria-label="文档编辑器">
         <div class="document-toolbar" role="toolbar" aria-label="文档格式">
           <button type="button" data-doc-format="undo" aria-label="撤销">↶</button>
@@ -286,15 +320,23 @@
         <textarea id="document-source" aria-label="文档 Markdown 源码" maxlength="8000" rows="16" hidden></textarea>
         <p id="document-length" class="note" hidden></p>
       </section>
-      <label id="body-label">正文
-        <textarea name="body" maxlength="8000" rows="16"></textarea>
+      <label id="body-label">网页 HTML
+        <textarea name="body" maxlength="8000" rows="16" spellcheck="false"></textarea>
       </label>
       <div id="media-editor" hidden>
-        <label>文件 <input id="media-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp,audio/mpeg,audio/ogg,audio/wav,video/mp4,video/webm"></label>
+        <label id="media-file-picker">文件 <input id="media-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp,audio/mpeg,audio/ogg,audio/wav,video/mp4,video/webm"></label>
         <p id="media-meta" class="note"></p>
         <img id="media-image" alt="" hidden src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
         <audio id="media-audio" controls hidden></audio>
         <video id="media-video" controls hidden></video>
+        <section id="media-model3d" aria-label="3D 模型" hidden>
+          <div id="media-model3d-preview" hidden></div>
+          <p id="media-model3d-status" class="note" role="status"></p>
+          <div class="artifact-editor-actions">
+            <button type="button" id="media-model3d-toggle" aria-controls="media-model3d-preview" aria-expanded="false">预览 3D 模型</button>
+            <a id="media-model3d-download">下载 GLB</a>
+          </div>
+        </section>
       </div>
       <section id="slides-editor" aria-label="幻灯片编辑器" hidden>
         <div class="artifact-editor-actions">
@@ -366,35 +408,40 @@
         <canvas id="board-canvas" width="800" height="600"></canvas>
       </div>
       <p id="editor-source" class="note" hidden></p>
-      <iframe id="website-preview" title="网站预览" sandbox hidden></iframe>
-      <section id="version-panel" hidden>
-        <h2>版本与导出</h2>
+      <div id="website-preview-controls" hidden>
+        <button type="button" id="website-preview-toggle" aria-controls="website-preview" aria-pressed="false">打开互动预览</button>
+        <p id="website-preview-status" class="note" role="status" hidden></p>
+      </div>
+      <iframe id="website-preview" title="网站预览" sandbox referrerpolicy="no-referrer" hidden></iframe>
+      <details id="version-panel" class="artifact-editor-panel" hidden>
+        <summary>版本与导出</summary>
         <p class="note">每次保存会留下一版，可以导出或恢复到某一版。恢复会生成新的修订，不会改写历史。</p>
+        <p id="version-status" class="note" role="status" hidden></p>
         <ul id="version-list"></ul>
         <p id="version-empty" class="note" hidden>还没有历史版本。</p>
         <label for="export-format">当前版本导出格式</label><select id="export-format"><option value="original">原格式</option><option value="docx">Word DOCX（文档）</option><option value="pdf">文本 PDF（文档 / 幻灯片提纲 / 看板数据）</option><option value="xlsx">Excel XLSX（电子表格 / 看板）</option><option value="pptx">PowerPoint PPTX（幻灯片标题与条目）</option></select><p class="note">DOCX 保留文本与标题，非完整 Office 编辑器；PDF 是分页文字，不是页面 / 媒体截图，暂不支持 emoji 等非 BMP 字符。电子表格导出保留支持的公式。PPTX 是实际幻灯片包，含标题与条目，不含宏、媒体或外部链接，也不是渲染缩略图或完整编辑器。历史版本下载仍为其原格式。</p>
-        <p id="artifact-live-update" class="note" hidden>服务器作品版本已变化；本地草稿不会自动覆盖。<button type="button" id="artifact-live-load">读取服务器版本（需确认覆盖草稿）</button></p>
         <button type="button" id="export-artifact">导出当前版本</button>
-      </section>
-      <section id="share-panel" hidden>
-        <h2>只读分享</h2>
+      </details>
+      <details id="share-panel" class="artifact-editor-panel" hidden>
+        <summary>只读分享</summary>
         <p class="note">链接需要点下面的按钮才会生成，撤销后立即失效。不会自动发布。</p>
+        <p id="share-status" class="note" role="status" hidden></p>
         <ul id="share-list"></ul>
         <p id="share-empty" class="note" hidden>还没有分享链接。</p>
         <button type="button" id="create-share">创建只读分享链接</button>
         <p id="share-once" class="note" hidden></p>
-      </section>
-      <section id="discover-panel" hidden>
-        <h2>公开到发现页</h2>
-        <p class="note">发布后会出现在公开发现动态里，并用短地址 /w/… 打开。不会自动发布。发布后任何访问者可查看作品；媒体内容也可公开查看和下载。推荐尚未接通。</p>
-        <p id="discover-status" class="note" hidden></p>
+      </details>
+      <details id="discover-panel" class="artifact-editor-panel" hidden>
+        <summary>公开到发现页</summary>
+        <p class="note">发布后会出现在公开发现动态里。任何访问者都能通过公开链接查看作品和下载已发布的 3D 文件。</p>
+        <p id="discover-status" class="note" role="status" hidden></p>
         <div id="discover-form" class="discover-form" role="group" aria-label="公开到发现页">
           <label for="discover-slug">公开短地址</label>
           <input id="discover-slug" name="slug" maxlength="30" autocomplete="off" spellcheck="false" inputmode="latin">
           <button type="button" id="publish-discover">发布到发现页</button>
           <button type="button" id="revoke-discover" hidden>从发现页撤回</button>
         </div>
-      </section>
+      </details>
       <button type="submit" id="save-artifact">保存</button>
       <button type="button" id="cancel-editor">返回列表</button>
       <button type="button" id="remove-artifact">删除</button>
@@ -405,7 +452,7 @@
       <h2 id="send-to-chat-title">发送到聊天</h2>
       <p id="send-to-chat-lead" class="note"></p>
       <ul id="send-to-chat-list"></ul>
-      <p id="send-to-chat-empty" class="empty-state" hidden>这个工作区还没有可发送的群或单聊。</p>
+      <p id="send-to-chat-empty" class="empty-state" hidden>这个工作区还没有可发送的会话。</p>
       <p id="send-to-chat-error" class="note" role="status" hidden></p>
       <div class="send-dialog-actions">
         <button type="button" id="send-to-chat-cancel">取消</button>
@@ -413,6 +460,27 @@
       </div>
     </div>
   </div>
+  <dialog id="artifact-notifications" aria-labelledby="artifact-notifications-heading">
+    <div class="artifact-notifications-head">
+      <h2 id="artifact-notifications-heading">作品通知</h2>
+      <button type="button" id="artifact-notifications-read-all" disabled>全部已读</button>
+      <button type="button" id="artifact-notifications-close" aria-label="关闭作品通知" autofocus>
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" fill="none"/></svg>
+      </button>
+    </div>
+    <div class="artifact-notifications-content">
+      <p id="artifact-notifications-status" class="note" role="status" hidden></p>
+      <button type="button" id="artifact-notifications-retry" hidden>重试</button>
+      <p id="artifact-notifications-empty" class="note" hidden>暂无作品通知。</p>
+      <ul id="artifact-notifications-list"></ul>
+    </div>
+  </dialog>
   </main>
+  <nav class="mobile-primary-nav" aria-label="主导航">
+    <a href="/chat"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 4h16v12H9l-5 4V4Z"/></svg>聊天</a>
+    <a href="/discover"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg>发现</a>
+    <a href="/space" aria-current="page"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg>作品</a>
+    <a href="/settings"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 6h16 M4 12h16 M4 18h16 M9 4v4 M15 10v4 M9 16v4"/></svg>设置</a>
+  </nav>
 </body>
 </html>

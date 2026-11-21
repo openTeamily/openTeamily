@@ -107,6 +107,28 @@ class ShellPageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('GET', '/shell/app.css', origin='https://evil.test')['status'], 403)
         self.assertEqual(self.raw.call('POST', '/shell/app.css')['status'], 405)
 
+    def test_public_agent_composer_loads_before_login(self):
+        composer = self.raw.call('GET', '/shell/public-agent-composer.mjs')
+        self.assertEqual(composer['status'], 200)
+        self.assertEqual(composer['headers']['Content-Type'], 'text/javascript; charset=utf-8')
+        self.assertEqual(composer['headers']['X-Content-Type-Options'], 'nosniff')
+        self.assertIn(b'./public-agent-link.mjs', composer['body'])
+        dependency = self.raw.call('GET', '/shell/public-agent-link.mjs')
+        self.assertEqual(dependency['status'], 200)
+        self.assertIn(b'export function stagePublicAgentOpening', dependency['body'])
+
+    def test_public_agent_share_loads_before_login(self):
+        path = '/shell/public-agent-share.mjs'
+        script = self.raw.call('GET', path)
+        self.assertEqual(script['status'], 200)
+        self.assertEqual(script['headers']['Content-Type'], 'text/javascript; charset=utf-8')
+        self.assertEqual(script['headers']['X-Content-Type-Options'], 'nosniff')
+        self.assertEqual(script['headers']['Cross-Origin-Resource-Policy'], 'same-origin')
+        self.assertIn(b'data-copy-profile', script['body'])
+        head = self.raw.call('HEAD', path)
+        self.assertEqual(head['status'], 200)
+        self.assertEqual(head['body'], b'')
+
     def test_management_pages_share_the_shell_and_keep_functional_ids(self):
         for path in PAGES:
             page = self.raw.call('GET', path)

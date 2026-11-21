@@ -12,6 +12,10 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/export`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/draft`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/speech`, ORIGIN).feature, 'meetings');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/share-recipients?conversation_id=otc_1`, ORIGIN).feature, 'meetings');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/shares`, ORIGIN).feature, 'meetings');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/shared`, ORIGIN).feature, 'meetings');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/shared/${ID}/revoke`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/transcribe`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/draft`, ORIGIN), null);
   assert.equal(movedTarget(`/v1/workspaces/${WS}/memory?q=x`, ORIGIN).feature, 'memory');
@@ -35,6 +39,8 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/memory/capture`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/archive`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/messages`, ORIGIN).feature, 'agents');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/attachments?kind=file`, ORIGIN).feature, 'agents');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/reply-progress?key=reply-test-key-123`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/api-keys`, ORIGIN).feature, 'agent-api');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/api-keys/${ID}/revoke`, ORIGIN).feature, 'agent-api');
   // Cross-user / provision routes stay on the platform.
@@ -49,10 +55,18 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget('/v1/model-api', ORIGIN).feature, 'model-api');
   assert.equal(movedTarget('/v1/model-api/image', ORIGIN).feature, 'model-api');
   assert.equal(movedTarget('/v1/model-api/video', ORIGIN).feature, 'model-api');
+  assert.equal(movedTarget('/v1/model-api/music', ORIGIN).feature, 'model-api');
+  assert.equal(movedTarget('/v1/model-api/model3d', ORIGIN).feature, 'model-api');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/images`, ORIGIN).feature, 'images');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/videos`, ORIGIN).feature, 'videos');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/music`, ORIGIN).feature, 'music');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/models-3d`, ORIGIN).feature, 'model3d');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/images/${ID}`, ORIGIN).feature, 'images');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/videos/${ID}`, ORIGIN).feature, 'videos');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/music/${ID}`, ORIGIN).feature, 'music');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/websites`, ORIGIN).feature, 'websites');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/websites/${ID}`, ORIGIN).feature, 'websites');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/models-3d/${ID}`, ORIGIN).feature, 'model3d');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/images/wrong`, ORIGIN), null);
   assert.equal(movedTarget(`/v1/composio/connections/${ID}/disconnect`, ORIGIN).feature, 'connectors');
   assert.equal(movedTarget(`/v1/mcp/servers/${ID}`, ORIGIN).feature, 'connectors');
@@ -64,6 +78,11 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
 
 
 test('members, team, messenger and discover /v1 routes go to the C features', () => {
+  assert.deepEqual(movedTarget('/v1/profile/social?view=following', ORIGIN), {
+    feature: 'discover', path: '/v1/profile/social?view=following',
+  });
+  assert.equal(movedTarget('/v1/profile', ORIGIN), null);
+  assert.equal(movedTarget('/v1/profile/avatar', ORIGIN), null);
   assert.equal(movedTarget(`/v1/workspaces/${WS}/members`, ORIGIN).feature, 'members');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/members/${ID}/remove`, ORIGIN).feature, 'members');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/members/ann.home/suspend`, ORIGIN).feature, 'members');
@@ -77,6 +96,7 @@ test('members, team, messenger and discover /v1 routes go to the C features', ()
   assert.equal(movedTarget(`/v1/workspaces/${WS}/directory`, ORIGIN).feature, 'teams');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/social/conversations?limit=20`, ORIGIN).feature, 'messenger');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/social/conversations/otc_01/messages`, ORIGIN).feature, 'messenger');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/social/conversations/otc_01/attachments?kind=photo`, ORIGIN).feature, 'messenger');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/social/conversations/otc_01/memory/capture`, ORIGIN).feature, 'messenger');
   for (const action of ['create', 'preview', 'join', 'poll', 'signal', 'leave', 'end']) {
     assert.equal(movedTarget('/v1/meeting-calls/' + action, ORIGIN).feature, 'messenger');
@@ -84,8 +104,6 @@ test('members, team, messenger and discover /v1 routes go to the C features', ()
   assert.equal(movedTarget('/v1/discover/agents?q=x', ORIGIN).feature, 'discover');
   assert.equal(movedTarget('/v1/discover/me/works?tab=following', ORIGIN).feature, 'discover');
   assert.equal(movedTarget('/v1/discover/works/my-essay/engagement', ORIGIN).feature, 'discover');
-  assert.equal(movedTarget('/v1/discover/works/my-essay/comments?limit=20', ORIGIN).feature, 'discover');
-  assert.equal(movedTarget('/v1/discover/works/my-essay/comments/otwc_2', ORIGIN).feature, 'discover');
   // Workspace lists and team creation use the DS-Bot teams feature.
   assert.equal(movedTarget('/v1/auth/session', ORIGIN), null);
   assert.equal(movedTarget('/v1/workspaces?limit=100', ORIGIN).feature, 'teams');
@@ -98,6 +116,12 @@ test('the envelope carries method, path, body and idempotency key only', () => {
   assert.deepEqual(env, { endpoint: 'meetings/v1', payload: { method: 'POST', path: '/v1/x', idempotency_key: 'k'.repeat(20), body: { title: '周会' } } });
 });
 
+test('Space activity stays in the owner artifact feature and does not reuse management streaming', () => {
+  const activity = `/v1/workspaces/${WS}/artifacts/activity?artifact=${ID}`;
+  assert.deepEqual(movedTarget(activity, ORIGIN), {feature: 'artifacts', path: activity});
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/events`, ORIGIN), null);
+});
+
 test('answers become ordinary responses, downloads keep their name', async () => {
   const json = toResponse({ status: 409, body: { error: { code: 'conflict' } } });
   assert.equal(json.status, 409);
@@ -105,6 +129,17 @@ test('answers become ordinary responses, downloads keep their name', async () =>
   const file = toResponse({ status: 200, download: { content_type: 'text/markdown', filename: 'm.md', data: Buffer.from('# hi').toString('base64') } });
   assert.equal(await file.text(), '# hi');
   assert.match(file.headers.get('Content-Disposition'), /m\.md/);
+});
+
+test('binary shim downloads preserve Chinese and emoji names in an ASCII-compatible header', async () => {
+  const filename = '陶瓷花瓶 🏺.glb';
+  const file = toResponse({status: 200, download: {
+    content_type: 'model/gltf-binary', filename, data: 'Z2xURg==', inline: true,
+  }});
+  assert.equal(await file.text(), 'glTF');
+  const header = file.headers.get('Content-Disposition');
+  assert.match(header, /^inline; filename="[ -~]+";/);
+  assert.equal(decodeURIComponent(header.split("filename*=UTF-8''")[1]), filename);
 });
 
 test('does nothing on pages served by the legacy platform', () => {
@@ -140,4 +175,36 @@ test('a missing moved feature never falls back to platform execution', async () 
   const response = await win.fetch('/v1/settings');
   assert.equal(response.status, 502);
   assert.deepEqual(calls, ['/b/api/openteamily']);
+});
+
+test('moved notification read requests retain keepalive on the actual DS-Bot fetch', async () => {
+  const calls = [];
+  const win = {
+    document: {querySelector: () => ({}), addEventListener() {}},
+    location: {origin: ORIGIN},
+    async fetch(url, options) {
+      calls.push({url, options});
+      return Response.json({ok: true, value: {status: 200, body: {unread_count: 0}}});
+    },
+  };
+  install(win);
+  const path = `/v1/workspaces/${WS}/notifications/read`;
+  const post = {method: 'POST', body: JSON.stringify({notification_id: ID})};
+  await win.fetch(path, {...post, keepalive: true});
+  await win.fetch(new Request(ORIGIN + path, {...post, keepalive: true}));
+  await win.fetch(path, post);
+  assert.deepEqual(calls.map(call => call.url), Array(3).fill('/b/api/openteamily'));
+  assert.deepEqual(calls.map(call => call.options.keepalive), [true, true, undefined]);
+  assert.deepEqual(JSON.parse(calls[0].options.body), {endpoint: 'social/v1', payload: {
+    method: 'POST', path, body: {notification_id: ID},
+  }});
+});
+
+test('work detail and comment paths stay within the viewer’s Discover plugin', () => {
+  const base = '/v1/discover/works/work-demo';
+  const id = 'otwc_' + '0'.repeat(26);
+  for (const path of [base, base + '/comments?limit=20', base + '/comments/' + id + '/like', base + '/comments/' + id + '/remove']) {
+    assert.equal(movedTarget(path, ORIGIN)?.feature, 'discover');
+  }
+  assert.equal(movedTarget(base + '/comments/forum/comment', ORIGIN), null);
 });

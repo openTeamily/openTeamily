@@ -63,6 +63,7 @@ function fakeDocument() {
 
 const WORKSPACE = 'a'.repeat(32);
 const MEETING_ID = 'b'.repeat(32);
+const OTHER_MEETING_ID = 'c'.repeat(32);
 
 function meeting(id = MEETING_ID, revision = 3, actions = [
   {text: 'A', done: false, owner: ''},
@@ -77,7 +78,7 @@ function meeting(id = MEETING_ID, revision = 3, actions = [
   };
 }
 
-async function mountPage(tag, { revokeWith = 200 } = {}) {
+async function mountPage(tag, { revokeWith = 200, beforeWrite = () => {} } = {}) {
   const {doc, elements} = fakeDocument();
   const state = {calls: [], body: meeting(), posted: [], revokeWith};
   const json = (status, payload) => ({status, json: async () => payload});
@@ -96,9 +97,13 @@ async function mountPage(tag, { revokeWith = 200 } = {}) {
     if (path === `/v1/workspaces/${WORKSPACE}/meetings/${MEETING_ID}` && method === 'GET') {
       return json(200, {meeting: state.body});
     }
+    if (path === `/v1/workspaces/${WORKSPACE}/meetings/${OTHER_MEETING_ID}` && method === 'GET') {
+      return json(200, {meeting: {...meeting(OTHER_MEETING_ID, 8), title: 'Other'}});
+    }
     if (path === `/v1/workspaces/${WORKSPACE}/meetings/${MEETING_ID}` && method === 'POST') {
       const payload = JSON.parse(options.body || '{}');
       state.posted.push(payload);
+      await beforeWrite();
       if (revokeWith !== 200) return json(revokeWith, {error: {message: 'Meeting changed elsewhere; reload and retry'}});
       state.body = {
         ...state.body,
@@ -174,6 +179,51 @@ test('a stale revision reverts the tick and says the meeting moved on', async ()
     assert.equal((await doc.getElementById('status').textContent).trim(), '会议已在别处更新，请重新打开后再勾选。');
     assert.equal(doc.getElementById('status').dataset.kind, 'error');
   } finally {
+    restore();
+  }
+});
+
+test('a tick persists only the saved action and keeps unsaved edits local', async () => {
+  const {doc, state, restore} = await mountPage('draft-isolation');
+  try {
+    const row = doc.getElementById('action-list').children[1];
+    const title = row.children[0];
+    title.value = 'draft text';
+    title.handlers.input[0]();
+    const box = checkbox(doc, 1);
+    box.checked = true;
+    await box.handlers.change[0]();
+    assert.equal(state.posted[0].changes.action_items[1].text, 'B');
+    assert.equal(state.posted[0].changes.action_items[1].done, true);
+    assert.equal(title.value, 'draft text');
+    assert.equal(box.checked, true);
+  } finally {
+    restore();
+  }
+});
+
+test('an earlier write cannot update the newly selected meeting', async () => {
+  let finish;
+  const held = new Promise(resolve => { finish = resolve; });
+  const {doc, state, restore} = await mountPage('scope-fence', {beforeWrite: () => held});
+  try {
+    const box = checkbox(doc, 0);
+    box.checked = true;
+    const sent = box.handlers.change[0]();
+    assert.equal(doc.getElementById('save-meeting').disabled, true);
+    await doc.getElementById('meeting-list').handlers.click[0]({
+      target: {closest: () => ({dataset: {meeting: OTHER_MEETING_ID}})},
+    });
+    assert.match(doc.getElementById('meeting-meta').textContent, /修订 8/);
+    finish();
+    await sent;
+    assert.equal(state.body.revision, 4);
+    assert.equal(doc.getElementById('meeting-title').value, 'Other');
+    assert.match(doc.getElementById('meeting-meta').textContent, /修订 8/);
+    assert.equal(doc.getElementById('save-meeting').disabled, false);
+    assert.equal(doc.getElementById('status').textContent, '');
+  } finally {
+    finish();
     restore();
   }
 });

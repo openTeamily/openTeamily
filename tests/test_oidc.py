@@ -8,7 +8,10 @@ import unittest
 
 from openteamily.app import App, Config
 from openteamily.fake_oidc import FakeOidcProvider, load_test_rsa
+from openteamily.lifecycle import Lifecycle, ManagerAuth, ManagerIdentity, RuntimePolicy
 from openteamily.oidc import OidcRegistry, Provider, parse_jwks, jwt_claims
+from openteamily.runtime_autoprovision import AutoProvisionPolicy
+from openteamily.security import digest, opaque
 from openteamily.store import Store
 from tests.test_management import Client, ORIGIN, PASSWORD
 
@@ -89,6 +92,26 @@ class OidcTests(unittest.TestCase):
         other = Client(self.app, peer='127.0.0.2')
         again = self.complete(client=other)
         self.assertEqual(again['body']['user']['id'], result['body']['user']['id'])
+
+    def test_first_oidc_login_queues_compose_start_before_redirect(self):
+        runtime = Lifecycle(self.store, RuntimePolicy(image_ref='registry.test/runtime@sha256:' + 'a' * 64,
+                                                     backend_mode='compose'), clock=lambda: NOW)
+        manager_auth = ManagerAuth([ManagerIdentity('auto-mgr', digest(opaque()), frozenset(), 'compose', True)])
+        self.app = App(self.store, self.app.config, clock=lambda: NOW, oidc_registry=self.registry,
+                       lifecycle=runtime, manager_auth=manager_auth,
+                       auto_provision=AutoProvisionPolicy(enabled=True, manager_id='auto-mgr', max_instances=3))
+        self.client = Client(self.app)
+        result = self.complete()
+        self.assertEqual(result['status'], 302)
+        owner = result['body']['user']['id']
+        again = self.complete(client=Client(self.app, peer='127.0.0.2'))
+        self.assertEqual(again['body']['user']['id'], owner)
+        with self.store.connect() as db:
+            rows = db.execute(
+                'SELECT j.operation_type, j.status, j.revision FROM runtime_jobs j '
+                'JOIN runtime_auto_provisions p ON p.instance_id=j.instance_id WHERE p.user_id=?', (owner,),
+            ).fetchall()
+        self.assertEqual([tuple(row) for row in rows], [('start', 'queued', 1)])
 
     def test_unverified_email_and_bad_pkce_are_rejected(self):
         self.assertEqual(self.complete(email_verified=False)['status'], 400)

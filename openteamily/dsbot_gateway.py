@@ -64,7 +64,7 @@ MOVED_APIS = (
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/notifications(?:/read)?$'), 'social'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/members(?:/[A-Za-z0-9._-]{1,80}(?:/(?:remove|suspend|unsuspend))?)?$'), 'members'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/invites(?:/[A-Za-z0-9._-]{1,80}/(?:revoke|freeze|unfreeze))?$'), 'invites'),
-    (re.compile(r'^/v1/invites/accept$'), 'invites'),
+    (re.compile(r'^/v1/invites/(?:accept|preview)$'), 'invites'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/join-requests(?:/[A-Za-z0-9._-]{1,80}/(?:approve|reject))?$'), 'invites'),
     (re.compile(r'^/v1/join-requests$'), 'invites'),
     (re.compile(r'^/v1/skills/(?:scopes|readiness|runs)$'), 'skills'),
@@ -76,30 +76,34 @@ MOVED_APIS = (
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/directory$'), 'teams'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/social/conversations(?:/[A-Za-z0-9._-]{1,80}(?:/[A-Za-z0-9._/-]{1,120})?)?$'), 'messenger'),
     (re.compile(r'^/v1/meeting-calls/(?:create|preview|join|poll|signal|leave|end)$'), 'messenger'),
+    (re.compile(r'^/v1/profile/(?:social|follow-work)$'), 'discover'),
     (re.compile(r'^/v1/discover/(?:agents|works|me/works)$'), 'discover'),
     (re.compile(r'^/v1/discover/agents/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]/start$'), 'discover'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts/[0-9a-f]{32}/discover(?:/revoke)?$'), 'discover'),
-    (re.compile(r'^/v1/discover/works/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]/engagement$'), 'discover'),
-    (re.compile(r'^/v1/discover/works/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]/comments(?:/[A-Za-z0-9_-]{1,64})?$'), 'discover'),
+    (re.compile(r'^/v1/discover/works/[a-z0-9][a-z0-9-]{1,28}[a-z0-9](?:/(?:engagement|comments(?:/otwc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}/(?:like|remove))?))?$'), 'discover'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/discover(?:/revoke)?$'), 'discover'),
     (re.compile(r'^/v1/(?:automation-templates|onboarding/automations)$'), 'automations'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/automations(?:/(?:tick|[0-9a-f]{32}))?$'), 'automations'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/automations/[0-9a-f]{32}/(?:run|remove|runs(?:/[0-9a-f]{32}(?:/(?:cancel|retry|artifact))?)?)$'), 'automations'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/api-keys(?:/[0-9a-f]{32}/revoke)?$'), 'agent-api'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/conversations/[0-9a-f]{32}/memory/capture$'), 'agents'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents(?:/[0-9a-f]{32}(?:/(?:archive|conversations(?:/[0-9a-f]{32}(?:/messages(?:/[0-9a-f]{32}/(?:artifact|files/[0-3]))?)?)?))?)?$'), 'agents'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/meetings(?:/(?:draft|speech|transcribe)|/[0-9a-f]{32}(?:/(?:remove|export))?)?$'), 'meetings'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents(?:/[0-9a-f]{32}(?:/(?:archive|conversations(?:/[0-9a-f]{32}(?:/(?:attachments|reply-progress|messages(?:/[0-9a-f]{32}/(?:artifact|files/[0-3]))?))?)?))?)?$'), 'agents'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/meetings(?:/(?:draft|speech|transcribe|share-recipients|shared(?:/[0-9a-f]{32}(?:/revoke)?)?|[0-9a-f]{32}(?:/(?:remove|export|shares))?))?$'), 'meetings'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory(?:/[0-9a-f]{32}(?:/(?:remove|export|share-group|dream(?:/[0-9a-f]{32})?|versions(?:/\d{1,8}(?:/restore)?)?))?)?$'), 'memory'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory/actions/draft(?:/save)?$'), 'memory'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory/(?:candidates(?:/[0-9a-f]{32})?|profile(?:/dream)?|graph|(?:actions|links|preferences)(?:/[0-9a-f]{32}(?:/remove)?)?)$'), 'memory'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/search/(?:messages|resources)$'), 'search'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:spreadsheet|slides)/draft$'), 'artifacts'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:activity|(?:spreadsheet|slides)/draft)$'), 'artifacts'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$'), 'artifacts'),
     (re.compile(r'^/v1/settings$'), 'settings'),
     (re.compile(r'^/v1/notification-prefs$'), 'settings'),
     (re.compile(r'^/v1/onboarding(?:/(?:recommendations|picks|look))?$'), 'settings'),
-    (re.compile(r'^/v1/model-api(?:/(?:image|video))?$'), 'model-api'),
+    (re.compile(r'^/v1/model-api(?:/(?:image|video|music|model3d))?$'), 'model-api'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/images(?:/[0-9a-f]{32})?$'), 'images'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/videos(?:/[0-9a-f]{32})?$'), 'videos'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/music(?:/[0-9a-f]{32})?$'), 'music'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/websites(?:/[0-9a-f]{32})?$'), 'websites'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/models-3d(?:/[0-9a-f]{32})?$'), 'model3d'),
     (re.compile(r'^/v1/composio$'), 'connectors'),
     (re.compile(r'^/v1/composio/key$'), 'connectors'),
     (re.compile(r'^/v1/composio/toolkits$'), 'connectors'),
@@ -117,6 +121,7 @@ MOVED_API_LOCATIONS = (
     'location = /v1/team-templates { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/(?:team-templates|notifications)(?:/|$) { return 418; }',
     'location = /v1/invites/accept { return 418; }',
+    'location = /v1/invites/preview { return 418; }',
     'location = /v1/join-requests { return 418; }',
     'location ~ ^/v1/skills/(?:scopes|readiness|runs)$ { return 418; }',
     'location ^~ /v1/runtime/ { return 418; }',
@@ -127,6 +132,8 @@ MOVED_API_LOCATIONS = (
     'location = /v1/team-directory { return 418; }',
     'location ^~ /v1/team-directory/ { return 418; }',
     'location ~ ^/v1/meeting-calls/(?:create|preview|join|poll|signal|leave|end)$ { return 418; }',
+    'location = /v1/profile/social { return 418; }',
+    'location = /v1/profile/follow-work { return 418; }',
     'location ^~ /v1/discover/ { return 418; }',
     'location ~ ^/v1/contacts(?:/|$) { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/(?:members|invites|join-requests|directory|social)(?:/|$) { return 418; }',
@@ -135,9 +142,12 @@ MOVED_API_LOCATIONS = (
     'location = /v1/notification-prefs { return 418; }',
     'location = /v1/onboarding { return 418; }',
     'location ^~ /v1/onboarding/ { return 418; }',
-    'location ~ ^/v1/model-api(?:/(?:image|video))?$ { return 418; }',
+    'location ~ ^/v1/model-api(?:/(?:image|video|music|model3d))?$ { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/images(?:/[0-9a-f]{32})?$ { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/videos(?:/[0-9a-f]{32})?$ { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/music(?:/[0-9a-f]{32})?$ { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/websites(?:/[0-9a-f]{32})?$ { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/models-3d(?:/[0-9a-f]{32})?$ { return 418; }',
     'location = /v1/composio { return 418; }',
     'location ^~ /v1/composio/ { return 418; }',
     'location ^~ /v1/mcp/servers { return 418; }',
@@ -145,10 +155,10 @@ MOVED_API_LOCATIONS = (
     'location = /v1/onboarding/automations { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/automations(?:/|$) { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/agents(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/meetings(?:/(?:draft|speech|transcribe)|/[0-9a-f]{32}(?:/(?:remove|export))?)?$ { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/meetings(?:/(?:draft|speech|transcribe|share-recipients|shared(?:/[0-9a-f]{32}(?:/revoke)?)?|[0-9a-f]{32}(?:/(?:remove|export|shares))?))?$ { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/memory(?:/|$) { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/search/(?:messages|resources)$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:spreadsheet|slides)/draft$ { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:activity|(?:spreadsheet|slides)/draft)$ { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$ { return 418; }',
 )
 
@@ -216,6 +226,8 @@ def target_for(uri, routes):
         return '/api/openteamily/legacy?feature=' + quote(feature, safe='') + '&path=' + quote(path, safe='') + (('&query=' + quote(query, safe='')) if query else '')
     if path == '/space' and 'artifacts' in routes['moved_pages']:
         path = '/artifacts'
+    if path == '/profile/edit/' and 'profile' in routes['moved_pages']:
+        path = '/profile/edit'
     first = path.split('/')[1] if path != '/' else 'home'
     if first in routes['moved_pages']:
         return PAGE_ROUTE + '?path=' + quote(path, safe='')
@@ -277,6 +289,33 @@ def _upstream_row(db, instance_id):
     if row is None:
         raise GatewayError(503, 'dsbot_not_ready')
     return row
+
+
+def owner_runtime_readiness(db, user_id):
+    """The browser receives a state only, never the address or runtime cookie."""
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE name='dsbot_upstreams' AND type='table'").fetchone():
+        return 'unmanaged'
+    try:
+        iid = owned_instance(db, user_id)
+    except RuntimeFault:
+        return 'unavailable'
+    if iid is None:
+        return 'setup'
+    try:
+        _upstream_row(db, iid)
+    except GatewayError:
+        state = db.execute("""
+            SELECT i.desired, i.blocked, i.error_code, EXISTS (
+                SELECT 1 FROM runtime_auto_provisions p JOIN runtime_jobs j ON j.instance_id=p.instance_id
+                WHERE p.instance_id=i.id AND j.revision=i.revision
+                  AND j.operation_type='create' AND j.status IN ('queued','running')
+            ) AS creating
+            FROM instances i WHERE i.id=?
+        """, (iid,)).fetchone()
+        if state is None or state[1] or state[2]:
+            return 'unavailable'
+        return 'starting' if state[0] == 'running' or state[3] else 'unavailable'
+    return 'ready'
 
 
 def authorize(db, *, cookie_header, session_cookie, method, uri, origin, fetch_site, fetch_mode,
@@ -638,6 +677,9 @@ __SOCIAL_LOCATION__
 __DSBOT_LOCATIONS__
   location @ot_dsbot {
     auth_request /_ot_authz;
+    error_page 401 = @ot_login;
+    error_page 500 = @ot_dsbot_error;
+    auth_request_set $ot_gateway_error $upstream_http_x_ot_gateway_error;
     auth_request_set $ot_upstream $upstream_http_x_ot_upstream;
     auth_request_set $ot_path $upstream_http_x_ot_upstream_path;
     auth_request_set $ot_origin $upstream_http_x_ot_upstream_origin;
@@ -659,6 +701,14 @@ __DSBOT_LOCATIONS__
     proxy_read_timeout 3600s;
     proxy_redirect off;
     proxy_hide_header Set-Cookie;
+  }
+  location @ot_dsbot_error {
+    default_type application/json;
+    if ($ot_gateway_error != dsbot_not_ready) { return 500 '{"error":{"code":"runtime_route_failed"}}'; }
+    if ($http_sec_fetch_mode = navigate) { rewrite ^ /runtime-starting? last; }
+    add_header Cache-Control no-store always;
+    add_header Retry-After 3 always;
+    return 503 '{"error":{"code":"dsbot_not_ready"}}';
   }
   location ^~ /v1/gateway/ {
     auth_request /_ot_authz;

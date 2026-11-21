@@ -15,6 +15,9 @@ from . import discover
 class SettingsPage:
     ASSETS = {
         '/login': ('home', 'index.html', 'text/html; charset=utf-8'),
+        '/runtime-starting': ('home', 'runtime-starting.html', 'text/html; charset=utf-8'),
+        '/home/runtime-starting.mjs': ('home', 'runtime-starting.mjs', 'text/javascript; charset=utf-8'),
+        '/home/runtime-readiness.mjs': ('home', 'runtime-readiness.mjs', 'text/javascript; charset=utf-8'),
         '/register': ('register', 'index.html', 'text/html; charset=utf-8'),
         '/register/': ('register', 'index.html', 'text/html; charset=utf-8'),
         '/register/app.mjs': ('register', 'app.mjs', 'text/javascript; charset=utf-8'),
@@ -48,6 +51,7 @@ class SettingsPage:
         '/members/app.css': ('members', 'app.css', 'text/css; charset=utf-8'),
         '/artifacts': ('artifacts', 'index.html', 'text/html; charset=utf-8'),
         '/artifacts/app.mjs': ('artifacts', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/notifications.mjs': ('artifacts', 'notifications.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/app.css': ('artifacts', 'app.css', 'text/css; charset=utf-8'),
         '/space': ('artifacts', 'index.html', 'text/html; charset=utf-8'),
         '/agents': ('agents', 'index.html', 'text/html; charset=utf-8'),
@@ -60,10 +64,21 @@ class SettingsPage:
         '/memory/app.css': ('memory', 'app.css', 'text/css; charset=utf-8'),
         '/shell/app.css': ('shell', 'app.css', 'text/css; charset=utf-8'),
         '/shell/app.mjs': ('shell', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/system-locale.mjs': ('shell', 'system-locale.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/system-locale-catalog.mjs': ('shell', 'system-locale-catalog.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/system-locale-chat.mjs': ('shell', 'system-locale-chat.mjs', 'text/javascript; charset=utf-8'),
         '/shell/rich-editor.mjs': ('shell', 'rich-editor.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/model3d-preview.mjs': ('shell', 'model3d-preview.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/model3d-viewer.mjs': ('shell', 'model3d-viewer.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/model3d-engine-0.187.0.mjs': ('shell', 'model3d-engine-0.187.0.mjs', 'text/javascript; charset=utf-8'),
         '/shell/thumb.mjs': ('shell', 'thumb.mjs', 'text/javascript; charset=utf-8'),
         '/shell/meeting-link.mjs': ('shell', 'meeting-link.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/work-notification.mjs': ('shell', 'work-notification.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/public-agent-composer.mjs': ('shell', 'public-agent-composer.mjs', 'text/javascript; charset=utf-8'),
         '/shell/public-agent-link.mjs': ('shell', 'public-agent-link.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/public-agent-share.mjs': ('shell', 'public-agent-share.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/public-work-link.mjs': ('shell', 'public-work-link.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/team-invite-link.mjs': ('shell', 'team-invite-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/dsbot-api.mjs': ('shell', 'dsbot-api.mjs', 'text/javascript; charset=utf-8'),
         '/shell/dsbot-skills.mjs': ('shell', 'dsbot-skills.mjs', 'text/javascript; charset=utf-8'),
         '/chat': ('chat', 'index.html', 'text/html; charset=utf-8'),
@@ -81,6 +96,7 @@ class SettingsPage:
         '/messenger/app.css': ('messenger', 'app.css', 'text/css; charset=utf-8'),
         '/discover': ('discover', 'index.html', 'text/html; charset=utf-8'),
         '/discover/app.mjs': ('discover', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/discover/comments.mjs': ('discover', 'comments.mjs', 'text/javascript; charset=utf-8'),
         '/discover/app.css': ('discover', 'app.css', 'text/css; charset=utf-8'),
         '/meetings': ('meetings', 'index.html', 'text/html; charset=utf-8'),
         '/meetings/app.mjs': ('meetings', 'app.mjs', 'text/javascript; charset=utf-8'),
@@ -89,6 +105,7 @@ class SettingsPage:
         '/profile': ('profile', 'index.html', 'text/html; charset=utf-8'),
         '/profile/edit': ('profile', 'index.html', 'text/html; charset=utf-8'),
         '/profile/app.mjs': ('profile', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/profile/social.mjs': ('profile', 'social.mjs', 'text/javascript; charset=utf-8'),
         '/onboarding': ('onboarding', 'index.html', 'text/html; charset=utf-8'),
         '/onboarding/app.mjs': ('onboarding', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/onboarding/app.css': ('onboarding', 'app.css', 'text/css; charset=utf-8'),
@@ -104,7 +121,6 @@ class SettingsPage:
         '/look/app.css': ('look', 'app.css', 'text/css; charset=utf-8'),
         '/skills': ('skills', 'index.html', 'text/html; charset=utf-8'),
         '/skills/imports.mjs': ('skills', 'imports.mjs', 'text/javascript; charset=utf-8'),
-        '/shell/workspace-events.mjs': ('shell', 'workspace-events.mjs', 'text/javascript; charset=utf-8'),
         '/skills/execution.mjs': ('skills', 'execution.mjs', 'text/javascript; charset=utf-8'),
         '/skills/app.mjs': ('skills', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/skills/app.css': ('skills', 'app.css', 'text/css; charset=utf-8'),
@@ -186,24 +202,32 @@ class SettingsPage:
         if path == '/discover':
             if query in ('tab=agents', 'tab=agents&section=groups'):
                 return True
-            # The feed tab, category and search are shareable deep links. The
-            # router only serves the screen; the page reads these itself, so the
-            # allowlist is limited to the keys and values it can produce.
+            # Feed filters and work detail links use the same management page.
             seen = set()
             for key, value in parse_qsl(query, keep_blank_values=True):
                 if key in seen or not value:
                     return False
                 seen.add(key)
+                if key == 'work' and not re.fullmatch(r'[a-z0-9][a-z0-9-]{1,28}[a-z0-9]', value):
+                    return False
+                if key in ('comments', 'share') and value != '1':
+                    return False
                 if key == 'feed' and value not in ('following', 'collected'):
                     return False
-                if key == 'kind' and value not in ('website', 'image', 'audio', 'slides', 'video'):
+                if key == 'sort' and value != 'popular':
+                    return False
+                if key == 'kind' and value not in ('website', 'image', 'audio', 'slides', 'video', 'model3d'):
                     return False
                 if key == 'q':
                     if len(value) > 80 or any(ord(ch) < 32 for ch in value):
                         return False
-                elif key not in ('feed', 'kind'):
+                elif key not in ('feed', 'kind', 'sort', 'work', 'comments', 'share'):
                     return False
-            return bool(seen)
+            panels = seen.intersection({'comments', 'share'})
+            return (bool(seen)
+                    and not ('sort' in seen and seen.intersection({'feed', 'kind'}))
+                    and len(panels) <= 1
+                    and (not panels or 'work' in seen))
         if path == '/agents':
             slug = query[len('category='):] if query.startswith('category=') else ''
             return slug in discover.AGENT_CATEGORY_SLUGS
@@ -234,6 +258,8 @@ class SettingsPage:
             return self.api(env, start_response)
         audio_page = path in ('/chat', '/chat/', '/meetings')
         csp = self.CSP + "; media-src 'self' blob:" if audio_page else self.CSP
+        if path in ('/chat', '/chat/', '/space', '/artifacts', '/discover'):
+            csp = csp.replace("connect-src 'self'", "connect-src 'self' blob:").replace("img-src 'self'", "img-src 'self' blob:")
         microphone = '(self)' if audio_page else '()'
         headers = [('Cache-Control', 'no-store'), ('X-Content-Type-Options', 'nosniff'),
                    ('Content-Security-Policy', csp), ('Referrer-Policy', 'no-referrer'),

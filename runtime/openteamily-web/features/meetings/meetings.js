@@ -5,6 +5,7 @@ import {
   CONTROL, HEX32, digest, idempotencyKey, newId, pagination, refuse, requireBodyKeys, stableJson, validLongText,
 } from '../../featurekit/http.js'
 import {speechStatus, transcribe} from './speech.js'
+import {shareRoutes} from './shares.js'
 
 export const LIMITS = {
   TITLE_MAX: 120, ATTENDEES_MAX: 50, ATTENDEE_MAX: 80, TRANSCRIPT_MAX: 40000, SUMMARY_MAX: 8000,
@@ -205,7 +206,9 @@ async function dispatch(req, workspaceId, meetingId, removing) {
     req.store.run('DELETE FROM meetings WHERE id=?', row.id)
     return { body: { removed: view(row, false) } }
   }
-  if (req.method === 'GET' && !req.queryString) return { body: { meeting: view(row) } }
+  if (req.method === 'GET' && !req.queryString) return { body: {
+    meeting: view(row), ...(req.ownerUsername ? {viewer_username:req.ownerUsername} : {}),
+  } }
   if (req.method === 'POST' && !req.queryString) return update(req, row)
   refuse(400, 'invalid', 'Invalid meeting request')
 }
@@ -239,6 +242,7 @@ export const spec = {
     CREATE INDEX IF NOT EXISTS meeting_workspace ON meetings(workspace_id, id);`],
   importTables: { meetings: COLUMNS },
   routes: [
+    ...shareRoutes,
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/speech$/, handle: speechStatus },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/transcribe$/, handle: transcribe },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/draft$/, handle: draftNotes },

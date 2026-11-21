@@ -204,7 +204,7 @@ function existingSource(store, workspaceId, source) {
   return null
 }
 
-export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = false} = {}) {
+export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = false, reuseSource = false} = {}) {
   const { store, owner, featureDir } = ctx
   if (typeof workspaceId !== 'string' || !HEX32.test(workspaceId)) refuse(400, 'invalid', 'Provide a workspace_id')
   const title = input.title
@@ -240,8 +240,8 @@ export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = 
   return store.transaction(() => {
     const source = input.source
     const already = existingSource(store, workspaceId, source)
-    // A saved chat message is a snapshot. Subsequent edits and title changes do not replace it.
-    if (already && reuseChatSource) return { status: 200, body: { artifact: view(already) } }
+    // Saved source snapshots survive later edits and title changes.
+    if (already && (reuseChatSource || reuseSource)) return { status: 200, body: { artifact: view(already) } }
     const prior = store.get('SELECT * FROM artifacts WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
     if (prior) {
       const row = load(store, workspaceId, prior.id)

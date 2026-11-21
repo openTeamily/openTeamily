@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
-  <title>设置 · OpenTeamily</title>
+  <title data-ui-text="settings.title">设置 · OpenTeamily</title>
   <link rel="stylesheet" href="/shell/app.css">
   <link rel="stylesheet" href="/settings/app.css">
   <script type="module" src="/shell/app.mjs"></script>
@@ -14,45 +14,45 @@
   <script type="module" src="/settings/custom-mcp.mjs"></script>
 </head>
 <body class="app-workspace app-primary">
-  <a class="skip-link" href="#main">跳到主要内容</a>
-  <nav class="app-rail" aria-label="应用导航">
-    <a class="brand-mark" href="/" title="OpenTeamily 首页" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
-    <a href="/" title="首页" aria-label="首页"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z"/></svg><span class="rail-label">首页</span></a>
-    <a href="/chat" title="聊天" aria-label="聊天"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H9l-5 4V4Z"/></svg><span class="rail-label">聊天</span></a>
-    <a href="/agents" title="智能体" aria-label="智能体"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14v12H5z M9 3h6 M12 3v4 M8 12h1 M15 12h1 M9 16h6"/></svg><span class="rail-label">智能体</span></a>
-        <a href="/skills" title="技能" aria-label="技能"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Z M8.5 10.5h7 M8.5 14h4.5"/></svg><span class="rail-label">技能</span></a>
-<a href="/automations" title="自动化" aria-label="自动化"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg><span class="rail-label">自动化</span></a>
-    <a href="/memory" title="记忆" aria-label="记忆"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4a4 4 0 0 0-4 4v8a4 4 0 0 0 4 4 M16 4a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4 M8 8h8 M8 12h8 M8 16h8 M12 4v16"/></svg><span class="rail-label">记忆</span></a>
-    <a href="/space" title="作品" aria-label="作品"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg><span class="rail-label">作品</span></a>
-    <a href="/meetings" title="会议" aria-label="会议"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v14H4z M8 3v4 M16 3v4 M4 10h16"/></svg><span class="rail-label">会议</span></a>
-    <a href="/discover" title="发现" aria-label="发现"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg><span class="rail-label">发现</span></a>
-    <a href="/contacts" title="联系人" aria-label="联系人"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z M3 21v-2a7 7 0 0 1 14 0v2 M17 4a3.5 3.5 0 0 1 0 7 M19 14a6 6 0 0 1 3 5v2"/></svg><span class="rail-label">联系人</span></a>
+  <a data-ui-text="shell.skip" class="skip-link" href="#main">跳到主要内容</a>
+  <nav class="app-rail" data-ui-label="shell.nav" aria-label="应用导航">
+    <a data-ui-title="shell.brand.home" class="brand-mark" href="/" title="OpenTeamily 首页" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
+    <a data-ui-title="shell.home" data-ui-label="shell.home" href="/" title="首页" aria-label="首页"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z"/></svg><span data-ui-text="shell.home" class="rail-label">首页</span></a>
+    <a data-ui-title="shell.chat" data-ui-label="shell.chat" href="/chat" title="聊天" aria-label="聊天"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H9l-5 4V4Z"/></svg><span data-ui-text="shell.chat" class="rail-label">聊天</span></a>
+    <a data-ui-title="shell.agents" data-ui-label="shell.agents" href="/agents" title="智能体" aria-label="智能体"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14v12H5z M9 3h6 M12 3v4 M8 12h1 M15 12h1 M9 16h6"/></svg><span data-ui-text="shell.agents" class="rail-label">智能体</span></a>
+        <a data-ui-title="shell.skills" data-ui-label="shell.skills" href="/skills" title="技能" aria-label="技能"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Z M8.5 10.5h7 M8.5 14h4.5"/></svg><span data-ui-text="shell.skills" class="rail-label">技能</span></a>
+<a data-ui-title="shell.automations" data-ui-label="shell.automations" href="/automations" title="自动化" aria-label="自动化"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg><span data-ui-text="shell.automations" class="rail-label">自动化</span></a>
+    <a data-ui-title="shell.memory" data-ui-label="shell.memory" href="/memory" title="记忆" aria-label="记忆"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4a4 4 0 0 0-4 4v8a4 4 0 0 0 4 4 M16 4a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4 M8 8h8 M8 12h8 M8 16h8 M12 4v16"/></svg><span data-ui-text="shell.memory" class="rail-label">记忆</span></a>
+    <a data-ui-title="shell.space" data-ui-label="shell.space" href="/space" title="作品" aria-label="作品"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg><span data-ui-text="shell.space" class="rail-label">作品</span></a>
+    <a data-ui-title="shell.meetings" data-ui-label="shell.meetings" href="/meetings" title="会议" aria-label="会议"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v14H4z M8 3v4 M16 3v4 M4 10h16"/></svg><span data-ui-text="shell.meetings" class="rail-label">会议</span></a>
+    <a data-ui-title="shell.discover" data-ui-label="shell.discover" href="/discover" title="发现" aria-label="发现"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg><span data-ui-text="shell.discover" class="rail-label">发现</span></a>
+    <a data-ui-title="shell.contacts" data-ui-label="shell.contacts" href="/contacts" title="联系人" aria-label="联系人"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z M3 21v-2a7 7 0 0 1 14 0v2 M17 4a3.5 3.5 0 0 1 0 7 M19 14a6 6 0 0 1 3 5v2"/></svg><span data-ui-text="shell.contacts" class="rail-label">联系人</span></a>
     <span class="rail-spacer"></span>
-    <a href="/profile" class="rail-signed-in" hidden title="我的资料" aria-label="我"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7a4 4 0 1 0 8 0 4 4 0 0 0-8 0 M4 21v-2a8 8 0 0 1 16 0v2"/></svg><span class="rail-label">我</span></a>
-    <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换浅色或深色。会写入已有外观设置；按钮在深色下显示「深色」。点击后的标签变化未经 Teamily 核实。">浅色</button>
-    <a href="/download" title="下载" aria-label="下载"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12 m-5-5 5 5 5-5 M4 16v5h16v-5"/></svg><span class="rail-label">下载</span></a>
+    <a data-ui-title="shell.profile" data-ui-label="shell.profile.short" href="/profile" class="rail-signed-in" hidden title="我的资料" aria-label="我"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7a4 4 0 1 0 8 0 4 4 0 0 0-8 0 M4 21v-2a8 8 0 0 1 16 0v2"/></svg><span data-ui-text="shell.profile.short" class="rail-label">我</span></a>
+    <button data-ui-title="shell.appearance.hint" type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换浅色或深色。">浅色</button>
+    <a data-ui-title="shell.download" data-ui-label="shell.download" href="/download" title="下载" aria-label="下载"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12 m-5-5 5 5 5-5 M4 16v5h16v-5"/></svg><span data-ui-text="shell.download" class="rail-label">下载</span></a>
     <div class="account-slot" hidden>
-      <button type="button" id="account-menu-button" class="account-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="账户菜单">账户</button>
+      <button data-ui-title="shell.account.menu" type="button" id="account-menu-button" class="account-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="账户菜单">账户</button>
       <div id="account-menu" class="account-menu" role="menu" hidden>
         <p id="account-identity" class="account-identity"></p>
-        <a href="/profile" role="menuitem" aria-label="查看我的资料">查看我的资料</a>
-        <a href="/team" role="menuitem">创建团队</a>
+        <a data-ui-label="shell.profile.view" data-ui-text="shell.profile.view" href="/profile" role="menuitem" aria-label="查看我的资料">查看我的资料</a>
+        <a data-ui-text="shell.team.new" href="/team" role="menuitem">创建团队</a>
         <div class="account-sub">
-          <button type="button" id="help-menu-button" aria-expanded="false" aria-controls="help-menu">帮助</button>
+          <button data-ui-text="shell.help" type="button" id="help-menu-button" aria-expanded="false" aria-controls="help-menu">帮助</button>
           <div id="help-menu" hidden>
-            <a href="/help" role="menuitem">帮助中心</a>
-            <a href="/guide" role="menuitem">功能指引</a>
-            <a href="/about" role="menuitem">关于</a>
-            <a href="/download" role="menuitem" aria-label="下载">下载</a>
-            <a href="/settings#send-shortcut" role="menuitem">快捷键</a>
-            <a href="/terms" role="menuitem">服务条款</a>
-            <a href="/privacy" role="menuitem">隐私政策</a>
-            <a href="https://github.com/openTeamily/openTeamily/issues" rel="noreferrer" target="_blank" role="menuitem" title="指向本仓库的 issue 列表，不是 Teamily 的联系邮箱">报告问题</a>
+            <a data-ui-text="shell.help.center" href="/help" role="menuitem">帮助中心</a>
+            <a data-ui-text="shell.guide" href="/guide" role="menuitem">功能指引</a>
+            <a data-ui-text="shell.about" href="/about" role="menuitem">关于</a>
+            <a data-ui-label="shell.download" data-ui-text="shell.download" href="/download" role="menuitem" aria-label="下载">下载</a>
+            <a data-ui-text="shell.shortcuts" href="/settings#send-shortcut" role="menuitem">快捷键</a>
+            <a data-ui-text="shell.terms" href="/terms" role="menuitem">服务条款</a>
+            <a data-ui-text="shell.privacy" href="/privacy" role="menuitem">隐私政策</a>
+            <a data-ui-title="shell.issue.hint" data-ui-text="shell.issue" href="https://github.com/openTeamily/openTeamily/issues" rel="noreferrer" target="_blank" role="menuitem" title="打开本项目的问题列表">报告问题</a>
           </div>
         </div>
-        <a href="/settings" role="menuitem" aria-label="所有设置">所有设置</a>
+        <a data-ui-label="shell.settings.all" data-ui-text="shell.settings.all" href="/settings" role="menuitem" aria-label="所有设置">所有设置</a>
         <form id="logout-form" method="post" action="/v1/auth/logout">
-          <button type="submit">退出登录</button>
+          <button data-ui-text="shell.signout" type="submit">退出登录</button>
         </form>
       </div>
     </div>
@@ -60,144 +60,144 @@
   <p id="status" role="status"></p>
   <main id="main">
   <section id="login-panel" hidden>
-    <h2>登录</h2>
+    <h2 data-ui-text="shell.signin">登录</h2>
     <form id="login-form" method="post" action="/v1/auth/login">
-      <label>用户名 <input type="text" id="username" name="username" required autocomplete="username" maxlength="64"></label>
-      <label>密码 <input id="password" name="password" type="password" required autocomplete="current-password" minlength="12" maxlength="256"></label>
-      <button type="submit">登录</button>
+      <label><span data-ui-text="shell.username">用户名</span> <input type="text" id="username" name="username" required autocomplete="username" maxlength="64"></label>
+      <label><span data-ui-text="shell.password">密码</span> <input id="password" name="password" type="password" required autocomplete="current-password" minlength="12" maxlength="256"></label>
+      <button data-ui-text="shell.signin" type="submit">登录</button>
     </form>
-    <p><a class="login-register-button" href="/register">注册新账户</a> · 需要管理员开放本实例注册；普通账号不会成为平台管理员。</p>
+    <p><a data-ui-text="shell.register" class="login-register-button" href="/register">注册新账户</a> · <span data-ui-text="shell.register.policy">需要管理员开放本实例注册。</span></p>
     <div id="oidc-providers"></div>
   </section>
   <section id="settings-panel" hidden>
     <div data-settings-hub>
     <header class="page-top">
-      <h1>设置</h1>
+      <h1 data-ui-text="shell.settings">设置</h1>
     </header>
     <p id="whoami"></p>
-    <nav class="workspace-links" aria-label="工作区">
-      <a href="/members">成员</a>
+    <nav data-ui-label="shell.workspace" class="workspace-links" aria-label="工作区">
+      <a data-ui-text="shell.members" href="/members">成员</a>
     </nav>
-    <nav id="settings-index" class="settings-index" aria-label="设置分组">
+    <nav data-ui-label="settings.groups" id="settings-index" class="settings-index" aria-label="设置分组">
       <section class="settings-cluster" aria-labelledby="group-account">
-        <h2 id="group-account">账户与资料</h2>
+        <h2 data-ui-text="settings.account" id="group-account">账户与资料</h2>
         <div class="settings-group">
         <a class="settings-row" href="/profile">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 3.5a4 4 0 1 1 0 8 4 4 0 0 1 0-8zM5 19.2c.6-3.4 3.4-5.2 7-5.2s6.4 1.8 7 5.2c.1.6-.3 1.3-1 1.3H6c-.7 0-1.1-.7-1-1.3z"/></svg></span>
-          <span class="settings-row-label">账户与资料</span>
+          <span data-ui-text="settings.account" class="settings-row-label">账户与资料</span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
         </a>
         </div>
       </section>
       <section class="settings-cluster" aria-labelledby="group-ai">
-        <h2 id="group-ai">AI 与智能体设置</h2>
+        <h2 data-ui-text="settings.ai" id="group-ai">AI 与智能体设置</h2>
         <div class="settings-group">
         <a class="settings-row" href="/settings/language">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4 5h9v2H8.6A13 13 0 0 0 11 11.5c1.3-1 2.4-2.1 3.3-3.3l1.5 1.3C14.5 11 13 12.5 11.4 13.7L14 18h-2.2l-1.8-3.1c-1 .7-2.1 1.3-3.3 1.8l-.8-1.8c1-.4 2-.9 2.8-1.5A15 15 0 0 1 6.2 7H4V5zm11 0h5v2h-2.1l-2.2 12h-2.1L16.9 7H15V5z"/></svg></span>
-          <span class="settings-row-label">语言</span>
+          <span data-ui-text="settings.language" class="settings-row-label">语言</span>
           <span id="language-current" class="settings-row-meta"></span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
         </a>
         <a class="settings-row" href="/settings/channels">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4.8 10.5A8.5 8.5 0 0 1 19.2 7l-1.3 1.3A6.7 6.7 0 0 0 6 11.7l-1.2-1.2zm3 3A5 5 0 0 1 16.5 10l-1.3 1.3a3.3 3.3 0 0 0-5.1 1.5L8 13.5zM12 16a2 2 0 1 1 0 4 2 2 0 0 1 0-4z"/></svg></span>
-          <span class="settings-row-label">Agent 渠道</span>
+          <span data-ui-text="settings.channels" class="settings-row-label">Agent 渠道</span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
         </a>
         <a class="settings-row settings-row-stack" href="/settings/agent-access">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 3h6v2h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-3l-3 3-3-3H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h3V3zm-1 6a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm8 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z"/></svg></span>
           <span class="settings-row-copy">
             <span class="settings-row-title">Agent API</span>
-            <span class="settings-row-meta">在本实例之外使用你的 agent：网站、API、AI 客户端</span>
+            <span data-ui-text="settings.agent-api.hint" class="settings-row-meta">在本实例之外使用你的 agent：网站、API、AI 客户端</span>
           </span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
         </a>
         <a class="settings-row" href="#model-api">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3 M16 3v3 M8 18v3 M16 18v3 M3 8h3 M3 16h3 M18 8h3 M18 16h3 M6 6h12v12H6z M10 10h4v4h-4z"/></svg></span>
-          <span class="settings-row-label">模型 API</span>
-          <span id="model-key-state" class="settings-row-meta">平台默认或你自己的配置，不用积分</span>
+          <span data-ui-text="settings.model-api" class="settings-row-label">模型 API</span>
+          <span data-ui-text="settings.model-api.default" id="model-key-state" class="settings-row-meta">平台默认或你自己的配置，不用积分</span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
         </a>
         <a class="settings-row" href="/settings/skill-configuration">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3Z"/></svg></span>
-          <span class="settings-row-label">技能配置</span>
+          <span data-ui-text="settings.skills" class="settings-row-label">技能配置</span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
         </a>
         <a class="settings-row settings-row-stack" href="/settings/connectors">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M8 3h2v5h4V3h2v5h1a2 2 0 0 1 2 2v3a6 6 0 0 1-5 5.9V21H10v-2.1A6 6 0 0 1 5 13V10a2 2 0 0 1 2-2h1V3z"/></svg></span>
           <span class="settings-row-copy">
-            <span class="settings-row-title">应用连接器</span>
-            <span class="settings-row-meta">你的 agent 可以使用的第三方账号</span>
+            <span data-ui-text="settings.connectors" class="settings-row-title">应用连接器</span>
+            <span data-ui-text="settings.connectors.hint" class="settings-row-meta">你的 agent 可以使用的第三方账号</span>
           </span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
         </a>
         </div>
       </section>
       <section class="settings-cluster" aria-labelledby="group-prefs">
-        <h2 id="group-prefs">偏好与安全</h2>
+        <h2 data-ui-text="settings.preferences" id="group-prefs">偏好与安全</h2>
         <div class="settings-group">
         <label class="settings-row settings-toggle">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M10.6 13.4a4 4 0 0 1 0-5.6l3-3a4 4 0 1 1 5.6 5.6l-1.5 1.5-1.4-1.4 1.5-1.5a2 2 0 0 0-2.8-2.8l-3 3a2 2 0 0 0 0 2.8l1.4 1.4-1.4 1.4-1.4-1.4zm2.8-2.8a4 4 0 0 1 0 5.6l-3 3a4 4 0 1 1-5.6-5.6l1.5-1.5 1.4 1.4-1.5 1.5a2 2 0 1 0 2.8 2.8l3-3a2 2 0 0 0 0-2.8L11.2 9l1.4-1.4 1.4 1.4z"/></svg></span>
-          <span class="settings-row-label">显示链接预览</span>
+          <span data-ui-text="settings.link-previews" class="settings-row-label">显示链接预览</span>
           <input type="checkbox" name="link_previews" form="settings-form" role="switch">
         </label>
         <label class="settings-row settings-toggle">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 3a6 6 0 0 1 6 6v3.2l1.6 2.6H4.4L6 12.2V9a6 6 0 0 1 6-6zm-3 15a3 3 0 0 0 6 0H9z"/></svg></span>
-          <span class="settings-row-label">任务完成提醒</span>
+          <span data-ui-text="settings.reminders" class="settings-row-label">任务完成提醒</span>
           <input type="checkbox" name="task_completion_reminders" form="settings-form" role="switch">
         </label>
         <a class="settings-row" href="/settings/appearance">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 3a9 9 0 0 1 0 18H9a3 3 0 0 1 0-6h1.5A1.5 1.5 0 0 0 12 13.5 4.5 4.5 0 1 0 7.5 9H9A3 3 0 0 1 12 3zm-4 5a1.2 1.2 0 1 0 0-2.4A1.2 1.2 0 0 0 8 8zm3-2.5a1.2 1.2 0 1 0 0-2.4 1.2 1.2 0 0 0 0 2.4zM16 8a1.2 1.2 0 1 0 0-2.4A1.2 1.2 0 0 0 16 8zm1.5 3.5a1.2 1.2 0 1 0 0-2.4 1.2 1.2 0 0 0 0 2.4z"/></svg></span>
-          <span class="settings-row-label">外观</span>
+          <span data-ui-text="settings.appearance" class="settings-row-label">外观</span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
         </a>
         <a class="settings-row" href="/settings/shortcuts">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M5 8h9.5a4.5 4.5 0 1 1 0 9H12v-2h2.5a2.5 2.5 0 0 0 0-5H5l-2 2v3l2 2h3v-2H6l-1-1v-1l1-1h8v-2H5z"/></svg></span>
-          <span class="settings-row-label">发送快捷键</span>
+          <span data-ui-text="settings.send-shortcuts" class="settings-row-label">发送快捷键</span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
         </a>
         <a class="settings-row" href="/settings/message-folding">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M5 5h14v2H5V5zm0 4h10v2H5V9zm0 4h14v2H5v-2zm0 4h10v2H5v-2z"/></svg></span>
-          <span class="settings-row-label">消息折叠</span>
+          <span data-ui-text="settings.folding" class="settings-row-label">消息折叠</span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
         </a>
         <a class="settings-row" href="/settings/privacy">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M8 9V7a4 4 0 1 1 8 0v2h1.5A1.5 1.5 0 0 1 19 10.5v8A1.5 1.5 0 0 1 17.5 20h-11A1.5 1.5 0 0 1 5 18.5v-8A1.5 1.5 0 0 1 6.5 9H8zm2 0h4V7a2 2 0 1 0-4 0v2z"/></svg></span>
-          <span class="settings-row-label">隐私</span>
+          <span data-ui-text="settings.privacy" class="settings-row-label">隐私</span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
         </a>
         </div>
       </section>
       <section class="settings-cluster" aria-labelledby="group-support">
-        <h2 id="group-support">支持与法律</h2>
+        <h2 data-ui-text="settings.support" id="group-support">支持与法律</h2>
         <div class="settings-group">
         <a class="settings-row" href="/guide">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.6 2.2c-.8.4-1.1.9-1.1 1.8 M12 17h.01"/></svg></span>
-          <span class="settings-row-label">功能指引</span>
+          <span data-ui-text="shell.guide" class="settings-row-label">功能指引</span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
         </a>
         <a class="settings-row" href="/about">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 11v6 M12 8h.01"/></svg></span>
-          <span class="settings-row-label">关于</span>
+          <span data-ui-text="shell.about" class="settings-row-label">关于</span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
         </a>
         <a class="settings-row" href="/help">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v12H4z M8 6V5a4 4 0 0 1 8 0v1"/></svg></span>
-          <span class="settings-row-label">帮助中心</span>
+          <span data-ui-text="shell.help.center" class="settings-row-label">帮助中心</span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
         </a>
         <a class="settings-row" href="/terms">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h8l4 4v12H7z M15 4v4h4 M9 12h6 M9 16h6"/></svg></span>
-          <span class="settings-row-label">服务条款</span>
+          <span data-ui-text="shell.terms" class="settings-row-label">服务条款</span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
         </a>
         <a class="settings-row" href="/privacy">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 19 6v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg></span>
-          <span class="settings-row-label">隐私政策</span>
+          <span data-ui-text="shell.privacy" class="settings-row-label">隐私政策</span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
         </a>
-        <a class="settings-row" href="https://github.com/openTeamily/openTeamily/issues" rel="noreferrer" target="_blank" title="指向本仓库的 issue 列表，不是 Teamily 的联系邮箱">
+        <a data-ui-title="shell.issue.hint" class="settings-row" href="https://github.com/openTeamily/openTeamily/issues" rel="noreferrer" target="_blank" title="打开本项目的问题列表">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v5 M12 16h.01"/></svg></span>
-          <span class="settings-row-label">报告问题</span>
+          <span data-ui-text="shell.issue" class="settings-row-label">报告问题</span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
         </a>
         </div>
@@ -205,7 +205,7 @@
     </nav>
     </div>
     <form id="settings-form" method="post" action="/v1/settings">
-      <div data-settings-page="appearance" hidden>
+      <div lang="zh-CN" data-settings-page="appearance" hidden>
         <header class="settings-subhead">
           <a href="/settings" class="settings-back" aria-label="返回设置">‹ 外观</a>
         </header>
@@ -234,35 +234,39 @@
       </div>
       <div data-settings-page="language" hidden>
         <header class="settings-subhead">
-          <a href="/settings" class="settings-back" aria-label="返回设置">‹ 语言</a>
+          <a data-ui-label="settings.back" data-ui-text="settings.language.back" href="/settings" class="settings-back" aria-label="返回设置">‹ 语言</a>
         </header>
         <fieldset id="language-section" class="settings-card">
-          <legend class="visually-hidden">语言</legend>
-          <label class="settings-field">系统语言
-            <select name="language">
+          <legend data-ui-text="settings.language" class="visually-hidden">语言</legend>
+          <label class="settings-field"><span data-ui-text="settings.language.system">系统语言</span>
+            <select name="language" aria-describedby="system-language-scope">
               <option value="en">English</option>
-              <option value="fa">فارسی</option>
-              <option value="fr">Français</option>
-              <option value="de">Deutsch</option>
-              <option value="es">Español</option>
-              <option value="it">Italiano</option>
-              <option value="pt-BR">Português (Brasil)</option>
-              <option value="ru">Русский</option>
-              <option value="id">Bahasa Indonesia</option>
-              <option value="ms">Bahasa Melayu</option>
-              <option value="hi">हिन्दी</option>
-              <option value="bn">বাংলা</option>
-              <option value="th">ภาษาไทย</option>
-              <option value="ja">日本語</option>
-              <option value="ko">한국어</option>
-              <option value="zh-HK">繁體中文(香港)</option>
-              <option value="zh-TW">繁體中文(台灣)</option>
               <option value="zh-CN">简体中文</option>
+              <optgroup data-ui-option-group="settings.language.unavailable" label="界面翻译暂未提供" disabled>
+                <option value="fa">فارسی</option>
+                <option value="fr">Français</option>
+                <option value="de">Deutsch</option>
+                <option value="es">Español</option>
+                <option value="it">Italiano</option>
+                <option value="pt-BR">Português (Brasil)</option>
+                <option value="ru">Русский</option>
+                <option value="id">Bahasa Indonesia</option>
+                <option value="ms">Bahasa Melayu</option>
+                <option value="hi">हिन्दी</option>
+                <option value="bn">বাংলা</option>
+                <option value="th">ภาษาไทย</option>
+                <option value="ja">日本語</option>
+                <option value="ko">한국어</option>
+                <option value="zh-HK">繁體中文(香港)</option>
+                <option value="zh-TW">繁體中文(台灣)</option>
+              </optgroup>
             </select>
           </label>
-          <label class="settings-field">聊天语言
+          <p data-ui-text="settings.language.scope" id="system-language-scope" class="note">设置首页、语言页、主要聊天控件和导航支持简体中文及英文。</p>
+          <p data-ui-text="settings.language.fallback" id="system-language-fallback" class="note" hidden>已保留所选语言。该界面翻译暂未提供，目前显示简体中文。</p>
+          <label class="settings-field"><span data-ui-text="settings.language.chat">聊天语言</span>
             <select name="chat_language">
-              <option value="auto">跟随界面语言</option>
+              <option data-ui-text="settings.language.auto" value="auto">根据消息语言回复</option>
               <option value="en">English</option>
               <option value="fa">فارسی</option>
               <option value="fr">Français</option>
@@ -283,11 +287,10 @@
             </select>
           </label>
           <p class="note" id="chat-language-effect"></p>
-          <label class="settings-check"><input type="checkbox" name="auto_translate"> 自动翻译消息</label>
+          <label class="settings-check"><input type="checkbox" name="auto_translate"> <span data-ui-text="settings.language.auto-translate">自动翻译消息</span></label>
         </fieldset>
-        <p class="note">「跟随界面语言」是 OpenTeamily 已有的选项，对照里的聊天语言列表没有单独记下这一项。</p>
       </div>
-      <div data-settings-page="shortcuts" hidden>
+      <div lang="zh-CN" data-settings-page="shortcuts" hidden>
         <header class="settings-subhead">
           <a href="/settings" class="settings-back" aria-label="返回设置">‹ 快捷键</a>
         </header>
@@ -307,7 +310,7 @@
           </div>
         </section>
       </div>
-      <div data-settings-page="message-folding" hidden>
+      <div lang="zh-CN" data-settings-page="message-folding" hidden>
         <header class="settings-subhead">
           <a href="/settings" class="settings-back" aria-label="返回设置">‹ 设置</a>
         </header>
@@ -326,7 +329,7 @@
           </label>
         </fieldset>
       </div>
-      <div data-settings-page="privacy" hidden>
+      <div lang="zh-CN" data-settings-page="privacy" hidden>
         <header class="settings-subhead">
           <a href="/settings" class="settings-back" aria-label="返回设置">‹ 隐私设置</a>
         </header>
@@ -351,7 +354,7 @@
         </fieldset>
       </div>
     </form>
-    <div data-settings-page="model-api" hidden>
+    <div lang="zh-CN" data-settings-page="model-api" hidden>
         <header class="settings-subhead">
           <a href="/settings" class="settings-back" aria-label="返回设置">‹ 模型 API</a>
         </header>
@@ -402,8 +405,32 @@
         </div>
       </fieldset>
     </form>
+    <form id="music-api-form" method="post" action="/v1/model-api/music">
+      <fieldset id="music-api" class="settings-card" disabled>
+        <legend>音乐模型</legend>
+        <p class="note">使用 ElevenLabs Music 生成纯音乐或带人声的歌曲。此密钥仅用于当前账号的音乐任务。</p>
+        <label>音乐 API 密钥 <input type="password" name="api_key" maxlength="4096" autocomplete="new-password"></label>
+        <p id="music-api-status" class="note" role="status"></p>
+        <div class="settings-form-actions">
+          <button type="submit" id="save-music-api">保存音乐配置</button>
+          <button type="button" id="clear-music-api" hidden>移除音乐密钥</button>
+        </div>
+      </fieldset>
+    </form>
+    <form id="model3d-api-form" method="post" action="/v1/model-api/model3d">
+      <fieldset id="model3d-api" class="settings-card" disabled>
+        <legend>3D 模型</legend>
+        <p class="note">使用 Meshy 7.1 将描述或参考图生成 GLB 文件。此密钥仅用于当前账号的 3D 生成任务。</p>
+        <label>Meshy API 密钥 <input type="password" name="api_key" maxlength="4096" autocomplete="new-password"></label>
+        <p id="model3d-api-status" class="note" role="status"></p>
+        <div class="settings-form-actions">
+          <button type="submit" id="save-model3d-api">保存 3D 配置</button>
+          <button type="button" id="clear-model3d-api" hidden>移除 3D 密钥</button>
+        </div>
+      </fieldset>
+    </form>
     </div>
-    <div data-settings-page="skill-configuration" hidden>
+    <div lang="zh-CN" data-settings-page="skill-configuration" hidden>
         <header class="settings-subhead">
           <a href="/settings" class="settings-back" aria-label="返回设置">‹ 技能配置</a>
         </header>
@@ -451,7 +478,7 @@
       </fieldset>
     </form>
     </div>
-    <div data-settings-page="channels" hidden>
+    <div lang="zh-CN" data-settings-page="channels" hidden>
         <header class="settings-subhead">
           <a href="/settings" class="settings-back" aria-label="返回设置">‹ Agent 渠道</a>
         </header>
@@ -480,7 +507,7 @@
         </ul>
         <p class="note">对照页标题带有专有品牌，这里只用「Agent 渠道」。没有复制第三方渠道标志。连接会进入外部账号流程，本页只展示记录下来的渠道名单，按钮保持禁用。</p>
     </div>
-    <div data-settings-page="agent-access" hidden>
+    <div lang="zh-CN" data-settings-page="agent-access" hidden>
         <header class="settings-subhead">
           <a href="/settings" class="settings-back" aria-label="返回设置">‹ Agent API</a>
         </header>
@@ -492,7 +519,7 @@
         <p class="settings-card settings-empty">没有已授权的 AI 客户端。</p>
         <p class="note">按智能体的 Agent API 调用密钥在<a href="/agents">智能体</a>页的「API 密钥」里生成和撤销；这里还不会汇总列出，也还没有 AI 客户端授权接口。</p>
     </div>
-    <div data-settings-page="connectors" hidden>
+    <div lang="zh-CN" data-settings-page="connectors" hidden>
         <header class="settings-subhead">
           <a href="/settings" class="settings-back" aria-label="返回设置">‹ 应用连接器</a>
         </header>
@@ -981,11 +1008,11 @@
     </div>
   </section>
   </main>
-  <nav class="mobile-primary-nav" aria-label="主导航">
-    <a href="/chat"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 4h16v12H9l-5 4V4Z"/></svg>聊天</a>
-    <a href="/discover"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg>发现</a>
-    <a href="/contacts"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z M3 21v-2a7 7 0 0 1 14 0v2 M17 4a3.5 3.5 0 0 1 0 7 M19 14a6 6 0 0 1 3 5v2"/></svg>联系人</a>
-    <a href="/settings" aria-current="page"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 6h16 M4 12h16 M4 18h16 M9 4v4 M15 10v4 M9 16v4"/></svg>设置</a>
+  <nav data-ui-label="shell.nav.mobile" class="mobile-primary-nav" aria-label="主导航">
+    <a href="/chat"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 4h16v12H9l-5 4V4Z"/></svg><span data-ui-text="shell.chat">聊天</span></a>
+    <a href="/discover"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg><span data-ui-text="shell.discover">发现</span></a>
+    <a href="/contacts"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z M3 21v-2a7 7 0 0 1 14 0v2 M17 4a3.5 3.5 0 0 1 0 7 M19 14a6 6 0 0 1 3 5v2"/></svg><span data-ui-text="shell.contacts">联系人</span></a>
+    <a href="/settings" aria-current="page"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 6h16 M4 12h16 M4 18h16 M9 4v4 M15 10v4 M9 16v4"/></svg><span data-ui-text="shell.settings">设置</span></a>
   </nav>
 </body>
 </html>

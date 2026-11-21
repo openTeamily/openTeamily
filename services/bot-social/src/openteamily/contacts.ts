@@ -57,7 +57,12 @@ export function registerContacts(app: FastifyInstance, ot: OtContext) {
   });
   app.get(root + "/lookup", async req => {
     const {ownerId} = ot.me(req);
-    return {peer: profile(ot, peerByHandle(ot, query(req).handle, ownerId))};
+    const peer = peerByHandle(ot, query(req).handle, ownerId);
+    const match = ot.get<Contact>(`SELECT * FROM ot_contacts WHERE owner_a=? AND owner_b=?
+      AND status IN ('accepted','pending')`, ...[ownerId, peer].sort());
+    return {peer: profile(ot, peer), relationship: match
+      ? {id: match.id, status: match.status, incoming: match.requested_by !== ownerId}
+      : null};
   });
   app.post(root, async req => {
     const {ownerId} = ot.me(req);

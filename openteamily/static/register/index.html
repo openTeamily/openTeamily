@@ -12,7 +12,7 @@
 <main>
   <p class="brand">OpenTeamily</p>
   <h1>创建账户</h1>
-  <p id="register-policy" role="status">正在读取本实例注册策略…</p><p>创建本实例的账户。仅在管理员开放注册时可用；第三方服务密钥稍后在设置中填写。</p>
+  <p id="register-policy" role="status">正在读取本实例注册策略…</p>
   <form id="register-form" method="post" action="/v1/auth/register">
     <label for="register-username">用户名</label>
     <input type="text" id="register-username" name="username" autocomplete="username" required minlength="3" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{2,63}" aria-describedby="username-help">

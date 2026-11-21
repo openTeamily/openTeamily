@@ -1,13 +1,14 @@
 import { sharedBotSocial } from '../../lib/c/bot-social.js'
 // Legacy /v1 artifact routes, executed inside this user's DS-Bot. The browser
 // shim turns the works-library page's existing fetches into artifacts/v1.
-import { FeatureError, pagination, refuse, requireBodyKeys, validLongText } from '../../featurekit/http.js'
+import { digest, FeatureError, pagination, refuse, requireBodyKeys, validLongText } from '../../featurekit/http.js'
 import {
   canEdit, content, createArtifact, createMedia, createShare, exportResult, HEX32, listShares, listing,
   load, mediaDigests, parseExportFormat, recordVersion, replaceMedia, restoreArtifact, revokeShare, shareView,
   unlinkMedia, updateArtifact, view, versionView,
 } from './library.js'
 import { decodeUpload } from './media.js'
+import { WEBSITE_HTML, websitePreviewRevision } from '../../lib/website-preview.js'
 import { publicKind, SLIDES_SCHEMA, TITLE_MAX, validTitle } from './model.js'
 import { normalizeSlides } from './structured.js'
 import { decodeWorkbook, normalizeWorkbook, WORKBOOK_SCHEMA, workbookText } from './workbook.js'
@@ -23,19 +24,38 @@ function mustLoad(req, workspaceId, artifactId) {
   return row
 }
 
+function workspaceActivity(req, workspaceId) {
+  // Only revision metadata from this owner's private database. The workspace
+  // index keeps the read bounded to works in the selected scope.
+  const rows = req.store.all(`
+    SELECT a.id, a.revision, f.artifact_id IS NOT NULL AS favorited
+    FROM artifacts a
+    LEFT JOIN artifact_favorites f ON f.artifact_id=a.id AND f.user_id=?
+    WHERE a.workspace_id=? ORDER BY a.id`, req.owner, workspaceId)
+  const version = digest(JSON.stringify([req.owner, workspaceId, rows]))
+  return { rows, version }
+}
+
+function activity(req, workspaceId) {
+  const artifactId = req.query.get('artifact')
+  if (req.method !== 'GET' || (req.query.size && (req.query.size !== 1 || !HEX32.test(artifactId || '')))) {
+    refuse(400, 'invalid', 'Invalid artifact activity request')
+  }
+  const {rows, version} = workspaceActivity(req, workspaceId)
+  return { body: artifactId ? {version, revision: rows.find((row) => row.id === artifactId)?.revision ?? null} : {version} }
+}
+
 export async function dispatch(req, workspaceId, artifactId, action) {
   const context = ctx(req)
   if (!artifactId && req.method === 'GET') {
     const { limit, cursor, args } = pagination(req.query, ['q'])
     const needle = (args.get('q') ?? '').trim().toLocaleLowerCase('en-US')
     if (needle.length > 80) refuse(400, 'invalid', 'Invalid artifact request')
+    const { rows: activityRows, version } = workspaceActivity(req, workspaceId)
     const rows = listing(req.store, workspaceId, cursor, limit + 1, needle)
-    const favorites = new Set(req.store.all(
-      'SELECT f.artifact_id AS id FROM artifact_favorites f JOIN artifacts a ON a.id=f.artifact_id WHERE a.workspace_id=? AND f.user_id=?',
-      workspaceId, req.owner,
-    ).map((row) => row.id))
+    const favorites = new Set(activityRows.filter((row) => row.favorited).map((row) => row.id))
     const items = rows.slice(0, limit).map((row) => view(row, false, { favorited: favorites.has(row.id) }))
-    return { body: { items, cursor: rows.length > limit ? rows[limit - 1].id : null } }
+    return { body: { items, cursor: rows.length > limit ? rows[limit - 1].id : null, activity_version: version } }
   }
   if (!artifactId && req.method === 'POST' && !req.queryString) {
     const raw = await req.json(4 * 1024 * 1024)
@@ -74,8 +94,20 @@ export async function dispatch(req, workspaceId, artifactId, action) {
     return { body: { removed: view(row, false) } }
   }
   if (action === 'preview') {
-    if (req.method !== 'GET' || req.queryString) refuse(400, 'invalid', 'Invalid artifact request')
-    return content(row, context.featureDir, { preview: true })
+    if (req.method !== 'GET') refuse(400, 'invalid', 'Invalid artifact request')
+    const website = publicKind(row) === 'website'
+    if (!req.queryString) {
+      const result = content(row, context.featureDir, { preview: true })
+      return website ? { ...result, inline: true } : result
+    }
+    const revision = websitePreviewRevision(req.query)
+    if (!website || revision === null) refuse(400, 'invalid', 'Invalid artifact request')
+    if (revision !== row.revision) refuse(409, 'conflict', 'Open the current saved website revision')
+    return {
+      status: 200, raw: row.body,
+      headers: { 'content-type': WEBSITE_HTML },
+      filename: 'website-preview.html',
+    }
   }
   if (action === 'file') {
     if (req.queryString) refuse(400, 'invalid', 'Invalid artifact request')
@@ -258,6 +290,7 @@ async function artifactDraft(req, workspaceId, kind) {
 }
 
 export const routes = [
+  { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/activity$/, handle: activity },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/(spreadsheet|slides)\/draft$/, handle: artifactDraft },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/versions(?:\/(\d{1,8})(?:\/(export))?)?$/, handle: history },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/shares(?:\/([0-9a-f]{32})(\/revoke)?)?$/, handle: shares },

@@ -1,4 +1,5 @@
 import { readWorkspaceChoices } from '../shell/dsbot-api.mjs';
+import { spaceHref } from '../shell/thumb.mjs';
 
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
@@ -84,6 +85,7 @@ const RUN_ERROR_REASONS = Object.freeze({
   timeout: '这次运行超时，没有在时限内完成。',
   no_agent: '当前没有已连接的代理，运行还在排队。',
   provider_error: '模型提供方这次没有返回结果。',
+  model_unconfigured: '这个运行时缺少模型 API 配置。',
   rate_limited: '被服务方限流，这次运行没有跑完。',
   forbidden: '当前工作区没有权限完成这次运行。',
   invalid: '这次运行的请求没有被接受，没有执行。',
@@ -368,6 +370,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const workspaceSelect = document.getElementById('workspace');
   const search = document.getElementById('search');
   const runButton = document.getElementById('tick-automation');
+  const runHistoryButton = document.getElementById('show-run-history');
+  const runPanel = document.getElementById('run-panel');
+  const runHeading = document.getElementById('run-heading');
+  const runPages = document.getElementById('run-pages');
+  const runNewer = document.getElementById('run-newer');
+  const runOlder = document.getElementById('run-older');
   const newButton = document.getElementById('new-automation');
   const saveButton = document.getElementById('save-automation');
   const backButton = document.getElementById('cancel-editor');
@@ -384,6 +392,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let runRequest = 0;
   let listRequest = 0;
   let recentRuns = [];
+  let runCursors = [''];
+  let nextRunCursor = '';
+  let activeRun = false;
+  const savedRunResults = new Map();
+  const savingRunResults = new Set();
   const manualKeys = new Map();
   const manualPending = new Set();
   const view = document.defaultView;
@@ -493,6 +506,62 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+  function resetRunPages() {
+    runCursors = [''];
+    nextRunCursor = '';
+    if (runPages) runPages.hidden = true;
+  }
+
+  function setRunPageControls(loading = false) {
+    if (runPages) runPages.hidden = !nextRunCursor && runCursors.length === 1;
+    if (runNewer) runNewer.disabled = loading || runCursors.length === 1;
+    if (runOlder) runOlder.disabled = loading || !nextRunCursor;
+  }
+
+  function showRunHistory() {
+    runPanel?.scrollIntoView({block: 'start'});
+    runHeading?.focus({preventScroll: true});
+  }
+
+  async function saveRunResult(button, item, target) {
+    if (savingRunResults.has(item.id)) return;
+    savingRunResults.add(item.id);
+    button.disabled = true;
+    button.textContent = '保存中…';
+    const sameEditor = () => current?.id === target.automation && workspaceId() === target.workspace && !form.hidden;
+    try {
+      const result = await request('POST',
+        `/v1/workspaces/${target.workspace}/automations/${target.automation}/runs/${item.id}/artifact`, {});
+      const artifact = result.body.artifact?.id;
+      if (![200, 201].includes(result.status) || !/^[0-9a-f]{32}$/.test(artifact || '')) {
+        if (sameEditor()) show('error', messageFor(result.body.error, '保存到作品库失败。'));
+        return;
+      }
+      savedRunResults.set(item.id, artifact);
+      if (sameEditor()) {
+        show('ok', '已保存到作品库。');
+        if (!button.isConnected) {
+          renderRuns(recentRuns);
+          return;
+        }
+        const link = document.createElement('a');
+        link.href = spaceHref(target.workspace, artifact);
+        link.className = 'run-work-link';
+        link.textContent = '打开作品';
+        button.insertAdjacentElement('afterend', link);
+        button.hidden = true;
+        link.focus();
+      }
+    } catch {
+      if (sameEditor()) show('error', '暂时无法确认是否已保存，可以重试。');
+    } finally {
+      savingRunResults.delete(item.id);
+      if (sameEditor() && !button.isConnected && !savedRunResults.has(item.id)) renderRuns(recentRuns);
+      button.disabled = false;
+      button.textContent = '保存到作品库';
+    }
+  }
+
   function renderRuns(items) {
     const list = document.getElementById('run-list');
     const empty = document.getElementById('run-empty');
@@ -549,19 +618,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         note.textContent = RUN_DETAIL_EMPTY;
         detail.appendChild(note);
       }
-      if (item.status === 'succeeded' && current && current.id) {
-        const save = document.createElement('button');
-        save.type = 'button';
-        save.textContent = '保存到作品库';
-        save.addEventListener('click', async () => {
-          const result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${current.id}/runs/${item.id}/artifact`, {});
-          if (result.status !== 200 && result.status !== 201) {
-            show('error', messageFor(result.body.error, '保存到作品库失败。'));
-            return;
-          }
-          show('ok', '已保存到作品库。');
-        });
-        detail.appendChild(save);
+      if (item.status === 'succeeded' && runResultText(item).trim() && current?.id) {
+        const target = {workspace: workspaceId(), automation: current.id};
+        const artifact = savedRunResults.get(item.id);
+        const action = document.createElement(artifact ? 'a' : 'button');
+        if (artifact) {
+          action.href = spaceHref(target.workspace, artifact);
+          action.className = 'run-work-link';
+          action.textContent = '打开作品';
+        } else {
+          action.type = 'button';
+          action.disabled = savingRunResults.has(item.id);
+          action.textContent = action.disabled ? '保存中…' : '保存到作品库';
+          action.addEventListener('click', () => saveRunResult(action, item, target));
+        }
+        detail.appendChild(action);
+      }
+      if (item.error_code === 'model_unconfigured') {
+        const settings = document.createElement('a');
+        settings.href = '/settings#model-api';
+        settings.className = 'run-work-link';
+        settings.textContent = '配置模型 API';
+        detail.appendChild(settings);
       }
       toggle.addEventListener('click', () => {
         const next = !expandedRuns.has(item.id);
@@ -650,7 +728,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }, pending ? 3000 : 12000);
   }
 
-  async function loadRuns() {
+  async function loadRuns({cursors = runCursors, focus = false} = {}) {
     stopRunPoll();
     const panel = document.getElementById('run-panel');
     if (!panel) return;
@@ -661,20 +739,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const workspace = workspaceId(), automation = current.id;
     const seq = ++runRequest;
     const wanted = runFilter === 'all' ? '' : `&status=${runFilter}`;
-    const listed = await request('GET', `/v1/workspaces/${workspace}/automations/${automation}/runs?limit=20${wanted}`)
+    const cursor = cursors.at(-1);
+    setRunPageControls(true);
+    const listed = await request('GET', `/v1/workspaces/${workspace}/automations/${automation}/runs?limit=20${wanted}${cursor ? '&cursor=' + cursor : ''}`)
       .catch(() => ({status: 0, body: {}}));
     if (seq !== runRequest || workspaceId() !== workspace || current?.id !== automation || form.hidden) return;
     if (listed.status !== 200) {
+      setRunPageControls();
       show('error', messageFor(listed.body.error, '无法读取运行记录。'));
-      scheduleRunPoll(recentRuns.some(item => item.status === 'queued'));
+      scheduleRunPoll(activeRun);
       return;
     }
     const items = listed.body.items || [];
+    runCursors = cursors;
+    nextRunCursor = /^[0-9a-f]{32}$/.test(listed.body.cursor || '') ? listed.body.cursor : '';
+    setRunPageControls();
     renderRuns(items);
-    const pending = items.some(item => item.status === 'queued');
-    runButton.disabled = pending || manualPending.has(automation);
-    runButton.textContent = pending ? '运行中…' : '运行一次';
-    scheduleRunPoll(pending);
+    if (focus) showRunHistory();
+    activeRun = listed.body.has_pending === true || items.some(item => item.status === 'queued');
+    runButton.disabled = activeRun || manualPending.has(automation);
+    runButton.textContent = activeRun ? '运行中…' : '运行一次';
+    scheduleRunPoll(activeRun);
   }
 
   async function renderProviders() {
@@ -731,6 +816,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     current = item;
     draftSave = null;
     recentRuns = [];
+    activeRun = false;
+    resetRunPages();
+    if (runHistoryButton) runHistoryButton.hidden = !item?.id;
     stopRunPoll();
     listPanel.hidden = true;
     form.hidden = false;
@@ -870,6 +958,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     loadList();
   });
   search.addEventListener('input', () => loadList());
+  runHistoryButton?.addEventListener('click', () => {
+    if (runPanel?.hidden) void loadRuns({focus: true});
+    else showRunHistory();
+  });
+  runNewer?.addEventListener('click', () => {
+    if (runCursors.length > 1) void loadRuns({cursors: runCursors.slice(0, -1), focus: true});
+  });
+  runOlder?.addEventListener('click', () => {
+    if (nextRunCursor) void loadRuns({cursors: [...runCursors, nextRunCursor], focus: true});
+  });
   syncRunFilters();
   for (const [filter, id] of Object.entries(RUN_FILTER_BUTTONS)) {
     const button = document.getElementById(id);
@@ -877,6 +975,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     button.addEventListener('click', async () => {
       if (filter === runFilter) return;
       runFilter = filter;
+      resetRunPages();
       syncRunFilters();
       pushRunFilter(filter);
       await loadRuns();
@@ -887,6 +986,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const wanted = runFilterFromSearch(readSearch());
       if (wanted === runFilter) return;
       runFilter = wanted;
+      resetRunPages();
       syncRunFilters();
       loadRuns();
     });
@@ -979,6 +1079,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (heading) heading.textContent = current.title;
     document.getElementById('remove-automation').hidden = false;
     runButton.hidden = false;
+    if (runHistoryButton) runHistoryButton.hidden = false;
     show('ok', current.enabled ? '已保存，自动运行已启用。' : '已保存，自动运行未启用。');
     await loadRuns();
   });
@@ -1000,17 +1101,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       manualKeys.delete(automation);
       if (!isCurrent()) return;
+      const onLatest = runCursors.length === 1 && runFilter === 'all';
       runFilter = 'all';
+      resetRunPages();
       syncRunFilters();
       pushRunFilter(runFilter);
-      renderRuns([result.body.run, ...recentRuns.filter(run => run.id !== result.body.run.id)]);
+      activeRun = result.body.run.status === 'queued';
+      renderRuns([result.body.run, ...(onLatest ? recentRuns.filter(run => run.id !== result.body.run.id) : [])].slice(0, 20));
       show('ok', '已提交，结果会出现在运行记录中。');
+      showRunHistory();
     } catch {
       if (isCurrent()) show('error', '暂时无法确认是否提交成功，可以重试。');
     } finally {
       manualPending.delete(automation);
       if (isCurrent()) {
-        runButton.disabled = recentRuns.some(run => run.status === 'queued');
+        runButton.disabled = activeRun;
         runButton.textContent = runButton.disabled ? '运行中…' : '运行一次';
         await loadRuns();
       }
@@ -1058,6 +1163,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     closeConfirm({restoreFocus: false});
     current = null;
+    savedRunResults.clear();
     stopRunPoll();
     await load();
   });

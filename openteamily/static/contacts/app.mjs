@@ -13,6 +13,7 @@ const lookupState = byId('lookup-state');
 const lookupResult = byId('lookup-result');
 const lookupButton = byId('lookup-contact');
 const sendRequest = byId('request-contact');
+const lookupRelationship = byId('lookup-relationship');
 
 let section = 'accepted';
 let workspace = '';
@@ -25,7 +26,7 @@ let lookupSequence = 0;
 let submitting = false;
 let version = 0;
 let confirmRemove = '';
-const busy = new Set();
+const busy = new Map();
 
 async function request(path, body) {
   const headers = {Accept: 'application/json'};
@@ -74,6 +75,9 @@ function updateTabs() {
 }
 
 function render() {
+  const focused = list.contains(document.activeElement) ? document.activeElement : null;
+  const focusId = focused?.closest('li')?.dataset.contactId;
+  const focusAction = focused?.dataset.action;
   updateTabs();
   byId('contacts-results').setAttribute('aria-busy', String(loading));
   retry.hidden = !failed;
@@ -88,6 +92,7 @@ function render() {
   list.replaceChildren(...visible.map(row => {
     const item = document.createElement('li');
     item.className = 'contact-person';
+    item.dataset.contactId = row.id;
     const avatar = document.createElement('span');
     avatar.className = 'contact-avatar';
     avatar.setAttribute('aria-hidden','true');
@@ -101,10 +106,11 @@ function render() {
     info.append(name, handle);
     const actions = document.createElement('div');
     actions.className = 'contact-actions';
-    const button = (label, callback, secondary = false) => {
+    const button = (action, label, callback, secondary = false) => {
       const element = document.createElement('button');
       element.type = 'button';
-      element.textContent = label;
+      element.dataset.action = action;
+      element.textContent = busy.get(row.id) === action ? (action === 'chat' ? '正在打开…' : '处理中…') : label;
       element.disabled = busy.has(row.id);
       if (secondary) element.className = 'secondary';
       element.addEventListener('click', callback);
@@ -112,22 +118,29 @@ function render() {
     };
     if (row.status === 'accepted') {
       if (confirmRemove === row.id) {
-        button('确认移除', () => void change(row, 'remove'));
-        button('取消', () => { confirmRemove = ''; render(); }, true);
+        button('remove', '确认移除', () => void change(row, 'remove'));
+        button('cancel-remove', '取消', () => { confirmRemove = ''; render(); }, true);
       } else {
-        button('聊天', () => void chat(row));
-        button('移除', () => { confirmRemove = row.id; render(); }, true);
+        button('chat', '聊天', () => void chat(row));
+        button('confirm-remove', '移除', () => { confirmRemove = row.id; render(); }, true);
       }
     } else if (row.incoming) {
-      button('接受', () => void change(row, 'accept'));
-      button('拒绝', () => void change(row, 'decline'), true);
+      button('accept', '接受', () => void change(row, 'accept'));
+      button('decline', '拒绝', () => void change(row, 'decline'), true);
     } else {
       handle.textContent += ' · 等待确认';
-      button('撤回', () => void change(row, 'cancel'), true);
+      button('cancel', '撤回', () => void change(row, 'cancel'), true);
     }
     item.append(avatar, info, actions);
     return item;
   }));
+  if (focusId) {
+    const controls = [...list.querySelectorAll('button:not(:disabled)')]
+      .filter(button => button.closest('li')?.dataset.contactId === focusId);
+    const next = controls.find(button => button.dataset.action === focusAction) || controls[0]
+      || tabs.find(tab => tab.dataset.section === section);
+    next?.focus({preventScroll:true});
+  }
 }
 
 async function load() {
@@ -151,7 +164,7 @@ async function load() {
 
 async function change(row, action) {
   if (busy.has(row.id)) return;
-  busy.add(row.id);
+  busy.set(row.id, action);
   render();
   try {
     replaceRecord(await request(root + '/' + encodeURIComponent(row.id), {action}));
@@ -174,7 +187,7 @@ async function chat(row) {
     void load();
     return;
   }
-  busy.add(row.id);
+  busy.set(row.id, 'chat');
   render();
   try {
     const data = await request('/v1/workspaces/' + workspace + '/social/conversations', {kind:'dm', member_ids:[row.peer.handle]});
@@ -194,6 +207,21 @@ function clearLookup() {
   lookupButton.disabled = false;
 }
 
+function showLookup(peer, relationship) {
+  located = {peer, relationship};
+  const accepted = relationship?.status === 'accepted';
+  const pending = relationship?.status === 'pending';
+  const received = pending && relationship.incoming;
+  lookupRelationship.textContent = accepted ? '已添加' : received ? '对方已发送申请' : pending ? '等待对方确认' : '';
+  lookupRelationship.hidden = !relationship;
+  sendRequest.textContent = accepted ? '聊天' : received ? '接受申请' : '发送申请';
+  sendRequest.hidden = pending && !received;
+  byId('lookup-avatar').textContent = avatarText(peer);
+  byId('lookup-name').textContent = peer.display_name || peer.handle;
+  byId('lookup-handle').textContent = '@' + peer.handle;
+  lookupResult.hidden = false;
+}
+
 byId('add-contact').addEventListener('click', () => {
   byId('contact-lookup-form').reset();
   clearLookup();
@@ -209,14 +237,10 @@ byId('contact-lookup-form').addEventListener('submit', async event => {
   lookupButton.disabled = true;
   lookupState.textContent = '正在查找…';
   try {
-    const {peer} = await request(root + '/lookup?' + new URLSearchParams({handle:handleField.value.trim()}));
+    const {peer, relationship} = await request(root + '/lookup?' + new URLSearchParams({handle:handleField.value.trim()}));
     if (sequence !== lookupSequence || !dialog.open) return;
-    located = peer;
     lookupState.textContent = '';
-    byId('lookup-avatar').textContent = avatarText(peer);
-    byId('lookup-name').textContent = peer.display_name || peer.handle;
-    byId('lookup-handle').textContent = '@' + peer.handle;
-    lookupResult.hidden = false;
+    showLookup(peer, relationship);
   } catch (error) {
     if (sequence === lookupSequence) lookupState.textContent = error.message;
   } finally {
@@ -224,19 +248,37 @@ byId('contact-lookup-form').addEventListener('submit', async event => {
   }
 });
 sendRequest.addEventListener('click', async () => {
-  if (!located || submitting) return;
+  if (!located || submitting || sendRequest.hidden) return;
+  const {peer, relationship} = located;
+  if (relationship?.status === 'accepted') {
+    dialog.close();
+    return chat({...relationship, peer});
+  }
+  const sequence = lookupSequence;
   submitting = true;
   sendRequest.disabled = true;
   try {
-    const item = await request(root, {handle:located.handle});
+    const accepting = relationship?.status === 'pending' && relationship.incoming;
+    const item = accepting
+      ? await request(root + '/' + encodeURIComponent(relationship.id), {action:'accept'})
+      : await request(root, {handle:peer.handle});
     replaceRecord(item);
+    if (sequence !== lookupSequence || !dialog.open) {
+      render();
+      return;
+    }
+    if (item.status === 'pending' && item.incoming) {
+      showLookup(item.peer, item);
+      render();
+      return;
+    }
     section = item.status;
     search.value = '';
     dialog.close();
-    notify(item.status === 'accepted' ? '已经是联系人。' : item.incoming ? '对方已发来申请。' : '已发送申请。');
+    notify(accepting ? '已添加联系人。' : item.status === 'accepted' ? '已经是联系人。' : '已发送申请。');
     render();
   } catch (error) {
-    lookupState.textContent = error.message;
+    if (sequence === lookupSequence && dialog.open) lookupState.textContent = error.message;
   } finally {
     submitting = false;
     sendRequest.disabled = false;

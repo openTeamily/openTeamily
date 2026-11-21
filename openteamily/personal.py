@@ -36,6 +36,11 @@ PERSONAL_INSTRUCTIONS = (
 WELCOME = '你们已经是好友了，可以开始聊天啦！'
 CONTROL = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
 
+
+class WorkspaceCapacity(ValueError):
+    pass
+
+
 BUILTINS = (
     ('teamily-agent', 'Teamily Agent', 'Teamily 平台助手', '帮助用户了解和使用平台功能。'),
     ('content-creator', 'Content Creator', '内容创作助手', '协助起草、改写和润色内容。'),
@@ -90,7 +95,7 @@ def ensure(db, user, max_workspaces_per_user, max_workspaces, max_agents, now):
     if (db.execute('SELECT COUNT(*) FROM workspaces WHERE owner_id=?', (user['id'],)).fetchone()[0]
             >= max_workspaces_per_user
             or db.execute('SELECT COUNT(*) FROM workspaces').fetchone()[0] >= max_workspaces):
-        raise ValueError('quota')
+        raise WorkspaceCapacity('Workspace capacity reached')
     workspace_id = uuid4().hex
     db.execute(
         'INSERT INTO workspaces VALUES(?,?,?,?,?,?)',

@@ -216,7 +216,7 @@ function languageFetcher(values) {
       sent.push({path, body: JSON.parse(options.body), headers: options.headers});
       return json(201, {
         message: {id: 'm3', role: 'user', body: '今天有什么安排？', status: 'succeeded'},
-        reply: {id: 'm4', role: 'assistant', body: '', status: 'queued', error_code: null},
+        reply: {id: 'm4', role: 'assistant', body: '收到。', status: 'succeeded', error_code: null},
       });
     }
     throw new Error('unexpected ' + (options.method || 'GET') + ' ' + path);
@@ -251,10 +251,16 @@ test('a saved English chat language rides along with the next message', async ()
   assert.match(sent[0].headers['Idempotency-Key'] || '', /^msg-/);
 });
 
-test('跟随界面语言 sends no chat language at all', async () => {
+test('automatic reply language sends no forced language preference', async () => {
   const sent = await sendOnce({send_shortcut: 'enter', chat_language: 'auto'});
   assert.equal(sent.length, 1, 'the composer sends exactly one message');
   assert.deepEqual(Object.keys(sent[0].body), ['body'], 'auto must not invent a language field');
+});
+
+test('the English interface keeps the separately selected Japanese reply language', async () => {
+  const sent = await sendOnce({send_shortcut:'enter', language:'en', chat_language:'ja'});
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].body.chat_language, 'ja');
 });
 
 // The stored value is a code; the sentence under the select is the only place a
@@ -263,8 +269,8 @@ test('the language note says what the choice does when a message is sent', async
   const settings = await import('../openteamily/static/settings/app.mjs');
   assert.equal(typeof settings.chatLanguageEffect, 'function',
     'the language page needs one sentence about what the choice does');
-  assert.match(settings.chatLanguageEffect('en', 'English'), /发消息时会带上「English」/);
-  assert.match(settings.chatLanguageEffect('auto', '跟随界面语言'), /发消息时不指定语言/);
+  assert.match(settings.chatLanguageEffect('en', 'English'), /使用「English」回复/);
+  assert.match(settings.chatLanguageEffect('auto'), /界面语言单独设置/);
   const nodes = {'chat-language-effect': {textContent: ''}};
   settings.syncChatLanguageNote({getElementById: id => nodes[id] || null}, 'ja', '日本語');
   assert.match(nodes['chat-language-effect'].textContent, /日本語/);

@@ -29,6 +29,14 @@ export default function modelApi(host) {
         if (!call?.internal) throw Object.assign(new Error('Internal endpoint'), {code: 'model-api/not-found'})
         return api.resolveVideo()
       },
+      musicProvider: async (_payload, call) => {
+        if (!call?.internal) throw Object.assign(new Error('Internal endpoint'), {code: 'model-api/not-found'})
+        return api.resolveMusic()
+      },
+      model3dProvider: async (_payload, call) => {
+        if (!call?.internal) throw Object.assign(new Error('Internal endpoint'), {code: 'model-api/not-found'})
+        return api.resolveModel3d()
+      },
       v1: compatHandler(api.legacy),
     },
   }

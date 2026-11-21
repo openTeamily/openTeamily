@@ -124,7 +124,8 @@
           <label>名称 <input type="text" name="name" required maxlength="80" autocomplete="off"></label>
           <label class="stack">简介 <input type="text" name="summary" maxlength="500" autocomplete="off"></label>
           <label class="stack">说明 <textarea name="instructions" maxlength="16000"></textarea></label>
-          <label class="stack">快捷开场 <textarea name="quick_starts" maxlength="404" rows="3" placeholder="每行一条，最多 5 条，每条不超过 80 字"></textarea></label>
+          <label class="stack">快捷开场 <textarea name="quick_starts" maxlength="404" rows="3" placeholder="每行一条，最多 5 条，每条不超过 80 字" aria-describedby="new-agent-quick-starts-help"></textarea></label>
+          <p class="note" id="new-agent-quick-starts-help">你可以在私聊中点选快捷开场，再编辑并发送。</p>
           <label>类目 <select name="category"><option value="">未分类</option></select></label>
           <button type="submit">创建</button>
         </fieldset>
@@ -137,7 +138,8 @@
           <label>名称 <input type="text" name="name" required maxlength="80" autocomplete="off"></label>
           <label class="stack">简介 <input type="text" name="summary" maxlength="500" autocomplete="off"></label>
           <label class="stack">说明 <textarea name="instructions" maxlength="16000"></textarea></label>
-          <label class="stack">快捷开场 <textarea name="quick_starts" maxlength="404" rows="3" placeholder="每行一条，最多 5 条，每条不超过 80 字"></textarea></label>
+          <label class="stack">快捷开场 <textarea name="quick_starts" maxlength="404" rows="3" placeholder="每行一条，最多 5 条，每条不超过 80 字" aria-describedby="edit-agent-quick-starts-help"></textarea></label>
+          <p class="note" id="edit-agent-quick-starts-help">你可以在私聊中点选快捷开场，再编辑并发送。</p>
           <label>类目 <select name="category"><option value="">未分类</option></select></label>
           <div class="actions">
             <button type="submit">保存</button>
@@ -148,7 +150,7 @@
       </form>
       <section id="homepage-panel" hidden>
         <h2>公开主页</h2>
-        <p class="note">在发现页管理公开主页、访客聊天和快捷开场。</p>
+        <p class="note">在发现页管理访客聊天，并选择是否公开展示快捷开场。</p>
         <a id="manage-public-homepage" href="/discover?tab=agents#catalog-manage">管理公开主页</a>
       </section>
       <section id="api-key-panel" hidden>

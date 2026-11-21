@@ -1,5 +1,6 @@
 // Artifact model (legacy openteamily/artifacts.py): constants, validation,
 // public views and text-only thumbnails, executed inside the user's DS-Bot.
+import { GLB_MIME } from '../../lib/glb.js'
 import {decodeWorkbook} from './workbook.js'
 import { CONTROL, digest, validLongText } from '../../featurekit/http.js'
 
@@ -20,7 +21,7 @@ export const PREFIX_LEN = 8
 export const SAFE_FILENAME = /^[A-Za-z0-9._-]{1,80}$/
 export const STROKE_ID = /^[A-Za-z0-9_-]{8,32}$/
 export const COLOR = /^#[0-9A-Fa-f]{6}$/
-export const MEDIA_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'audio/mpeg', 'audio/ogg', 'audio/wav', 'video/mp4', 'video/webm'])
+export const MEDIA_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'audio/mpeg', 'audio/ogg', 'audio/wav', 'video/mp4', 'video/webm', GLB_MIME])
 export const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 export const emptyBoard = () => ({ schema: 'openteamily.whiteboard.v1', width: 800, height: 600, strokes: [] })
 export const SLIDES_SCHEMA = 'openteamily.slides.v1'

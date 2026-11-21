@@ -77,20 +77,7 @@ def save(db,uid,value,revision,consent,now):
         raise PackageError(429,'Maximum 10 immutable versions per package')
     db.execute('INSERT INTO imported_skill_versions VALUES(?,?,?,?,?)',(uid,item['id'],item['version'],encoded,now))
     db.execute('INSERT INTO imported_skill_heads VALUES(?,?,?,?,1,?) ON CONFLICT(user_id,skill_id) DO UPDATE SET version=excluded.version,revision=excluded.revision,active=1,updated=excluded.updated',(uid,item['id'],item['version'],revision+1,now))
-    cancel_unavailable(db,uid,now)
     return item,metadata(db,uid,item['id'])
-
-
-def cancel_unavailable(db,uid,now):
-    from . import runtime_connect, skill_packages
-    rows = db.execute("SELECT o.task_id,COALESCE(s.manifest,m.manifest,'[]') AS manifest FROM skill_task_owners o LEFT JOIN skill_task_selection s ON s.task_id=o.task_id LEFT JOIN skill_task_material m ON m.task_id=o.task_id WHERE o.user_id=?",(uid,)).fetchall()
-    for row in rows:
-        expected = json.loads(row['manifest'])
-        available = skill_packages.material(db,row['task_id'])
-        if expected and any(item not in available for item in expected):
-            task = runtime_connect.load_task(db,row['task_id'])
-            if task and task['status'] in ('queued','claimed'):
-                runtime_connect.cancel_task(db,task,now)
 
 
 def revoke(db,uid,ident,revision,now):
@@ -102,5 +89,4 @@ def revoke(db,uid,ident,revision,now):
     if prior['active']:
         db.execute('UPDATE imported_skill_heads SET active=0,revision=revision+1,updated=? WHERE user_id=? AND skill_id=?',(now,uid,ident))
         db.execute('DELETE FROM skill_bindings WHERE user_id=? AND skill_id=?',(uid,ident))
-        cancel_unavailable(db,uid,now)
     return metadata(db,uid,ident)

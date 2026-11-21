@@ -9,13 +9,14 @@ import { allPages, recallAcrossWorkspaces, routes as pageRoutes, search } from '
 import { personal, routes as extraRoutes } from './extras.js'
 import { actor } from './common.js'
 import { captureRoutes, captureWorker } from './capture.js'
+import { actionDraftRoutes } from './action-drafts.js'
 
 export default defineFeature({
   name: 'memory',
   pages: ['memory'],
   migrations: MIGRATIONS,
   importTables: IMPORT_TABLES,
-  routes: [...extraRoutes, ...pageRoutes, ...captureRoutes],
+  routes: [...actionDraftRoutes, ...extraRoutes, ...pageRoutes, ...captureRoutes],
   search,
   endpoints: ({ store, owner, host }) => ({
     ...captureWorker({store,host}),

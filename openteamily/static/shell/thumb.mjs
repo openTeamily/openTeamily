@@ -191,6 +191,19 @@ export function saveableAgentMessage(item) {
   return Boolean(item && item.status === 'succeeded' && typeof item.body === 'string' && item.body.trim());
 }
 
+export function artifactKindLabel(kind, mime) {
+  if (kind === 'media') return mime === 'model/gltf-binary' ? '3D 模型' : '媒体';
+  const labels = {website: '网站', whiteboard: '白板', slides: '幻灯片', dashboard: '看板', spreadsheet: '电子表格'};
+  return Object.hasOwn(labels, kind) ? labels[kind] : '文档';
+}
+
+export function artifactVersionLabel(resource, mime) {
+  if (!resource?.kind) return '';
+  const kind = artifactKindLabel(resource.kind, mime);
+  return Number.isSafeInteger(resource.revision) && resource.revision > 0
+    ? `${kind} · 版本 ${resource.revision}` : kind;
+}
+
 export function socialSavePath(workspaceId, conversationId, messageId) {
   return `/v1/workspaces/${workspaceId}/social/conversations/${conversationId}/messages/${messageId}/save`;
 }

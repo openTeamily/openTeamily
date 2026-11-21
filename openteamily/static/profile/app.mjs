@@ -1,3 +1,7 @@
+import '../shell/dsbot-api.mjs';
+import { mountProfileSocial } from './social.mjs';
+export { FOLLOW_WORK_EMPTY, followWorkNotice, followWorkSwitchLabel } from './social.mjs';
+
 function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
@@ -34,16 +38,6 @@ export function avatarTone(name) {
   let hash = 0;
   for (const ch of String(name || '')) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
   return String((hash % 6) + 1);
-}
-
-export const FOLLOW_WORK_EMPTY = '还没有关注任何人。先在发现页关注作者，再回来打开作品通知。';
-
-export function followWorkNotice(enabled) {
-  return enabled ? '已打开作品通知。' : '已关闭作品通知。';
-}
-
-export function followWorkSwitchLabel(name) {
-  return name ? name + ' 的作品通知' : '这个账号的作品通知';
 }
 
 export function monogram(name) {
@@ -92,9 +86,9 @@ function isEditPath() {
   return /\/profile\/edit\/?$/.test(location.pathname || '');
 }
 
-async function request(method, path, body) {
+async function request(method, path, body, {signal} = {}) {
   const headers = { Accept: 'application/json' };
-  const options = { method, headers, credentials: 'same-origin' };
+  const options = { method, headers, credentials: 'same-origin', signal };
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
     headers['X-CSRF-Token'] = csrfCookie(document.cookie);
@@ -112,15 +106,28 @@ function mount() {
   const mainPanel = document.getElementById('main-panel');
   const form = document.getElementById('profile-form');
   if (!status || !loginPanel || !mainPanel || !form) return;
+  const social = hasHome() ? mountProfileSocial({document, request, avatarTone, monogram}) : null;
   const goals = ['health', 'finance', 'career', 'hobbies', 'family', 'productivity', 'other'];
   let revision = 0;
   let snapshot = '';
   let currentUsername = '';
   let currentHandle = '';
+  let profileReady = false;
+  const editInitial = document.getElementById('profile-edit-initial');
+  const editStatus = document.getElementById('profile-edit-status');
+  const editRetry = document.getElementById('profile-edit-retry');
 
   function show(kind, text) {
     status.dataset.kind = kind;
     status.textContent = text;
+  }
+
+  function showProfileInitial(text, failed = false) {
+    if (!hasHome() || !editInitial) return;
+    form.hidden = !profileReady;
+    editInitial.hidden = profileReady;
+    editStatus.textContent = text;
+    editRetry.hidden = !failed;
   }
 
   function syncView() {
@@ -256,134 +263,14 @@ function mount() {
     const hint = document.querySelector && document.querySelector('#handle-hint');
     if (hint) hint.textContent = value.handle ? '' : '首次设置后可以再改有限次数；这里不限制修改次数。';
     if (hasHome()) {
-      const label = username || value.name || '';
+      const label = value.name || username || '';
       const nameEl = document.getElementById('profile-username');
-      if (nameEl) nameEl.textContent = username || '';
+      if (nameEl) nameEl.textContent = label;
       paintAvatar(document.querySelector('#profile-avatar'), label);
       paintAvatar(document.querySelector('#profile-edit-avatar'), label);
-      const title = document.querySelector('#followers-dialog-title');
-      if (title) title.textContent = username || '';
       updateCounters();
       markClean();
     }
-  }
-
-  function closeFollowWork() {
-    const dialog = document.querySelector('#follow-work-dialog');
-    if (dialog) dialog.hidden = true;
-  }
-
-  function followWorkRow(item) {
-    const li = document.createElement('li');
-    li.className = 'follow-work-row';
-    const label = document.createElement('label');
-    label.className = 'follow-work-label';
-    const input = document.createElement('input');
-    input.type = 'checkbox';
-    input.checked = item.enabled;
-    input.setAttribute('aria-label', followWorkSwitchLabel(item.name));
-    input.dataset.creator = item.creator_id;
-    const copy = document.createElement('span');
-    copy.className = 'follow-work-copy';
-    const name = document.createElement('strong');
-    name.textContent = item.name || item.username;
-    const handle = document.createElement('span');
-    handle.className = 'follow-work-handle';
-    handle.textContent = '@' + (item.handle || item.username);
-    copy.append(name, handle);
-    label.append(input, copy);
-    input.addEventListener('change', async () => {
-      input.disabled = true;
-      try {
-        const result = await request('POST', '/v1/profile/follow-work',
-          {creator_id: item.creator_id, enabled: input.checked});
-        const status = document.querySelector('#follow-work-status');
-        if (result.status !== 200) {
-          input.checked = !input.checked;
-          if (status) {
-            status.hidden = false;
-            status.textContent = messageFor(result.body.error, '无法保存作品通知设置。');
-          }
-          return;
-        }
-        if (status) {
-          status.hidden = false;
-          status.textContent = followWorkNotice(input.checked);
-        }
-      } finally {
-        input.disabled = false;
-      }
-    });
-    li.append(label);
-    return li;
-  }
-
-  async function loadFollowWork() {
-    const list = document.querySelector('#follow-work-list');
-    const empty = document.querySelector('#follow-work-empty');
-    const status = document.querySelector('#follow-work-status');
-    if (!list) return;
-    if (status) {
-      status.hidden = true;
-      status.textContent = '';
-    }
-    const result = await request('GET', '/v1/profile/follow-work');
-    if (result.status !== 200) {
-      list.hidden = true;
-      if (empty) {
-        empty.hidden = false;
-        empty.textContent = messageFor(result.body.error, '无法读取作品通知设置。');
-      }
-      return;
-    }
-    const items = result.body.items || [];
-    list.replaceChildren(...items.map(followWorkRow));
-    list.hidden = items.length === 0;
-    if (empty) {
-      empty.hidden = items.length > 0;
-      empty.textContent = FOLLOW_WORK_EMPTY;
-    }
-  }
-
-  function setFeed(tab) {
-    const empty = document.querySelector && document.querySelector('#profile-feed-empty');
-    const tabs = {
-      posts: ['#tab-posts', '还没有帖子，发布你的第一篇吧。'],
-      saved: ['#tab-saved', '还没有收藏。收藏功能尚未接通。'],
-      liked: ['#tab-liked', '还没有点赞。点赞功能尚未接通。'],
-    };
-    const current = tabs[tab] || tabs.posts;
-    if (typeof document.querySelectorAll === 'function') {
-      for (const button of document.querySelectorAll('.profile-tabs [role="tab"]')) {
-        button.setAttribute('aria-selected', button.id === current[0].slice(1) ? 'true' : 'false');
-      }
-    }
-    if (empty) empty.textContent = current[1];
-  }
-
-  function openFollowers(tab) {
-    const dialog = document.querySelector && document.querySelector('#followers-dialog');
-    if (!dialog) return;
-    dialog.hidden = false;
-    const following = document.querySelector('#dialog-tab-following');
-    const followers = document.querySelector('#dialog-tab-followers');
-    const search = document.querySelector('#followers-search');
-    const empty = document.querySelector('#followers-dialog-empty');
-    const isFollowers = tab !== 'following';
-    if (following) following.setAttribute('aria-selected', isFollowers ? 'false' : 'true');
-    if (followers) followers.setAttribute('aria-selected', isFollowers ? 'true' : 'false');
-    if (search) {
-      search.placeholder = isFollowers ? '搜索粉丝' : '搜索关注';
-      search.value = '';
-    }
-    if (empty) empty.textContent = isFollowers
-      ? '还没有粉丝。关注和粉丝功能尚未接通。'
-      : '还没有关注。关注和粉丝功能尚未接通。';
-  }
-
-  function closeFollowers() {
-    const dialog = document.querySelector && document.querySelector('#followers-dialog');
-    if (dialog) dialog.hidden = true;
   }
 
   async function loadAgents() {
@@ -392,19 +279,19 @@ function mount() {
     if (!list) return;
     list.replaceChildren();
     try {
-      const workspaces = await request('GET', '/v1/workspaces?limit=100');
+      const workspaces = await request('GET', '/v1/workspaces?scope=personal');
       if (workspaces.status !== 200) throw new Error('workspaces');
       const items = workspaces.body.items || workspaces.body.workspaces || [];
       const first = items[0];
       if (!first || !first.id) throw new Error('empty');
       const listed = await request('GET', `/v1/workspaces/${first.id}/agents?limit=100`);
       if (listed.status !== 200) throw new Error('agents');
-      const agents = (listed.body.items || []).filter(item => item && item.name).slice(0, 5);
+      const agents = (listed.body.items || []).filter(item => item?.id && item.name && !item.archived && !item.native_deleted).slice(0, 5);
       if (!agents.length) throw new Error('empty');
       for (const agent of agents) {
         const row = document.createElement('li');
         const link = document.createElement('a');
-        link.href = '/agents';
+        link.href = '/chat#' + new URLSearchParams({workspace: first.id, agent: agent.id});
         const face = document.createElement('span');
         face.className = 'avatar';
         face.dataset.tone = avatarTone(agent.name);
@@ -424,6 +311,8 @@ function mount() {
   async function load() {
     const session = await request('GET', '/v1/auth/session');
     if (session.status === 401) {
+      social?.reset();
+      profileReady = false;
       loginPanel.hidden = false;
       mainPanel.hidden = true;
       show('', '');
@@ -434,6 +323,10 @@ function mount() {
       return;
     }
     const username = session.body.user.username;
+    if (currentUsername && currentUsername !== username) {
+      social?.reset();
+      profileReady = false;
+    }
     currentUsername = username;
     loginPanel.hidden = true;
     mainPanel.hidden = false;
@@ -444,14 +337,22 @@ function mount() {
     document.getElementById('profile-username').textContent = username;
     const email = document.querySelector && document.querySelector('#profile-email');
     if (email) email.textContent = '未设置';
-    const result = await request('GET', '/v1/profile');
+    if (social && !isEditPath()) {
+      social.load(session.body.user.id || username);
+      void loadAgents();
+    }
+    showProfileInitial('正在读取资料…');
+    const result = await request('GET', '/v1/profile').catch(() => ({status: 0, body: {}}));
     if (result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法读取资料。'));
+      const error = messageFor(result.body.error, '无法读取资料。');
+      showProfileInitial(error, true);
+      if (!isEditPath() || profileReady) show('error', error);
       return;
     }
     fill(result.body.profile, username);
     applyAvatar(result.body.avatar);
-    if (hasHome()) await loadAgents();
+    profileReady = true;
+    showProfileInitial('');
   }
 
   const changeAvatar = document.getElementById('profile-change-avatar');
@@ -508,7 +409,7 @@ function mount() {
       const result = await request('POST', '/v1/profile', {revision, changes});
       if (result.status === 409) {
         const current = result.body && result.body.error && result.body.error.current;
-        if (current) fill(current, document.getElementById('profile-username').textContent);
+        if (current) fill(current, currentUsername);
         show('error', current
           ? '资料已在别处更新，已重新加载。'
           : '保存失败：资料已在别处更新或 Teamily ID 不可用，请刷新后重试。');
@@ -518,7 +419,7 @@ function mount() {
         show('error', messageFor(result.body.error, '保存失败。'));
         return;
       }
-      fill(result.body.profile, document.getElementById('profile-username').textContent);
+      fill(result.body.profile, currentUsername);
       show('ok', '资料已保存。');
     } finally {
       saving = false;
@@ -558,6 +459,15 @@ function mount() {
       }
     });
   }
+  editRetry?.addEventListener('click', async () => {
+    if (editRetry.disabled) return;
+    editRetry.disabled = true;
+    try {
+      await load();
+    } finally {
+      editRetry.disabled = false;
+    }
+  });
 
   const cancel = document.querySelector && document.querySelector('#profile-cancel');
   if (cancel) {
@@ -607,52 +517,9 @@ function mount() {
   }
 
   if (hasHome()) {
-    setFeed('posts');
-    const tabPosts = document.querySelector('#tab-posts');
-    const tabSaved = document.querySelector('#tab-saved');
-    const tabLiked = document.querySelector('#tab-liked');
-    if (tabPosts) tabPosts.addEventListener('click', () => setFeed('posts'));
-    if (tabSaved) tabSaved.addEventListener('click', () => setFeed('saved'));
-    if (tabLiked) tabLiked.addEventListener('click', () => setFeed('liked'));
-    const following = document.querySelector('#stat-following');
-    const followers = document.querySelector('#stat-followers');
-    if (following) following.addEventListener('click', () => openFollowers('following'));
-    if (followers) followers.addEventListener('click', () => openFollowers('followers'));
-    const close = document.querySelector('#followers-dialog-close');
-    if (close) close.addEventListener('click', closeFollowers);
-    const dialog = document.querySelector('#followers-dialog');
-    if (dialog) {
-      dialog.addEventListener('click', event => {
-        if (event.target === dialog) closeFollowers();
-      });
-    }
-    const tabF = document.querySelector('#dialog-tab-following');
-    const tabR = document.querySelector('#dialog-tab-followers');
-    if (tabF) tabF.addEventListener('click', () => openFollowers('following'));
-    if (tabR) tabR.addEventListener('click', () => openFollowers('followers'));
     const share = document.querySelector('#profile-share');
     if (share) share.addEventListener('click', shareProfile);
-    const notifyOpen = document.querySelector('#profile-notify-open');
-    if (notifyOpen) notifyOpen.addEventListener('click', () => {
-      const dialog = document.querySelector('#follow-work-dialog');
-      if (!dialog) return;
-      dialog.hidden = false;
-      loadFollowWork();
-    });
-    const notifyClose = document.querySelector('#follow-work-dialog-close');
-    if (notifyClose) notifyClose.addEventListener('click', closeFollowWork);
-    const notifyDialog = document.querySelector('#follow-work-dialog');
-    if (notifyDialog) {
-      notifyDialog.addEventListener('click', event => {
-        if (event.target === notifyDialog) closeFollowWork();
-      });
-    }
-    document.addEventListener('keydown', event => {
-      if (event.key === 'Escape') {
-        closeFollowers();
-        closeFollowWork();
-      }
-    });
+
   }
 
   syncView();

@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { createServer } from 'node:http'
 import { EventEmitter, once } from 'node:events'
 import { PassThrough } from 'node:stream'
+import { setTimeout as delay } from 'node:timers/promises'
 import {
   createBridge, createBridgeServer, forwardModel, runTurn, startBridge, MODEL_ID,
   userModelOverride, MODEL_OVERRIDE,
@@ -132,6 +133,20 @@ test('the DeepSeek Flash vision model updates a retained provider and follows ac
   ])
 })
 
+test('a missing model is actionable and does not block other native providers', () => {
+  const fake = fakeRuntime()
+  const bridge = createBridge(fake.rt, {port:1})
+  const bot = fake.rt.botOf('bot1')
+  bot.model = 'openteamily/' + MODEL_ID
+  bridge.state.startupModel = () => null
+  assert.throws(() => bridge.requireModel(bot.id), {code:'agents/model-unconfigured', status:503})
+  bot.model = 'other-provider/alternate'
+  assert.doesNotThrow(() => bridge.requireModel(bot.id))
+  bot.model = MODEL_ID
+  bridge.state.startupModel = () => ({model:'owner-selected'})
+  assert.doesNotThrow(() => bridge.requireModel(bot.id))
+})
+
 test('a provisioned DS-Bot starts its native proxy and runs a turn without polling retired routes', async t => {
   const origins = []
   const management = createServer((req, res) => {
@@ -179,6 +194,140 @@ test('a provisioned DS-Bot starts its native proxy and runs a turn without polli
   assert.deepEqual(fake.log.filter(entry => entry[0] === 'delete'), [['delete', 'ot-tools', true]])
   assert.deepEqual(Object.keys(rt.state.capabilities.items), ['ot-apps'])
   assert.deepEqual(origins, [])
+})
+
+test('native reply progress matches the admitted request, session, turn and attempt', async () => {
+  const {rt, ctx, log} = fakeRuntime()
+  const session = {id:'chat1'}
+  const earlier = {id:'chat1'}
+  const other = {id:'chat2'}
+  const agent = {id:session.id, session}
+  const progress = []
+  rt.sendUser = async request => { log.push(request) }
+  const result = runTurn(rt, ctx, 'bot1', 'read this', 'own-rpc', 1000, [{type:'file', receiptId:'file1'}], {
+    onProgress: value => progress.push(value),
+  })
+  const event = (type, data, subject = session) => ctx.emit('session/event', subject, {type, data})
+  let revision = 0
+  const stream = (type, payload, subject = agent) => ctx.emit('agent/assistant-stream', {
+    agent: subject, frame: {type, revision: ++revision, ...payload},
+  })
+  const delta = (attemptId, text, type = 'text-delta', subject) => stream('chunk', {attemptId,chunk:{type,text}}, subject)
+  assert.deepEqual(log[0].content, [{type:'text',text:'read this'}, {type:'file',receiptId:'file1'}])
+
+  event('turn/start', {turn:5})
+  event('user/message', {source:{rpcId:'wrong-rpc'}})
+  event('user/message', {source:{rpcId:'own-rpc'}}, other)
+  stream('start', {attemptId:'before-echo',turn:5,step:1})
+  delta('before-echo', 'unrelated input')
+  event('user/message', {source:{rpcId:'own-rpc'}})
+  stream('start', {attemptId:'wrong-turn',turn:4,step:1})
+  delta('wrong-turn', 'unrelated turn')
+  rt.state.exchangeTurns = {chat1:[5]}
+  stream('start', {attemptId:'hidden',turn:5,step:1})
+  delta('hidden', 'hidden exchange text')
+  rt.state.exchangeTurns = {}
+  stream('start', {attemptId:'first',turn:5,step:1})
+  delta('first', 'unrelated session', 'text-delta', {id:other.id,session:other})
+  delta('first', 'replaced native session', 'text-delta', {id:earlier.id,session:earlier})
+  delta('first', 'private reasoning', 'reasoning-delta')
+  delta('first', 'private tool input', 'tool-call-delta')
+  assert.deepEqual(progress, [])
+
+  delta('first', 'draft to discard')
+  assert.deepEqual(progress, ['draft to discard'])
+  event('assistant/attempt', {turn:5,step:1})
+  stream('end', {attemptId:'first',outcome:{kind:'committed',eventType:'assistant/attempt',seq:12}})
+  delta(undefined, 'unidentified late stream data')
+  event('llm/retry-started', {turn:5,step:1})
+  assert.deepEqual(progress, ['draft to discard', ''])
+
+  stream('start', {attemptId:'retry',turn:5,step:1})
+  event('turn/start', {turn:4})
+  delta('first', 'late bytes from discarded attempt')
+  delta('retry', 'Now ')
+  delta('retry', 'visible')
+  await delay(70)
+  assert.deepEqual(progress, ['draft to discard', '', 'Now visible'])
+  event('assistant/message', {turn:5,step:1,text:'Now visible'})
+  stream('end', {attemptId:'retry',outcome:{kind:'committed',eventType:'assistant/message',seq:13}})
+  stream('start', {attemptId:'next-step',turn:5,step:2})
+  delta('next-step', 'next paragraph')
+  await delay(70)
+  assert.equal(progress.at(-1), 'Now visible\n\nnext paragraph')
+
+  event('assistant/message', {turn:4,step:1,text:'wrong turn final'})
+  event('assistant/message', {turn:5,step:2,text:'wrong session final'}, earlier)
+  event('turn/end', {turn:4})
+  event('assistant/message', {turn:5,step:2,text:'authoritative final paragraph'})
+  stream('end', {attemptId:'next-step',outcome:{kind:'committed',eventType:'assistant/message',seq:14}})
+  event('turn/end', {turn:5,turnId:'native-turn-id'})
+  assert.deepEqual(await result, {text:'Now visible\n\nauthoritative final paragraph', sessionId:'chat1', turnId:'native-turn-id'})
+  assert.equal(ctx.listenerCount('session/event'), 0)
+  assert.equal(ctx.listenerCount('agent/assistant-stream'), 0)
+  assert.equal(ctx.listenerCount('agent/disposed'), 0)
+})
+
+test('native progress clears on replacement and remains bounded without changing the final reply', async () => {
+  const {rt, ctx} = fakeRuntime()
+  rt.sendUser = async () => {}
+  const progress = []
+  const reply = runTurn(rt, ctx, 'bot1', 'hello', 'request', 1000, [], {onProgress(text) {
+    progress.push(text)
+    if (text) throw new Error('A progress consumer cannot fail the turn')
+  }})
+  const start = session => {
+    ctx.emit('session/event', session, {type:'turn/start', data:{turn:1}})
+    ctx.emit('session/event', session, {type:'user/message', data:{source:{rpcId:'request'}}})
+    const agent = {id:'chat1', session}
+    ctx.emit('agent/assistant-stream', {agent, frame:{type:'start', attemptId:'chat1:1', revision:1, turn:1, step:1}})
+    return agent
+  }
+  const chunk = (agent, text, revision = 2) => ctx.emit('agent/assistant-stream', {
+    agent, frame:{type:'chunk', attemptId:'chat1:1', revision, chunk:{type:'text-delta',text}},
+  })
+  const first = start({id:'chat1'})
+  chunk(first, 'interrupted partial')
+  assert.deepEqual(progress, ['interrupted partial'])
+  ctx.emit('agent/disposed', {agent:first})
+  assert.deepEqual(progress, ['interrupted partial', ''])
+  const newSession = {id:'chat1'}
+  const second = start(newSession)
+  chunk(first, 'late text from the old agent', 3)
+  const long = '界'.repeat(22_000)
+  chunk(second, long)
+  await delay(70)
+  assert.equal(progress.at(-1), long.slice(0,20_000))
+  ctx.emit('session/event', newSession, {type:'assistant/message', data:{turn:1,step:1,text:long}})
+  ctx.emit('session/event', newSession, {type:'turn/end', data:{turn:1}})
+  assert.equal((await reply).text, long)
+  assert.equal(ctx.listenerCount('agent/assistant-stream'), 0)
+})
+
+test('native stream listeners and pending progress are removed on rejection or timeout', async () => {
+  const {rt, ctx} = fakeRuntime()
+  rt.sendUser = () => { throw new Error('send refused') }
+  const progress = []
+  const options = {onProgress(value) {
+    progress.push(value)
+    return Promise.reject(new Error('isolated progress consumer'))
+  }}
+  await assert.rejects(runTurn(rt, ctx, 'bot1', 'hello', 'request', 100, [], options), /send refused/)
+  rt.sendUser = async () => {}
+  const attempt = runTurn(rt, ctx, 'bot1', 'hello', 'request', 20, [], options)
+  const session = {id:'chat1'}
+  const agent = {id:session.id, session}
+  ctx.emit('session/event', session, {type:'turn/start', data:{turn:1}})
+  ctx.emit('session/event', session, {type:'user/message', data:{source:{rpcId:'request'}}})
+  ctx.emit('agent/assistant-stream', {agent, frame:{type:'start', attemptId:'a1', revision:1, turn:1, step:1}})
+  ctx.emit('agent/assistant-stream', {agent, frame:{type:'chunk', attemptId:'a1', revision:2, chunk:{type:'text-delta',text:'visible'}}})
+  ctx.emit('agent/assistant-stream', {agent, frame:{type:'chunk', attemptId:'a1', revision:3, chunk:{type:'text-delta',text:'pending'}}})
+  await assert.rejects(attempt, /timed out/)
+  assert.equal(ctx.listenerCount('session/event'), 0)
+  assert.equal(ctx.listenerCount('agent/assistant-stream'), 0)
+  assert.equal(ctx.listenerCount('agent/disposed'), 0)
+  await delay(60)
+  assert.deepEqual(progress, ['visible'])
 })
 
 test('separate conversations use separate native DS-Bot threads and reuse persisted mapping', async () => {

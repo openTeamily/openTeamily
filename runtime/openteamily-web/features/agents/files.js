@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { FeatureError } from '../../featurekit/http.js'
+import { MEDIA_MIMES } from '../artifacts/model.js'
 
 export const PRIVATE_FILE_BYTES = 8 * 1024 * 1024
 export const PRIVATE_FILE_COUNT = 4
@@ -12,7 +13,7 @@ const MEDIA = {
 }
 const fail = (status, code, message) => { throw new FeatureError(status, code, message) }
 
-export function privateFiles(descriptors) {
+export function privateFiles(descriptors, {savedWork = false} = {}) {
   if (!Array.isArray(descriptors) || !descriptors.length || descriptors.length > PRIVATE_FILE_COUNT) {
     fail(400, 'invalid', 'Select one to four files')
   }
@@ -20,7 +21,9 @@ export function privateFiles(descriptors) {
   return descriptors.map(item => {
     const title = (typeof item?.title === 'string' ? item.title : '').replace(/[\u0000-\u001f\u007f/\\]/g, '_').trim().slice(0, 200)
     const ext = title.toLowerCase().split('.').at(-1)
-    const mime = Object.hasOwn(MEDIA, ext) ? MEDIA[ext] : ''
+    const resource = savedWork ? item?.resource : null
+    const storedMime = savedWork && typeof item?.mime === 'string' ? item.mime.split(';')[0] : ''
+    const mime = Object.hasOwn(MEDIA, ext) ? MEDIA[ext] : MEDIA_MIMES.has(storedMime) ? storedMime : ''
     if (!title || !mime) fail(400, 'attachment_type_blocked', 'Unsupported file type')
     if (typeof item.data !== 'string' || !item.data.length) fail(400, 'invalid', 'Provide a nonempty file')
     if (item.data.length > Math.ceil(PRIVATE_FILE_BYTES / 3) * 4) fail(413, 'attachment_too_large', 'Files must total 8 MiB or less')
@@ -35,7 +38,7 @@ export function privateFiles(descriptors) {
     if (['docx','xlsx','pptx'].includes(ext) && data.subarray(0,4).toString('hex') !== '504b0304') {
       fail(400, 'attachment_type_blocked', 'The file is not an Office document')
     }
-    return {title, mime, data}
+    return {title, mime, data, ...(resource ? {resource} : {})}
   })
 }
 

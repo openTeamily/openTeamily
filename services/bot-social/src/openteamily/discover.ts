@@ -2,11 +2,14 @@
 // creator follows and follow notifications. Ported from the legacy discover.py (#87, #313, #335).
 // A listing is a whitelisted projection the owner's DS-Bot chose to publish (title, summary,
 // category, kind and an optional explicitly released snapshot).
+import { randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { assert } from "../errors.js";
 import { newId } from "../ids.js";
+import { DEFAULT_ATTACHMENT_LIMITS } from "../attachments.js";
+import { CHAT_FILE_BODY_LIMIT, decodeChatFile } from "./chat-files.js";
 import { body, handleKey, hashCode, intParam, one, OtContext, optText, params, query, text } from "./core.js";
-import { commentCount } from "./work-comments.js";
+import { WORK_COMMENTS_SCHEMA, registerWorkComments, workCommentCount, workCommentsPage } from "./work-comments.js";
 
 export const DISCOVER_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_listings (
@@ -17,18 +20,52 @@ CREATE TABLE IF NOT EXISTS ot_listings (
   UNIQUE (owner_id, kind, ref)
 );
 CREATE INDEX IF NOT EXISTS ot_listings_feed ON ot_listings(listed, updated_at);
+CREATE INDEX IF NOT EXISTS ot_listings_recent_works ON ot_listings(updated_at DESC, id DESC) WHERE listed = 1 AND kind = 'work';
+CREATE INDEX IF NOT EXISTS ot_listings_profile_works ON ot_listings(owner_id, created_at, id) WHERE listed = 1 AND kind = 'work';
+CREATE TABLE IF NOT EXISTS ot_listing_models (
+  listing_id TEXT PRIMARY KEY REFERENCES ot_listings(id) ON DELETE CASCADE,
+  owner_id TEXT NOT NULL, content BLOB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ot_listing_models_owner ON ot_listing_models(owner_id);
+CREATE TABLE IF NOT EXISTS ot_listing_sites (
+  listing_id TEXT PRIMARY KEY REFERENCES ot_listings(id) ON DELETE CASCADE,
+  html TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ot_likes (listing_id TEXT NOT NULL REFERENCES ot_listings(id) ON DELETE CASCADE, owner_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (listing_id, owner_id));
 CREATE TABLE IF NOT EXISTS ot_collections (listing_id TEXT NOT NULL REFERENCES ot_listings(id) ON DELETE CASCADE, owner_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (listing_id, owner_id));
-CREATE TABLE IF NOT EXISTS ot_follows (follower_id TEXT NOT NULL, creator_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (follower_id, creator_id), CHECK (follower_id <> creator_id));
+CREATE TABLE IF NOT EXISTS ot_follows (follower_id TEXT NOT NULL, creator_id TEXT NOT NULL, created_at INTEGER NOT NULL,
+  work_notices INTEGER NOT NULL DEFAULT 1 CHECK (work_notices IN (0, 1)),
+  PRIMARY KEY (follower_id, creator_id), CHECK (follower_id <> creator_id));
 CREATE INDEX IF NOT EXISTS ot_follows_creator ON ot_follows(creator_id);
+CREATE INDEX IF NOT EXISTS ot_likes_recent ON ot_likes(listing_id, created_at);
+CREATE INDEX IF NOT EXISTS ot_collections_recent ON ot_collections(listing_id, created_at);
+CREATE INDEX IF NOT EXISTS ot_likes_profile_recent ON ot_likes(owner_id, created_at, listing_id);
+CREATE INDEX IF NOT EXISTS ot_collections_profile_recent ON ot_collections(owner_id, created_at, listing_id);
+CREATE INDEX IF NOT EXISTS ot_follows_profile_outgoing ON ot_follows(follower_id, created_at);
+CREATE INDEX IF NOT EXISTS ot_follows_profile_incoming ON ot_follows(creator_id, created_at);
+${WORK_COMMENTS_SCHEMA}
 `;
 
 export const CATEGORIES = ["content-creation", "customer-support", "data-analysis", "design", "education", "engineering", "finance", "it-security", "investment", "legal", "life", "marketing", "operations", "product", "recruiting", "research", "sales"];
-export const WORK_KINDS = ["document", "website", "whiteboard", "media", "image", "audio", "video", "slides", "dashboard"];
+export const WORK_KINDS = ["document", "website", "whiteboard", "media", "image", "audio", "video", "slides", "dashboard", "model3d"];
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
+const LISTING_ID = /^otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
 const RESERVED = new Set(["settings", "team", "members", "v1", "discover", "agents", "chat", "messenger", "space", "artifacts", "memory", "automations", "runtimes", "profile", "download", "install", "shell", "share", "a", "d", "api", "login", "logout", "search", "w", "works", "feed"]);
 const REF = /^[A-Za-z0-9._:-]{1,80}$/;
 const SNAPSHOT_MAX = 200_000;
+const WORK_PREVIEW_MAX = 2_000;
+const MODEL_MIME = "model/gltf-binary";
+const MAX_SITE_BYTES = 32 * 1024;
+const SITE_POLICY = [
+  "sandbox allow-scripts", "frame-ancestors 'self'", "default-src 'none'",
+  "script-src 'unsafe-inline'", "style-src 'unsafe-inline'", "img-src data:", "font-src data:", "media-src data:",
+  "connect-src 'none'", "object-src 'none'", "frame-src 'none'", "worker-src 'none'", "base-uri 'none'", "form-action 'none'",
+].join("; ");
+
+function publishedSiteAvailable(ot: OtContext, l: { id: string; listed: number; work_kind: string | null }) {
+  return Boolean(l.listed && l.work_kind === "website"
+    && ot.get("SELECT 1 FROM ot_listing_sites WHERE listing_id = ?", l.id));
+}
 
 function engagement(ot: OtContext, l: any, viewer: string) {
   const has = (table: string) => !!ot.get(`SELECT 1 FROM ${table} WHERE listing_id = ? AND owner_id = ?`, l.id, viewer);
@@ -56,13 +93,31 @@ function listingPath(ot: OtContext, l: { kind: string; slug: string }) {
   return `${prefix}${l.kind === "agent" ? "/a/" : "/w/"}${l.slug}`;
 }
 
-const listingView = (ot: OtContext, l: any, viewer: string | null, withSnapshot = false) => ({
+const LISTING_CARD_COLUMNS = `l.id, l.owner_id, l.kind, l.slug, l.title, l.summary, l.category, l.work_kind,
+  l.listed, l.chat_enabled, l.updated_at, l.created_at`;
+
+const listingFields = (ot: OtContext, l: any) => ({
   id: l.id, slug: l.slug, kind: l.kind, title: l.title, summary: l.summary, category: l.category, work_kind: l.work_kind,
-  creator: ot.profileView(l.owner_id), listed: !!l.listed, chat_enabled: l.kind === "agent" && !!l.chat_enabled, updated_at: l.updated_at, created_at: l.created_at,
-  comment_count: commentCount(ot, l.id),
-  path: listingPath(ot, l), ...(viewer ? engagement(ot, l, viewer) : { likes: ot.get<any>("SELECT COUNT(*) AS n FROM ot_likes WHERE listing_id = ?", l.id).n, collections: ot.get<any>("SELECT COUNT(*) AS n FROM ot_collections WHERE listing_id = ?", l.id).n, liked: false, collected: false, following: false, own: false }),
+  updated_at: l.updated_at, created_at: l.created_at, path: listingPath(ot, l),
+});
+
+const listingView = (ot: OtContext, l: any, viewer: string | null, withSnapshot = false) => ({
+  ...listingFields(ot, l), creator: ot.profileView(l.owner_id), listed: !!l.listed, chat_enabled: l.kind === "agent" && !!l.chat_enabled,
+  ...(viewer ? engagement(ot, l, viewer) : { likes: ot.get<any>("SELECT COUNT(*) AS n FROM ot_likes WHERE listing_id = ?", l.id).n, collections: ot.get<any>("SELECT COUNT(*) AS n FROM ot_collections WHERE listing_id = ?", l.id).n, liked: false, collected: false, following: false, own: false }),
+  ...(l.kind === "work" ? {comment_count: workCommentCount(ot, l.id), site_available: publishedSiteAvailable(ot, l)} : {}),
   ...(withSnapshot ? { snapshot: l.snapshot ?? null } : {}),
 });
+
+function publicListingView(ot: OtContext, listing: any) {
+  const view = listingView(ot, listing, null, true);
+  const {handle, display_name, bio} = view.creator;
+  return {...view, creator: {handle, display_name, bio}};
+}
+
+function workExcerpt(listing: {snapshot: string | null; summary: string}, hasSite: boolean) {
+  const excerpt = String(listing.snapshot || "").slice(0, WORK_PREVIEW_MAX);
+  return hasSite || excerpt.startsWith("{") ? listing.summary || "" : excerpt;
+}
 
 function escapeHtml(value: string) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
@@ -82,14 +137,31 @@ function publishedQuickStarts(listing: {id: string; kind: string; snapshot: stri
   return {starts, version: hashCode(JSON.stringify([listing.id, starts]))};
 }
 
-function publicPage(l: any, view: any) {
+function publicPage(ot: OtContext, l: any, view: any) {
   const creator = view.creator?.display_name || view.creator?.handle || "";
   const title = String(view.title || view.slug);
-  const policy = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none';";
+  const site = l.kind === "work" && view.site_available === true;
+  const agent = l.kind === "agent";
+  const canChat = agent && Boolean(l.chat_enabled);
+  const policy = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none';"
+    + (site ? " frame-src 'self';" : "") + (agent ? " script-src 'self';" : "");
   if (l.kind === "work") {
-    const content = l.snapshot && !String(l.snapshot).startsWith("{")
-      ? `<pre>${escapeHtml(String(l.snapshot).slice(0, 20_000))}</pre>`
-      : (view.summary ? `<p>${escapeHtml(view.summary)}</p>` : "");
+    const download = l.work_kind === "model3d" ? `<p><a href="/w/${l.slug}/file">下载 GLB</a></p>` : "";
+    const comments = workCommentsPage(ot, l, null, {limit: "4"});
+    const recent = comments.items.map(item => item.removed
+      ? '<li><span class="meta">评论已移除</span></li>'
+      : `<li><p class="meta">${escapeHtml(item.author?.name || item.author?.handle || "")}</p><pre>${escapeHtml(item.body)}</pre></li>`).join("");
+    const detail = `/login#work-comments=${encodeURIComponent(l.slug)}`;
+    const share = `/login#work-detail=${encodeURIComponent(l.slug)}`;
+    const {previous, next} = chronologicalWorkNeighbors(ot, l, PUBLIC_WORK_SCOPE);
+    const adjacent = (work: WorkNeighbor | null, rel: "prev" | "next", label: string) => work
+      ? `<a rel="${rel}" href="/w/${encodeURIComponent(work.slug)}" title="${escapeHtml(work.title)}">${label}</a>`
+      : `<span aria-disabled="true">${label}</span>`;
+    const content = site
+      ? `<iframe class="work-site-frame" src="/w/${encodeURIComponent(l.slug)}/site" title="${escapeHtml(title)} 的互动预览" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>`
+      : l.snapshot && !String(l.snapshot).startsWith("{")
+        ? `<pre>${escapeHtml(String(l.snapshot).slice(0, 20_000))}</pre>`
+        : (view.summary ? `<p>${escapeHtml(view.summary)}</p>` : "");
     return `<!DOCTYPE html>
 <html lang="zh-CN"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -99,19 +171,48 @@ function publicPage(l: any, view: any) {
 <style>
 body{font-family:system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem;line-height:1.5;color:#1a1a1a}
 .meta{color:#555;font-size:.9rem}
-pre{white-space:pre-wrap;background:#f6f6f6;padding:1rem;border-radius:8px}
+a{color:#24594b;text-underline-offset:.18em}
+a:focus-visible{outline:2px solid #176750;outline-offset:3px}
+h1{overflow-wrap:anywhere}
+body.interactive-work{max-width:64rem}
+.work-site-frame{display:block;box-sizing:border-box;width:100%;height:clamp(26rem,72vh,56rem);border:1px solid #cbdad3;border-radius:.6rem;background:#fff}
+.work-nav{display:flex;flex-wrap:wrap;gap:.5rem;margin:1rem 0}
+.work-nav>*{display:inline-flex;align-items:center;min-height:2.75rem;padding:.35rem .85rem;border:1px solid #cbdad3;border-radius:.6rem}
+.work-nav a{background:#edf6ee}
+.work-nav [aria-disabled]{color:#60716b;background:#f5f7f6}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f6f6;padding:1rem;border-radius:8px}
+.comments{margin:2rem 0}.comments ul{padding:0;list-style:none}.comments pre{font:inherit;margin:.3rem 0 .8rem}
 </style>
-</head><body>
+</head><body${site ? ' class="interactive-work"' : ""}>
 <p class="meta">作品${creator ? " · " + escapeHtml(creator) : ""}</p>
 <h1>${escapeHtml(title)}</h1>
+<nav class="work-nav" aria-label="浏览公开作品">
+${adjacent(previous, "prev", "上一件")}
+${adjacent(next, "next", "下一件")}
+<a href="${share}">分享作品</a>
+</nav>
 ${content}
+${download}
+<section class="comments" aria-labelledby="comments-title">
+<h2 id="comments-title">评论（${comments.comment_count}）</h2>
+${recent ? `<ul>${recent}</ul>` : ""}
+<a href="${detail}">查看评论</a>
+</section>
 </body></html>
 `;
   }
 
   const {starts, version} = publishedQuickStarts(l);
   const chatHref = `/login#public-agent=${encodeURIComponent(l.slug)}`;
-  const canChat = Boolean(l.chat_enabled);
+  const profilePath = escapeHtml(`/a/${encodeURIComponent(l.slug)}`);
+  const composer = canChat ? `
+<form id="public-agent-composer" method="post" data-slug="${escapeHtml(l.slug)}" data-listing-id="${escapeHtml(l.id)}">
+  <label for="public-agent-message">消息</label>
+  <textarea id="public-agent-message" name="message" rows="3" maxlength="4000" placeholder="输入第一条消息" required disabled></textarea>
+  <p id="public-agent-composer-status" role="status" hidden></p>
+  <button class="chat-action" type="submit" disabled>继续对话</button>
+  <a class="chat-fallback" href="${escapeHtml(chatHref)}">开始对话</a>
+</form>` : "";
   const choiceItems = starts.map((choice, index) => {
     const content = escapeHtml(choice);
     if (!canChat) return `<li class="starter-preview">${content}</li>`;
@@ -129,6 +230,8 @@ ${content}
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="${policy}">
 <title>${escapeHtml(title)} · OpenTeamily</title>
+<script type="module" src="/shell/public-agent-share.mjs"></script>
+${canChat ? '<script type="module" src="/shell/public-agent-composer.mjs"></script>' : ""}
 <style>
 :root{color-scheme:light;--ink:#192b28;--muted:#475b57;--surface:#fff;--line:#d7e1dd;--green:#24594b}
 *{box-sizing:border-box}
@@ -147,18 +250,40 @@ h1{margin:.85rem 0 .4rem;font-size:clamp(2rem,4.5vw,3.6rem);line-height:1.13;let
 h2,h3,p{margin:0}
 .creator{color:var(--muted);font-size:.9rem;overflow-wrap:anywhere}
 .description{margin-top:1.2rem;white-space:pre-wrap;overflow-wrap:anywhere}
+.profile-share{display:flex;flex-wrap:wrap;align-items:flex-start;gap:.35rem .75rem;margin-top:.85rem}
+.profile-share [hidden]{display:none}
+.profile-share button,.profile-share summary{min-height:2.75rem;padding:.55rem .7rem;border-radius:.55rem;font:inherit;font-size:.9rem;cursor:pointer}
+.profile-share button{border:1px solid var(--line);background:var(--surface);color:var(--green);font-weight:650}
+.profile-share button:hover{background:#edf6ed}
+.profile-share summary{color:var(--green)}
+.profile-share button:focus-visible,.profile-share summary:focus-visible,.profile-share input:focus-visible{outline:2px solid #176750;outline-offset:3px}
+.profile-share details[open]{flex:1 0 100%;max-width:100%;padding:0 .7rem .65rem;border:1px solid var(--line);border-radius:.55rem;background:var(--surface)}
+.profile-share details[open] summary{padding-inline:0}
+.profile-share label{display:block;color:var(--muted);font-size:.85rem}
+.profile-share input{display:block;width:100%;margin:.25rem 0 .55rem;padding:.45rem .55rem;border:1px solid #98bead;border-radius:.4rem;color:var(--ink);font:inherit}
+.profile-share details a,[data-copy-profile-status]{font-size:.85rem}
+[data-copy-profile-status]{flex-basis:100%;color:var(--muted)}
 .conversation{min-width:0;padding:1.45rem;border:1px solid var(--line);border-radius:1.25rem;background:var(--surface);box-shadow:0 10px 35px rgb(25 43 40 / .06)}
 .conversation h2{font-size:1.25rem;line-height:1.25}
 .help{margin:.55rem 0 1rem;color:var(--muted);font-size:.91rem}
 .chat-action{display:inline-flex;align-items:center;justify-content:center;min-height:2.85rem;padding:.55rem 1.25rem;border-radius:.65rem;background:var(--green);color:#fff;font-weight:700;text-decoration:none}
-.chat-action:hover{background:#19483c}
+.chat-action:not(:disabled):hover{background:#19483c}
+#public-agent-composer{display:grid;grid-template-columns:max-content 1fr;align-items:center;gap:.65rem .9rem}
+#public-agent-composer label,#public-agent-composer textarea,#public-agent-composer-status{grid-column:1/-1}
+#public-agent-composer label{font-weight:650;font-size:.92rem}
+#public-agent-composer textarea{width:100%;min-height:6.5rem;padding:.65rem .8rem;border:1px solid #98bead;border-radius:.65rem;color:var(--ink);background:#f8faf8;font:inherit;resize:vertical}
+#public-agent-composer textarea:focus-visible,#public-agent-composer button:focus-visible{outline:2px solid #176750;outline-offset:3px}
+#public-agent-composer button{border:0;font:inherit;font-weight:700;cursor:pointer}
+#public-agent-composer button:disabled{opacity:.55;cursor:default}
+#public-agent-composer-status{font-size:.9rem;color:#914224}
+.chat-fallback{font-size:.9rem;justify-self:start;text-underline-offset:3px}
 .starters{margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--line)}
 .starters h3{margin-bottom:.7rem;font-size:.97rem}
 .starters ul{display:grid;gap:.55rem;list-style:none;margin:0;padding:0}
 .starter,.starter-preview{display:flex;justify-content:space-between;align-items:center;gap:.8rem;min-height:2.9rem;padding:.6rem .8rem;border:1px solid var(--line);border-radius:.65rem;background:#f8faf8;overflow-wrap:anywhere}
 .starter{text-decoration:none}
 .starter:hover{border-color:#98bead;background:#edf6ed}
-@media(max-width:44rem){.agent-home{grid-template-columns:minmax(0,1fr);padding:1.65rem 1rem 2rem;gap:1.45rem}.topbar{padding-inline:1rem}.avatar{width:3rem;height:3rem;border-radius:.9rem;font-size:1.35rem}.conversation{padding:1.15rem}.chat-action{width:100%}}
+@media(max-width:44rem){.agent-home{grid-template-columns:minmax(0,1fr);padding:1.65rem 1rem 2rem;gap:1.45rem}.topbar{padding-inline:1rem}.avatar{width:3rem;height:3rem;border-radius:.9rem;font-size:1.35rem}.conversation{padding:1.15rem}#public-agent-composer{grid-template-columns:minmax(0,1fr)}.chat-action{width:100%}}
 </style>
 </head><body>
 <header class="site-header"><div class="topbar">
@@ -170,12 +295,21 @@ h2,h3,p{margin:0}
 <div class="avatar" aria-hidden="true">${escapeHtml(Array.from(title.trim())[0]?.toUpperCase() || "O")}</div>
 <h1 id="profile-title">${escapeHtml(title)}</h1>
 ${creator ? `<p class="creator">发布者 · ${escapeHtml(creator)}</p>` : ""}
+<div id="public-agent-share" class="profile-share" data-profile-path="${profilePath}">
+  <button type="button" data-copy-profile disabled hidden>复制主页链接</button>
+  <details data-copy-profile-fallback>
+    <summary>主页链接</summary>
+    <label>主页地址 <input type="text" value="${profilePath}" data-copy-profile-url readonly></label>
+    <a href="${profilePath}">打开公开主页</a>
+  </details>
+  <p data-copy-profile-status role="status" aria-live="polite" hidden></p>
+</div>
 ${view.summary ? `<p class="description">${escapeHtml(view.summary)}</p>` : ""}
 </section>
 <section class="conversation" aria-labelledby="conversation-title">
 <h2 id="conversation-title">网页对话</h2>
-<p class="help">${canChat ? "登录后可以聊天，发布者可以查看对话。快捷开场会填入输入框。" : "该智能体暂未开放访客聊天。"}</p>
-${canChat ? `<a class="chat-action" href="${escapeHtml(chatHref)}">开始对话</a>` : ""}
+<p class="help">${canChat ? "登录后确认发送。发送的消息会与智能体发布者共享。" : "该智能体暂未开放访客聊天。"}</p>
+${composer}
 ${startList}
 </section>
 </main>
@@ -190,12 +324,235 @@ function listedBySlug(ot: OtContext, slug: string) {
   return l;
 }
 
+type FeedScope = { where: string; args: unknown[] };
+type WorkAnchor = { id: string; updated_at: number };
+type WorkNeighbor = { slug: string; title: string };
+const PUBLIC_WORK_SCOPE: FeedScope = {where: "l.listed = 1 AND l.kind = 'work'", args: []};
+
+function publicWorkPreview(ot: OtContext, slug: string) {
+  assert(SLUG.test(slug), 404, "listing_not_found", "no such work");
+  const work = ot.get<any>(`SELECT ${LISTING_CARD_COLUMNS}, substr(l.snapshot, 1, ?) AS snapshot
+    FROM ot_listings l WHERE l.slug = ? AND ${PUBLIC_WORK_SCOPE.where}`, WORK_PREVIEW_MAX, slug);
+  assert(work, 404, "listing_not_found", "no such work");
+  const {creator, title, work_kind, updated_at, path, likes, collections, comment_count, site_available} =
+    listingView(ot, work, null);
+  const author = creator.handle?.replace(/^@/, "").replace(/\.home$/, "") || creator.display_name;
+  return {
+    slug, title, kind: work_kind || "document", author,
+    updated: Math.floor(updated_at > 1e12 ? updated_at / 1000 : updated_at),
+    path, likes, collections, comment_count, site_available,
+    preview: workExcerpt(work, site_available === true),
+  };
+}
+
+function discoverScope(ot: OtContext, input: Record<string, unknown>, viewer: string) {
+  const kind = one(input.kind, "kind");
+  const tab = one(input.tab, "tab") ?? "all";
+  const sort = one(input.sort, "sort") ?? "latest";
+  const category = one(input.category, "category");
+  const workKind = one(input.work_kind, "work_kind");
+  const creator = one(input.creator, "creator");
+  const search = (one(input.q, "q") ?? "").trim().toLowerCase().slice(0, 60);
+  assert(sort === "latest" || sort === "popular", 400, "invalid_request", "unknown discover sort");
+  assert(sort !== "popular" || (kind === "work" && tab === "all"), 400, "invalid_request", "popularity sorting applies to the all works feed");
+
+  const conditions = ["l.listed = 1"];
+  const args: unknown[] = [];
+  if (kind) {
+    assert(kind === "agent" || kind === "work", 400, "invalid_request", "kind must be agent or work");
+    conditions.push("l.kind = ?");
+    args.push(kind);
+  }
+  if (category) { conditions.push("l.category = ?"); args.push(category); }
+  if (workKind) {
+    assert(WORK_KINDS.includes(workKind), 400, "invalid_request", "unknown work kind");
+    conditions.push("l.work_kind = ?");
+    args.push(workKind);
+  }
+  if (creator) { conditions.push("l.owner_id = ?"); args.push(ot.ownerByHandle(creator)); }
+  if (tab === "following") {
+    conditions.push("EXISTS (SELECT 1 FROM ot_follows f WHERE f.creator_id = l.owner_id AND f.follower_id = ?)");
+    args.push(viewer);
+  } else if (tab === "collected") {
+    conditions.push("EXISTS (SELECT 1 FROM ot_collections c WHERE c.listing_id = l.id AND c.owner_id = ?)");
+    args.push(viewer);
+  } else {
+    assert(tab === "all", 400, "invalid_request", "tab must be all, following or collected");
+  }
+  if (search) {
+    conditions.push("(instr(lower(l.title), ?) > 0 OR instr(lower(l.summary), ?) > 0 OR instr(p.handle, ?) > 0 OR instr(lower(p.display_name), ?) > 0)");
+    args.push(search, search, search, search);
+  }
+  return {sort, where: conditions.join(" AND "), args};
+}
+
+function chronologicalWorkNeighbors(ot: OtContext, work: WorkAnchor, scope: FeedScope) {
+  const neighbor = (previous: boolean) => {
+    const comparison = previous ? ">" : "<";
+    const direction = previous ? "ASC" : "DESC";
+    return ot.get<WorkNeighbor>(`SELECT l.slug, l.title FROM ot_listings l
+      LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
+      WHERE ${scope.where} AND (l.updated_at, l.id) ${comparison} (?, ?)
+      ORDER BY l.updated_at ${direction}, l.id ${direction} LIMIT 1`,
+    ...scope.args, work.updated_at, work.id) ?? null;
+  };
+  return {previous: neighbor(true), next: neighbor(false)};
+}
+
+const RANKING_WINDOW = 500;
+const RANKING_TTL = 10 * 60_000;
+const RANKING_SESSIONS = 128;
+const RANKED_CURSOR = /^([A-Za-z0-9_-]{32})\.([1-9][0-9]{0,2})$/;
+const WEEK = 7 * 86_400_000;
+
+function rankedWorkIds(ot: OtContext, {where, args}: FeedScope) {
+  const now = ot.now();
+  const minimumEngagementTime = now - 8 * WEEK;
+  // Weight recent distinct likes and collections on opted-in works, without
+  // counting an author's own engagement.
+  const rows = ot.all<{id: string}>(`WITH recent AS MATERIALIZED (
+    SELECT l.id, l.owner_id, l.updated_at FROM ot_listings l
+    LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
+    WHERE l.listed = 1 AND l.kind = 'work' AND ${where}
+    ORDER BY l.updated_at DESC, l.id DESC LIMIT ${RANKING_WINDOW}
+  )
+  SELECT l.id FROM recent l ORDER BY (
+    2 * (SELECT COUNT(*) FROM (SELECT 1 FROM ot_likes
+      WHERE listing_id = l.id AND created_at >= ? AND owner_id <> l.owner_id LIMIT 12))
+    + 3 * (SELECT COUNT(*) FROM (SELECT 1 FROM ot_collections
+      WHERE listing_id = l.id AND created_at >= ? AND owner_id <> l.owner_id LIMIT 8))
+    - MIN(12, MAX(0, CAST((? - l.updated_at) / ${WEEK} AS INTEGER)))
+  ) DESC, l.updated_at DESC, l.id DESC`, ...args, minimumEngagementTime, minimumEngagementTime, now);
+  return rows.map(row => row.id);
+}
+
+function popularWorks(ot: OtContext) {
+  type Ranking = { context: string; keys: string; expires: number };
+  const rankings = new Map<string, Ranking>();
+
+  return (where: string, args: unknown[], viewer: string, limit: number, cursor: string | undefined) => {
+    const context = hashCode(JSON.stringify([viewer, where, args]));
+    const now = ot.now();
+    let token: string;
+    let ranking: Ranking;
+    let offset = 0;
+    if (cursor !== undefined) {
+      const match = RANKED_CURSOR.exec(cursor);
+      assert(match && Number(match[2]) < RANKING_WINDOW, 400, "invalid_request", "invalid popularity cursor");
+      token = match[1];
+      offset = Number(match[2]);
+      const previous = rankings.get(token);
+      assert(previous && previous.expires > now, 409, "popularity_expired", "refresh the popular works feed");
+      assert(previous.context === context, 400, "invalid_request", "cursor belongs to another feed");
+      ranking = previous;
+    } else {
+      token = randomBytes(24).toString("base64url");
+      ranking = {context, keys: JSON.stringify(rankedWorkIds(ot, {where, args})), expires: now + RANKING_TTL};
+    }
+
+    // Use the captured order for pagination, but verify current publication
+    // and filter membership before returning a card. Revocation takes effect
+    // immediately and engagement changes cannot make a work repeat on a later page.
+    const rows = ot.all<any>(`SELECT ${LISTING_CARD_COLUMNS}, r.key AS position FROM json_each(?) r
+      JOIN ot_listings l ON l.id = r.value LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
+      WHERE r.key >= ? AND l.listed = 1 AND l.kind = 'work' AND ${where}
+      ORDER BY r.key LIMIT ?`, ranking.keys, offset, ...args, limit + 1);
+    const next = rows[limit];
+    if (next && cursor === undefined) {
+      for (const [key, entry] of rankings) if (entry.expires <= now) rankings.delete(key);
+      if (rankings.size >= RANKING_SESSIONS) {
+        const oldest = rankings.keys().next().value;
+        if (oldest) rankings.delete(oldest);
+      }
+      rankings.set(token, ranking);
+    }
+    return { items: rows.slice(0, limit).map(row => listingView(ot, row, viewer)),
+      next_cursor: next ? `${token}.${next.position}` : null };
+  };
+}
+
+function profileSocialCounts(ot: OtContext, owner: string) {
+  return ot.get(`SELECT
+    (SELECT COUNT(*) FROM ot_follows f JOIN ot_profiles p ON p.owner_id = f.creator_id
+      WHERE f.follower_id = ?) AS following,
+    (SELECT COUNT(*) FROM ot_follows f JOIN ot_profiles p ON p.owner_id = f.follower_id
+      WHERE f.creator_id = ?) AS followers,
+    (SELECT COUNT(*) FROM ot_listings l JOIN ot_likes r ON r.listing_id = l.id
+      WHERE l.owner_id = ? AND l.listed = 1 AND r.owner_id <> l.owner_id) AS likes_received,
+    (SELECT COUNT(*) FROM ot_listings l JOIN ot_collections r ON r.listing_id = l.id
+      WHERE l.owner_id = ? AND l.listed = 1 AND r.owner_id <> l.owner_id) AS collections_received`,
+  owner, owner, owner, owner);
+}
+
+type ProfileSocialKey = {
+  activity_at: number;
+  page_key: string;
+};
+
+const foldProfileSearch = (value: string) => value.normalize("NFKC").toLowerCase();
+
+function profileSocialCursor(cursor: string | undefined, scope: string, isFollowList: boolean): unknown[] {
+  if (cursor === undefined) return [];
+  const match = /^([a-f0-9]{24})\.([0-9]{1,16})\.([A-Za-z0-9][A-Za-z0-9_.-]{0,79})$/.exec(cursor);
+  assert(match && match[1] === scope, 400, "invalid_request", "invalid profile social cursor");
+  const at = Number(match[2]);
+  assert(Number.isSafeInteger(at) && (isFollowList || LISTING_ID.test(match[3])), 400, "invalid_request", "invalid profile social cursor");
+  return [at, match[3]];
+}
+
+function profileFollowRows(ot: OtContext, owner: string, outgoing: boolean, search: string, cursor: unknown[], limit: number) {
+  const [actor, peer] = outgoing ? ["follower_id", "creator_id"] : ["creator_id", "follower_id"];
+  return ot.all<ProfileSocialKey & {handle: string; display_name: string; bio: string; following: number; work_notices: number}>(`
+    SELECT p.handle, p.display_name, p.bio, f.work_notices, f.created_at AS activity_at, p.handle AS page_key,
+      EXISTS (SELECT 1 FROM ot_follows outgoing WHERE outgoing.follower_id = ? AND outgoing.creator_id = p.owner_id) AS following
+    FROM ot_follows f JOIN ot_profiles p ON p.owner_id = f.${peer}
+    WHERE f.${actor} = ?
+      ${search ? "AND (instr(ot_profile_fold(p.handle), ?) > 0 OR instr(ot_profile_fold(p.display_name), ?) > 0)" : ""}
+      ${cursor.length ? "AND (f.created_at, p.handle) < (?, ?)" : ""}
+    ORDER BY f.created_at DESC, p.handle DESC LIMIT ?`,
+  owner, owner, ...(search ? [search, search] : []), ...cursor, limit);
+}
+
+function profileListingRows(ot: OtContext, owner: string, view: "liked" | "collected" | "published", cursor: unknown[], limit: number) {
+  const activity = view === "published"
+    ? "SELECT id AS listing_id, created_at FROM ot_listings WHERE owner_id = ? AND listed = 1 AND kind = 'work'"
+    : `SELECT listing_id, created_at FROM ${view === "liked" ? "ot_likes" : "ot_collections"} WHERE owner_id = ?`;
+  return ot.all(`WITH profile_activity AS (${activity})
+    SELECT ${LISTING_CARD_COLUMNS}, a.created_at AS activity_at, a.listing_id AS page_key,
+      p.handle, COALESCE(p.display_name, '(left)') AS display_name, COALESCE(p.bio, '') AS bio,
+      EXISTS (SELECT 1 FROM ot_likes r WHERE r.listing_id = l.id AND r.owner_id = ?) AS liked,
+      EXISTS (SELECT 1 FROM ot_collections r WHERE r.listing_id = l.id AND r.owner_id = ?) AS collected
+    FROM profile_activity a JOIN ot_listings l ON l.id = a.listing_id
+    LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
+    WHERE l.listed = 1 ${cursor.length ? "AND (a.created_at, a.listing_id) < (?, ?)" : ""}
+    ORDER BY a.created_at DESC, a.listing_id DESC LIMIT ?`,
+  owner, owner, owner, ...cursor, limit);
+}
+
+function profileSocialPage<T extends ProfileSocialKey, R>(rows: T[], limit: number, scope: string, project: (row: T) => R) {
+  const last = rows.length > limit ? rows[limit - 1] : null;
+  return {
+    items: rows.slice(0, limit).map(project),
+    next_cursor: last ? `${scope}.${last.activity_at}.${last.page_key}` : null,
+  };
+}
+
 export function registerDiscover(app: FastifyInstance, ot: OtContext) {
+  const popular = popularWorks(ot);
+  registerWorkComments(app, ot);
+  ot.db.function("ot_profile_fold", {deterministic: true}, foldProfileSearch);
   const columns = new Set(ot.all<{name: string}>("PRAGMA table_info(ot_listings)").map(column => column.name));
   if (!columns.has("chat_enabled")) ot.run("ALTER TABLE ot_listings ADD COLUMN chat_enabled INTEGER NOT NULL DEFAULT 0");
   if (!columns.has("chat_from")) ot.run("ALTER TABLE ot_listings ADD COLUMN chat_from INTEGER NOT NULL DEFAULT 0");
+  const followColumns = ot.all<{name: string}>("PRAGMA table_info(ot_follows)");
+  if (!followColumns.some(column => column.name === "work_notices")) {
+    ot.run("ALTER TABLE ot_follows ADD COLUMN work_notices INTEGER NOT NULL DEFAULT 1 CHECK (work_notices IN (0, 1))");
+  }
 
-  app.put("/v1/ot/listings", async (req) => {
+  app.put("/v1/ot/listings", {
+    bodyLimit: CHAT_FILE_BODY_LIMIT,
+    onRequest: async req => { ot.me(req); },
+  }, async (req) => {
     const me = ot.me(req);
     const b = body(req);
     assert(b.kind === "agent" || b.kind === "work", 400, "invalid_request", "kind must be agent or work");
@@ -206,7 +563,16 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     assert(category === null || CATEGORIES.includes(category), 400, "invalid_request", "unknown category");
     const workKind = b.kind === "work" ? String(b.work_kind ?? "document") : null;
     assert(workKind === null || WORK_KINDS.includes(workKind), 400, "invalid_request", "unknown work kind");
-    const snapshot = b.snapshot == null ? null : text(b.snapshot, "snapshot", { max: SNAPSHOT_MAX, multiline: true });
+    if (workKind !== "model3d") assert(b.model_data === undefined, 400, "invalid_request", "only a 3D work accepts a GLB file");
+    const model = workKind === "model3d" ? decodeChatFile({title: "model.glb", mime: MODEL_MIME, data: b.model_data}).data : null;
+    const site = b.site_html;
+    if (site !== undefined) {
+      assert(workKind === "website" && typeof site === "string" && site.trim().length > 0,
+        400, "invalid_request", "site_html requires a website work and non-empty HTML");
+      assert(Buffer.byteLength(site, "utf8") <= MAX_SITE_BYTES, 413, "site_too_large", "site_html exceeds 32 KiB");
+    }
+    const snapshot = site !== undefined || b.snapshot == null
+      ? null : text(b.snapshot, "snapshot", { max: SNAPSHOT_MAX, multiline: true });
     const existing = ot.get<any>("SELECT * FROM ot_listings WHERE owner_id = ? AND kind = ? AND ref = ?", me.ownerId, b.kind, b.ref);
     assert(b.chat_enabled === undefined || (b.kind === "agent" && typeof b.chat_enabled === "boolean"),
       400, "invalid_request", "chat_enabled must be a boolean on an agent listing");
@@ -226,9 +592,28 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
         assert(ot.get<any>("SELECT COUNT(*) AS n FROM ot_listings WHERE owner_id = ?", me.ownerId).n < 500, 429, "too_many_listings", "listing limit reached");
         ot.run("INSERT INTO ot_listings(id, owner_id, kind, ref, slug, title, summary, category, work_kind, snapshot, chat_enabled, chat_from, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", id, me.ownerId, b.kind, b.ref, slug, title, summary, category, workKind, snapshot, Number(chatEnabled), chatFrom, now, now);
       }
+      if (model) {
+        const budget = ot.get<{bytes: number}>(`SELECT COALESCE(SUM(length(content)),0) AS bytes
+          FROM ot_listing_models WHERE owner_id = ? AND listing_id <> ?`, me.ownerId, id);
+        assert((budget?.bytes ?? 0) + model.length <= DEFAULT_ATTACHMENT_LIMITS.ownerBudgetBytes,
+          413, "attachment_storage_full", "public model storage is full");
+        ot.run(`INSERT INTO ot_listing_models (listing_id, owner_id, content) VALUES (?,?,?)
+          ON CONFLICT(listing_id) DO UPDATE SET content=excluded.content`, id, me.ownerId, model);
+      } else if (existing?.work_kind === "model3d") {
+        ot.run("DELETE FROM ot_listing_models WHERE listing_id = ?", id);
+      }
+      if (site !== undefined) {
+        ot.run(`INSERT INTO ot_listing_sites (listing_id, html) VALUES (?,?)
+          ON CONFLICT(listing_id) DO UPDATE SET html=excluded.html`, id, site);
+      } else if (existing?.work_kind === "website") {
+        ot.run("DELETE FROM ot_listing_sites WHERE listing_id = ?", id);
+      }
       if (!existing || !existing.listed) {
-        for (const f of ot.all<any>("SELECT follower_id FROM ot_follows WHERE creator_id = ? LIMIT 5000", me.ownerId)) {
-          ot.notify(f.follower_id, "discover.published", { listing_id: id, slug, kind: b.kind, title, creator: ot.profileView(me.ownerId) });
+        const followers = ot.all<{follower_id: string}>("SELECT follower_id FROM ot_follows WHERE creator_id = ? AND (? <> 'work' OR work_notices = 1) LIMIT 5000",
+          me.ownerId, b.kind);
+        if (followers.length) {
+          const data = { listing_id: id, slug, kind: b.kind, title, creator: ot.profileView(me.ownerId) };
+          for (const {follower_id} of followers) ot.notify(follower_id, "discover.published", data);
         }
       }
     });
@@ -236,8 +621,13 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   });
   app.delete("/v1/ot/listings/:id", async (req) => {
     const me = ot.me(req);
-    const r = ot.run("UPDATE ot_listings SET listed = 0, chat_enabled = 0, updated_at = ? WHERE id = ? AND owner_id = ?", ot.now(), params(req).id, me.ownerId);
-    assert(r.changes === 1, 404, "listing_not_found", "no such listing of yours");
+    const id = params(req).id;
+    ot.tx(() => {
+      const r = ot.run("UPDATE ot_listings SET listed = 0, chat_enabled = 0, updated_at = ? WHERE id = ? AND owner_id = ?", ot.now(), id, me.ownerId);
+      assert(r.changes === 1, 404, "listing_not_found", "no such listing of yours");
+      ot.run("DELETE FROM ot_listing_models WHERE listing_id = ?", id);
+      ot.run("DELETE FROM ot_listing_sites WHERE listing_id = ?", id);
+    });
     return { unlisted: true };
   });
   app.get("/v1/ot/listings/mine", async (req) => {
@@ -248,26 +638,44 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   app.get("/v1/ot/discover", async (req) => {
     const me = ot.me(req);
     const q = query(req);
-    const kind = one(q.kind, "kind");
-    const tab = one(q.tab, "tab") ?? "all";
-    const category = one(q.category, "category");
-    const workKind = one(q.work_kind, "work_kind");
-    const creator = one(q.creator, "creator");
-    const search = (one(q.q, "q") ?? "").trim().toLowerCase().slice(0, 60);
-    const before = intParam(q.before, "before", 0);
+    const {sort, where, args} = discoverScope(ot, q, me.ownerId);
+    const cursor = one(q.cursor, "cursor");
     const limit = intParam(q.limit, "limit", 30, 100);
-    const where = ["l.listed = 1"]; const args: unknown[] = [];
-    if (kind) { assert(kind === "agent" || kind === "work", 400, "invalid_request", "kind must be agent or work"); where.push("l.kind = ?"); args.push(kind); }
-    if (category) { where.push("l.category = ?"); args.push(category); }
-    if (workKind) { where.push("l.work_kind = ?"); args.push(workKind); }
-    if (creator) { where.push("l.owner_id = ?"); args.push(ot.ownerByHandle(creator)); }
-    if (tab === "following") { where.push("EXISTS (SELECT 1 FROM ot_follows f WHERE f.creator_id = l.owner_id AND f.follower_id = ?)"); args.push(me.ownerId); }
-    else if (tab === "collected") { where.push("EXISTS (SELECT 1 FROM ot_collections c WHERE c.listing_id = l.id AND c.owner_id = ?)"); args.push(me.ownerId); }
-    else assert(tab === "all", 400, "invalid_request", "tab must be all, following or collected");
-    if (search) { where.push("(instr(lower(l.title), ?) > 0 OR instr(lower(l.summary), ?) > 0 OR instr(p.handle, ?) > 0 OR instr(lower(p.display_name), ?) > 0)"); args.push(search, search, search, search); }
-    if (before) { where.push("l.updated_at < ?"); args.push(before); }
-    const rows = ot.all<any>(`SELECT l.* FROM ot_listings l LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id WHERE ${where.join(" AND ")} ORDER BY l.updated_at DESC, l.id DESC LIMIT ?`, ...args, limit);
+    if (sort === "popular") {
+      assert(q.before === undefined, 400, "invalid_request", "the popular feed uses a popularity cursor");
+      return popular(where, args, me.ownerId, Math.max(1, limit), cursor);
+    }
+    assert(cursor === undefined, 400, "invalid_request", "the latest feed uses the before cursor");
+    const before = intParam(q.before, "before", 0);
+    const boundary = before ? " AND l.updated_at < ?" : "";
+    const rows = ot.all<any>(`SELECT ${LISTING_CARD_COLUMNS} FROM ot_listings l LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
+      WHERE ${where}${boundary} ORDER BY l.updated_at DESC, l.id DESC LIMIT ?`, ...args, ...(before ? [before] : []), limit);
     return { items: rows.map((l) => listingView(ot, l, me.ownerId)), next_before: rows.length === limit ? rows[rows.length - 1].updated_at : null };
+  });
+  app.get("/v1/ot/discover/:slug/detail", async (req, reply) => {
+    const me = ot.me(req);
+    const q = query(req);
+    assert(Object.keys(q).every(key => ["tab", "sort", "work_kind", "q", "creator"].includes(key)),
+      400, "invalid_request", "unknown work detail filter");
+    const scope = discoverScope(ot, {...q, kind: "work"}, me.ownerId);
+    const slug = params(req).slug;
+    assert(SLUG.test(slug), 404, "listing_not_found", "no such work");
+    const work = ot.get<any>(`SELECT ${LISTING_CARD_COLUMNS} FROM ot_listings l WHERE l.slug = ? AND ${PUBLIC_WORK_SCOPE.where}`, slug);
+    assert(work, 404, "listing_not_found", "no such work");
+    reply.header("Cache-Control", "no-store");
+    const detail = {work: listingView(ot, work, me.ownerId), previous: null, next: null};
+    if (scope.sort === "popular") {
+      const ids = rankedWorkIds(ot, scope);
+      const position = ids.indexOf(work.id);
+      if (position === -1) return detail;
+      const neighbor = (id: string | undefined) => id
+        ? ot.get<WorkNeighbor>(`SELECT l.slug, l.title FROM ot_listings l WHERE l.id = ? AND ${PUBLIC_WORK_SCOPE.where}`, id) ?? null
+        : null;
+      return {...detail, previous: neighbor(ids[position - 1]), next: neighbor(ids[position + 1])};
+    }
+    const matches = ot.get(`SELECT 1 FROM ot_listings l LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
+      WHERE l.id = ? AND ${scope.where}`, work.id, ...scope.args);
+    return matches ? {...detail, ...chronologicalWorkNeighbors(ot, work, scope)} : detail;
   });
   app.get("/v1/ot/discover/:slug", async (req) => {
     const me = ot.me(req);
@@ -298,6 +706,18 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     if (r.changes) ot.notify(creator, "follow.new", { follower: ot.profileView(me.ownerId) });
     return { following: true };
   });
+  app.post("/v1/ot/follows/notifications", async (req, reply) => {
+    const owner = ot.me(req).ownerId;
+    reply.header("Cache-Control", "private, no-store");
+    const b = body(req);
+    assert(typeof b.handle === "string" && typeof b.enabled === "boolean" && Object.keys(b).length === 2,
+      400, "invalid_request", "provide a creator handle and an enabled boolean");
+    const creator = ot.ownerByHandle(text(b.handle, "handle", {min: 1, max: 100}));
+    const changed = ot.run("UPDATE ot_follows SET work_notices = ? WHERE follower_id = ? AND creator_id = ?",
+      Number(b.enabled), owner, creator);
+    assert(changed.changes === 1, 404, "follow_not_found", "you are not following this creator");
+    return {enabled: b.enabled};
+  });
   app.get("/v1/ot/follows", async (req) => {
     const me = ot.me(req);
     const handle = one(query(req).handle, "handle");
@@ -307,32 +727,94 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
       followers: ot.all<any>("SELECT follower_id FROM ot_follows WHERE creator_id = ? ORDER BY created_at DESC LIMIT 500", who).map((r) => ot.profileView(r.follower_id)),
     };
   });
+  app.get("/v1/ot/profile/social", async (req, reply) => {
+    const owner = ot.me(req).ownerId;
+    reply.header("Cache-Control", "private, no-store");
+    const q = query(req);
+    const view = one(q.view, "view") ?? "counts";
+    if (view === "counts") {
+      assert(Object.keys(q).every(key => key === "view"), 400, "invalid_request", "unknown profile counts filter");
+      return profileSocialCounts(ot, owner);
+    }
+    const isFollowList = view === "following" || view === "followers" || view === "work-notices";
+    assert(isFollowList || view === "liked" || view === "collected" || view === "published",
+      400, "invalid_request", "unknown profile social view");
+    assert(Object.keys(q).every(key => ["view", "cursor", "limit"].includes(key) || (key === "q" && isFollowList)),
+      400, "invalid_request", "unknown profile social filter");
+    const term = one(q.q, "q");
+    const search = term === undefined ? "" : foldProfileSearch(text(term, "q", {max: 80})).replace(/^@/, "");
+    const limit = Math.max(1, intParam(q.limit, "limit", 20, 50));
+    const scope = hashCode(JSON.stringify([owner, view, search])).slice(0, 24);
+    const cursor = profileSocialCursor(one(q.cursor, "cursor"), scope, isFollowList);
+    if (isFollowList) {
+      const rows = profileFollowRows(ot, owner, view !== "followers", search, cursor, limit + 1);
+      if (view === "work-notices") {
+        return profileSocialPage(rows, limit, scope, ({handle, display_name, bio, work_notices}) =>
+          ({handle, display_name, bio, enabled: Boolean(work_notices)}));
+      }
+      return profileSocialPage(rows, limit, scope, ({handle, display_name, bio, following}) =>
+        ({handle, display_name, bio, following: Boolean(following)}));
+    }
+    const rows = profileListingRows(ot, owner, view, cursor, limit + 1);
+    return profileSocialPage(rows, limit, scope, row =>
+      ({...listingFields(ot, row), creator: {handle: row.handle, display_name: row.display_name, bio: row.bio},
+        liked: Boolean(row.liked), collected: Boolean(row.collected)}));
+  });
 
   // Public catalog pages: no connector token. The isolated site exposes them at
   // https://<origin>/social/a/<slug> and /social/w/<slug> through the existing edge prefix.
   app.get("/v1/ot/public/listings/:slug", async (req, reply) => {
     const l = listedBySlug(ot, params(req).slug);
-    if (l.kind === "agent") reply.header("Cache-Control", "no-store");
-    return listingView(ot, l, null, true);
+    reply.header("Cache-Control", "no-store");
+    return publicListingView(ot, l);
   });
   const sendPublic = async (req: any, reply: any, kind: "agent" | "work") => {
-    if (kind === "agent") reply.header("Cache-Control", "no-store");
-    const l = listedBySlug(ot, params(req).slug);
-    assert(l.kind === kind, 404, "listing_not_found", "no such listing");
-    const view = listingView(ot, l, null, true);
+    reply.header("Cache-Control", "no-store");
+    reply.header("Vary", "Accept");
+    const slug = params(req).slug;
     const accept = String(req.headers.accept || "");
-    if (accept.includes("application/json") && !accept.includes("text/html")) return view;
+    const json = accept.includes("application/json") && !accept.includes("text/html");
+    if (json && kind === "work" && query(req).view === "preview") return publicWorkPreview(ot, slug);
+    const l = listedBySlug(ot, slug);
+    assert(l.kind === kind, 404, "listing_not_found", "no such listing");
+    const view = publicListingView(ot, l);
+    if (json) return view;
     reply.header("Content-Type", "text/html; charset=utf-8");
-    if (kind === "work") reply.header("Cache-Control", "public, max-age=60");
-    return reply.send(publicPage(l, view));
+    return reply.send(publicPage(ot, l, view));
   };
   app.get("/a/:slug", async (req, reply) => sendPublic(req, reply, "agent"));
   app.get("/w/:slug", async (req, reply) => sendPublic(req, reply, "work"));
+  app.get("/w/:slug/file", async (req, reply) => {
+    const slug = params(req).slug;
+    const model = ot.get<{title: string; content: Buffer}>(`SELECT l.title, m.content FROM ot_listing_models m
+      JOIN ot_listings l ON l.id = m.listing_id
+      WHERE l.slug = ? AND l.listed = 1 AND l.kind = 'work' AND l.work_kind = 'model3d'`, slug);
+    reply.header("Cache-Control", "no-store");
+    assert(model, 404, "listing_not_found", "no such public model");
+    const name = encodeURIComponent(model.title.replace(/[\ud800-\udfff]/gu, "\ufffd") + ".glb").replace(/['()*]/g, c => "%" + c.charCodeAt(0).toString(16));
+    return reply.type(MODEL_MIME)
+      .header("Content-Disposition", `attachment; filename="${slug}.glb"; filename*=UTF-8''${name}`)
+      .header("X-Content-Type-Options", "nosniff")
+      .header("Content-Security-Policy", "default-src 'none'; sandbox")
+      .send(model.content);
+  });
+  app.get("/w/:slug/site", async (req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const l = listedBySlug(ot, params(req).slug);
+    assert(l.kind === "work" && l.work_kind === "website",
+      404, "listing_not_found", "no such public website");
+    const site = ot.get<{html: string}>("SELECT html FROM ot_listing_sites WHERE listing_id = ?", l.id);
+    assert(site, 404, "listing_not_found", "no such public website");
+    return reply.type("text/html; charset=utf-8")
+      .header("Content-Security-Policy", SITE_POLICY)
+      .header("X-Content-Type-Options", "nosniff")
+      .header("Referrer-Policy", "no-referrer")
+      .send(site.html);
+  });
   app.get("/w/:slug/preview", async (req) => {
     const l = listedBySlug(ot, params(req).slug);
     assert(l.kind === "work", 404, "listing_not_found", "no such listing");
-    const snapshot = l.snapshot ? String(l.snapshot).slice(0, 2000) : "";
-    return { preview: snapshot.startsWith("{") ? (listingView(ot, l, null).summary || "") : snapshot };
+    return { preview: workExcerpt(l, publishedSiteAvailable(ot, l)) };
   });
 
   // Public homepage "start a conversation": a signed-in visitor talks to the creator's
@@ -340,25 +822,33 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   // attached; the creator's own DS-Bot answers through its agent inbox.
   app.post("/v1/ot/discover/:slug/start", async (req, reply) => {
     const me = ot.me(req);
-    const input = body(req);
+    const input = (req.body === undefined ? {} : req.body) as Record<string, unknown>;
     assert(input && typeof input === "object" && !Array.isArray(input), 400, "invalid_request", "Invalid public chat request");
-    const quick = Object.keys(input).length !== 0;
-    if (quick) {
-      assert(Object.keys(input).length === 2 && Number.isInteger(input.quick_start)
-        && input.quick_start >= 0 && input.quick_start <= 4
-        && typeof input.quick_start_version === "string" && /^[a-f0-9]{64}$/.test(input.quick_start_version),
+    const fields = Object.keys(input);
+    const selected = Object.hasOwn(input, "listing_id");
+    const listingId = input.listing_id;
+    let quickStart: { index: number; version: string } | undefined;
+    if (selected) {
+      assert(fields.length === 1 && typeof listingId === "string" && LISTING_ID.test(listingId),
+        400, "invalid_request", "无效的公开智能体。");
+    } else if (fields.length) {
+      const { quick_start: index, quick_start_version: version } = input;
+      assert(fields.length === 2 && typeof index === "number" && Number.isInteger(index) && index >= 0 && index <= 4
+        && typeof version === "string" && /^[a-f0-9]{64}$/.test(version),
       400, "invalid_request", "请选择有效的快捷开场。");
+      quickStart = { index, version };
     }
     const result = ot.tx(() => {
       const l = listedBySlug(ot, params(req).slug);
       assert(l.kind === "agent", 404, "listing_not_found", "no such listing");
+      assert(!selected || l.id === listingId, 409, "public_agent_changed", "该公开页面已更新，请返回主页重新选择智能体。");
       assert(l.chat_enabled, 409, "public_chat_closed", "该智能体未开放访客聊天。");
       assert(l.owner_id !== me.ownerId, 400, "invalid_request", "this is your own agent");
       let draftText: string | undefined;
-      if (quick) {
+      if (quickStart) {
         const {starts, version} = publishedQuickStarts(l);
-        draftText = starts[input.quick_start];
-        assert(draftText && input.quick_start_version === version, 409, "quick_start_changed", "快捷开场已更新，请返回公开主页重新选择。");
+        draftText = starts[quickStart.index];
+        assert(draftText && quickStart.version === version, 409, "quick_start_changed", "快捷开场已更新，请返回公开主页重新选择。");
       }
       const key = `agent:${l.id}:${me.ownerId}`;
       const existing = ot.get<{id: string; created_by: string}>("SELECT id, created_by FROM ot_conversations WHERE dm_key = ?", key);
@@ -373,7 +863,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
         }
         ot.run("INSERT INTO ot_conversation_agents(conversation_id, agent_ref, owner_id, name, auto_reply, created_at) VALUES (?,?,?,?,1,?)",
           id, l.ref, l.owner_id, title, now);
-        if (!quick) ot.notify(l.owner_id, "discover.conversation_started", {
+        if (!quickStart && !selected) ot.notify(l.owner_id, "discover.conversation_started", {
           listing_id: l.id, slug: l.slug, conversation_id: id, visitor: ot.profileView(me.ownerId),
         });
       } else {

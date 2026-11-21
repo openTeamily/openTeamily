@@ -273,7 +273,7 @@ class Lifecycle:
         with self.store.transaction() as db:
             return self.create_with(db, owner, wid, key, per_user=per_user)
 
-    def create_with(self, db, owner, wid, key, *, per_user=False):
+    def create_with(self, db, owner, wid, key, *, per_user=False, start_immediately=False):
         """Create inside the caller's IMMEDIATE transaction (server-side auto-provisioning)."""
         if not valid_key(key):
             fail(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
@@ -294,9 +294,12 @@ class Lifecycle:
             fail(429, 'quota', 'Instance capacity reached')
         iid, op, jid = uuid4().hex, uuid4().hex, uuid4().hex
         create_key = digest('owner:' + owner + ':' + key) if owner_scoped else digest(key)
-        db.execute('INSERT INTO instances(id,workspace_id,owner_id,profile,backend_mode,image_ref,volume_ref,desired,revision,operation_id,operation_type,observed,create_key,created) VALUES(?,?,?,?,?,?,?,\'stopped\',1,?,\'create\',\'pending\',?,?)',
-                   (iid, wid, owner, self.policy.profile, self.policy.backend_mode, self.policy.image_ref, 'ot-' + iid, op, create_key, now))
-        db.execute("INSERT INTO runtime_jobs(id,instance_id,revision,operation_id,operation_type,status,created) VALUES(?,?,1,?,'create','queued',?)", (jid, iid, op, now))
+        desired, action = ('running', 'start') if start_immediately else ('stopped', 'create')
+        db.execute("INSERT INTO instances(id,workspace_id,owner_id,profile,backend_mode,image_ref,volume_ref,desired,revision,operation_id,operation_type,observed,create_key,created) VALUES(?,?,?,?,?,?,?,?,1,?,?,'pending',?,?)",
+                   (iid, wid, owner, self.policy.profile, self.policy.backend_mode, self.policy.image_ref,
+                    'ot-' + iid, desired, op, action, create_key, now))
+        db.execute("INSERT INTO runtime_jobs(id,instance_id,revision,operation_id,operation_type,status,created) VALUES(?,?,1,?,?,'queued',?)",
+                   (jid, iid, op, action, now))
         return True, self.result(db, iid)
 
     def inspect(self, owner, iid):

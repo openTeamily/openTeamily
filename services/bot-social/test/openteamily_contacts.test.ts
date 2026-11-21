@@ -17,6 +17,7 @@ test("contacts require both owners and give a stable, private account-level DM",
   const found = await a.ok("GET", contacts + "/lookup?handle=" + encodeURIComponent("@" + b.handle));
   assert.equal(found.peer.handle, b.handle);
   assert.deepEqual(Object.keys(found.peer).sort(), ["display_name","handle"]);
+  assert.equal(found.relationship, null);
   assert.equal((await a.call("POST", conversations, start)).status, 403);
 
   const request = await a.ok("POST", contacts, {handle:b.handle});
@@ -24,11 +25,18 @@ test("contacts require both owners and give a stable, private account-level DM",
   assert.equal(request.incoming, false);
   assert.equal((await b.ok("POST", contacts, {handle:a.handle})).id, request.id, "crossed requests retain the original consent");
   assert.equal((await b.ok("GET", contacts)).items[0].incoming, true);
+  assert.deepEqual((await a.ok("GET", contacts + "/lookup?handle=" + b.handle)).relationship,
+    {id:request.id, status:"pending", incoming:false});
+  assert.deepEqual((await b.ok("GET", contacts + "/lookup?handle=" + a.handle)).relationship,
+    {id:request.id, status:"pending", incoming:true});
+  assert.equal((await stranger.ok("GET", contacts + "/lookup?handle=" + b.handle)).relationship, null);
   assert.deepEqual((await stranger.ok("GET", contacts)).items, []);
   assert.equal((await a.call("POST", contacts + "/" + request.id, {action:"accept"})).status, 409);
   assert.equal((await stranger.call("POST", contacts + "/" + request.id, {action:"accept"})).status, 404);
   assert.equal((await a.call("POST", conversations, start)).status, 403);
   await b.ok("POST", contacts + "/" + request.id, {action:"accept"});
+  assert.deepEqual((await a.ok("GET", contacts + "/lookup?handle=" + b.handle)).relationship,
+    {id:request.id, status:"accepted", incoming:false});
 
   const dm = await a.ok("POST", conversations, start);
   assert.deepEqual(dm.direct, {open:true});
@@ -46,6 +54,7 @@ test("contacts require both owners and give a stable, private account-level DM",
   assert.equal((await stranger.call("GET", path)).status, 404);
 
   await b.ok("POST", contacts + "/" + request.id, {action:"remove"});
+  assert.equal((await a.ok("GET", contacts + "/lookup?handle=" + b.handle)).relationship, null);
   assert.deepEqual((await a.ok("GET", contacts)).items, []);
   assert.equal((await a.ok("GET", path)).direct.open, false);
   assert.equal((await b.ok("GET", filePath)).data, data, "history remains readable");

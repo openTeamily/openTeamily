@@ -1,3 +1,5 @@
+import {teamInviteUrl} from '../shell/team-invite-link.mjs';
+
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
@@ -44,12 +46,12 @@ export function inviteValues(document) {
 // The invite object has no email field, and the endpoint rejects unknown ones, so
 // an address typed in the wizard only ever becomes a link in the user's own mail
 // client. Nothing is sent to the server and no mail is claimed to be sent.
-export function inviteMailto(email, teamName, token) {
+export function inviteMailto(email, teamName, url) {
   const address = (email || '').trim();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address) || /[\r\n]/.test(address)) return '';
+  if (!url || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address) || /[\r\n]/.test(address)) return '';
   const subject = '邀请你加入团队「' + (teamName || 'OpenTeamily 团队') + '」';
-  const body = '邀请令牌：' + token + '\n\n在 OpenTeamily 的成员页「接受邀请」里粘贴这个令牌即可加入。令牌只显示一次。';
-  return 'mailto:' + encodeURI(address) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+  const body = '打开邀请，登录后确认加入：\n' + url;
+  return 'mailto:' + encodeURIComponent(address) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
 }
 
 // Renders the server's own invite object; it carries no email, so none is shown.
@@ -147,7 +149,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('submit').disabled = false;
     document.getElementById('invite-result').hidden = true;
     document.getElementById('invite-summary').textContent = '';
-    document.getElementById('invite-token').textContent = '';
+    document.getElementById('invite-token').value = '';
     document.getElementById('invite-mailto').hidden = true;
     form.reset();
     form.elements.mode.value = 'new';
@@ -296,11 +298,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       invited = true;
       document.getElementById('invite-summary').textContent = inviteSummary(result.body.invite);
-      document.getElementById('invite-token').textContent = result.body.token || '';
+      const url = teamInviteUrl(result.body.token, document.defaultView?.location?.origin);
+      document.getElementById('invite-token').value = url;
+      document.getElementById('copy-invite').disabled = !url;
       const mail = document.getElementById('invite-mailto');
       if (mail) {
         const address = (document.getElementById('invite-email') || {}).value || '';
-        const href = inviteMailto(address, created.name, result.body.token || '');
+        const href = inviteMailto(address, created.name, url);
         mail.hidden = !href;
         if (href) {
           mail.setAttribute('href', href);
@@ -327,12 +331,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('invite-skip').addEventListener('click', () => createAndInvite(false));
 
   document.getElementById('copy-invite').addEventListener('click', async () => {
-    const token = document.getElementById('invite-token').textContent;
+    const field = document.getElementById('invite-token');
+    if (!field.value) return;
     try {
-      await globalThis.navigator.clipboard.writeText(token);
-      show('ok', '已复制邀请令牌，粘贴给同事即可。');
+      await globalThis.navigator.clipboard.writeText(field.value);
+      show('ok', '已复制邀请链接。');
     } catch {
-      show('error', '这个浏览器不允许自动复制，请手动选中令牌。');
+      field.select();
+      show('error', '请复制选中的链接。');
     }
   });
 

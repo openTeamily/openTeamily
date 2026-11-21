@@ -89,12 +89,18 @@ function usable(i: any, now: number) { return !i.revoked && !i.frozen && i.expir
 /** Accept an invite (by row) for `ownerId`: direct membership, or a pending request when approval is required. */
 function acceptInvite(ot: OtContext, invite: any, ownerId: string) {
   const now = ot.now();
-  assert(usable(invite, now), 410, "invite_unusable", "this invite has expired, been used up, paused or revoked");
   const existing = roleOf(ot, invite.team_id, ownerId);
-  if (existing) return { status: existing.suspended ? "suspended" : "member", team_id: invite.team_id };
-  const team = ot.get<any>("SELECT id, name FROM ot_teams WHERE id = ?", invite.team_id);
+  const team = ot.get<any>("SELECT id, name, workspace_id FROM ot_teams WHERE id = ?", invite.team_id);
+  if (existing) return { status: existing.suspended ? "suspended" : "member",
+    team_id: invite.team_id, workspace_id: team.workspace_id, role: existing.role };
+  const prior = invite.requires_approval
+    ? ot.get<any>("SELECT * FROM ot_join_requests WHERE team_id = ? AND owner_id = ?", invite.team_id, ownerId)
+    : null;
+  if (prior?.status === "pending" && prior.invite_id === invite.id) {
+    return { status: "pending", team_id: invite.team_id, request_id: prior.id };
+  }
+  assert(usable(invite, now), 410, "invite_unusable", "this invite has expired, been used up, paused or revoked");
   if (invite.requires_approval) {
-    const prior = ot.get<any>("SELECT * FROM ot_join_requests WHERE team_id = ? AND owner_id = ?", invite.team_id, ownerId);
     if (prior?.status === "pending") return { status: "pending", team_id: invite.team_id, request_id: prior.id };
     const id = prior?.id ?? newId("otjr");
     ot.run("INSERT INTO ot_join_requests(id, team_id, owner_id, invite_id, role, status, created_at) VALUES (?,?,?,?,?,'pending',?) ON CONFLICT(team_id, owner_id) DO UPDATE SET status = 'pending', invite_id = excluded.invite_id, role = excluded.role, created_at = excluded.created_at, decided_at = NULL, decided_by = NULL",
@@ -106,7 +112,7 @@ function acceptInvite(ot: OtContext, invite: any, ownerId: string) {
   addMember(ot, invite.team_id, ownerId, invite.role, invite.created_by);
   ot.run("UPDATE ot_invites SET use_count = use_count + 1 WHERE id = ?", invite.id);
   notifyAdmins(ot, invite.team_id, "team.member_joined", { team_id: team.id, team_name: team.name, member: ot.profileView(ownerId) });
-  return { status: "member", team_id: invite.team_id };
+  return { status: "member", team_id: invite.team_id, workspace_id: team.workspace_id, role: invite.role };
 }
 
 function createInvite(ot: OtContext, teamId: string, by: string, b: any) {

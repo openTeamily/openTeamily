@@ -73,7 +73,7 @@
     </header>
     <p id="whoami" class="visually-hidden"></p>
     <div class="page-toolbar">
-      <label class="workspace-field">工作区
+        <label class="workspace-field" id="member-workspace-field">工作区
         <select id="workspace"></select>
       </label>
       <p id="role-note" class="note"></p>
@@ -109,7 +109,10 @@
         <label>最多使用次数 <input type="number" name="max_uses" min="1" max="50" value="1"></label>
         <label class="check-row"><input type="checkbox" name="requires_approval"> 加入前需要所有者或管理员审批</label>
         <button type="submit">生成</button>
-        <p id="issued-token" class="note" hidden></p>
+        <div id="issued-token" class="invite-link" hidden>
+          <label>邀请链接 <input type="url" id="issued-invite-link" readonly autocomplete="off" spellcheck="false"></label>
+          <button type="button" id="copy-issued-invite">复制邀请链接</button>
+        </div>
       </fieldset>
     </form>
     <section id="invites-panel" hidden>
@@ -145,8 +148,9 @@
     <form id="accept-form" method="post" action="/v1/invites/accept">
       <fieldset>
         <legend>接受邀请</legend>
-        <label>邀请令牌 <input type="text" name="token" required minlength="32" maxlength="128" autocomplete="off" spellcheck="false"></label>
-        <button type="submit">加入</button>
+        <label id="receive-invite-field">邀请链接或邀请码 <input type="text" id="receive-invite-token" name="token" required maxlength="512" autocomplete="off" spellcheck="false"></label>
+        <p id="invitation-preview" role="status" hidden></p>
+        <button type="submit" id="confirm-invite">查看邀请</button>
       </fieldset>
     </form>
   </section>

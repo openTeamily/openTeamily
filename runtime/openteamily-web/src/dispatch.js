@@ -1,3 +1,5 @@
+import { WEBSITE_HTML, WEBSITE_PREVIEW_CSP, WEBSITE_PREVIEW_PATH, websitePreviewRevision } from '../lib/website-preview.js'
+
 // POST /api/openteamily: one JSON channel for every OpenTeamily feature that has
 // moved into the user's DS-Bot. Endpoints come from features/<name>/index.js
 // (see src/features.js) as '<name>/<op>'.
@@ -109,7 +111,8 @@ async function composeAttachments(request, agent) {
   for (const file of files) {
     attachments.push({title:file.name, mime:file.type, data:Buffer.from(await file.arrayBuffer()).toString('base64')})
   }
-  return agent ? {body:form.get('body'), reply_language:form.get('reply_language'), attachments} : {attachment:attachments[0], reply_to:form.get('reply_to') ?? undefined}
+  return agent ? {body:form.get('body'), chat_language:form.get('chat_language'),
+    reply_language:form.get('reply_language'), attachments} : {attachment:attachments[0], reply_to:form.get('reply_to') ?? undefined}
 }
 
 function fileResponse(request, {data, content_type, filename, inline}) {
@@ -187,7 +190,25 @@ export function createLegacyDispatch({ endpoints }) {
       const idempotency_key = request.headers.get('idempotency-key') || undefined
       const result = await handler({ method: request.method, path, query, body, idempotency_key }, { request, host: null })
       const status = Number(result?.status) || 200
-      if (result?.download && status === 200) return fileResponse(request, result.download)
+      if (result?.download && status === 200) {
+        // The interactive document has its own opaque origin. No other
+        // artifacts or attachment responses can opt in to this policy.
+        if (feature === 'artifacts' && request.method === 'GET'
+            && WEBSITE_PREVIEW_PATH.test(path)
+            && websitePreviewRevision(new URLSearchParams(query)) !== null
+            && result.download.content_type === WEBSITE_HTML) {
+          return new Response(Buffer.from(result.download.data, 'base64'), {
+            headers: {
+              'content-type': WEBSITE_HTML,
+              'content-security-policy': WEBSITE_PREVIEW_CSP,
+              'cache-control': 'private, no-store',
+              'x-content-type-options': 'nosniff',
+              'referrer-policy': 'no-referrer',
+            },
+          })
+        }
+        return fileResponse(request, result.download)
+      }
       return new Response(status === 204 ? null : JSON.stringify(result?.body ?? {}), {
         status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
       })

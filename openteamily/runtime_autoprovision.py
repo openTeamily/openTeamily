@@ -141,7 +141,11 @@ def ensure(db, lifecycle, policy, user_id, workspace_id, agent_id, now):
     if db.execute('SELECT COUNT(*) FROM runtime_auto_provisions').fetchone()[0] >= policy.max_instances:
         return {'state': 'capacity', 'instance_id': None}
     try:
-        _created, result = lifecycle.create_with(db, user_id, workspace_id, create_key(user_id))
+        # Compose up can create the volume and start the container under one lease.
+        _created, result = lifecycle.create_with(
+            db, user_id, workspace_id, create_key(user_id),
+            start_immediately=lifecycle.policy.backend_mode == 'compose',
+        )
     except RuntimeFault as error:
         return {'state': 'capacity' if error.status == 429 else 'failed', 'instance_id': None,
                 'error_code': error.code}

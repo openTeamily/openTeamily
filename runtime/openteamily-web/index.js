@@ -25,7 +25,14 @@ export function apply(ctx, config = {}) {
   const identity = loadIdentity({ env: process.env, dataDir })
   const pagesDir = config.pagesDir ?? join(HERE, 'pages')
   const features = loadFeatures({ dir: config.featuresDir ?? join(HERE, 'features'), identity, dataDir })
-  const page = createPageHandler({ pagesDir, identity })
+  const page = createPageHandler({
+    pagesDir, identity,
+    async getSystemLanguage() {
+      const { table } = await features
+      const result = await table['settings/get']?.()
+      return result?.settings?.values?.language
+    },
+  })
   const dispatch = createDispatch({ endpoints: async () => (await features).table })
   ctx.effect(() => ctx.connection.fetch.register({
     path: PAGE_PATH,

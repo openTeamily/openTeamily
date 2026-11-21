@@ -17,6 +17,7 @@ body.app-workspace > #main > #main-panel.contacts-page {
   box-shadow: none;
 }
 .contacts-heading h1 { width: auto; margin: 0 auto 0 0; font-size: 1.375rem; }
+body.app-workspace .contacts-heading h1 { font-size: clamp(1.375rem, 3vw, 1.625rem); }
 #add-contact {
   min-height: 2.75rem;
   padding: 0 .875rem;
@@ -116,10 +117,27 @@ body.app-workspace > #main > #main-panel.contacts-page {
   box-shadow: none;
 }
 #add-contact-dialog h2 { margin: 0; font-size: 1.125rem; }
-#close-add-contact { min-width: 2.75rem; min-height: 2.75rem; padding: 0; color: var(--ot-ink); background: transparent; }
+#close-add-contact { min-width: 2.75rem; min-height: 2.75rem; padding: 0; border-color: transparent; color: var(--ot-ink); background: transparent; box-shadow: none; }
+#close-add-contact:hover { background: var(--ot-surface-2); }
 #contact-lookup-form { margin: .5rem 0 0; padding: 0; background: transparent; border: 0; box-shadow: none; }
-.lookup-fields { display: flex; gap: .5rem; margin-top: .375rem; }
-.lookup-fields input[type="text"] { flex: 1; min-width: 0; width: auto; min-height: 2.75rem; font-size: 1rem; }
+.lookup-fields { display: flex; align-items: center; gap: .5rem; margin-top: .375rem; }
+.lookup-fields input[type="text"] { box-sizing: border-box; flex: 1; min-width: 0; width: auto; height: 2.75rem; font-size: 1rem; }
 #lookup-state { color: var(--ot-muted); }
 #lookup-result { margin-top: 1rem; }
 #lookup-result button, .lookup-fields button { min-height: 2.75rem; white-space: nowrap; }
+#request-contact { border-color: transparent; color: var(--ot-on-accent); background: var(--ot-accent); }
+#request-contact:hover { background: var(--ot-accent-hover); }
+#lookup-result { padding: .75rem; border: 1px solid var(--ot-line); border-radius: .75rem; }
+#lookup-relationship { color: var(--ot-accent-hover); font-weight: 600; }
+
+@media (max-width: 43.75rem) {
+  #add-contact-dialog {
+    inset: auto 0 0;
+    width: 100%;
+    max-width: none;
+    max-height: 85dvh;
+    margin: 0;
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+    border-radius: 1rem 1rem 0 0;
+  }
+}

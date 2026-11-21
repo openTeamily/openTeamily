@@ -67,6 +67,11 @@ CREATE TABLE memory_capture_groups (
   membership INTEGER NOT NULL, cursor INTEGER NOT NULL, next_scan INTEGER NOT NULL,
   PRIMARY KEY(workspace_id,conversation_id));
 CREATE INDEX memory_capture_groups_due ON memory_capture_groups(next_scan);
+`, `
+CREATE TABLE memory_action_draft_saves (
+  workspace_id TEXT NOT NULL, owner_id TEXT NOT NULL, key_hash TEXT NOT NULL,
+  request_hash TEXT NOT NULL, action_ids TEXT NOT NULL,
+  PRIMARY KEY (workspace_id,owner_id,key_hash));
 `]
 
 export const IMPORT_TABLES = {

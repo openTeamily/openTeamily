@@ -141,3 +141,77 @@ test('teams, members, invites and social features map to the shared routes', asy
   assert.equal(f.calls[6].body.requires_approval, true)
   assert.ok(f.calls.every((c) => c.auth === `Bearer ${TOKEN}`))
 })
+
+test('the native inbox requests recent scoped notices and constructs safe meeting and Discover links', async t => {
+  const personal = 'a'.repeat(32)
+  const team = 'b'.repeat(32)
+  const share = 'c'.repeat(32)
+  const item = (kind,data,seq) => ({kind,data,seq,id:`notice-${seq}`,created_at:4000,read:false})
+  const f = fakeFetch((url,init) => {
+    const scope = new URL(url).searchParams
+    if (init.method === 'POST') return {unread:1}
+    const scoped = scope.get('workspace_id')
+    if (scoped && scoped !== team) return [404,{error:{code:'not_found',message:'workspace not found'}}]
+    return {unread:4,notifications:[
+      item('meeting.shared',{share_id:share,title:'纪要',organizer:'Alice',...(scoped ? {workspace_id:scoped}:{}),path:'//outside.test'},7),
+      item('meeting.shared',{share_id:share,workspace_id:'d'.repeat(32)},6),
+      item('discover.published',{slug:'design-log',kind:'work',title:'设计',creator:{display_name:'Bob'},path:'//outside.test'},5),
+      item('discover.published',{slug:'helper-1',listing_kind:'agent',creator:{handle:'bob.home'}},4),
+      item('discover.published',{slug:'../x',kind:'work',path:'//outside.test'},3),
+    ]}
+  })
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:creds(),fetch:f.fetch}))
+  t.after(() => setSharedBotSocial(undefined))
+  const endpoint = social({async call(name) {
+    assert.equal(name,'agents/personal-binding')
+    return {workspace_id:personal}
+  }}).endpoints.v1
+  const local = await endpoint({method:'GET',path:`/v1/workspaces/${personal}/notifications?filter=unread`})
+  assert.equal(f.calls.at(-1).url,SERVER+'/v1/ot/notifications?limit=200&latest=1&personal=1&unread=1')
+  assert.equal(local.status,200)
+  assert.equal(local.body.unread_count,4)
+  assert.deepEqual(local.body.items.map(row=>row.seq),[7,5,4,3])
+  assert.equal(local.body.items[0].path,`/meetings#workspace=${personal}&shared=${share}`)
+  assert.equal(local.body.items[0].workspace_id,personal)
+  assert.equal(local.body.items[1].kind,'discover.published')
+  assert.equal(local.body.items[1].listing_kind,'work')
+  assert.equal(local.body.items[1].path,'/w/design-log')
+  assert.equal(local.body.items[2].path,'/a/helper-1')
+  assert.equal(local.body.items[3].path,undefined)
+  const scoped = await endpoint({method:'GET',path:`/v1/workspaces/${team}/notifications`})
+  assert.equal(f.calls.at(-1).url,SERVER+`/v1/ot/notifications?limit=200&latest=1&workspace_id=${team}`)
+  assert.equal(scoped.body.items[0].path,`/meetings#workspace=${team}&shared=${share}`)
+  const read = await endpoint({method:'POST',path:`/v1/workspaces/${team}/notifications/read`,body:{notification_id:'notice-7'}})
+  assert.deepEqual(read,{status:200,body:{unread_count:1}})
+  assert.deepEqual(f.calls.at(-1).body,{notification_id:'notice-7',workspace_id:team})
+  assert.equal((await endpoint({method:'GET',path:`/v1/workspaces/${'e'.repeat(32)}/notifications`})).status,404)
+  assert.equal(f.calls.length,4)
+})
+
+test('Space work notices map account messages to the recipient workspace and scope their read updates', async t => {
+  const workspace = 'a'.repeat(32)
+  const conversation = 'otc_' + 'B'.repeat(26)
+  const message = 'otm_' + 'C'.repeat(26)
+  const notice = {id:'fixture-notice',seq:8,kind:'artifact.shared',created_at:9500,read:false,
+    data:{conversation_id:conversation,message_id:message,title:'排期表',actor_username:'Alice'}}
+  const f = fakeFetch((url, init) => init.method === 'GET' ? {unread:3,notifications:[
+    notice, {...notice,id:'malformed',data:{...notice.data,conversation_id:'../profile'}},
+  ]} : {unread:0})
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:creds(),fetch:f.fetch}))
+  t.after(() => setSharedBotSocial(undefined))
+  const endpoint = social({async call() { return {workspace_id:workspace} }}).endpoints.v1
+  const base = `/v1/workspaces/${workspace}/notifications`
+  const list = await endpoint({method:'GET',path:base+'?kind=work&limit=1'})
+  assert.deepEqual(list, {status:200,body:{limit:1,unread_count:3,items:[{
+    id:'fixture-notice',seq:8,kind:'artifact.shared',created:9,read:false,
+    conversation_id:conversation,message_id:message,workspace_id:workspace,title:'排期表',actor_username:'Alice',
+    path:`/chat#workspace=${workspace}&social=${conversation}&message=${message}`,
+  }]}})
+  assert.equal(f.calls[0].url,SERVER+'/v1/ot/notifications?limit=1&latest=1&personal=1&kind=work')
+  const read = await endpoint({method:'POST',path:base+'/read',body:{all:true,kind:'work'}})
+  assert.deepEqual(read,{status:200,body:{unread_count:0}})
+  assert.deepEqual(f.calls[1].body,{all:true,personal:true,kind:'work'})
+  assert.equal((await endpoint({method:'GET',path:base+'?kind=work&kind=work'})).status,400)
+  assert.equal((await endpoint({method:'POST',path:base+'/read',body:{all:true,kind:'unknown'}})).status,400)
+  assert.equal(f.calls.length,2)
+})

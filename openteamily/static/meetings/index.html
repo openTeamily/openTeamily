@@ -11,7 +11,7 @@
   <script type="module" src="/shell/dsbot-api.mjs"></script>
   <script type="module" src="/meetings/app.mjs"></script>
 </head>
-<body class="app-workspace">
+<body class="app-workspace app-primary">
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
     <a class="brand-mark" href="/" title="OpenTeamily 首页" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
@@ -64,25 +64,46 @@
     </form>
   </section>
   <section id="main-panel" hidden>
-    <header class="page-top">
+    <header class="page-top meeting-page-top">
       <a id="meeting-library" href="/space?view=meetings" aria-label="返回会议资料">‹ 返回会议资料</a>
       <h1>会议</h1>
-      <p id="whoami"></p>
+      <p id="whoami" class="visually-hidden"></p>
       <label class="workspace-pick">工作区
         <select id="workspace"></select>
       </label>
     </header>
-    <div class="meeting-layout">
-      <section class="meeting-list-pane" aria-label="会议列表">
+    <div class="meeting-layout" id="meeting-layout" data-view="catalogue">
+      <header class="meeting-mobile-toolbar">
+        <button type="button" id="meeting-back-to-list" class="secondary">‹ 会议列表</button>
+        <button type="submit" id="save-meeting-mobile" form="meeting-form">保存</button>
+      </header>
+      <section class="meeting-list-pane" id="meeting-list-pane" aria-label="会议列表">
         <div class="meeting-list-head">
           <h2>会议记录</h2>
           <button type="button" id="new-meeting" disabled>新建会议</button>
         </div>
+        <button type="button" id="meeting-shares-history" class="secondary" aria-haspopup="dialog" hidden>分享记录</button>
         <ul id="meeting-list"></ul>
         <p id="meetings-empty" class="note" hidden>还没有会议记录。点击「新建会议」开始。</p>
       </section>
-      <section class="meeting-editor-pane" aria-label="会议详情">
-        <p id="meeting-empty" class="note">选择左侧的会议，或新建一个。</p>
+      <section class="meeting-editor-pane" id="meeting-editor-pane" aria-label="会议详情" tabindex="-1">
+        <p id="meeting-empty" class="note">选择一份会议记录，或新建会议。</p>
+        <article id="shared-meeting-detail" hidden aria-labelledby="shared-meeting-title">
+          <header>
+            <p class="shared-meeting-badge">共享纪要</p>
+            <h2 id="shared-meeting-title" tabindex="-1"></h2>
+            <p id="shared-meeting-meta" class="note"></p>
+          </header>
+          <section aria-labelledby="shared-meeting-summary-label">
+            <h3 id="shared-meeting-summary-label">摘要</h3>
+            <p id="shared-meeting-summary"></p>
+          </section>
+          <section aria-labelledby="shared-meeting-action-label">
+            <h3 id="shared-meeting-action-label">行动项</h3>
+            <ul id="shared-meeting-actions"></ul>
+            <p id="shared-meeting-no-actions" class="note" hidden>没有行动项。</p>
+          </section>
+        </article>
         <form id="meeting-form" hidden>
           <label>标题 <input id="meeting-title" maxlength="120" required></label>
           <label>开始时间 <input id="meeting-started-at" type="datetime-local" required></label>
@@ -128,6 +149,7 @@
           <div class="meeting-actions">
             <button type="submit" id="save-meeting">保存</button>
             <button type="button" id="cancel-meeting" class="secondary">取消</button>
+            <button type="button" id="share-meeting" class="secondary" aria-haspopup="dialog" hidden>分享纪要</button>
             <a id="export-meeting" class="secondary" download hidden>导出 Markdown</a>
             <button type="button" id="remove-meeting" class="secondary" hidden>删除</button>
           </div>
@@ -135,6 +157,46 @@
       </section>
     </div>
   </section>
+  <dialog id="meeting-delete-dialog" aria-labelledby="meeting-delete-title">
+    <h2 id="meeting-delete-title">删除会议记录</h2>
+    <p id="meeting-delete-target"></p>
+    <div class="meeting-actions">
+      <button type="button" class="secondary" id="cancel-remove-meeting" autofocus>取消</button>
+      <button type="button" id="confirm-remove-meeting">确认删除</button>
+    </div>
+  </dialog>
+  <dialog id="meeting-share-dialog" aria-labelledby="meeting-share-title">
+    <header class="meeting-share-head">
+      <h2 id="meeting-share-title">分享纪要</h2>
+      <button type="button" class="secondary" id="meeting-share-close" autofocus>关闭</button>
+    </header>
+    <p id="meeting-share-lead" class="note"></p>
+    <form id="meeting-share-form">
+      <label for="meeting-share-conversation">会话</label>
+      <select id="meeting-share-conversation" required disabled></select>
+      <fieldset id="meeting-share-recipients">
+        <legend>接收人</legend>
+        <div id="meeting-share-recipient-items"></div>
+        <p id="meeting-share-recipient-status" class="note" role="status"></p>
+      </fieldset>
+      <div class="meeting-actions">
+        <button type="submit" id="meeting-share-submit" disabled>确认分享</button>
+        <p id="meeting-share-status" class="note" role="status"></p>
+      </div>
+    </form>
+    <section class="meeting-share-history" aria-labelledby="meeting-share-history-title">
+      <h3 id="meeting-share-history-title">已分享</h3>
+      <ul id="meeting-share-sent"></ul>
+      <p id="meeting-share-sent-status" class="note" role="status"></p>
+      <button type="button" class="secondary" id="meeting-share-sent-more" hidden>加载更多分享</button>
+    </section>
+  </dialog>
   </main>
+  <nav class="mobile-primary-nav" aria-label="主导航">
+    <a href="/chat"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 4h16v12H9l-5 4V4Z"/></svg>聊天</a>
+    <a href="/discover"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg>发现</a>
+    <a href="/space?view=meetings" aria-current="page"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg>作品</a>
+    <a href="/settings"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 6h16 M4 12h16 M4 18h16 M9 4v4 M15 10v4 M9 16v4"/></svg>设置</a>
+  </nav>
 </body>
 </html>

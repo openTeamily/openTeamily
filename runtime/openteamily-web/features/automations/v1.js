@@ -36,8 +36,12 @@ export function automationsV1({ endpoints, log, personalBinding }) {
       return { status: result.status, body: { run: result.run } }
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations/${HEX}/runs/${HEX}/(cancel|retry|artifact)$`), handle: wrap(async (req, workspaceId, id, runId, action) => {
-      if (action === 'artifact') throw new FeatureError(503, 'unavailable', 'Saving a run to the works library is not in this DS-Bot yet')
+      if (req.method !== 'POST' || req.query.size) throw new FeatureError(405, 'method', 'Only POST is supported')
       const payload = { workspace_id: workspaceId, id, run_id: runId, idempotency_key: req.headers.get('idempotency-key') }
+      if (action === 'artifact') {
+        const {status, artifact} = await call('saveRun', payload)
+        return {status, body: {artifact}}
+      }
       const result = action === 'cancel' ? await call('cancel', payload) : await call('retry', payload)
       return { status: result.status ?? 200, body: { run: result.run, ...(result.retried ? { retried: result.retried } : {}) } }
     }) },

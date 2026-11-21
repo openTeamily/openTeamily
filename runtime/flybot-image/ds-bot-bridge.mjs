@@ -125,37 +125,169 @@ export function createBridgeServer(state, { log = () => {}, forward = forwardMod
   })
 }
 
-// Wait for the DS-Bot turn that our requestId started; collect the Bot's text.
-export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, files = []) {
+const PROGRESS_TEXT_LIMIT = 20_000
+const PROGRESS_INTERVAL_MS = 50
+
+function turnProgress(onProgress) {
+  if (typeof onProgress !== 'function') return
+  let committed = '', draft = '', sent = ''
+  let timer, nextSend = 0
+  function send() {
+    clearTimeout(timer)
+    timer = undefined
+    const snapshot = (committed && draft ? committed + '\n\n' + draft : committed || draft).trimStart()
+    if (snapshot === sent) return
+    sent = snapshot
+    nextSend = Date.now() + PROGRESS_INTERVAL_MS
+    try { void Promise.resolve(onProgress(snapshot)).catch(() => {}) } catch {}
+  }
+  return {
+    append(text) {
+      const remaining = PROGRESS_TEXT_LIMIT - committed.length - draft.length - (committed ? 2 : 0)
+      if (!text || remaining <= 0) return
+      draft += text.slice(0, remaining)
+      if (timer !== undefined) return
+      const wait = nextSend - Date.now()
+      if (wait <= 0) send()
+      else timer = setTimeout(send, wait)
+    },
+    commit(texts) {
+      const writing = sent || draft
+      for (const text of texts) {
+        const remaining = PROGRESS_TEXT_LIMIT - committed.length - (committed ? 2 : 0)
+        if (remaining <= 0) break
+        committed += (committed ? '\n\n' : '') + text.slice(0, remaining)
+      }
+      draft = ''
+      if (writing) send()
+    },
+    discard() {
+      draft = ''
+      send()
+    },
+    reset() {
+      committed = ''
+      draft = ''
+      send()
+    },
+    dispose() { clearTimeout(timer) },
+  }
+}
+
+// Join progress to the native request echo and durable turn. The settled display
+// items remain the source of truth for the returned reply.
+export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, files = [], { onProgress } = {}) {
+  if (typeof requestId !== 'string' || !requestId) return Promise.reject(new Error('DS-Bot request identifier is required'))
   return new Promise((resolve, reject) => {
-    let sessionId
+    const sessionId = rt.chatOf(botId)
+    const progress = turnProgress(onProgress)
+    let observedTurn, observedSession, boundTurn, boundSession, attempt, lastAgent
+    let revision = 0
     let settled = false
     const parts = []
-    let off = () => {}
+    const listeners = []
     const finish = (error, value) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      try { off() } catch {}
+      progress?.dispose()
+      for (const listener of listeners) {
+        try {
+          if (typeof listener === 'function') listener()
+          else listener?.dispose?.()
+        } catch {}
+      }
       error ? reject(error) : resolve(value)
     }
     const timer = setTimeout(() => finish(new Error('DS-Bot turn timed out')), timeoutMs)
-    const disposer = ctx.on('session/event', (session, event) => {
-      if (settled) return
-      if (event?.type === 'user/message' && event.data?.source?.rpcId === requestId) { sessionId = session.id; return }
-      if (!sessionId || session?.id !== sessionId) return
-      for (const item of rt.displayItems(session.id, [event]) ?? []) {
-        if (item?.kind === 'bot' && typeof item.text === 'string' && item.text.trim()) parts.push(item.text)
+    function discardAttempt() {
+      attempt = undefined
+      progress?.discard()
+    }
+    function resetTurn() {
+      boundSession = undefined
+      boundTurn = undefined
+      attempt = undefined
+      parts.length = 0
+      progress?.reset()
+    }
+    try {
+      listeners.push(ctx.on('session/event', (session, event) => {
+        if (settled || session?.id !== sessionId || !event || (boundSession && session !== boundSession)) return
+        const turn = event.data?.turn
+        if (event.type === 'turn/start' && Number.isSafeInteger(turn)) {
+          if (session === observedSession && turn <= observedTurn) return
+          if (boundTurn !== undefined && turn !== boundTurn) resetTurn()
+          observedTurn = turn
+          observedSession = session
+          return
+        }
+        if (event.type === 'user/message' && event.data?.source?.rpcId === requestId) {
+          boundSession = session
+          boundTurn = session === observedSession ? observedTurn : undefined
+          return
+        }
+        if (!boundSession) {
+          if (event.type === 'turn/end' && session === observedSession && turn === observedTurn) {
+            observedTurn = undefined
+            observedSession = undefined
+          }
+          return
+        }
+        if (boundTurn !== undefined && turn !== undefined && turn !== boundTurn) return
+        if (attempt && attempt.step === event.data?.step && (event.type === 'assistant/attempt' || event.type === 'llm/retry-started')) {
+          discardAttempt()
+        }
+        const start = parts.length
+        for (const item of rt.displayItems(sessionId, [event]) ?? []) {
+          if (item?.kind === 'bot' && typeof item.text === 'string' && item.text.trim()) parts.push(item.text)
+        }
+        if (progress && event.type === 'assistant/message') {
+          if (attempt?.step === event.data?.step) attempt = undefined
+          progress.commit(parts.slice(start))
+        }
+        if (event.type === 'turn/end') {
+          const reply = parts.join('\n\n').trim()
+          if (reply) finish(null, { text: reply, sessionId, turnId: event.data?.turnId ?? event.turnId ?? null })
+          else finish(new Error(event.data?.error ? 'DS-Bot turn failed' : 'DS-Bot turn ended without a reply'))
+        }
+      }))
+      if (progress) {
+        listeners.push(ctx.on('agent/assistant-stream', ({ agent, frame }) => {
+          if (settled || !boundSession || boundTurn === undefined || agent?.id !== sessionId || agent?.session !== boundSession
+              || !Number.isSafeInteger(frame?.revision)) return
+          if (frame.type === 'start') {
+            if (frame.turn !== boundTurn || typeof frame.attemptId !== 'string' || !frame.attemptId || !Number.isSafeInteger(frame.step)
+                || rt.state?.exchangeTurns?.[sessionId]?.includes(boundTurn)) return
+            if (lastAgent === agent && (frame.revision <= revision || frame.attemptId === attempt?.id)) return
+            if (attempt) discardAttempt()
+            lastAgent = agent
+            revision = frame.revision
+            attempt = { id: frame.attemptId, step: frame.step }
+            return
+          }
+          if (!attempt || lastAgent !== agent || frame.attemptId !== attempt.id || frame.revision <= revision) return
+          revision = frame.revision
+          if (frame.type === 'end') {
+            discardAttempt()
+          } else if (frame.type === 'chunk' && frame.chunk?.type === 'text-delta' && typeof frame.chunk.text === 'string') {
+            progress.append(frame.chunk.text)
+          }
+        }, { global: true }))
+        listeners.push(ctx.on('agent/disposed', ({ agent }) => {
+          if (agent === lastAgent && !settled) {
+            resetTurn()
+            observedTurn = undefined
+            observedSession = undefined
+            lastAgent = undefined
+          }
+        }, { global: true }))
       }
-      if (event.type === 'turn/end') {
-        const reply = parts.join('\n\n').trim()
-        if (reply) finish(null, { text: reply, sessionId, turnId: event.data?.turnId ?? event.turnId ?? null })
-        else finish(new Error(event.data?.error ? 'DS-Bot turn failed' : 'DS-Bot turn ended without a reply'))
-      }
-    })
-    off = typeof disposer === 'function' ? disposer : () => disposer?.dispose?.()
-    Promise.resolve(rt.sendUser({ sessionId: rt.chatOf(botId), content: [{ type: 'text', text }, ...files], requestId }))
-      .catch(error => finish(error instanceof Error ? error : new Error('DS-Bot rejected the message')))
+      Promise.resolve(rt.sendUser({ sessionId, content: [{ type: 'text', text }, ...files], requestId }))
+        .catch(error => finish(error instanceof Error ? error : new Error('DS-Bot rejected the message')))
+    } catch (error) {
+      finish(error instanceof Error ? error : new Error('DS-Bot rejected the message'))
+    }
   })
 }
 
@@ -237,6 +369,15 @@ export function createBridge(rt, { env = process.env, port } = {}) {
     if (input.includes('image') !== hasImageInput) await saveInput(input)
   }
 
+  function requireModel(botId) {
+    const model = rt.botOf(botId)?.model
+    if ((!model || model === MODEL_ID || model === PROVIDER + '/' + MODEL_ID) && !state.startupModel()) {
+      throw Object.assign(new Error('Configure a model API for this OpenTeamily runtime.'), {
+        code: 'agents/model-unconfigured', status: 503,
+      })
+    }
+  }
+
   // Native turns share a queue because they switch the active DS-Bot part.
   let turnQueue = Promise.resolve()
   function exclusive(fn) {
@@ -245,7 +386,7 @@ export function createBridge(rt, { env = process.env, port } = {}) {
     return run
   }
   return {
-    state, setup: ensureSetup, prepareModel, exclusive, selectConversation,
+    state, setup: ensureSetup, prepareModel, requireModel, exclusive, selectConversation,
     legacySession: key => loadChats()[key], port: listenPort, baseURL, get botId() { return botId },
   }
 }

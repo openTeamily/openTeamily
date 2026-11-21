@@ -5,14 +5,17 @@
 // that DS-Bot and posted back here. Automatic (un-@'d) group replies are capped at 3 per hour per
 // conversation (#346). OpenTeamily semantics; not Teamily parity.
 import { createHash } from "node:crypto";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { assert } from "../errors.js";
 import { newId } from "../ids.js";
 import { body, handleKey, intParam, OtContext, optText, params, query, text } from "./core.js";
 import { shareTeam, requireMember } from "./teams.js";
 import { acceptedContact } from "./contacts.js";
 
-import { CHAT_FILE_BODY_LIMIT, CHAT_FILES_SCHEMA, attachmentView, decodeChatFile, readAttachment, saveAttachment } from "./chat-files.js";
+import {
+  CHAT_FILE_BODY_LIMIT, CHAT_FILES_SCHEMA, attachmentView, chatFileView, decodeChatFile, migrateChatFiles, readAttachment,
+  saveAttachment, type ChatFileMetadata,
+} from "./chat-files.js";
 
 export const MESSENGER_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_group_announcements (
@@ -85,7 +88,8 @@ CREATE TABLE IF NOT EXISTS ot_agent_reply_jobs (
   id TEXT PRIMARY KEY, message_id TEXT NOT NULL REFERENCES ot_messages(id) ON DELETE CASCADE,
   owner_id TEXT NOT NULL, agent_ref TEXT NOT NULL, agent_name TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('queued','running','failed','replied')),
-  attempt INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL,
+  attempt INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL, source_revision INTEGER,
+  progress_revision INTEGER NOT NULL DEFAULT 0,
   UNIQUE (message_id, owner_id, agent_ref)
 );
 CREATE INDEX IF NOT EXISTS ot_agent_reply_jobs_queue ON ot_agent_reply_jobs(owner_id, status, updated_at);
@@ -104,17 +108,22 @@ export const REACTIONS = ["👍", "❤️", "😄", "🎉", "👀", "✅"];
 const BODY_MAX = 4000;
 const REPLY_JOB_TIMEOUT = 180_000;
 const REPLY_JOB_ATTEMPTS = 3;
+const REPLY_PROGRESS_CAPACITY = 512;
+const REPLY_PROGRESS_PAGE = 50;
 
 type ReplyAgent = {owner_id: string; agent_ref: string; name: string};
 type ReplyJob = {
   id: string; message_id: string; owner_id: string; agent_ref: string; agent_name: string;
   status: "queued" | "running" | "failed" | "replied"; attempt: number; updated_at: number;
-  available: number;
+  available: number; source_revision: number | null; current_revision: number; progress_revision: number;
 };
 
-const REPLY_JOB_SOURCE = `SELECT j.*, src.conversation_id, src.retracted, src.seq, c.title AS conversation_title,
-  (src.retracted=0 AND member.owner_id IS NOT NULL AND agent.owner_id IS NOT NULL
-    AND (c.team_id IS NULL OR team.owner_id IS NOT NULL)) AS available
+const REPLY_JOB_SOURCE = `SELECT j.*, src.conversation_id, src.retracted, src.seq, src.revision AS current_revision,
+  c.title AS conversation_title,
+  (src.retracted=0 AND c.kind='group' AND COALESCE(c.dm_key,'') NOT LIKE 'agent:%'
+    AND member.owner_id IS NOT NULL AND agent.owner_id IS NOT NULL
+    AND (c.team_id IS NULL OR team.owner_id IS NOT NULL)
+    AND NOT EXISTS (SELECT 1 FROM ot_hidden_messages h WHERE h.owner_id=j.owner_id AND h.message_id=src.id)) AS available
   FROM ot_agent_reply_jobs j JOIN ot_messages src ON src.id=j.message_id
   JOIN ot_conversations c ON c.id=src.conversation_id
   LEFT JOIN ot_conversation_members member ON member.conversation_id=c.id AND member.owner_id=j.owner_id
@@ -123,7 +132,8 @@ const REPLY_JOB_SOURCE = `SELECT j.*, src.conversation_id, src.retracted, src.se
 
 function replyJobState(job: ReplyJob, now: number) {
   if ((job.status === "queued" || job.status === "running")
-      && (!job.available || job.updated_at <= now - REPLY_JOB_TIMEOUT)) return "failed";
+      && (!job.available || job.updated_at <= now - REPLY_JOB_TIMEOUT
+        || (job.source_revision !== null && job.source_revision !== job.current_revision))) return "failed";
   return job.status;
 }
 
@@ -132,7 +142,7 @@ function replyJobViews(ot: OtContext, message: any, viewer?: string) {
   const now = ot.now();
   return ot.all<ReplyJob>(REPLY_JOB_SOURCE + " WHERE j.message_id=? ORDER BY j.rowid", message.id).map(job => {
     const status = replyJobState(job, now);
-    return {id: job.id, agent_name: job.agent_name, status,
+    return {id: job.id, agent_name: job.agent_name, status, attempt: job.attempt,
       can_retry: Boolean(viewer === message.author_id && job.available && status === "failed" && job.attempt < REPLY_JOB_ATTEMPTS)};
   });
 }
@@ -167,7 +177,7 @@ function publicListing(ot: OtContext, conversation: {dm_key?: string | null}) {
   }>("SELECT ref, owner_id, slug, title, summary, snapshot, listed, chat_enabled, chat_from FROM ot_listings WHERE id=? AND kind='agent'", key.split(":")[1]) ?? null;
 }
 
-function fixedPublicThread(conv: {dm_key?: string | null}) {
+export function fixedPublicThread(conv: {dm_key?: string | null}) {
   return !!conv.dm_key?.startsWith("agent:");
 }
 
@@ -185,7 +195,7 @@ export function requireDirectReach(ot: OtContext, conv: {id: string; kind: strin
   assert(peer && directReachable(ot, owner, peer.owner_id), 403, "not_reachable", "请先建立联系人关系。");
 }
 
-function accountConversation(ot: OtContext, id: string, owner: string) {
+export function accountConversation(ot: OtContext, id: string, owner: string) {
   const conv = memberOf(ot, id, owner);
   assert(ordinaryDirect(conv) || conv.account_group === 1, 404, "conversation_not_found", "no such personal conversation");
   return conv;
@@ -232,14 +242,14 @@ function messageMemories(ot: OtContext, m: any) {
     JOIN ot_group_memories g ON g.id=r.memory_id WHERE r.message_id=? AND g.conversation_id=? AND ${ACTIVE_MEMORIES}`,m.id,m.conversation_id);
 }
 
-function workspaceTeam(ot: OtContext, workspace: string, ownerId: string) {
+export function workspaceTeam(ot: OtContext, workspace: string, ownerId: string) {
   assert(/^[0-9a-f]{32}$/.test(workspace), 400, "invalid_request", "Invalid workspace");
   const match = ot.get<{id: string}>("SELECT id FROM ot_teams WHERE workspace_id=?", workspace);
   assert(match, 404, "team_not_found", "Workspace not found");
   return requireMember(ot, match.id, ownerId).team;
 }
 
-function workspaceConversation(ot: OtContext, workspace: string, id: string, ownerId: string) {
+export function workspaceConversation(ot: OtContext, workspace: string, id: string, ownerId: string) {
   const team = workspaceTeam(ot, workspace, ownerId);
   const conv = memberOf(ot, id, ownerId);
   let directPeer: string | undefined;
@@ -320,7 +330,7 @@ function registerActivityTriggers(ot: OtContext) {
     {table: "ot_conversation_agents", events: ["INSERT", "UPDATE", "DELETE"]},
     {table: "ot_messages", events: ["UPDATE"]},
     {table: "ot_reactions", events: ["INSERT", "DELETE"], room: message},
-    {table: "ot_agent_reply_jobs", events: ["INSERT", "UPDATE"], room: message},
+    {table: "ot_agent_reply_jobs", events: ["INSERT", "UPDATE OF status,attempt,updated_at"], room: message},
     {table: "ot_group_announcements", events: ["INSERT", "UPDATE"]},
   ];
   for (const {table, events, room} of changes) for (const event of events) {
@@ -328,6 +338,28 @@ function registerActivityTriggers(ot: OtContext) {
     ot.run(`CREATE TRIGGER IF NOT EXISTS ${table}_activity_${event.split(" ")[0].toLowerCase()}
       AFTER ${event} ON ${table} BEGIN
         UPDATE ot_conversations SET activity_revision=activity_revision+1 WHERE id=${room?.(row) ?? row + ".conversation_id"};
+      END`);
+  }
+}
+
+function registerReplyJobInvalidation(ot: OtContext) {
+  // Removing access ends the attempt, even if access is restored before the worker polls.
+  const roomSource = `SELECT 1 FROM ot_messages WHERE id=ot_agent_reply_jobs.message_id
+      AND conversation_id=OLD.conversation_id`;
+  const teamSource = `SELECT 1 FROM ot_messages m JOIN ot_conversations c ON c.id=m.conversation_id
+      WHERE m.id=ot_agent_reply_jobs.message_id AND c.team_id=OLD.team_id`;
+  const changes = [
+    {name: "room_member", event: "DELETE ON ot_conversation_members", source: roomSource, agent: ""},
+    {name: "room_agent", event: "DELETE ON ot_conversation_agents", source: roomSource, agent: "AND agent_ref=OLD.agent_ref"},
+    {name: "team_member", event: "DELETE ON ot_team_members", source: teamSource, agent: ""},
+    {name: "team_suspension", event: "UPDATE OF suspended ON ot_team_members WHEN NEW.suspended=1 AND OLD.suspended=0",
+      source: teamSource, agent: ""},
+  ];
+  for (const change of changes) {
+    ot.run(`CREATE TRIGGER IF NOT EXISTS ot_agent_reply_jobs_after_${change.name}
+      AFTER ${change.event} BEGIN
+        UPDATE ot_agent_reply_jobs SET status='failed'
+        WHERE owner_id=OLD.owner_id AND status IN ('queued','running') AND EXISTS (${change.source}) ${change.agent};
       END`);
   }
 }
@@ -434,13 +466,27 @@ function replyContext(ot: OtContext, conversationId: string, seq: number) {
 }
 
 export function registerMessenger(app: FastifyInstance, ot: OtContext) {
+  migrateChatFiles(ot);
+  // SQLite lower() folds ASCII only. Filenames can contain Unicode letters.
+  ot.db.function("ot_attachment_title_matches", {deterministic: true}, (title: string, term: string) =>
+    Number(title.toLowerCase().includes(term)));
   const conversationCols = new Set(ot.all<{name: string}>("PRAGMA table_info(ot_conversations)").map(col => col.name));
   if (!conversationCols.has("account_group")) ot.run("ALTER TABLE ot_conversations ADD COLUMN account_group INTEGER NOT NULL DEFAULT 0");
   if (!conversationCols.has("activity_revision")) ot.run("ALTER TABLE ot_conversations ADD COLUMN activity_revision INTEGER NOT NULL DEFAULT 0");
-  registerActivityTriggers(ot);
   const messageCols = new Set(ot.all<any>("PRAGMA table_info(ot_messages)").map(c => c.name));
   if (!messageCols.has("revision")) ot.run("ALTER TABLE ot_messages ADD COLUMN revision INTEGER NOT NULL DEFAULT 1");
   if (!messageCols.has("forwarded_author")) ot.run("ALTER TABLE ot_messages ADD COLUMN forwarded_author TEXT");
+  const jobCols = new Set(ot.all<{name: string}>("PRAGMA table_info(ot_agent_reply_jobs)").map(c => c.name));
+  if (!jobCols.has("source_revision")) ot.run("ALTER TABLE ot_agent_reply_jobs ADD COLUMN source_revision INTEGER");
+  if (!jobCols.has("progress_revision")) {
+    ot.tx(() => {
+      ot.run("ALTER TABLE ot_agent_reply_jobs ADD COLUMN progress_revision INTEGER NOT NULL DEFAULT 0");
+      ot.run("DROP TRIGGER IF EXISTS ot_agent_reply_jobs_activity_update");
+    });
+  }
+  registerActivityTriggers(ot);
+  registerReplyJobInvalidation(ot);
+  const replyProgress = new Map<string, {attempt: number; text: string; expires: number}>();
   const agentCols = new Set(ot.all<any>("PRAGMA table_info(ot_conversation_agents)").map(c => c.name));
   if (!agentCols.has("auto_reply_after_seq")) {
     ot.run("ALTER TABLE ot_conversation_agents ADD COLUMN auto_reply_after_seq INTEGER NOT NULL DEFAULT 0");
@@ -810,7 +856,18 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const mentions = parsed.mentions;
       const m = insertMessage(ot, conv, { author: me.ownerId, kind: "member", body: parsed.body, mentions, replyTo, clientKey });
       if (voice) ot.run("INSERT INTO ot_voice_messages VALUES (?,?,?)", m.id, voice.mime, voice.data);
-      if (file) saveAttachment(ot, m.id, me.ownerId, file);
+      if (file) {
+        saveAttachment(ot, m.id, me.ownerId, file);
+        if (file.resource && !sourceConversation) {
+          const recipients = ot.all<{owner_id: string}>(`SELECT recipient.owner_id FROM ot_conversation_members recipient
+            WHERE recipient.conversation_id=? AND recipient.owner_id<>? AND (? IS NULL OR EXISTS (
+              SELECT 1 FROM ot_team_members teammate WHERE teammate.team_id=?
+                AND teammate.owner_id=recipient.owner_id AND teammate.suspended=0))`, conv.id, me.ownerId, conv.team_id, conv.team_id);
+          const notice = {conversation_id: conv.id, message_id: m.id, title: file.resource.title,
+            actor_username: me.displayName, ...(conv.team_id ? {team_id: conv.team_id} : {})};
+          for (const recipient of recipients) ot.notify(recipient.owner_id, "artifact.shared", notice);
+        }
+      }
       if (conv.kind === "group" && !fixedPublicThread(conv) && !voice && !file) {
         for (const agent of parsed.agents) {
           ot.run(`INSERT INTO ot_agent_reply_jobs(id,message_id,owner_id,agent_ref,agent_name,status,updated_at)
@@ -869,6 +926,49 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     });
     return reply.status(201).send(result);
   });
+  const listAttachments = async (req: FastifyRequest, reply: FastifyReply) => {
+    reply.header("cache-control", "private, no-store");
+    const me = ot.me(req);
+    const {workspace, id} = params(req);
+    const conv = workspace ? workspaceConversation(ot, workspace, id, me.ownerId).conv : memberOf(ot, id, me.ownerId);
+    const q = query(req);
+    assert(Object.keys(q).every(key => ["kind", "q", "cursor", "limit"].includes(key)),
+      400, "invalid_request", "Unknown attachment search parameter");
+    assert(q.kind === "photo" || q.kind === "file" || q.kind === "resource",
+      400, "invalid_request", "Choose photo, file or resource attachments");
+    const term = q.q === undefined ? "" : text(q.q, "q", {max: 80, multiline: true}).trim().toLowerCase();
+    const rawLimit = q.limit ?? "20";
+    const limit = Number(rawLimit);
+    assert(typeof rawLimit === "string" && /^[0-9]{1,2}$/.test(rawLimit) && limit >= 1 && limit <= 50,
+      400, "invalid_request", "Attachment search limit must be 1–50");
+    const before = q.cursor === undefined ? Number.MAX_SAFE_INTEGER : Number(q.cursor);
+    assert(q.cursor === undefined || (typeof q.cursor === "string" && /^[1-9][0-9]{0,15}$/.test(q.cursor) && Number.isSafeInteger(before)),
+      400, "invalid_request", "Invalid attachment cursor");
+    if (fixedPublicThread(conv)) {
+      assert(!workspace, 404, "conversation_not_found", "no such conversation in this workspace");
+      // Published agent conversations support text only.
+      return {items: [], next_cursor: null};
+    }
+    assert(workspace || ordinaryDirect(conv) || conv.account_group === 1,
+      404, "conversation_not_found", "no such personal conversation");
+    const typeFilter = q.kind === "resource" ? "a.resource IS NOT NULL"
+      : q.kind === "photo" ? "a.mime LIKE 'image/%'" : "a.mime NOT LIKE 'image/%'";
+    const title = q.kind === "resource" ? "json_extract(a.resource, '$.title')" : "a.title";
+    const rows = ot.all<ChatFileMetadata & {message_id: string; created_at: number; seq: number}>(`
+      SELECT m.id AS message_id, m.created_at, m.seq, a.title, a.mime, a.bytes, a.resource
+      FROM ot_messages m JOIN ot_message_attachments a ON a.message_id=m.id
+      WHERE m.conversation_id=? AND m.seq<? AND m.retracted=0 AND ${VISIBLE_MESSAGE}
+        AND ${typeFilter} AND (?='' OR ot_attachment_title_matches(${title}, ?))
+      ORDER BY m.seq DESC LIMIT ?`, conv.id, before, me.ownerId, term, term, limit + 1);
+    return {
+      items: rows.slice(0, limit).map(row => ({
+        message_id: row.message_id, created_at: row.created_at, attachment: chatFileView(row),
+      })),
+      next_cursor: rows.length > limit ? String(rows[limit - 1].seq) : null,
+    };
+  };
+  app.get("/v1/ot/workspaces/:workspace/conversations/:id/attachments", listAttachments);
+  app.get("/v1/ot/conversations/:id/attachments", listAttachments);
   app.get("/v1/ot/workspaces/:workspace/conversations/:id/messages/:message/file", async req => {
     const me = ot.me(req);
     const {workspace, id, message} = params(req);
@@ -1012,7 +1112,8 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const now = ot.now();
       assert(job.available && replyJobState(job, now) === "failed" && job.attempt < REPLY_JOB_ATTEMPTS,
         409, "reply_job_unavailable", "当前无法重试这次回复。");
-      ot.run("UPDATE ot_agent_reply_jobs SET status='queued',attempt=attempt+1,updated_at=? WHERE id=?", now, job.id);
+      ot.run("UPDATE ot_agent_reply_jobs SET status='queued',attempt=attempt+1,updated_at=?,source_revision=NULL,progress_revision=0 WHERE id=?", now, job.id);
+      replyProgress.delete(job.id);
       return {reply_jobs: replyJobViews(ot, original, me.ownerId)};
     });
   });
@@ -1028,11 +1129,69 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const expected = b.action === "start" ? "queued" : "running";
       assert(job.attempt === b.attempt && replyJobState(job, now) === expected,
         409, "reply_job_unavailable", "这次回复的状态已更新。");
-      ot.run("UPDATE ot_agent_reply_jobs SET status=?,updated_at=? WHERE id=?",
-        b.action === "start" ? "running" : "failed", now, job.id);
+      if (b.action === "start") {
+        assert(b.source_revision === undefined || b.source_revision === job.current_revision,
+          409, "reply_job_unavailable", "原消息已更新。");
+        ot.run("UPDATE ot_agent_reply_jobs SET status='running',updated_at=?,source_revision=? WHERE id=?",
+          now, job.current_revision, job.id);
+      } else {
+        ot.run("UPDATE ot_agent_reply_jobs SET status='failed',updated_at=? WHERE id=?", now, job.id);
+      }
+      replyProgress.delete(job.id);
       return {ok: true};
     });
   });
+
+  app.post("/v1/ot/agent-reply-jobs/:id/progress", {bodyLimit: 32 * 1024}, async (req, reply) => {
+    reply.header("cache-control", "private, no-store");
+    const me = ot.me(req);
+    const b = body(req);
+    assert(Number.isSafeInteger(b.attempt) && b.attempt > 0 && Number.isSafeInteger(b.revision) && b.revision > 0
+      && typeof b.text === "string" && b.text.length <= BODY_MAX,
+      400, "invalid_request", "Invalid reply progress snapshot");
+    const job = ot.get<ReplyJob>(REPLY_JOB_SOURCE + " WHERE j.id=? AND j.owner_id=?", params(req).id, me.ownerId);
+    assert(job, 404, "reply_job_not_found", "找不到这次回复。");
+    const now = ot.now();
+    assert(job.attempt === b.attempt && job.source_revision === job.current_revision && replyJobState(job, now) === "running",
+      409, "reply_job_unavailable", "这次回复的状态已更新。");
+    const previous = replyProgress.get(job.id);
+    assert(b.revision > job.progress_revision, 409, "reply_progress_stale", "这次回复的进度已更新。");
+    if (!previous && replyProgress.size >= REPLY_PROGRESS_CAPACITY) {
+      for (const [id, snapshot] of replyProgress) {
+        if (snapshot.expires <= now) replyProgress.delete(id);
+      }
+      assert(replyProgress.size < REPLY_PROGRESS_CAPACITY, 429, "reply_progress_busy", "正在显示的回复进度过多。");
+    }
+    // Keep ordering across Bot Social restarts. Only the revision counter is durable.
+    const accepted = ot.run("UPDATE ot_agent_reply_jobs SET progress_revision=? WHERE id=? AND status='running' AND attempt=? AND progress_revision<?",
+      b.revision, job.id, job.attempt, b.revision);
+    assert(accepted.changes === 1, 409, "reply_job_unavailable", "这次回复的状态已更新。");
+    replyProgress.set(job.id, {attempt: job.attempt, text: b.text, expires: job.updated_at + REPLY_JOB_TIMEOUT});
+    return {ok: true};
+  });
+
+  const listReplyProgress = async (req: FastifyRequest, reply: FastifyReply) => {
+    reply.header("cache-control", "private, no-store");
+    const me = ot.me(req);
+    const {workspace, id} = params(req);
+    const conv = workspace ? workspaceConversation(ot, workspace, id, me.ownerId).conv : memberOf(ot, id, me.ownerId);
+    assert(conv.kind === "group" && !fixedPublicThread(conv) && (workspace || conv.account_group === 1),
+      404, "conversation_not_found", "no such group conversation");
+    assert(Object.keys(query(req)).length === 0, 400, "invalid_request", "Unexpected reply progress query");
+    const now = ot.now();
+    const jobs = ot.all<ReplyJob>(REPLY_JOB_SOURCE + ` WHERE src.conversation_id=? AND available
+      AND j.status IN ('queued','running') AND j.updated_at>?
+      AND (j.source_revision IS NULL OR j.source_revision=src.revision)
+      AND NOT EXISTS (SELECT 1 FROM ot_hidden_messages h WHERE h.owner_id=? AND h.message_id=src.id)
+      ORDER BY src.seq DESC,j.rowid DESC LIMIT ?`, conv.id, now - REPLY_JOB_TIMEOUT, me.ownerId, REPLY_PROGRESS_PAGE);
+    return {items: jobs.map(job => {
+      const snapshot = replyProgress.get(job.id);
+      return {id: job.id, message_id: job.message_id, attempt: job.attempt,
+        text: job.status === "running" && snapshot?.attempt === job.attempt && snapshot.expires > now ? snapshot.text : ""};
+    })};
+  };
+  app.get("/v1/ot/workspaces/:workspace/conversations/:id/reply-progress", listReplyProgress);
+  app.get("/v1/ot/conversations/:id/reply-progress", listReplyProgress);
 
   app.post("/v1/ot/conversations/:id/memory-sources", async req => {
     const viewer = ot.me(req).ownerId;
@@ -1132,17 +1291,19 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const after = intParam(query(req).after, "after", 0);
     const limit = Math.max(1, intParam(query(req).limit, "limit", 20, 50));
     const rows = ot.all<any>(`WITH pending AS (
-      SELECT m.* FROM ot_messages m
+      SELECT m.* FROM ot_messages m JOIN ot_conversations room ON room.id=m.conversation_id
       WHERE m.rowseq > ? AND m.author_kind = 'member' AND m.retracted = 0
         AND NOT EXISTS (SELECT 1 FROM ot_voice_messages v WHERE v.message_id=m.id)
         AND NOT EXISTS (SELECT 1 FROM ot_message_attachments a WHERE a.message_id=m.id)
         AND EXISTS (SELECT 1 FROM ot_conversation_members cm WHERE cm.conversation_id=m.conversation_id AND cm.owner_id=?)
         AND EXISTS (SELECT 1 FROM ot_conversation_agents ca WHERE ca.conversation_id=m.conversation_id AND ca.owner_id=?)
+        AND (room.team_id IS NULL OR EXISTS (SELECT 1 FROM ot_team_members tm
+          WHERE tm.team_id=room.team_id AND tm.owner_id=? AND tm.suspended=0))
       ORDER BY m.rowseq LIMIT ?
     )
     SELECT m.*, a.agent_ref AS my_agent, a.name AS my_agent_name, a.auto_reply AS my_auto, a.auto_reply_after_seq AS auto_after_seq
     FROM pending m JOIN ot_conversation_agents a ON a.conversation_id=m.conversation_id AND a.owner_id=?
-    ORDER BY m.rowseq, a.agent_ref`, after, me.ownerId, me.ownerId, limit * 4, me.ownerId);
+    ORDER BY m.rowseq, a.agent_ref`, after, me.ownerId, me.ownerId, me.ownerId, limit * 4, me.ownerId);
     const roomNotes = new Map<string, {id:string;title:string;body:string}[]>();
     const memories = (cid:string) => {
       if (!roomNotes.has(cid)) {
@@ -1206,6 +1367,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const mode = b.mode === "auto" ? "auto" : b.mode === "public" ? "public" : "mention";
     const msg = ot.tx(() => {
       const conv = memberOf(ot, params(req).id, me.ownerId);
+      if (conv.team_id) requireMember(ot, conv.team_id, me.ownerId);
       const agent = ot.get<any>("SELECT * FROM ot_conversation_agents WHERE conversation_id = ? AND agent_ref = ? AND owner_id = ?", conv.id, ref, me.ownerId);
       assert(agent, 404, "agent_not_found", "that agent of yours is not in this group");
       if (fixedPublicThread(conv)) {
@@ -1226,11 +1388,11 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         + " WHERE j.message_id=? AND j.owner_id=? AND j.agent_ref=? AND src.conversation_id=?", originalId, me.ownerId, ref, conv.id) : undefined;
       if (b.job_id !== undefined) {
         assert(job && job.id === b.job_id && job.attempt === b.attempt && job.available
-          && (job.status === "running" || job.status === "replied"),
+          && (replyJobState(job, ot.now()) === "running" || job.status === "replied"),
         409, "reply_job_unavailable", "这次回复的状态已更新。");
       } else if (job) {
         // Older inbox clients can finish a first attempt while containers update.
-        assert(job.available && job.attempt === 1 && job.status !== "failed",
+        assert(job.available && job.attempt === 1 && replyJobState(job, ot.now()) !== "failed",
           409, "reply_job_unavailable", "这次回复的状态已更新。");
       }
       if (job?.status === "replied") {
@@ -1263,7 +1425,10 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         agentName: agent.name, body: bodyText, mentions: [], replyTo: originalId, replyMode: mode,
         clientKey });
       for (const id of refs) ot.run("INSERT OR IGNORE INTO ot_group_memory_references VALUES(?,?)",response.id,id);
-      if (job) ot.run("UPDATE ot_agent_reply_jobs SET status='replied',updated_at=? WHERE id=?", ot.now(), job.id);
+      if (job) {
+        ot.run("UPDATE ot_agent_reply_jobs SET status='replied',updated_at=? WHERE id=?", ot.now(), job.id);
+        replyProgress.delete(job.id);
+      }
       return response;
     });
     return reply.status(201).send(messageView(ot, msg, me.ownerId));

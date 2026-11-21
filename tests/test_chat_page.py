@@ -103,8 +103,8 @@ class ChatPageTests(unittest.TestCase):
         html = page['body'].decode()
         start = html.index('id="chat-empty"')
         block = html[start:html.index('id="message-list"', start)]
-        self.assertIn('<a href="/agents">浏览智能体</a>', block)
-        self.assertIn('<a href="/guide">查看功能指引</a>', block)
+        self.assertRegex(block, r'<a href="/agents"[^>]*>浏览智能体</a>')
+        self.assertRegex(block, r'<a href="/guide"[^>]*>查看功能指引</a>')
 
     def test_page_rejects_cross_origin_queries_and_writes(self):
         self.assertEqual(self.raw.call('GET', '/chat', origin='https://evil.test')['status'], 403)

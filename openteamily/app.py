@@ -11,14 +11,15 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import custom_mcp, skill_packages, agents, artifacts, bot_social, composio, connected_tools, conversations, meetings, members, model_api, notifications, oidc, onboarding, personal, profiles, runtime_autoprovision, runtime_connect, skill_secrets, social, team_templates, teams, skill_installs
+from . import skill_packages, agents, artifacts, bot_social, composio, conversations, meetings, members, model_api, oidc, onboarding, personal, profiles, runtime_autoprovision, skill_secrets, social, team_templates, teams, skill_installs
 
 
 
-from .dsbot_gateway import moved_api  # noqa: E402
+from .dsbot_gateway import moved_api, owner_runtime_readiness  # noqa: E402
 
 # Central execution routes removed in the DS-Bot architecture (thin 410 for old clients).
 GONE_PATHS = frozenset({'/v1/agent-homepages/start', '/v1/runtime-keys', '/v1/runtime/connections', '/v1/runtime/tasks'})
+GONE_WORKSPACE_EVENTS = re.compile(r'/v1/workspaces/[0-9a-f]{32}/events')
 
 class APIError(Exception):
     def __init__(self, status, code, message):
@@ -107,9 +108,6 @@ class App:
             raise ValueError("Invalid operator model HTTP policy")
         self.model_http_policy = model_http_policy or ModelHttpPolicy()
         self.store, self.config, self.clock = store, config, clock
-        # Tests inject a fake Composio HTTP transport; production uses urllib.
-        self.composio_transport = composio_transport
-        self.mcp_transport = mcp_transport
         self.lifecycle, self.manager_auth = lifecycle, manager_auth
         from . import runtime_autoprovision
         if auto_provision is not None and not isinstance(auto_provision, runtime_autoprovision.AutoProvisionPolicy):
@@ -118,8 +116,6 @@ class App:
         self.auto_provision = auto_provision or runtime_autoprovision.AutoProvisionPolicy()
         self.operator_admin = operator_admin
         self.oidc_registry = oidc_registry
-        from .events import Limits
-        self.event_limits = Limits()
 
     def __call__(self, env, start_response):
         headers = [('Cache-Control', 'no-store'),
@@ -139,15 +135,6 @@ class App:
             status, body = 500, {'error': {'code': 'internal', 'message': 'Internal service error'}}
         if not any(key.lower() == 'content-security-policy' for key, _value in headers):
             headers.append(('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'"))
-        from .events import EventStream
-        if isinstance(body,EventStream):
-            headers.insert(0,('Content-Type','text/event-stream; charset=utf-8'))
-            headers.append(('X-Accel-Buffering','no'))
-            try:
-                start_response('200 OK',headers)
-            except BaseException:
-                body.close();raise
-            return body
         if isinstance(body, (bytes, bytearray)):
             data = bytes(body)
             if not any(key.lower() == 'content-type' for key, _value in headers):
@@ -426,6 +413,7 @@ class App:
             (user_id, username, password_hash(opaque() + opaque()), now),
         )
         self.attach_oidc(db, user_id, identity, now)
+        self.queue_new_account_runtime(db, user_id, username, now)
         return self.oidc_signed_in(db, now, user_id)
 
     def attach_oidc(self, db, user_id, identity, now):
@@ -513,6 +501,7 @@ class App:
                         refuse(429, 'quota', 'Account capacity reached')
                     user_id = uuid4().hex
                     db.execute('INSERT INTO users VALUES(?,?,?,?)', (user_id, username, password_hash(password), now))
+                    self.queue_new_account_runtime(db, user_id, username, now)
                     headers = self.new_session(db, user_id, now)
                 return 201, {'user': {'id': user_id, 'username': username}}, headers
             with self.store.connect() as db:
@@ -565,6 +554,8 @@ class App:
                 with self.store.transaction() as db:
                     return self.save_bot_social(db, now, None, self.body(env, ['revision', 'changes']), scope='platform')
             refuse(404, 'not_found', 'Route not found')
+        if GONE_WORKSPACE_EVENTS.fullmatch(path):
+            refuse(410, 'retired', 'Workspace event streams have been retired')
         if path.startswith(('/v1/agent/', '/v1/gateway/')) or path in GONE_PATHS or moved_api(path):
             # Execution moved to each user's DS-Bot; public pages to Bot Social. Old clients get 410.
             refuse(410, 'moved_to_dsbot', 'This route now runs on your own DS-Bot')
@@ -580,6 +571,11 @@ class App:
             if method == 'POST':
                 self.csrf_check(env, session)
             return self.runtime_dispatch(env, session['user_id'], method, path, query)
+        if path == '/v1/auth/runtime-readiness' and method == 'GET' and not query:
+            with self.store.connect() as db:
+                session = self.authenticated(db, env, now)
+                state = owner_runtime_readiness(db, session['user_id']) if self.auto_provision.enabled else 'unmanaged'
+            return 200, {'state': state}, []
         with self.store.transaction() as db:
             session = self.authenticated(db, env, now)
             if method in ('POST', 'DELETE'):
@@ -597,9 +593,6 @@ class App:
                 if method == 'POST' and not query:
                     return self.save_avatar(db, session, now, env)
                 refuse(400, 'invalid', 'Invalid avatar request')
-            if path == '/v1/profile/follow-work':
-                if method in ('GET', 'POST') and not query:
-                    return self.profile_follow_work(db, session, method, now, env)
             if path == '/v1/profile':
                 if method == 'GET' and not query:
                     row = profiles.load(db, session['user_id'])
@@ -644,25 +637,6 @@ class App:
                         refuse(403, 'forbidden', 'Not allowed to change Bot Social settings')
                     return self.save_bot_social(db, now, workspace, self.body(env, ['revision', 'changes']))
                 refuse(400, 'invalid', 'Invalid Bot Social request')
-            stream_match=re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/events',path)
-            if stream_match:
-                if method!='GET' or query:
-                    refuse(400,'invalid','Events require GET without query parameters')
-                from .events import EventStream, StreamLimit, snapshot
-                last_id=env.get('HTTP_LAST_EVENT_ID','')
-                if last_id and not re.fullmatch(r'[0-9a-f]{64}',last_id):
-                    refuse(400,'invalid','Invalid Last-Event-ID')
-                wid=stream_match[1]
-                if members.load(db,wid,session['user_id']) is None:
-                    refuse(404,'not_found','Workspace not found')
-                # The initial snapshot is authenticated before headers are committed.
-                reader=lambda: snapshot(self,env,wid)
-                initial=reader()
-                try:
-                    stream=EventStream(self.event_limits,session['user_id'],reader,initial,last_id)
-                except StreamLimit as exc:
-                    refuse(429,'stream_limit',str(exc))
-                return 200,stream,[]
             match = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})(/instances)?', path)
             if match:
                 row = members.load(db, match[1], session['user_id'])
@@ -735,20 +709,6 @@ class App:
         ).fetchone()
         return None if row is None else self.lifecycle.snapshot(row)
 
-
-    def profile_follow_work(self, db, session, method, now, env):
-        if method == 'GET':
-            return 200, {'items': [notifications.follow_work_switch_view(row) for row in
-                                   notifications.follow_work_switches(db, session['user_id'])]}, []
-        body = self.body(env, ['creator_id', 'enabled'])
-        creator_id, enabled = body.get('creator_id'), body.get('enabled')
-        if (not isinstance(creator_id, str) or not notifications.HEX32.fullmatch(creator_id)
-                or type(enabled) is not bool):
-            refuse(400, 'invalid', 'Provide creator_id and a boolean enabled')
-        item = notifications.set_follow_work(db, session['user_id'], creator_id, enabled, now)
-        if item is None:
-            refuse(400, 'invalid', 'Follow the creator first')
-        return 200, {'item': item}, []
 
     def save_profile(self, db, session, now, env):
         body = self.body(env, ['revision', 'changes'])
@@ -857,20 +817,33 @@ class App:
 
     def personal_agent_ensure(self, db, session, now):
         try:
-            row, created = personal.ensure(
-                db, {'id': session['user_id'], 'username': session['username']},
-                self.config.max_workspaces_per_user, self.config.max_workspaces,
-                self.config.max_agents_per_workspace, now)
-        except ValueError:
+            row, created = self.ensure_personal_agent(db, session['user_id'], session['username'], now)
+        except personal.WorkspaceCapacity:
             refuse(429, 'quota', 'Workspace capacity reached')
         payload = self.personal_payload(db, session, row)
         if self.auto_provision.enabled:
             provision = self.ensure_personal_runtime(db, session['user_id'], row, now)
             payload['personal_agent']['runtime_provisioning'] = {
                 'state': provision['state'], 'instance_id': provision['instance_id'],
+                'readiness': owner_runtime_readiness(db, session['user_id']),
                 'error_code': runtime_autoprovision.chat_error(
                     db, lambda iid: self.workspace_instance(db, row['workspace_id'], iid), provision)}
         return (201 if created else 200), payload, []
+
+    def ensure_personal_agent(self, db, user_id, username, now):
+        return personal.ensure(db, {'id': user_id, 'username': username},
+                               self.config.max_workspaces_per_user, self.config.max_workspaces,
+                               self.config.max_agents_per_workspace, now)
+
+    def queue_new_account_runtime(self, db, user_id, username, now):
+        if not self.auto_provision.enabled or self.lifecycle.policy.backend_mode != 'compose':
+            return
+        try:
+            row, _ = self.ensure_personal_agent(db, user_id, username, now)
+        except personal.WorkspaceCapacity:
+            # Signup can succeed even if the personal workspace must be retried.
+            return
+        self.ensure_personal_runtime(db, user_id, row, now)
 
     def ensure_personal_runtime(self, db, user_id, row, now):
         """Server-derived: the caller's own personal workspace and agent only."""

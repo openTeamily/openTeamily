@@ -30,7 +30,7 @@ test('image matches the compose manager contract (UID 1000, port 8080, healthche
   const docker = read('Dockerfile')
   assert.match(docker, /^\s*USER 1000:1000\s*$/m)
   assert.match(docker, /^\s*EXPOSE 8080\s*$/m)
-  assert.match(docker, /^\s*HEALTHCHECK /m)
+  assert.match(docker, /^\s*HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --start-interval=1s --retries=5 /m)
   assert.match(docker, /DSH_LISTEN_PORT=8080/)
   assert.match(docker, /flybot-image\/entrypoint\.sh/)
   const engine = readFileSync(join(repo, 'openteamily', 'manager', 'engine.py'), 'utf8')
