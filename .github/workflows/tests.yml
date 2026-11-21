@@ -49,6 +49,7 @@ jobs:
       - run: node --test tests/memory_search.test.mjs
       - run: node --test tests/memory_graph_empty.test.mjs
       - run: node --test tests/discover_page.test.mjs
+      - run: node --test tests/discover_creator_link.test.mjs
       - run: node --test tests/profile_page.test.mjs
       - run: node --test tests/profile_avatar.test.mjs
       - run: node --test tests/meetings_page.test.mjs

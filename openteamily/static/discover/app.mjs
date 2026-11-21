@@ -68,11 +68,33 @@ export const FEED_SEARCH_EMPTY_NOTE = '没有匹配的公开作品。';
 
 export const FEED_KINDS = ['', 'website', 'image', 'audio', 'slides', 'video'];
 
-export function feedQuery(query, cursor = '', kind = '') {
+export const FEED_CREATOR_EMPTY_NOTE = '该作者还没有公开作品。';
+export const FEED_CREATOR_VIEW_ALL = '查看全部作者';
+
+// Same rule as App.credentials: usernames are lowercase, 3-64 characters.
+const CREATOR_HANDLE = /^[a-z0-9][a-z0-9_.-]{2,63}$/;
+
+export function creatorFromSearch(search) {
+  const params = new URLSearchParams(typeof search === 'string' ? search : '');
+  const handle = (params.get('creator') || '').trim().toLowerCase();
+  return CREATOR_HANDLE.test(handle) ? handle : '';
+}
+
+export function creatorSearch(handle) {
+  const value = String(handle || '').trim().toLowerCase();
+  return CREATOR_HANDLE.test(value) ? '?creator=' + encodeURIComponent(value) : '';
+}
+
+export function creatorLink(handle) {
+  return '/discover' + creatorSearch(handle);
+}
+
+export function feedQuery(query, cursor = '', kind = '', creator = '') {
   const params = new URLSearchParams({limit: '12'});
   if (query) params.set('q', query);
   if (cursor) params.set('cursor', cursor);
   if (kind) params.set('kind', kind);
+  if (creator) params.set('creator', creator);
   return params.toString();
 }
 
@@ -87,6 +109,7 @@ export function feedStateFromSearch(search) {
     tab: feed === 'following' || feed === 'collected' ? feed : 'activity',
     kind: FEED_KINDS.includes(kind) ? kind : '',
     query: (params.get('q') || '').slice(0, 80),
+    creator: creatorFromSearch(search),
   };
 }
 
@@ -96,6 +119,7 @@ export function feedSearchText(state) {
   if (tab === 'following' || tab === 'collected') params.set('feed', tab);
   if (state && state.kind && FEED_KINDS.includes(state.kind)) params.set('kind', state.kind);
   if (state && state.query) params.set('q', state.query);
+  if (state && state.creator) params.set('creator', state.creator);
   const text = params.toString();
   return text ? '?' + text : '';
 }
@@ -178,9 +202,17 @@ export function detailMetaText(item) {
 }
 
 export function renderFeedCard(document, item) {
-  const card = document.createElement('a');
+  // The card carries two destinations, so it is a container rather than one big
+  // link: the cover and title open the work, the author opens that author's
+  // filtered feed. Links cannot nest, so this keeps both of them real <a>.
+  // It stays a div, not an article: the signed-in grid already wraps each work
+  // in <article class="feed-entry">, and scripts/ci_ui_screenshots.mjs counts
+  // #feed-grid article per work (a nested article would double that census).
+  const card = document.createElement('div');
   card.className = 'feed-card';
-  card.href = item.path || ('/w/' + (item.slug || ''));
+  const link = document.createElement('a');
+  link.className = 'feed-card-link';
+  link.href = item.path || ('/w/' + (item.slug || ''));
   const cover = document.createElement(item.kind === 'image' ? 'img' : 'div');
   cover.className = 'work-cover';
   cover.dataset.kind = item.kind || 'work';
@@ -203,17 +235,30 @@ export function renderFeedCard(document, item) {
   mark.className = 'feed-author-mark avatar';
   mark.dataset.tone = String(catalogTone(item.author || item.title || ''));
   mark.textContent = catalogMonogram(item.author || item.title || '');
-  const who = document.createElement('span');
+  const author = String(item.author || '').trim().toLowerCase();
+  const who = document.createElement(author ? 'a' : 'span');
+  if (author) {
+    who.className = 'feed-author';
+    who.href = creatorLink(author);
+    who.title = '只看 ' + item.author + ' 的公开作品';
+  }
+  who.textContent = item.author || '';
   const when = formatFeedTime(item.updated);
-  who.textContent = [item.author || '', when].filter(Boolean).join(' · ');
   meta.append(mark, who);
+  if (when) {
+    const stamp = document.createElement('span');
+    stamp.className = 'feed-when';
+    stamp.textContent = when;
+    meta.append(stamp);
+  }
   if (item.likes != null) {
     const likes = document.createElement('span');
     likes.className = 'feed-likes';
     likes.textContent = '♡ ' + (item.likes || 0);
     meta.append(likes);
   }
-  card.append(cover, kind, title, meta);
+  link.append(cover, kind, title);
+  card.append(link, meta);
   return card;
 }
 
@@ -453,7 +498,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     applyCatalogChrome();
   }
 
-  const feedState = {items: [], cursor: '', query: initialFeed.query, kind: initialFeed.kind, tab: initialFeed.tab, loading: false};
+  const feedState = {items: [], cursor: '', query: initialFeed.query, kind: initialFeed.kind, tab: initialFeed.tab, loading: false, creator: initialFeed.creator};
   let feedRequest = 0;
 
   function setFeedTab(tab) {
@@ -476,6 +521,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
     const input = document.getElementById('feed-query');
     if (input) input.value = feedState.query;
+    applyFeedCreator();
   }
 
   function feedUrl() {
@@ -494,6 +540,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       feedState.tab = next.tab;
       feedState.kind = next.kind;
       feedState.query = next.query;
+      feedState.creator = next.creator;
       applyFeedChrome();
       applyFeedNote();
       loadFeed();
@@ -512,6 +559,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (feedState.tab !== 'activity' && !currentUser) note.textContent = '请先登录，再查看关注或收录作品。';
     else if (feedState.tab === 'following') note.textContent = FEED_FOLLOWING_NOTE;
     else if (feedState.tab === 'collected') note.textContent = '这里只展示你收录且仍公开的作品。';
+    else if (feedState.creator && !feedState.items.length && !feedState.loading) note.textContent = FEED_CREATOR_EMPTY_NOTE;
     else note.textContent = (feedState.query || feedState.kind) && !feedState.items.length && !feedState.loading
       ? FEED_SEARCH_EMPTY_NOTE : (feedState.items.length ? FEED_ACTIVITY_LISTED_NOTE : FEED_ACTIVITY_EMPTY_NOTE);
   }
@@ -665,7 +713,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       error.textContent = '';
     }
     const privateFeed = currentUser || feedState.tab !== 'activity';
-    const params = feedQuery(feedState.query, append ? feedState.cursor : '', feedState.kind);
+    const params = feedQuery(feedState.query, append ? feedState.cursor : '', feedState.kind, feedState.creator);
     const tab = feedState.tab === 'activity' ? 'all' : feedState.tab;
     const path = privateFeed ? `/v1/discover/me/works?${params}&tab=${tab}` : `/v1/discover/works?${params}`;
     let result;
@@ -1150,6 +1198,32 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       }
       pushFeedUrl();
       return loadFeed();
+    });
+  }
+  // A creator filter is a link, not a stored preference: it lives in the URL so
+  // it can be copied, refreshed and cleared back to every author.
+  function applyFeedCreator() {
+    const chip = document.getElementById('feed-creator-chip');
+    if (!chip) return;
+    chip.hidden = !feedState.creator;
+    const label = document.getElementById('feed-creator-label');
+    if (label) label.textContent = feedState.creator ? '只看 ' + feedState.creator + ' 的公开作品' : '';
+    const clear = document.getElementById('feed-creator-clear');
+    if (clear) {
+      const pathname = location && typeof location.pathname === 'string' ? location.pathname : '/discover';
+      clear.href = pathname + feedSearchText({...feedState, creator: ''});
+      clear.setAttribute('aria-label', '清除作者筛选，回到全部作者');
+    }
+  }
+
+  const feedCreatorClear = document.getElementById('feed-creator-clear');
+  if (feedCreatorClear) {
+    feedCreatorClear.addEventListener('click', (event) => {
+      event.preventDefault();
+      feedState.creator = '';
+      applyFeedChrome();
+      pushFeedUrl();
+      loadFeed();
     });
   }
   const feedSearch = document.getElementById('feed-search');

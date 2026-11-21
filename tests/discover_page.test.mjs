@@ -351,17 +351,23 @@ test('the activity feed renders opted-in work cards from the public API', async 
   assert.equal(el('feed-grid').dataset.empty, 'false');
   assert.equal(el('feed-grid').children.length, 1);
   const cell = el('feed-grid').children[0];
-  // The grid cell wraps the work link so the detail can sit beside it.
+  // main wraps each work in <article class="feed-entry"> so the detail can sit
+  // beside it; inside, the card is a container with two real links.
   assert.equal(String(cell.tagName).toLowerCase(), 'article');
   assert.equal(cell.className, 'feed-entry');
   const card = cell.children[0];
-  assert.equal(String(card.tagName).toLowerCase(), 'a');
-  assert.equal(card.href, '/w/ci-fixture-doc');
-  assert.equal(card.children[0].className, 'work-cover');
-  assert.equal(card.children[0].dataset.kind, 'document');
-  assert.equal(card.children[1].textContent, '文档');
-  assert.equal(card.children[2].textContent, '[CI FIXTURE] Document');
-  assert.equal(card.children[3].children[1].textContent.includes('alice'), true);
+  assert.equal(String(card.tagName).toLowerCase(), 'div');
+  assert.equal(card.className, 'feed-card');
+  const link = card.children[0];
+  assert.equal(String(link.tagName).toLowerCase(), 'a');
+  assert.equal(link.href, '/w/ci-fixture-doc');
+  assert.equal(link.children[0].className, 'work-cover');
+  assert.equal(link.children[0].dataset.kind, 'document');
+  assert.equal(link.children[1].textContent, '文档');
+  assert.equal(link.children[2].textContent, '[CI FIXTURE] Document');
+  const author = card.children[1].children[1];
+  assert.equal(String(author.tagName).toLowerCase(), 'a', 'the author is its own link, not nested in the work link');
+  assert.equal(author.textContent.includes('alice'), true);
   assert.equal(el('feed-note').textContent, FEED_ACTIVITY_LISTED_NOTE);
   assert.equal(el('feed-count').textContent, '已显示 1 件公开作品');
   assert.equal(el('feed-more').hidden, true);
@@ -473,16 +479,16 @@ test('switching private feed tabs cannot be overwritten by an older in-flight re
 test('feed selection round-trips through the URL search', async () => {
   const {feedStateFromSearch, feedSearchText} = await import('../openteamily/static/discover/app.mjs');
   assert.deepEqual(feedStateFromSearch('?feed=following&kind=video&q=cat'),
-    {tab: 'following', kind: 'video', query: 'cat'});
+    {tab: 'following', kind: 'video', query: 'cat', creator: ''});
   assert.deepEqual(feedStateFromSearch('?feed=collected&q=%E4%B8%AD%E6%96%87'),
-    {tab: 'collected', kind: '', query: '中文'});
+    {tab: 'collected', kind: '', query: '中文', creator: ''});
   assert.deepEqual(feedStateFromSearch('?tab=agents'),
-    {tab: 'activity', kind: '', query: ''});
+    {tab: 'activity', kind: '', query: '', creator: ''});
   assert.deepEqual(feedStateFromSearch('?feed=following&kind=bogus'),
-    {tab: 'following', kind: '', query: ''});
-  assert.deepEqual(feedStateFromSearch('?feed=activity'), {tab: 'activity', kind: '', query: ''});
-  assert.deepEqual(feedStateFromSearch(''), {tab: 'activity', kind: '', query: ''});
-  assert.deepEqual(feedStateFromSearch(undefined), {tab: 'activity', kind: '', query: ''});
+    {tab: 'following', kind: '', query: '', creator: ''});
+  assert.deepEqual(feedStateFromSearch('?feed=activity'), {tab: 'activity', kind: '', query: '', creator: ''});
+  assert.deepEqual(feedStateFromSearch(''), {tab: 'activity', kind: '', query: '', creator: ''});
+  assert.deepEqual(feedStateFromSearch(undefined), {tab: 'activity', kind: '', query: '', creator: ''});
   assert.equal(feedSearchText({tab: 'following', kind: 'video', query: 'cat'}),
     '?feed=following&kind=video&q=cat');
   assert.equal(feedSearchText({tab: 'collected', kind: '', query: ''}), '?feed=collected');
@@ -619,19 +625,19 @@ test('following nobody from a shared URL shows the following empty note, not a b
 test('work covers use real same-origin published media, not invented screenshots', () => {
   const doc = fakeDocument();
   const image = renderFeedCard(doc, {slug: 'real-photo', title: '<safe>', kind: 'image'});
-  const cover = image.children.find(node => node.className === 'work-cover');
+  const cover = image.children[0].children.find(node => node.className === 'work-cover');
   assert.equal(cover.tagName, 'img');
   assert.equal(cover.src, '/w/real-photo/file');
   assert.equal(cover.loading, 'lazy');
   assert.equal(cover.alt, '');
   const website = renderFeedCard(doc, {slug: 'real-site', title: 'Site', kind: 'website'});
-  const fallback = website.children.find(node => node.className === 'work-cover');
+  const fallback = website.children[0].children.find(node => node.className === 'work-cover');
   assert.equal(fallback.tagName, 'div');
   assert.equal(fallback.dataset.kind, 'website');
   assert.equal(fallback.dataset.pattern, coverPattern('Site'));
   assert.equal(fallback.textContent, '');
   assert.equal(fallback.src, undefined);
-  const badge = website.children.find(node => node.className === 'kind');
+  const badge = website.children[0].children.find(node => node.className === 'kind');
   assert.equal(badge.textContent, '网页');
 });
 
@@ -743,6 +749,37 @@ test('document thumbnails preserve only bounded semantic text blocks', () => {
   ]});
   assert.deepEqual(model.blocks.map(block=>block.type), ['heading','list','code','quote']);
   assert.equal(model.blocks[1].text,'item');
+});
+
+
+test('a signed-in feed keeps exactly one article per work so the shipped grid census still counts works', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const item = {slug: 'shared-doc', title: 'Public work', author: 'bob', path: '/w/shared-doc', kind: 'document'};
+  const fetcher = async path => {
+    if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    if (path.startsWith('/v1/discover/me/works?')) {
+      const saved = path.includes('tab=following') || path.includes('tab=collected');
+      const items = saved ? [item] : [item, {...item, slug: 'second-doc', path: '/w/second-doc'}];
+      return {status: 200, json: async () => ({items, cursor: null})};
+    }
+    if (path.startsWith('/v1/discover/works?')) {
+      return {status: 200, json: async () => ({items: [item, {...item, slug: 'second-doc', path: '/w/second-doc'}], cursor: null})};
+    }
+    throw new Error('unexpected ' + path);
+  };
+  await mount(doc, {fetcher, location: {search: ''}});
+  const grid = doc.getElementById('feed-grid');
+  // scripts/ci_ui_screenshots.mjs:1969 counts #feed-grid article on the private
+  // collected feed and expects exactly one per saved work, so the card must not
+  // become a second <article> inside the per-work row.
+  const articles = node => node.children.reduce(
+    (count, child) => count + (String(child.tagName).toLowerCase() === 'article' ? 1 : 0) + articles(child), 0);
+  assert.equal(grid.children.length, 2);
+  assert.equal(articles(grid), 2);
+  assert.equal(String(grid.children[0].tagName).toLowerCase(), 'article');
+  assert.equal(String(grid.children[0].children[0].tagName).toLowerCase(), 'div');
+  assert.equal(grid.children[0].children[0].className, 'feed-card');
 });
 
 // A work card's detail is read in place: the feed keeps its tab, filter and
