@@ -1,7 +1,21 @@
 name: Upstream migration checks
 on:
+  # Feature-branch pushes are validated by the pull_request run; keep the push
+  # trigger for main only so the same branch is not executed twice (fork + PR).
   push:
+    branches: [main]
+    paths:
+      - runtime/**
+      - docs/**
+      - .github/workflows/upstream-migration.yml
   pull_request:
+    paths:
+      - runtime/**
+      - docs/**
+      - .github/workflows/upstream-migration.yml
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:

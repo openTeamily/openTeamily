@@ -1,6 +1,9 @@
 name: Management API tests
 on:
+  # Feature-branch pushes are validated by the pull_request run; keep the push
+  # trigger for main only so the same branch is not executed twice (fork + PR).
   push:
+    branches: [main]
   pull_request:
 permissions:
   contents: read

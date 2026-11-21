@@ -5,7 +5,11 @@ name: Upstream DS Bot runtime
 # version it pins, and starts as a container whose Bot API answers. No secrets: upstream's
 # suite uses its own fake model, and the startup test runs with --network none.
 on:
+  # Verification only (no artifacts published, no workflow_run dependents), and the
+  # pull_request run already covers every branch: keep push for main only so a fork
+  # branch push does not run it a second time.
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 permissions:

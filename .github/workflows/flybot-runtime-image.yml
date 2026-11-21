@@ -6,8 +6,20 @@ name: FlyBot runtime image
 # open: issue 1, issue 3, issue 5. This job does not authorize a public
 # redistributable release.
 on:
+  # Feature-branch pushes are validated by the pull_request run; keep the push
+  # trigger for main only so the same branch is not executed twice (fork + PR).
   push:
+    branches: [main]
+    paths:
+      - runtime/flybot-image/**
+      - .github/workflows/flybot-runtime-image.yml
   pull_request:
+    paths:
+      - runtime/flybot-image/**
+      - .github/workflows/flybot-runtime-image.yml
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:

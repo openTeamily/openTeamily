@@ -3,8 +3,22 @@ name: FlyBot social host adapter
 # through runtime/flybot-social-host, including the 0.3.5+ write-ahead group ledger.
 # Does not edit runtime/ds-bot-upstream/.
 on:
+  # Feature-branch pushes are validated by the pull_request run; keep the push
+  # trigger for main only so the same branch is not executed twice (fork + PR).
   push:
+    branches: [main]
+    paths:
+      - runtime/flybot-social-host/**
+      - runtime/ds-bot-upstream.pin.json
+      - .github/workflows/flybot-social-host.yml
   pull_request:
+    paths:
+      - runtime/flybot-social-host/**
+      - runtime/ds-bot-upstream.pin.json
+      - .github/workflows/flybot-social-host.yml
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
