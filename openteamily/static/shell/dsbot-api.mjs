@@ -9,7 +9,9 @@
 export const MOUNT = '/b';
 export const API_ROUTE = `${MOUNT}/api/openteamily`;
 
-// Page-facing route -> feature that serves it inside DS-Bot.
+// Legacy route -> feature that serves it inside DS-Bot. Streams add rows as
+// features move; a moved feature the DS-Bot does not have fails closed instead
+// of executing the same request on the platform.
 export const MOVED = [
   [/^\/v1\/skills\/(?:catalog|bindings|installed|packages(?:\/import-[a-z0-9][a-z0-9-]{1,39}(?:\/(?:revoke|versions(?:\/[0-9.]+)?))?)?)$/, 'skills'],
   [/^\/v1\/skill-secrets$/, 'skill-secrets'],
@@ -140,6 +142,10 @@ export function install(win = globalThis.window) {
     });
     const result = await response.json().catch(() => null);
     if (result && result.ok) return toResponse(result.value);
+    if (result && result.error && result.error.code === 'openteamily/not-found') {
+      return new Response(JSON.stringify({ error: { code: 'moved_to_dsbot', message: 'This feature is not available in your DS-Bot' } }),
+        { status: 503, headers: { 'Content-Type': 'application/json' } });
+    }
     return new Response(JSON.stringify({ error: { code: 'unavailable', message: (result && result.error && result.error.message) || 'DS-Bot request failed' } }),
       { status: response.ok ? 502 : response.status, headers: { 'Content-Type': 'application/json' } });
   }

@@ -115,18 +115,39 @@ test('moved artifact routes go to the artifacts feature of the user\'s own DS-Bo
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/bogus`, ORIGIN), null);
 });
 
-test('a missing moved feature never falls back to platform execution', async () => {
+test('a missing moved feature fails closed instead of falling back to /v1', async () => {
   const calls = [];
+  const doc = { querySelector: () => ({}), addEventListener() {} };
   const win = {
-    document: {querySelector: () => ({}), addEventListener() {}},
-    location: {origin: ORIGIN},
-    async fetch(url) {
-      calls.push(url);
-      return Response.json({ok: false, error: {code: 'openteamily/not-found'}});
+    document: doc,
+    location: { origin: ORIGIN },
+    fetch: async (input) => {
+      calls.push(String(input));
+      return new Response(JSON.stringify({ ok: false, error: { code: 'openteamily/not-found', message: 'missing' } }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } });
     },
   };
   install(win);
-  const response = await win.fetch('/v1/settings');
-  assert.equal(response.status, 502);
+  const response = await win.fetch('/v1/settings', { method: 'GET' });
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error.code, 'moved_to_dsbot');
   assert.deepEqual(calls, ['/b/api/openteamily']);
+});
+
+test('non-moved URLs still fall back to the platform request', async () => {
+  const calls = [];
+  const doc = { querySelector: () => ({}), addEventListener() {} };
+  const win = {
+    document: doc,
+    location: { origin: ORIGIN },
+    fetch: async (input) => {
+      calls.push(String(input));
+      return new Response('platform', { status: 200 });
+    },
+  };
+  install(win);
+  const response = await win.fetch('/v1/auth/session', { method: 'GET' });
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), 'platform');
+  assert.deepEqual(calls, ['/v1/auth/session']);
 });
