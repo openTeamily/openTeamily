@@ -713,6 +713,29 @@ body.app-workspace > #status[data-announce-only="true"] {
 }
 .composer-tools button:hover { background: var(--ot-bg-accent); color: var(--ot-ink); }
 
+/* Send mode: a per-message choice, shown as a chip on the bubble. */
+.composer-mode { display: inline-flex; align-items: center; margin-left: auto; }
+.composer-mode select {
+  padding: .1rem .3rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .4rem;
+  background: transparent;
+  color: var(--ot-ink);
+  font: inherit;
+  font-size: .78rem;
+}
+.mode-chip {
+  display: inline-block;
+  padding: 0 .35rem;
+  border-radius: 999px;
+  background: var(--ot-accent-soft);
+  color: var(--ot-ink);
+  font-size: .7rem;
+  font-weight: 600;
+  vertical-align: baseline;
+}
+.mode-chip[data-mode="agentic"] { background: var(--ot-bg-accent); }
+
 .social-mentions {
   padding: 0.2rem 1rem 0;
 }

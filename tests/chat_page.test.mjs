@@ -1526,7 +1526,7 @@ test('a selected group mention sends the chosen owner and agent together', async
     composer.value = '请查一下';
     await fire(el('chat-form'), 'submit', {preventDefault() {}});
     await settle();
-    assert.deepEqual(posts, [{body: '请查一下', agent_mentions: [{owner_id: 'owner-two', agent_id: 'same'}]}]);
+    assert.deepEqual(posts, [{body: '请查一下', agent_mentions: [{owner_id: 'owner-two', agent_id: 'same'}], mode: 'auto'}]);
     assert.equal(el('chat-agent-mentions').hidden, true);
   } finally { restore(); }
 });

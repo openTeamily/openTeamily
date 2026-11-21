@@ -119,6 +119,34 @@ test('legacy chat forwards explicitly selected group agents to Bot Social', asyn
 })
 
 
+test('the send mode travels with the message and comes back on the read contract', async () => {
+  const dir = fixture()
+  const f = fake({
+    'POST /v1/ot/conversations/otc_1/messages': body => ({id:'m1', body:body.body, mode:body.mode ?? 'auto'}),
+  })
+  setSharedBotSocial(createBotSocial({server: SERVER, credentialsPath: join(dir, 'bot', 'flybot-social.json'), fetch: f.fetch}))
+  const e = messenger({dataDir: dir}).endpoints
+  const path = '/v1/workspaces/' + 'a'.repeat(32) + '/social/conversations/otc_1/messages'
+  const sent = await e.v1({method:'POST',path,body:{body:'整理这周的发布计划',mode:'agentic'}})
+  assert.equal(sent.status, 201)
+  assert.equal(f.calls.at(-1).body.mode, 'agentic')
+  assert.equal(sent.body.message.mode, 'agentic')
+  const plain = await e.v1({method:'POST',path,body:{body:'普通消息'}})
+  assert.equal(plain.body.message.mode, 'auto')
+})
+
+test('history keeps the mode recorded on each message', async () => {
+  const dir = fixture()
+  const f = fake({'GET /v1/ot/conversations/otc_1/messages': () => ({
+    messages:[{id:'m1',seq:1,body:'a',mode:'agentic'},{id:'m2',seq:2,body:'b'}],
+  })})
+  setSharedBotSocial(createBotSocial({server: SERVER, credentialsPath: join(dir, 'bot', 'flybot-social.json'), fetch: f.fetch}))
+  const e = messenger({dataDir: dir}).endpoints
+  const path = '/v1/workspaces/' + 'a'.repeat(32) + '/social/conversations/otc_1/messages'
+  const page = await e.v1({method:'GET',path})
+  assert.deepEqual(page.body.items.map(m => m.mode), ['agentic','auto'])
+})
+
 test('voice recording and playback proxy through the member messenger', async () => {
   const dir = fixture()
   const voice = {mime:'audio/webm', data:'GkXfowAAAAAAAAAA'}

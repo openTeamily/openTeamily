@@ -83,6 +83,23 @@ export function shouldSendOnShortcut(event, sendShortcut = 'enter') {
 // The chat language is stored per account by /settings; it only reaches the
 // model if the message request carries it. 'auto' means "no opinion", so the
 // field has to be absent rather than a value the server has to interpret.
+// Send mode is a property of the message a person is writing: it travels with
+// the body, is stored with the row and shown on the bubble after a reload.
+export const MESSAGE_MODES = ['auto', 'instant', 'agentic'];
+export function normalizeMode(value) {
+  return MESSAGE_MODES.includes(value) ? value : 'auto';
+}
+export function modeLabel(mode) {
+  const value = normalizeMode(mode);
+  return value === 'instant' ? 'Instant' : (value === 'agentic' ? 'Agentic' : 'Auto');
+}
+export function modeStoreKey(conversationId) {
+  return 'ot.chat.mode.' + String(conversationId || '');
+}
+export function socialSendPayload(text, mode) {
+  return {body: text, mode: normalizeMode(mode)};
+}
+
 export function messagePayload(text, chatLanguage = 'auto') {
   const payload = {body: text};
   if (typeof chatLanguage === 'string' && chatLanguage && chatLanguage !== 'auto') {
@@ -2081,6 +2098,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         body.title = '转发自 ' + item.forwarded_from.author;
         role.textContent += ' · 转发自 ' + item.forwarded_from.author;
       }
+      if (item.mode && normalizeMode(item.mode) !== 'auto' && !item.retracted) {
+        const chip = document.createElement('span');
+        chip.className = 'mode-chip';
+        chip.dataset.mode = normalizeMode(item.mode);
+        chip.textContent = modeLabel(item.mode);
+        chip.title = '发送时选择的模式：' + modeLabel(item.mode);
+        role.append(document.createTextNode(' · '), chip);
+      }
       const time = document.createElement('p');
       time.className = 'time';
       time.textContent = formatTime(item.created);
@@ -2887,6 +2912,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
     }
     currentConversation = updated;
+    restoreComposerMode(currentConversation.id);
     renderReplyDraft();
     if (liveBanner) liveBanner.hidden = true;
     setSocialHistory({wid, cid: conversationId, cursor: result.body.cursor ?? null});
@@ -3781,6 +3807,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (notificationSnapshot) renderNotifications(notificationSnapshot);
     });
   }
+  const modeSelect = document.getElementById('composer-mode');
+  function modeStorage() {
+    try { return globalThis.localStorage || null; } catch { return null; }
+  }
+  function restoreComposerMode(conversationId) {
+    if (!modeSelect || !conversationId) return;
+    const storage = modeStorage();
+    let saved = '';
+    try { saved = storage ? storage.getItem(modeStoreKey(conversationId)) || '' : ''; } catch { saved = ''; }
+    modeSelect.value = normalizeMode(saved);
+  }
+  function rememberComposerMode(conversationId, mode) {
+    const storage = modeStorage();
+    if (!storage || !conversationId) return;
+    try { storage.setItem(modeStoreKey(conversationId), normalizeMode(mode)); } catch {}
+  }
+  if (modeSelect) modeSelect.addEventListener('change', () => {
+    if (currentConversation && currentSource === 'social') rememberComposerMode(currentConversation.id, modeSelect.value);
+  });
+
   const notificationsToggle = document.getElementById('notifications-toggle');
   if (notificationsToggle) notificationsToggle.addEventListener('click', async () => {
     const panel = document.getElementById('notifications-panel');
@@ -4469,7 +4515,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', social ? '请先打开或创建一个会话。' : '请先选择一个智能体。');
       return;
     }
-    const message = social ? agentMentions.message(field.value) : messagePayload(field.value, chatLanguage);
+    const message = social
+      ? {...agentMentions.message(field.value), ...socialSendPayload(field.value, modeSelect ? modeSelect.value : 'auto')}
+      : messagePayload(field.value, chatLanguage);
     const reply = social ? replyDrafts.get(scope) : undefined;
     if (reply) message.reply_to = reply.message_id;
     if (social && !validMessage(message.body)) {

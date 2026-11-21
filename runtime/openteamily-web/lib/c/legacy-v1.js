@@ -125,6 +125,7 @@ function messageItem(row, me, env, workspaceId) {
     revision: row.revision || 1,
     edited: unix(row.edited_at) || null,
     retracted: !!row.retracted,
+    mode: row.mode || 'auto',
     ...(row.reactions?.length ? {reactions: row.reactions} : {}),
     ...(row.voice ? { voice: row.voice } : {}),
     ...(row.reply_preview ? {reply_preview: row.reply_preview} : {}),
@@ -757,7 +758,7 @@ function messengerRoutes(host, wakeReplies) {
             message = {...body, body: snapshot.body, attachment: snapshot.attachment}
           }
           const me = await meOf(bs, env)
-          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: message?.body, voice: message?.voice, attachment: message?.attachment, workspace: match[1], direct: accountConversation(scope.conversation), client_key: idempotency_key, mentions: message?.mentions, agent_mentions: message?.agent_mentions, reply_to: message?.reply_to })
+          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: message?.body, voice: message?.voice, attachment: message?.attachment, workspace: match[1], direct: accountConversation(scope.conversation), client_key: idempotency_key, mentions: message?.mentions, agent_mentions: message?.agent_mentions, reply_to: message?.reply_to, mode: message?.mode })
           if (data.reply_jobs?.some(job => job.status === 'queued')) wakeReplies()
           return [201, { message: messageItem({ ...data, conversation_id: match[2] }, me, env, match[1]) }]
         })

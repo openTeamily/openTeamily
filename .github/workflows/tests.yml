@@ -29,6 +29,7 @@ jobs:
       - run: node --test tests/artifacts_page.test.mjs
       - run: node --test tests/automations_page.test.mjs
       - run: node --test tests/chat_language.test.mjs
+      - run: node --test tests/chat_send_mode.test.mjs
       - run: node --test tests/chat_page.test.mjs
       - run: node --test tests/chat_dsbot.test.mjs
       - run: node --test tests/dsbot_skills.test.mjs

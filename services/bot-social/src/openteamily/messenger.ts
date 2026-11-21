@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS ot_messages (
   author_id TEXT NOT NULL, author_kind TEXT NOT NULL CHECK (author_kind IN ('member','agent')), agent_ref TEXT, agent_name TEXT,
   body TEXT NOT NULL, mentions TEXT NOT NULL DEFAULT '[]', reply_to TEXT, reply_mode TEXT, client_key TEXT,
   created_at INTEGER NOT NULL, edited_at INTEGER, retracted INTEGER NOT NULL DEFAULT 0, pinned_by TEXT, forwarded_author TEXT,
+  mode TEXT NOT NULL DEFAULT 'auto' CHECK(mode IN ('auto','instant','agentic')),
   UNIQUE (conversation_id, seq), UNIQUE (conversation_id, author_id, client_key)
 );
 CREATE TABLE IF NOT EXISTS ot_group_memories (
@@ -153,6 +154,9 @@ function voiceData(value: any) {
   return {mime, data};
 }
 
+// Send mode chosen in the composer. It is recorded per message and shown on the bubble;
+// it does not yet change what the runtime does with the message.
+const MESSAGE_MODES = ["auto", "instant", "agentic"] as const;
 const AUTO_PER_HOUR = 3;
 const MENTION_PER_HOUR = 30;
 const HOUR = 3_600_000;
@@ -277,6 +281,7 @@ const messageView = (ot: OtContext, m: any, viewer?: string) => ({
   mine: viewer ? m.author_id === viewer && m.author_kind === "member" : undefined,
   ...(viewer === m.author_id && m.author_kind === "member" && m.client_key ? {client_key: m.client_key} : {}),
   body: m.retracted ? "" : m.body, revision: m.revision, retracted: !!m.retracted, edited_at: m.edited_at, created_at: m.created_at,
+  mode: m.mode ?? "auto",
   mentions: JSON.parse(m.mentions), ...(viewer ? {reply_jobs: replyJobViews(ot, m, viewer)} : {}), reply_to: m.reply_to, pinned: !!m.pinned_by,
   ...(viewer && m.reply_to && !m.retracted ? {reply_preview: replyPreview(ot, m, viewer)} : {}),
   ...(m.forwarded_author && !m.retracted ? {forwarded_from: {author: m.forwarded_author}} : {}),
@@ -371,7 +376,7 @@ function assertReachable(ot: OtContext, from: string, to: string, teamId?: strin
   }
 }
 
-function insertMessage(ot: OtContext, conv: any, row: { author: string; kind: "member" | "agent"; agentRef?: string; agentName?: string; body: string; mentions: string[]; replyTo?: string | null; replyMode?: string | null; clientKey?: string | null; forwardedAuthor?: string }) {
+function insertMessage(ot: OtContext, conv: any, row: { author: string; kind: "member" | "agent"; agentRef?: string; agentName?: string; body: string; mentions: string[]; replyTo?: string | null; replyMode?: string | null; clientKey?: string | null; forwardedAuthor?: string; mode?: string | null }) {
   if (row.clientKey) {
     const dup = ot.get<any>("SELECT * FROM ot_messages WHERE conversation_id = ? AND author_id = ? AND client_key = ?", conv.id, row.author, row.clientKey);
     if (dup) return dup;
@@ -379,8 +384,8 @@ function insertMessage(ot: OtContext, conv: any, row: { author: string; kind: "m
   const seq = conv.last_seq + 1;
   const now = ot.now();
   const id = newId("otm");
-  ot.run("INSERT INTO ot_messages(id, conversation_id, seq, author_id, author_kind, agent_ref, agent_name, body, mentions, reply_to, reply_mode, client_key, created_at, forwarded_author) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-    id, conv.id, seq, row.author, row.kind, row.agentRef ?? null, row.agentName ?? null, row.body, JSON.stringify(row.mentions), row.replyTo ?? null, row.replyMode ?? null, row.clientKey ?? null, now, row.forwardedAuthor ?? null);
+  ot.run("INSERT INTO ot_messages(id, conversation_id, seq, author_id, author_kind, agent_ref, agent_name, body, mentions, reply_to, reply_mode, client_key, created_at, forwarded_author, mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    id, conv.id, seq, row.author, row.kind, row.agentRef ?? null, row.agentName ?? null, row.body, JSON.stringify(row.mentions), row.replyTo ?? null, row.replyMode ?? null, row.clientKey ?? null, now, row.forwardedAuthor ?? null, row.mode ?? "auto");
   ot.run("UPDATE ot_conversations SET last_seq = ?, updated_at = ? WHERE id = ?", seq, now, conv.id);
   if (row.kind === "member") ot.run("UPDATE ot_conversation_members SET read_seq = ? WHERE conversation_id = ? AND owner_id = ?", seq, conv.id, row.author);
   return ot.get<any>("SELECT * FROM ot_messages WHERE id = ?", id);
@@ -441,6 +446,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   const messageCols = new Set(ot.all<any>("PRAGMA table_info(ot_messages)").map(c => c.name));
   if (!messageCols.has("revision")) ot.run("ALTER TABLE ot_messages ADD COLUMN revision INTEGER NOT NULL DEFAULT 1");
   if (!messageCols.has("forwarded_author")) ot.run("ALTER TABLE ot_messages ADD COLUMN forwarded_author TEXT");
+  if (!messageCols.has("mode")) ot.run("ALTER TABLE ot_messages ADD COLUMN mode TEXT NOT NULL DEFAULT 'auto' CHECK(mode IN ('auto','instant','agentic'))");
   const agentCols = new Set(ot.all<any>("PRAGMA table_info(ot_conversation_agents)").map(c => c.name));
   if (!agentCols.has("auto_reply_after_seq")) {
     ot.run("ALTER TABLE ot_conversation_agents ADD COLUMN auto_reply_after_seq INTEGER NOT NULL DEFAULT 0");
@@ -771,6 +777,9 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       400, "invalid_request", "Send a single file per message");
     const clientKey = optText(b.client_key, "client_key", { min: 1, max: 80 }) ?? null;
     const replyTo = optText(b.reply_to, "reply_to", {min: 1, max: 80}) ?? null;
+    const sendMode = optText(b.mode, "mode", {min: 1, max: 8}) ?? "auto";
+    assert((MESSAGE_MODES as readonly string[]).includes(sendMode), 400, "invalid_request",
+      "mode must be auto, instant or agentic");
     const msg = ot.tx(() => {
       const direct = b.direct === true;
       const workspace = !direct && (sourceConversation || b.attachment !== undefined)
@@ -782,7 +791,11 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         const previous = ot.get<any>(
           "SELECT * FROM ot_messages WHERE conversation_id=? AND author_id=? AND client_key=?", conv.id, me.ownerId, clientKey,
         );
-        if (previous) return previous;
+        if (previous) {
+          assert((previous.mode ?? "auto") === sendMode, 409, "conflict",
+            "该 Idempotency-Key 已用于另一条消息。");
+          return previous;
+        }
       }
       if (fixedPublicThread(conv)) {
         const listing = publicListing(ot, conv);
@@ -808,7 +821,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       if (replyTo) assert(replyOriginal(ot, conv.id, replyTo, me.ownerId), 409, "reply_unavailable", "原消息已不可回复，请取消引用。");
       const parsed = parseMentions(ot, conv.id, b.mentions, bodyText, b.agent_mentions);
       const mentions = parsed.mentions;
-      const m = insertMessage(ot, conv, { author: me.ownerId, kind: "member", body: parsed.body, mentions, replyTo, clientKey });
+      const m = insertMessage(ot, conv, { author: me.ownerId, kind: "member", body: parsed.body, mentions, replyTo, clientKey, mode: sendMode });
       if (voice) ot.run("INSERT INTO ot_voice_messages VALUES (?,?,?)", m.id, voice.mime, voice.data);
       if (file) saveAttachment(ot, m.id, me.ownerId, file);
       if (conv.kind === "group" && !fixedPublicThread(conv) && !voice && !file) {
