@@ -63,6 +63,7 @@ export const MOVED = [
   [/^\/v1\/discover\/agents\/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]\/(?:start|remix)$/, 'discover'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/artifacts\/[0-9a-f]{32}\/discover(?:\/revoke)?$/, 'discover'],
   [/^\/v1\/discover\/works\/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]\/engagement$/, 'discover'],
+  [/^\/v1\/discover\/works\/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]\/comments(?:\/[A-Za-z0-9_-]{1,64})?$/, 'discover'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/agents\/[0-9a-f]{32}\/discover(?:\/revoke)?$/, 'discover'],
 ];
 

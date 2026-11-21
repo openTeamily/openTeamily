@@ -84,6 +84,8 @@ test('members, team, messenger and discover /v1 routes go to the C features', ()
   assert.equal(movedTarget('/v1/discover/agents?q=x', ORIGIN).feature, 'discover');
   assert.equal(movedTarget('/v1/discover/me/works?tab=following', ORIGIN).feature, 'discover');
   assert.equal(movedTarget('/v1/discover/works/my-essay/engagement', ORIGIN).feature, 'discover');
+  assert.equal(movedTarget('/v1/discover/works/my-essay/comments?limit=20', ORIGIN).feature, 'discover');
+  assert.equal(movedTarget('/v1/discover/works/my-essay/comments/otwc_2', ORIGIN).feature, 'discover');
   // Workspace lists and team creation use the DS-Bot teams feature.
   assert.equal(movedTarget('/v1/auth/session', ORIGIN), null);
   assert.equal(movedTarget('/v1/workspaces?limit=100', ORIGIN).feature, 'teams');

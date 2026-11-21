@@ -6,6 +6,7 @@ import type { FastifyInstance } from "fastify";
 import { assert } from "../errors.js";
 import { newId } from "../ids.js";
 import { body, handleKey, hashCode, intParam, one, OtContext, optText, params, query, text } from "./core.js";
+import { commentCount } from "./work-comments.js";
 
 export const DISCOVER_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_listings (
@@ -58,6 +59,7 @@ function listingPath(ot: OtContext, l: { kind: string; slug: string }) {
 const listingView = (ot: OtContext, l: any, viewer: string | null, withSnapshot = false) => ({
   id: l.id, slug: l.slug, kind: l.kind, title: l.title, summary: l.summary, category: l.category, work_kind: l.work_kind,
   creator: ot.profileView(l.owner_id), listed: !!l.listed, chat_enabled: l.kind === "agent" && !!l.chat_enabled, updated_at: l.updated_at, created_at: l.created_at,
+  comment_count: commentCount(ot, l.id),
   path: listingPath(ot, l), ...(viewer ? engagement(ot, l, viewer) : { likes: ot.get<any>("SELECT COUNT(*) AS n FROM ot_likes WHERE listing_id = ?", l.id).n, collections: ot.get<any>("SELECT COUNT(*) AS n FROM ot_collections WHERE listing_id = ?", l.id).n, liked: false, collected: false, following: false, own: false }),
   ...(withSnapshot ? { snapshot: l.snapshot ?? null } : {}),
 });

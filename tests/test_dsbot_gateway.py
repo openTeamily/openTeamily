@@ -198,6 +198,8 @@ class GatewayTest(unittest.TestCase):
             ('/v1/meeting-calls/create', 'messenger'),
             ('/v1/meeting-calls/join', 'messenger'),
             ('/v1/discover/works', 'discover'),
+            ('/v1/discover/works/my-essay/comments', 'discover'),
+            ('/v1/discover/works/my-essay/comments/otwc_2', 'discover'),
             (f'/v1/workspaces/{ws}/agents/{ident}/discover', 'discover'),
         ):
             self.assertEqual(gw.moved_api(path), feature, path)

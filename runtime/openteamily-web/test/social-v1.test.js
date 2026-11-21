@@ -69,6 +69,15 @@ function fakeSocial() {
     if (path === '/v1/ot/discover?kind=work' || path.startsWith('/v1/ot/discover?')) {
       return ok(200, { items: [{ id: 'otl_1', slug: 'my-essay', kind: 'work', work_kind: 'document', title: 'Essay', creator: { handle: 'ann.home', display_name: 'Ann' }, updated_at: 1_700_000_000_000, path: '/w/my-essay', likes: 3, liked: false, collected: false, following: false, own: true }] })
     }
+    if (path === '/v1/ot/works/my-essay/comments?limit=20') {
+      return ok(200, { items: [{ id: 'otwc_1', body: '第一条', author: { handle: 'bea.home', display_name: 'Bea' }, created_at: 1_700_000_300_000, own: false, deleted: false }], next_after: null, comment_count: 1 })
+    }
+    if (path === '/v1/ot/works/my-essay/comments' && init.method === 'POST') {
+      return ok(201, { comment: { id: 'otwc_2', body: body.body, author: { handle: 'ann.home', display_name: 'Ann' }, created_at: 1_700_000_400_000, own: true, deleted: false }, comment_count: 2 })
+    }
+    if (path === '/v1/ot/works/my-essay/comments/otwc_2' && init.method === 'DELETE') {
+      return ok(200, { deleted: true, comment_count: 1 })
+    }
     return ok(404, { error: { code: 'not_found', message: path } })
   }
   return { fetch, calls }
@@ -146,6 +155,26 @@ test('discover v1 maps a work feed into the page card shape', async () => {
   assert.equal(feed.body.items[0].kind_label, '文档')
   assert.equal(feed.body.items[0].author, 'ann')
   assert.equal(feed.body.items[0].own_work, true)
+})
+
+test('work comments reach Bot Social with the reader, the author and the count intact', async () => {
+  const { social, host } = setup()
+  const read = await discover(host).endpoints.v1({ method: 'GET', path: '/v1/discover/works/my-essay/comments?limit=20' })
+  assert.equal(read.status, 200)
+  assert.deepEqual(read.body.items, [{ id: 'otwc_1', body: '第一条', author: 'bea', created: 1_700_000_300, own: false, deleted: false }])
+  assert.equal(read.body.comment_count, 1)
+  const write = await discover(host).endpoints.v1({ method: 'POST', path: '/v1/discover/works/my-essay/comments', body: { body: '  第二条  ' } })
+  assert.equal(write.status, 201)
+  assert.deepEqual(social.calls.at(-1).body, { body: '  第二条  ' })
+  assert.equal(write.body.comment.author, 'ann')
+  assert.equal(write.body.comment_count, 2)
+  const blank = await discover(host).endpoints.v1({ method: 'POST', path: '/v1/discover/works/my-essay/comments', body: { body: '   ' } })
+  assert.equal(blank.status, 400)
+  assert.equal(social.calls.at(-1).method, 'POST')
+  assert.equal(social.calls.at(-1).body.body, '  第二条  ', 'a blank comment is refused before Bot Social');
+  const removed = await discover(host).endpoints.v1({ method: 'DELETE', path: '/v1/discover/works/my-essay/comments/otwc_2' })
+  assert.equal(removed.status, 200)
+  assert.deepEqual(removed.body, { deleted: true, comment_count: 1 })
 })
 
 test('auth and single workspace paths stay outside the C v1 handlers', async () => {

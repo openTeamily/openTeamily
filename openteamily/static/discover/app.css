@@ -252,6 +252,43 @@ a.catalog-create[hidden] { display: none; }
 .feed-detail-open { color: var(--ot-accent); font-weight: 600; text-decoration: none; }
 .feed-detail-open:hover { text-decoration: underline; }
 .feed-detail-open:focus-visible { outline: 2px solid var(--ot-accent); outline-offset: 2px; }
+/* The thread under a work's detail: same card, one level of comments, oldest first. */
+.feed-comments { display: grid; gap: .35rem; margin-top: .35rem; padding-top: .55rem; border-top: 1px solid var(--ot-line); }
+.feed-comments-title { margin: 0; font-size: .76rem; font-weight: 650; color: var(--ot-ink); letter-spacing: .01em; }
+.feed-comments-list { display: grid; gap: .45rem; margin: 0; padding: 0; list-style: none; }
+.feed-comment { display: grid; gap: .1rem; }
+.feed-comment-author { margin: 0; font-size: .72rem; color: var(--ot-muted); }
+.feed-comment-body { margin: 0; color: var(--ot-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.feed-comment-empty { color: var(--ot-muted); }
+.feed-comment-delete {
+  justify-self: start; min-height: 1.9rem; padding: .1rem .55rem; border: 1px solid var(--ot-line);
+  border-radius: 999px; background: transparent; color: var(--ot-muted); font: inherit; font-size: .72rem; cursor: pointer;
+}
+.feed-comment-delete:hover { color: var(--ot-ink); border-color: var(--ot-line-strong); }
+.feed-comment-delete:focus-visible { outline: 2px solid var(--ot-accent); outline-offset: 2px; }
+.feed-comment-note { margin: .1rem 0 0; color: var(--ot-muted); font-size: .74rem; }
+.feed-comment-form { display: grid; gap: .35rem; margin-top: .35rem; }
+.feed-comment-input {
+  width: 100%; min-height: 3.1rem; padding: .4rem .55rem; border: 1px solid var(--ot-line); border-radius: .5rem;
+  background: var(--ot-surface); color: var(--ot-ink); font: inherit; font-size: .8rem; resize: vertical;
+}
+.feed-comment-input:focus-visible { outline: 2px solid var(--ot-accent); outline-offset: 1px; }
+.feed-comment-submit {
+  justify-self: start; min-height: 2rem; padding: .15rem .8rem; border: 1px solid var(--ot-accent);
+  border-radius: 999px; background: var(--ot-accent); color: var(--ot-surface); font: inherit; font-size: .76rem; cursor: pointer;
+}
+.feed-comment-submit:disabled { opacity: .55; cursor: default; }
+.feed-comment-submit:focus-visible { outline: 2px solid var(--ot-accent); outline-offset: 2px; }
+.feed-comments-more {
+  justify-self: start; min-height: 2rem; padding: .15rem .75rem; border: 1px solid var(--ot-line);
+  border-radius: 999px; background: transparent; color: var(--ot-muted); font: inherit; font-size: .74rem; cursor: pointer;
+}
+.feed-comments-more[hidden] { display: none; }
+.feed-comments-more:focus-visible { outline: 2px solid var(--ot-accent); outline-offset: 2px; }
+@media (max-width: 45rem) {
+  .feed-comment-form { gap: .3rem; }
+  .feed-comment-submit { justify-self: stretch; }
+}
 @media (max-width: 65rem) {
   .feed-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   body.app-workspace:not(.chat-open) > main > #main-panel { max-width: none; }

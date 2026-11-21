@@ -154,6 +154,19 @@ function workItem(row) {
     collected: !!row.collected,
     following: !!row.following,
     own_work: !!row.own,
+    comment_count: row.comment_count ?? 0,
+  }
+}
+
+// A comment on a public work: the page renders the author and time, never stored HTML.
+function commentItem(row) {
+  return {
+    id: row?.id ?? '',
+    body: row?.body ?? '',
+    author: usernameOf(row?.author) || row?.author?.display_name || '',
+    created: unix(row?.created_at),
+    own: !!row?.own,
+    deleted: !!row?.deleted,
   }
 }
 
@@ -1166,6 +1179,40 @@ function discoverRoutes(host) {
           else throw new Fault(400, 'invalid', 'Provide like/collect/follow and a boolean enabled')
           const fresh = await bs.get(`/v1/ot/discover/${seg(match[1], 'slug')}`)
           return [200, { likes: fresh.likes ?? 0, collections: fresh.collections ?? 0, liked: !!fresh.liked, collected: !!fresh.collected, following: !!fresh.following }]
+        })
+      },
+    },
+    // Comments on a public work. The page writes through this DS-Bot to Bot Social, so the
+    // thread is shared by every reader and the author is the signed-in owner, not this page.
+    {
+      method: 'GET', path: /^\/v1\/discover\/works\/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])\/comments$/,
+      async handle({ match, query }) {
+        return wrap(async () => {
+          const q = parseQuery(query)
+          const data = await client(host).get(`/v1/ot/works/${seg(match[1], 'slug')}/comments`
+            + qs({ after: q.get('after'), limit: q.get('limit') }))
+          return [200, { items: (data.items || []).map(commentItem), next_after: data.next_after ?? null,
+            comment_count: data.comment_count ?? 0 }]
+        })
+      },
+    },
+    {
+      method: 'POST', path: /^\/v1\/discover\/works\/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])\/comments$/,
+      async handle({ match, body }) {
+        return wrap(async () => {
+          const value = typeof body?.body === 'string' ? body.body : ''
+          if (!value.trim() || value.length > 2000) throw new Fault(400, 'invalid', '评论需要 1–2000 个字符。')
+          const data = await client(host).post(`/v1/ot/works/${seg(match[1], 'slug')}/comments`, { body: value })
+          return [201, { comment: commentItem(data.comment), comment_count: data.comment_count ?? 0 }]
+        })
+      },
+    },
+    {
+      method: 'DELETE', path: /^\/v1\/discover\/works\/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])\/comments\/([A-Za-z0-9_-]{1,64})$/,
+      async handle({ match }) {
+        return wrap(async () => {
+          const data = await client(host).del(`/v1/ot/works/${seg(match[1], 'slug')}/comments/${seg(match[2], 'comment_id')}`)
+          return [200, { deleted: true, comment_count: data.comment_count ?? 0 }]
         })
       },
     },

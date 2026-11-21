@@ -142,6 +142,44 @@ export const FEED_DETAIL_NO_TEXT = '这件作品没有文字摘要，打开原�
 export const FEED_DETAIL_EMPTY = '这件作品还没有内容。';
 export const FEED_DETAIL_OPEN = '打开原作品';
 
+// Comments sit in the same in-place detail: a real thread on the public work, written
+// through this DS-Bot to Bot Social. Nothing here is a local flip — a comment appears
+// only after the write comes back, and a delete only after the delete does.
+export const FEED_COMMENT_TITLE = '评论';
+export const FEED_COMMENT_EMPTY = '还没有评论，来说第一句。';
+export const FEED_COMMENT_SIGNED_OUT = '登录后可以评论。';
+export const FEED_COMMENT_PLACEHOLDER = '写一句评论…';
+export const FEED_COMMENT_SUBMIT = '发表';
+export const FEED_COMMENT_BLANK = '先写点内容再发表。';
+export const FEED_COMMENT_DELETE = '删除';
+export const FEED_COMMENT_DELETED = '这条评论已删除。';
+export const FEED_COMMENT_FAILED = '评论没有保存，请重试。';
+export const FEED_COMMENT_DELETE_FAILED = '删除没有保存，请重试。';
+export const FEED_COMMENT_UNREADABLE = '读不到评论，请重试。';
+export const FEED_COMMENT_MORE = '载入更多评论';
+export const FEED_COMMENT_MAX = 2000;
+export const FEED_COMMENT_PAGE = 20;
+
+export function commentPath(slug) {
+  return '/v1/discover/works/' + encodeURIComponent(String(slug || '')) + '/comments';
+}
+
+export function commentQuery(slug, after = '') {
+  const params = new URLSearchParams({ limit: String(FEED_COMMENT_PAGE) });
+  if (after) params.set('after', String(after));
+  return commentPath(slug) + '?' + params.toString();
+}
+
+export function commentAuthorText(comment) {
+  const author = comment && comment.author;
+  if (!author) return '';
+  return typeof author === 'string' ? author : (author.handle || author.display_name || '');
+}
+
+export function commentCountText(count) {
+  return FEED_COMMENT_TITLE + ' · ' + (Number(count) || 0);
+}
+
 // The detail repeats what the listing already knows plus the bounded, text-only
 // preview the public work page exposes. No body is read and stored HTML is
 // never interpreted: thumbModel normalises it and every line goes through
@@ -546,6 +584,134 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     cachedPreview(item).then(result => attachFeedThumb(document, cover, result.preview)).catch(() => {});
   }
 
+  // One work's thread. The count comes from the listing, the rows from the thread read;
+  // a refused write leaves the draft in the box instead of pretending it saved.
+  function commentSection(item) {
+    const section = document.createElement('section');
+    section.className = 'feed-comments';
+    const heading = document.createElement('h4');
+    heading.className = 'feed-comments-title';
+    let count = Number(item.comment_count) || 0;
+    const setCount = value => { count = Number(value) || 0; heading.textContent = commentCountText(count); };
+    heading.textContent = commentCountText(count);
+    const list = document.createElement('ul');
+    list.className = 'feed-comments-list';
+    const note = document.createElement('p');
+    note.className = 'feed-comment-note';
+    note.hidden = true;
+    section.append(heading, list, note);
+    if (!currentUser) {
+      note.hidden = false;
+      note.textContent = FEED_COMMENT_SIGNED_OUT;
+      return section;
+    }
+    const path = commentPath(item.slug);
+    let cursor = '';
+    let loading = false;
+    const showNote = text => { note.hidden = false; note.textContent = text; };
+    const clearNote = () => { note.hidden = true; note.textContent = ''; };
+
+    const addRow = comment => {
+      const row = document.createElement('li');
+      row.className = 'feed-comment';
+      const who = document.createElement('p');
+      who.className = 'feed-comment-author';
+      who.textContent = [commentAuthorText(comment), formatFeedTime(comment.created)].filter(Boolean).join(' · ');
+      const text = document.createElement('p');
+      text.className = 'feed-comment-body';
+      text.textContent = comment.deleted ? FEED_COMMENT_DELETED : String(comment.body || '');
+      row.append(who, text);
+      if (comment.own && !comment.deleted) {
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'feed-comment-delete';
+        remove.textContent = FEED_COMMENT_DELETE;
+        remove.addEventListener('click', async () => {
+          remove.disabled = true;
+          let result;
+          try { result = await request('DELETE', path + '/' + encodeURIComponent(comment.id)); }
+          catch { result = { status: 0, body: {} }; }
+          if (result.status !== 200) {
+            remove.disabled = false;
+            showNote(FEED_COMMENT_DELETE_FAILED);
+            return;
+          }
+          comment.deleted = true;
+          comment.body = '';
+          text.textContent = FEED_COMMENT_DELETED;
+          remove.hidden = true;
+          clearNote();
+          setCount(result.body && result.body.comment_count != null ? result.body.comment_count : Math.max(0, count - 1));
+        });
+        row.append(remove);
+      }
+      list.append(row);
+      return row;
+    };
+
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'feed-comments-more';
+    more.textContent = FEED_COMMENT_MORE;
+    more.hidden = true;
+
+    async function load(after = '') {
+      if (loading) return;
+      loading = true;
+      more.disabled = true;
+      let result;
+      try { result = await request('GET', commentQuery(item.slug, after)); }
+      catch { result = { status: 0, body: {} }; }
+      loading = false;
+      more.disabled = false;
+      if (result.status !== 200) { showNote(FEED_COMMENT_UNREADABLE); return; }
+      for (const comment of result.body.items || []) addRow(comment);
+      cursor = result.body.next_after == null ? '' : String(result.body.next_after);
+      more.hidden = !cursor;
+      if (result.body.comment_count != null) setCount(result.body.comment_count);
+      if (!list.childElementCount) {
+        const empty = document.createElement('li');
+        empty.className = 'feed-comment-empty';
+        empty.textContent = FEED_COMMENT_EMPTY;
+        list.append(empty);
+      }
+    }
+
+    const form = document.createElement('form');
+    form.className = 'feed-comment-form';
+    const input = document.createElement('textarea');
+    input.className = 'feed-comment-input';
+    input.rows = 2;
+    input.maxLength = FEED_COMMENT_MAX;
+    input.placeholder = FEED_COMMENT_PLACEHOLDER;
+    input.setAttribute('aria-label', FEED_COMMENT_PLACEHOLDER);
+    const submit = document.createElement('button');
+    submit.type = 'submit';
+    submit.className = 'feed-comment-submit';
+    submit.textContent = FEED_COMMENT_SUBMIT;
+    form.append(input, submit);
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      const draft = String(input.value || '').trim();
+      if (!draft) { showNote(FEED_COMMENT_BLANK); return; }
+      submit.disabled = true;
+      let result;
+      try { result = await request('POST', path, { body: draft }); }
+      catch { result = { status: 0, body: {} }; }
+      submit.disabled = false;
+      if (result.status !== 201 && result.status !== 200) { showNote(FEED_COMMENT_FAILED); return; }
+      input.value = '';
+      clearNote();
+      if (result.body && result.body.comment) addRow(result.body.comment);
+      if (result.body && result.body.comment_count != null) setCount(result.body.comment_count);
+      else setCount(count + 1);
+    });
+    section.append(form, more);
+    more.addEventListener('click', () => { void load(cursor); });
+    void load();
+    return section;
+  }
+
   // The detail is opened in place: the card keeps its own link to the work
   // page, and reading the summary never reloads the feed or the page.
   function attachFeedDetail(entry, item) {
@@ -581,7 +747,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       link.className = 'feed-detail-open';
       link.href = item.path || ('/w/' + (item.slug || ''));
       link.textContent = FEED_DETAIL_OPEN;
-      panel.append(meta, summary, link);
+      panel.append(meta, summary, link, commentSection(item));
       if (!feedPreviewPath(item)) {
         summary.textContent = FEED_DETAIL_NO_TEXT;
         return;

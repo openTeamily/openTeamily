@@ -80,6 +80,7 @@ MOVED_APIS = (
     (re.compile(r'^/v1/discover/agents/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]/start$'), 'discover'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts/[0-9a-f]{32}/discover(?:/revoke)?$'), 'discover'),
     (re.compile(r'^/v1/discover/works/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]/engagement$'), 'discover'),
+    (re.compile(r'^/v1/discover/works/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]/comments(?:/[A-Za-z0-9_-]{1,64})?$'), 'discover'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/discover(?:/revoke)?$'), 'discover'),
     (re.compile(r'^/v1/(?:automation-templates|onboarding/automations)$'), 'automations'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/automations(?:/(?:tick|[0-9a-f]{32}))?$'), 'automations'),
