@@ -96,7 +96,43 @@ CREATE TABLE IF NOT EXISTS artifact_chat_sources (
 CREATE TABLE artifact_spreadsheets (
   artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
   workbook TEXT NOT NULL);
+`, `
+-- Artifact annotation threads (retried from the retired openteamily/annotations.py).
+-- The artifact row is the parent: threads and comments are dropped with the
+-- artifact, and the workspace column keeps every query scoped to one workspace.
+CREATE TABLE IF NOT EXISTS annotation_threads (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+  artifact_revision INTEGER NOT NULL CHECK(artifact_revision >= 0),
+  anchor TEXT,
+  resolved INTEGER NOT NULL DEFAULT 0 CHECK(resolved IN (0,1)),
+  created_by TEXT NOT NULL,
+  created INTEGER NOT NULL,
+  updated INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS annotation_thread_artifact
+  ON annotation_threads(workspace_id, artifact_id, id);
+CREATE INDEX IF NOT EXISTS annotation_thread_open
+  ON annotation_threads(workspace_id, artifact_id, resolved, id);
+CREATE INDEX IF NOT EXISTS annotation_thread_revision
+  ON annotation_threads(workspace_id, artifact_id, artifact_revision, id);
+CREATE TABLE IF NOT EXISTS annotation_comments (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES annotation_threads(id) ON DELETE CASCADE,
+  workspace_id TEXT NOT NULL,
+  author_id TEXT NOT NULL,
+  body TEXT NOT NULL,
+  mentions TEXT NOT NULL,
+  created INTEGER NOT NULL,
+  updated INTEGER NOT NULL,
+  deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1)));
+CREATE INDEX IF NOT EXISTS annotation_comment_thread
+  ON annotation_comments(workspace_id, thread_id, deleted, id);
 `]
+
+// annotation_threads/annotation_comments have no legacy rows to import: the
+// retired module created its tables itself and nothing in app.py or store.py
+// ever called ensure_schema, so a legacy export cannot contain them.
 
 export const IMPORT_TABLES = {
   ot_users: ['id', 'username', 'is_owner'],

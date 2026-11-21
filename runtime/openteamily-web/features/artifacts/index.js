@@ -12,6 +12,7 @@ import { importMedia } from './media.js'
 import { emptyBoard, publicKind } from './model.js'
 import { exportOffice } from './office.js'
 import { decodeStructured } from './structured.js'
+import { annotationEndpoints } from './annotations.js'
 
 export { PER_WORKSPACE }
 
@@ -26,6 +27,9 @@ export default defineFeature({
   endpoints: (context) => {
     const ctx = { ...context, featureDir: context.host.featureDir() }
     return {
+    // Threaded annotations live in this feature because the artifact row (and
+    // its revision) is their parent; see annotations.js for the endpoint table.
+    ...annotationEndpoints(ctx),
     async create(payload) {
       const input = payload ?? {}
       const result = createArtifact(ctx, input.workspace_id, input, input.idempotency_key)
