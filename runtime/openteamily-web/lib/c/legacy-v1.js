@@ -82,6 +82,14 @@ function requestItem(row, workspaceId) {
   }
 }
 
+// #358: where the viewer's stored read cursor sits in this page. seq 0 means
+// nothing was ever read, and a fully read conversation has no boundary; in both
+// cases the page draws no line. bot-social already returns both numbers.
+function firstUnreadSeq(page) {
+  const read = Number(page?.read_seq), last = Number(page?.last_seq)
+  return Number.isSafeInteger(read) && Number.isSafeInteger(last) && read > 0 && read < last ? read + 1 : null
+}
+
 function conversationItem(row, me, env, workspaceId) {
   const members = (row.members || []).map((m) => ({
     ...memberItem({ ...m, role: m.role || 'member' }, me, env),
@@ -656,6 +664,7 @@ function messengerRoutes(host, wakeReplies) {
             items: (page.messages || []).map((m) => messageItem({ ...m, conversation_id: conv.id }, me, env, match[1])),
             agent_replies: [],
             pinned_messages: page.pinned_messages || [],
+            first_unread_seq: firstUnreadSeq(page),
             cursor: page.next_before ?? null,
           }]
         })
@@ -675,6 +684,7 @@ function messengerRoutes(host, wakeReplies) {
           }))
           return [200, {
             items: (page.messages || []).map(m => messageItem({ ...m, conversation_id: match[2] }, me, env, match[1])),
+            first_unread_seq: firstUnreadSeq(page),
             cursor: page.next_before ?? null, has_newer: page.has_newer === true,
           }]
         })

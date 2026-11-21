@@ -272,6 +272,30 @@ body.app-workspace > #status[data-announce-only="true"] {
 #message-list .pending { color: var(--ot-muted); }
 #message-list .failed { color: var(--ot-danger); }
 
+/* #358: the line above the first message this reader has not seen yet. It is a
+   row of the same list, so it scrolls with the messages and never covers one. */
+#message-list li.unread-divider {
+  align-self: stretch;
+  max-width: none;
+  padding: 0.15rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--ot-accent);
+  font-size: 0.8rem;
+  font-weight: 650;
+  text-align: center;
+}
+
+#message-list li.unread-divider::before,
+#message-list li.unread-divider::after {
+  content: '';
+  display: inline-block;
+  width: 2.5rem;
+  margin: 0 0.5rem;
+  vertical-align: middle;
+  border-top: 1px solid currentColor;
+}
+
 #chat-form {
   display: block;
   margin: 0;

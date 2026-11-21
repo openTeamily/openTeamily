@@ -12,6 +12,33 @@ import { mountPublicDraft } from './public-draft.mjs';
 import { publicAgentIntentFromHash, publicAgentContinuation } from '../shell/public-agent-link.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
+
+// The line drawn above the first message this reader has not seen yet. The
+// server names that message from the stored read cursor, so the line survives a
+// refresh and matches what the sidebar badge counted.
+export function unreadDividerText(count) {
+  const unread = Number(count) || 0;
+  return unread > 0 ? '以下是新消息 · ' + unread + ' 条' : '以下是新消息';
+}
+
+// Insert the divider right above the boundary row, and drop any divider left
+// from the previous paint so a repaint never stacks a second line. A boundary
+// outside the loaded window draws nothing rather than a line in the wrong place.
+export function renderUnreadDivider(document, list, boundary) {
+  for (const node of Array.from(list.children || [])) {
+    if (node && node.className === 'unread-divider') list.removeChild(node);
+  }
+  const wanted = String((boundary && boundary.messageId) || '');
+  if (!wanted) return null;
+  const anchor = (list.children || []).find(node => node && node.dataset && node.dataset.messageId === wanted);
+  if (!anchor) return null;
+  const divider = document.createElement('li');
+  divider.className = 'unread-divider';
+  divider.setAttribute('role', 'separator');
+  divider.textContent = unreadDividerText(boundary.count);
+  list.insertBefore(divider, anchor);
+  return divider;
+}
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
 import { conversationLabel, memberChoices, validMessage } from '../messenger/app.mjs';
 import { createLookAvatar } from '../look/app.mjs';
@@ -716,6 +743,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const servedByDsbot = dsbotServed(document);
   let personalLook = null;
   let currentConversation = null;
+  // The unread boundary snapshot taken when this conversation was opened: the
+  // stored read cursor names the first message this reader has not seen. It
+  // stays for as long as the conversation is open, so a background repaint
+  // keeps the line instead of blinking it away.
+  let unreadBoundary = null;
   const messageUtilities = mountMessageUtilities(document, {request, notify: show, composerContext: () => currentConversation ? {wid: workspaceId(), cid: currentConversation.id, source: currentSource} : null, context: () => currentSource === 'social' && currentConversation && !currentConversation.public_agent ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null});
   let currentSource = 'agent';
   const autoTranslation = mountGroupTranslation(document,{request});
@@ -2026,7 +2058,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return block;
   }
 
-  function renderSocialMessages(items, {keepScroll = Boolean(socialHistory?.readingHistory), refresh = false} = {}) {
+  function renderSocialMessages(items, {keepScroll = Boolean(socialHistory?.readingHistory), refresh = false, landOnUnread = false} = {}) {
     const translateRoom = currentConversation?.kind === 'group' || (currentConversation?.kind === 'dm' && chatPreferences.auto_translate === true);
     autoTranslation.open(servedByDsbot && currentUser && translateRoom && !currentConversation?.public_agent
       ? {user:currentUser.id,wid:workspaceId(),cid:currentConversation.id}
@@ -2192,7 +2224,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     renderPendingSend();
     attachmentSender?.render();
-    if (keepScroll) scroller.scrollTop = Math.max(0, oldTop + scroller.scrollHeight - oldHeight);
+    const boundary = unreadBoundary && currentConversation && unreadBoundary.conversationId === currentConversation.id
+      ? unreadBoundary : null;
+    const divider = renderUnreadDivider(document, list, boundary);
+    if (divider && landOnUnread) {
+      // Land on the first new message instead of the newest one, so a reader
+      // coming back to three unread replies starts where they left off.
+      divider.scrollIntoView?.({block: 'start'});
+    } else if (keepScroll) scroller.scrollTop = Math.max(0, oldTop + scroller.scrollHeight - oldHeight);
     else scroller.scrollTop = refresh && !wasAtLatest ? oldTop : scroller.scrollHeight;
     return false;
   }
@@ -2866,9 +2905,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       scheduleSocialPoll(updated);
       return true;
     }
-    if (!currentConversation || currentConversation.id !== updated.id) {
+    const entering = !currentConversation || currentConversation.id !== updated.id;
+    if (entering) {
       const panel = document.getElementById('conversation-search-panel'); if (panel) panel.hidden = true;
       const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
+      // Take the boundary from the snapshot this open was served from, before
+      // acknowledging it: the line then describes what the reader had not seen.
+      const firstUnreadSeq = Number(result.body.first_unread_seq);
+      const firstUnread = Number.isSafeInteger(firstUnreadSeq) && firstUnreadSeq > 0
+        ? (result.body.items || []).find(item => item && item.seq === firstUnreadSeq) : null;
+      unreadBoundary = firstUnread
+        ? {conversationId, messageId: firstUnread.id, count: updated.unread_count || 0} : null;
     }
     currentConversation = updated;
     publicDraft.enter(sendScope(), Boolean(updated.public_agent));
@@ -2901,7 +2948,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     setChatSubtitle(publicChat ? '公开智能体 · 发布者可查看此对话'
       : currentConversation.kind === 'group' ? groupInfoCounts(currentConversation).text
         : '单聊 · ' + ((currentConversation.members || []).length) + ' 人');
-    renderSocialMessages(result.body.items, {refresh});
+    renderSocialMessages(result.body.items, {refresh, landOnUnread: entering});
     renderGroupReplyAction(result.body.agent_replies || []);
     // Acknowledge only the last message actually rendered, not messages that
     // arrived after this snapshot, and never consume unread in a hidden tab.

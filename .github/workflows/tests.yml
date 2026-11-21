@@ -33,6 +33,7 @@ jobs:
       - run: node --test tests/chat_dsbot.test.mjs
       - run: node --test tests/dsbot_skills.test.mjs
       - run: node --test tests/chat_reminder.test.mjs
+      - run: node --test tests/chat_unread_divider.test.mjs
       - run: node --test tests/ci_test_list.test.mjs
       - run: node --test tests/guide_page.test.mjs
       - run: node --test tests/members_page.test.mjs
