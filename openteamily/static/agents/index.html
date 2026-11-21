@@ -109,6 +109,7 @@
     </div>
     <section id="list-panel">
       <p id="agents-count" class="directory-count" role="status" aria-live="polite"></p>
+      <p id="agent-status-note" class="note">卡片上的状态来自绑定容器的服务端心跳：在线＝已绑定的容器正在心跳，离线＝绑了容器但最近没有心跳，容器不可用＝实例当前不可用，未连运行时＝没有绑定容器（对话会回退到成员自己已连接的机器）。这份状态不是从最近回复时间推断的；读不到时显示「状态未知」。</p>
       <ul id="agent-list" class="card-grid"></ul>
       <p id="agents-empty" class="note" hidden>这个工作区还没有智能体。</p>
     </section>

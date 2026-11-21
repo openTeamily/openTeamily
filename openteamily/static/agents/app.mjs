@@ -138,6 +138,56 @@ export function statusLabel(message) {
   return message.body || '';
 }
 
+// The runtime badge is a server reading, not an inference: GET
+// /v1/workspaces/<ws>/agents/<id>/runtime answers {runtime: null} for an unbound
+// agent, otherwise a binding whose `status` comes from binding_status() in
+// openteamily/app.py — online (the bound container is heartbeating), offline
+// (bound, no recent heartbeat) or unavailable (the instance is gone). Nothing
+// here looks at reply times, so the labels say 在线/离线 and the tooltip names
+// the source; a failed read stays 状态未知 instead of pretending to be offline.
+export function agentStatusBadge(runtime) {
+  if (runtime === null) {
+    return {
+      key: 'unbound',
+      label: '未连运行时',
+      title: '没有绑定容器；对话会回退到成员自己已连接的机器。',
+    };
+  }
+  if (!runtime || typeof runtime !== 'object') {
+    return {
+      key: 'unknown',
+      label: '状态未知',
+      title: '读不到运行时状态；这不代表离线。',
+    };
+  }
+  if (runtime.status === 'online') {
+    return {
+      key: 'online',
+      label: '在线',
+      title: '已绑定的容器正在心跳（服务端状态），可以对话。',
+    };
+  }
+  if (runtime.status === 'offline') {
+    return {
+      key: 'offline',
+      label: '离线',
+      title: '已绑定容器，但最近没有心跳（服务端状态）；消息会等待容器。',
+    };
+  }
+  if (runtime.status === 'unavailable') {
+    return {
+      key: 'unavailable',
+      label: '容器不可用',
+      title: '绑定的容器实例当前不可用（服务端状态）。',
+    };
+  }
+  return {
+    key: 'unknown',
+    label: '状态未知',
+    title: '读不到运行时状态；这不代表离线。',
+  };
+}
+
 // The template endpoint reports a handful of known refusals; keep those in the
 // page's language and leave anything else in the server's own words.
 export function teamTemplateFailure(status, body) {
@@ -393,6 +443,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   let directoryAgents = [];
+  // agent id -> agentStatusBadge(...) read from the server's /runtime answer.
+  let runtimeStatuses = new Map();
 
   function matchesDirectoryQuery(item, query) {
     if (!query) return true;
@@ -439,11 +491,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         tag.textContent = categoryLabel(item.category);
         copy.append(tag);
       }
+      // Server-derived runtime state for this card (see agentStatusBadge):
+      // per-agent GET .../runtime, never a guess from message times.
       const chat = document.createElement('a');
       chat.className = 'chat-cta';
       chat.href = '/chat#workspace=' + encodeURIComponent(id) + '&agent=' + encodeURIComponent(item.id);
       chat.textContent = '聊天';
-      li.append(avatar, copy, chat);
+      const badge = runtimeStatuses.get(item.id) || agentStatusBadge(undefined);
+      const state = document.createElement('span');
+      state.className = 'category-tag agent-status';
+      state.dataset.status = badge.key;
+      state.textContent = badge.label;
+      state.title = badge.title;
+      state.setAttribute('aria-label', '运行时状态：' + badge.label + '。' + badge.title);
+      li.append(avatar, copy, chat, state);
       list.append(li);
     }
     if (empty) {
@@ -513,6 +574,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     directoryAgents = listed.body.items || [];
     directoryLoaded = true;
+    // One GET per agent: the list endpoint carries no runtime field, and this
+    // page already fans out per-agent requests for other panels. A failed read
+    // becomes 状态未知 rather than a guessed 离线.
+    runtimeStatuses = new Map();
+    const reads = directoryAgents.map(async item => {
+      let badge;
+      try {
+        const answer = await request('GET', `/v1/workspaces/${id}/agents/${item.id}/runtime`);
+        badge = answer.status === 200 ? agentStatusBadge(answer.body.runtime) : agentStatusBadge(undefined);
+      } catch {
+        badge = agentStatusBadge(undefined);
+      }
+      runtimeStatuses.set(item.id, badge);
+    });
+    await Promise.all(reads);
     fillCreatorOptions(creatorFilter, directoryAgents, memberNames, document);
     selectedCreator = creatorFilter ? creatorFilter.value : '';
     renderDirectory();
