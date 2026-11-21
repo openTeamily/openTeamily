@@ -137,6 +137,10 @@ class Client:
             raise ComposioError('composio_not_found', 'Composio did not find that item', status)
         if status == 429:
             raise ComposioError('composio_rate_limited', 'Composio rate limit reached; try later', status)
+        if status == 409:
+            raise ComposioError('composio_conflict', 'Composio already has an account for this toolkit', status)
+        if status >= 500:
+            raise ComposioError('composio_upstream', 'Composio server error; try later', status)
         if status not in allow:
             raise ComposioError('composio_failed', 'Composio request failed', status)
         if not raw:

@@ -181,7 +181,19 @@ class ComposioTests(unittest.TestCase):
         self.assertNotIn(ALICE_KEY, json.dumps(rejected))
         self.fake.fail = (500, b'oops')
         failed = self.connect(self.alice)
-        self.assertEqual(failed['body']['error']['code'], 'composio_failed')
+        self.assertEqual(failed['status'], 502)
+        self.assertEqual(failed['body']['error']['code'], 'composio_upstream')
+        # A 502 from the gateway is the same class as any upstream 5xx: it is
+        # the other side being down, not a bad key and not "not configured".
+        self.fake.fail = (502, b'bad gateway')
+        gateway = self.connect(self.alice)
+        self.assertEqual(gateway['status'], 502)
+        self.assertEqual(gateway['body']['error']['code'], 'composio_upstream')
+        # 409 means this toolkit already has an account upstream: the copy has
+        # to say "already connected", not "request failed".
+        self.fake.fail = (409, b'{"error":{"message":"account already exists"}}')
+        conflict = self.connect(self.alice)
+        self.assertEqual(conflict['body']['error']['code'], 'composio_conflict')
         self.fake.fail = (201, b'{"session_id":"trs_1","redirect_url":"http://evil.example"}')
         bad_link = self.connect(self.alice)
         self.assertEqual(bad_link['status'], 502)

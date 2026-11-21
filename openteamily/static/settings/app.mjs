@@ -305,7 +305,9 @@ const COMPOSIO_ERRORS = {
   composio_not_configured: '未配置 Composio：先填入你自己的 Composio API key。',
   composio_key_rejected: 'Composio 拒绝了这个 API key，请检查后重新保存。',
   composio_unreachable: '暂时连不上 Composio，请稍后再试。',
-  composio_rate_limited: 'Composio 请求太频繁，请稍后再试。',
+  composio_rate_limited: 'Composio 说请求太频繁（429），等一分钟再试；不是你 key 的问题。',
+  composio_conflict: '这个应用在你的 Composio 项目里已经有一个连接了：先去那边断开旧的，再回来重试。',
+  composio_upstream: '连不上 Composio：对方服务端返回 5xx（不是你 key 的问题），过一会儿再试。',
   composio_not_found: 'Composio 里找不到这个连接。',
   composio_failed: 'Composio 请求失败。',
 };

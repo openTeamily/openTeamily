@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { applyComposioRows, applyConnectorSearch, applySettingsView, composioRowState, pickConnection, CONNECTOR_CATALOG, csrfCookie, describeAppearance, diff, filterConnectorCatalog, mount, newlineBinding, privacyChanges, readForm, settingsViewFromLocation, syncAppearanceExtras, syncMcpDialog, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
+import { applyComposioRows, applyConnectorSearch, composioMessage, applySettingsView, composioRowState, pickConnection, CONNECTOR_CATALOG, csrfCookie, describeAppearance, diff, filterConnectorCatalog, mount, newlineBinding, privacyChanges, readForm, settingsViewFromLocation, syncAppearanceExtras, syncMcpDialog, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -809,4 +809,18 @@ test('connected-tool approvals do not imply a connected account before key setup
   assert.match(source, /允许此调用一次/);
   assert.match(source, /decision/);
   assert.doesNotMatch(source, /innerHTML/);
+});
+
+test('composio failure copy separates conflict, rate limit and upstream 5xx', () => {
+  const conflict = composioMessage({code: 'composio_conflict'}, 'fallback');
+  const limited = composioMessage({code: 'composio_rate_limited'}, 'fallback');
+  const upstream = composioMessage({code: 'composio_upstream'}, 'fallback');
+  assert.equal(new Set([conflict, limited, upstream]).size, 3);
+  for (const text of [conflict, limited, upstream]) {
+    assert.doesNotMatch(text, /未配置/);
+    assert.notEqual(text, "fallback");
+  }
+  assert.match(conflict, /已经有一个连接/);
+  assert.match(limited, /频繁/);
+  assert.match(upstream, /5xx/);
 });
