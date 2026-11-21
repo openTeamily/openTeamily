@@ -62,6 +62,36 @@ export function inviteSummary(invite) {
   return [role, day ? '有效期至 ' + day : '', '最多使用 ' + uses + ' 次'].filter(Boolean).join(' · ');
 }
 
+const BATCH_LIMIT = 10;
+const INVITE_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// One address per line; blank lines and repeats are dropped, and anything past
+// the per-click limit is reported instead of silently disappearing.
+export function parseInviteLines(text) {
+  const seen = new Set();
+  const entries = [];
+  let overflow = 0;
+  for (const raw of String(text || '').split('\n')) {
+    const email = raw.trim();
+    if (!email) continue;
+    const key = email.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (entries.length >= BATCH_LIMIT) { overflow += 1; continue; }
+    entries.push({email, valid: email.length <= 254 && INVITE_EMAIL.test(email)});
+  }
+  return {entries, overflow};
+}
+
+// Known rejections get the page's language; anything else keeps the server's own
+// words rather than inventing a cause.
+export function inviteFailureText(status, body) {
+  const message = body && body.error && body.error.message ? String(body.error.message) : '';
+  if (/Admins can only invite members/i.test(message)) return '管理员身份只能邀请成员。';
+  if (/Invite capacity reached/i.test(message)) return '邀请名额已满，先撤销一条旧邀请或提高配额。';
+  return message || '服务端拒绝了这条邀请。';
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
@@ -325,6 +355,73 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   document.getElementById('invite-skip').addEventListener('click', () => createAndInvite(false));
+
+  function batchInviteValues() {
+    const role = document.getElementById('batch-role');
+    const expiry = document.getElementById('batch-expiry');
+    const expires = Number(expiry ? expiry.value : 0);
+    return {
+      role: role && role.value === 'admin' ? 'admin' : 'member',
+      expires_in: INVITE_EXPIRY.includes(expires) ? expires : 604800,
+    };
+  }
+
+  document.getElementById('batch-invite').addEventListener('click', async () => {
+    const button = document.getElementById('batch-invite');
+    const list = document.getElementById('batch-results');
+    const summary = document.getElementById('batch-summary');
+    const source = document.getElementById('batch-emails');
+    const {entries, overflow} = parseInviteLines(source ? source.value : '');
+    if (!entries.length) {
+      show('error', '请先每行填一个邮箱。');
+      return;
+    }
+    if (!created) {
+      show('error', '请先创建团队，再批量邀请。');
+      return;
+    }
+    if (busy) return;
+    busy = true;
+    button.disabled = true;
+    button.textContent = '正在逐个生成…';
+    list.textContent = '';
+    const values = batchInviteValues();
+    let generated = 0;
+    let failed = 0;
+    try {
+      for (const entry of entries) {
+        const row = document.createElement('li');
+        row.dataset.email = entry.email;
+        if (!entry.valid) {
+          row.dataset.state = 'failed';
+          row.textContent = entry.email + ' · 邮箱格式不对，没有发给服务端。';
+          failed += 1;
+          list.appendChild(row);
+          continue;
+        }
+        const result = await request('POST', '/v1/workspaces/' + created.id + '/invites', values);
+        if (result.status === 201 && result.body.token) {
+          row.dataset.state = 'ok';
+          row.textContent = entry.email + ' · 邀请已生成，令牌 ' + result.body.token + '（只显示这一次）';
+          generated += 1;
+        } else {
+          row.dataset.state = 'failed';
+          row.textContent = entry.email + ' · ' + inviteFailureText(result.status, result.body);
+          failed += 1;
+        }
+        list.appendChild(row);
+      }
+      const parts = ['共 ' + entries.length + ' 行：' + generated + ' 条邀请已生成，' + failed + ' 行失败。'];
+      if (overflow) parts.push('另有 ' + overflow + ' 行超过一次 10 行的上限，没有发出，请分批再邀请。');
+      parts.push('令牌只显示这一次，请复制给对应的人。');
+      summary.textContent = parts.join('');
+      show(failed ? 'error' : 'ok', failed ? '有 ' + failed + ' 行没有生成邀请，原因见列表。' : '批量邀请完成。');
+    } finally {
+      busy = false;
+      button.disabled = false;
+      button.textContent = '逐个生成邀请';
+    }
+  });
 
   document.getElementById('copy-invite').addEventListener('click', async () => {
     const token = document.getElementById('invite-token').textContent;

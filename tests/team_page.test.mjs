@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import test from 'node:test';
-import {mount, readWizard, step1Ready, validName, validSlug} from '../openteamily/static/team/app.mjs';
+import {inviteFailureText, mount, parseInviteLines, readWizard, step1Ready, validName, validSlug} from '../openteamily/static/team/app.mjs';
 
 test('validName and validSlug match the contrast rules', () => {
   assert.equal(validName('团队'), true);
@@ -175,8 +175,9 @@ function fakeTeamDocument(html) {
 
 function jsonResponse(status, body) { return {status, json: async () => body}; }
 
-function teamFetcher({inviteStatus = 201} = {}) {
+function teamFetcher({inviteStatus = 201, failInviteAt = 0} = {}) {
   const requests = [];
+  let inviteCalls = 0;
   const fetcher = async (path, options = {}) => {
     const method = options.method || 'GET';
     requests.push({method, path, body: options.body ? JSON.parse(options.body) : undefined});
@@ -189,6 +190,8 @@ function teamFetcher({inviteStatus = 201} = {}) {
       return jsonResponse(201, {workspace: {id: 'wsnew', name: 'Desk Team', slug: 'desk-team', kind: 'team'}});
     }
     if (path === '/v1/workspaces/wsnew/invites' && method === 'POST') {
+      inviteCalls += 1;
+      if (failInviteAt && inviteCalls === failInviteAt) return jsonResponse(429, {error: {code: 'quota', message: 'Invite capacity reached'}});
       if (inviteStatus !== 201) return jsonResponse(inviteStatus, {error: {code: 'quota', message: 'Invite capacity reached'}});
       return jsonResponse(201, {
         invite: {
@@ -226,7 +229,8 @@ test('the wizard ships a real invite step and an honest placeholder for step 3',
   assert.match(teamHtml, /id="submit"[^>]*>[^<]*邀请/, 'the step 2 submit must say it also invites');
   assert.match(teamHtml, /id="invite-expiry"[\s\S]*?value="604800"/, 'the seven-day expiry must be offered');
   assert.doesNotMatch(teamHtml, /第 2 步和第 3 步还没有截图/, 'the page must stop claiming step 2 was never opened');
-  assert.match(teamHtml, /id="step-3"[\s\S]*?还没有对照/, 'step 3 must stay an honest placeholder');
+  assert.match(teamHtml, /id="step-3"[\s\S]*?服务器不发送邮件/, 'step 3 must say what the batch invite does not do');
+  assert.doesNotMatch(teamHtml, /还没有对照过 Teamily/, 'step 3 must no longer be a bare placeholder');
 });
 
 test('step one advances to the invite step without touching the server', async () => {
@@ -515,4 +519,48 @@ test('creating a team posts once with an idempotency key and lands on step 3', a
     assert.equal(elements.get('step-3').hidden, false);
     assert.equal(elements.get('step-2').hidden, true);
   });
+});
+
+test('the batch invite parser trims, drops duplicates and caps ten lines', () => {
+  const {entries, overflow} = parseInviteLines(' a@x.com \n\nA@X.com\nb@x.com\nnot-a-mail\nc@x.com\nd@x.com\ne@x.com\nf@x.com\ng@x.com\nh@x.com\ni@x.com\nj@x.com\nk@x.com\nl@x.com');
+  assert.deepEqual(entries.map((entry) => entry.email),
+    ['a@x.com', 'b@x.com', 'not-a-mail', 'c@x.com', 'd@x.com', 'e@x.com', 'f@x.com', 'g@x.com', 'h@x.com', 'i@x.com']);
+  assert.equal(overflow, 3, '超过十行的部分要报出来，不能静默丢掉');
+  assert.deepEqual(entries.filter((entry) => !entry.valid).map((entry) => entry.email), ['not-a-mail']);
+});
+
+test('a rejected batch line shows the server reason in the page language', () => {
+  assert.equal(inviteFailureText(403, {error: {message: 'Admins can only invite members'}}), '管理员身份只能邀请成员。');
+  assert.equal(inviteFailureText(429, {error: {message: 'Invite capacity reached'}}), '邀请名额已满，先撤销一条旧邀请或提高配额。');
+  assert.equal(inviteFailureText(500, {error: {message: 'boom'}}), 'boom');
+  assert.equal(inviteFailureText(500, {}), '服务端拒绝了这条邀请。');
+});
+
+test('step 3 explains the team roles and invites every address on its own line', async () => {
+  const {doc, el, requests} = await mountWizard({name: 'Desk Team', slug: 'desk-team'});
+  await el('invite-skip').dispatch('click');
+  assert.equal(el('step-3').hidden, false, '跳过后要进第 3 步');
+  assert.match(teamHtml, /id="step-3"[\s\S]*?管理员能管理成员和邀请/, '第 3 步要写清团队内的角色');
+  el('batch-emails').value = 'a@x.com\nb@x.com';
+  await el('batch-invite').dispatch('click');
+  const posts = requests.filter((item) => item.method === 'POST' && item.path === '/v1/workspaces/wsnew/invites');
+  assert.equal(posts.length, 2, '每行都要真的调用一次邀请端点');
+  assert.deepEqual(posts.map((item) => item.body.role), ['member', 'member']);
+  const rows = el('batch-results').children;
+  assert.equal(rows.length, 2, '每行一个结果');
+  assert.match(rows[0].textContent, /a@x\.com/);
+  assert.ok(rows[0].textContent.includes(TEAM_TOKEN), '成功的行要给出只显示一次的令牌');
+  assert.match(el('batch-summary').textContent, /2 行/);
+});
+
+test('a failed batch line keeps going and reports the reason for that line', async () => {
+  const {doc, el, requests} = await mountWizard({name: 'Desk Team', slug: 'desk-team'}, {failInviteAt: 2});
+  await el('invite-skip').dispatch('click');
+  el('batch-emails').value = 'a@x.com\nb@x.com';
+  await el('batch-invite').dispatch('click');
+  const rows = el('batch-results').children;
+  assert.equal(rows.length, 2);
+  assert.match(rows[1].textContent, /邀请名额已满/, '失败的行要给服务端原因');
+  assert.match(el('batch-summary').textContent, /1 行失败|1 条失败/);
+  assert.equal(requests.filter((item) => item.method === 'POST' && item.path === '/v1/workspaces/wsnew/invites').length, 2);
 });

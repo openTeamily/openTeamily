@@ -250,3 +250,58 @@ body.app-workspace #main-panel {
 #convert-workspace-field[hidden] {
   display: none;
 }
+
+.wizard-field textarea,
+.wizard-field select {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-weight: 400;
+  padding: .7rem .85rem;
+  border: 1px solid var(--ot-line-strong);
+  border-radius: .85rem;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+}
+
+.wizard-field textarea {
+  min-height: 6.5rem;
+  resize: vertical;
+}
+
+.wizard-field textarea:focus,
+.wizard-field select:focus {
+  outline: 2px solid var(--ot-focus);
+  outline-offset: 1px;
+}
+
+#batch-invite {
+  margin-bottom: 1rem;
+}
+
+.batch-results {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: grid;
+  gap: .5rem;
+}
+
+.batch-results li {
+  padding: .55rem .7rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .75rem;
+  background: var(--ot-surface-2);
+  font-size: .8125rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.batch-results li[data-state="ok"] {
+  border-color: var(--ot-line-strong);
+}
+
+.batch-results li[data-state="failed"] {
+  border-style: dashed;
+}

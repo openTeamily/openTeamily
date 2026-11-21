@@ -143,8 +143,30 @@
           </section>
         </div>
         <div id="step-3" class="step" hidden>
-          <h2>下一步</h2>
-          <p class="note">第 3 步（团队内的角色与批量邀请）还没有对照过 Teamily，这里不会编造版式。团队已经建好，可以去 <a href="/members">成员页</a> 管理成员和邀请，或去 <a href="/chat">聊天</a> 开始工作。</p>
+          <h2>角色与批量邀请</h2>
+          <p class="wizard-lead">团队里的两个角色：管理员能管理成员和邀请；成员参与团队工作，不能管理成员。</p>
+          <p class="wizard-hint">接口只接受 admin 和 member 两种角色；管理员身份只能邀请成员，邀请管理员时服务端会拒绝，下面会逐行写明原因。</p>
+          <label class="wizard-field">批量邀请的邮箱（一行一个，最多 10 行）
+            <textarea id="batch-emails" name="batch_emails" rows="4" maxlength="2000" autocomplete="off" spellcheck="false" placeholder="a@example.com&#10;b@example.com"></textarea>
+          </label>
+          <label class="wizard-field">这些人的角色
+            <select id="batch-role" name="batch_role">
+              <option value="member" selected>成员</option>
+              <option value="admin">管理员</option>
+            </select>
+          </label>
+          <label class="wizard-field">邀请有效期
+            <select id="batch-expiry" name="batch_expiry">
+              <option value="86400">1 天</option>
+              <option value="604800" selected>7 天</option>
+              <option value="2592000">30 天</option>
+            </select>
+          </label>
+          <button type="button" id="batch-invite">逐个生成邀请</button>
+          <ul id="batch-results" class="batch-results" aria-live="polite"></ul>
+          <p id="batch-summary" class="wizard-hint"></p>
+          <p class="note">每次点击按行逐个调用 <code>POST /v1/workspaces/&lt;id&gt;/invites</code>，成功的那行给出只显示一次的令牌，失败的那行给出服务端原因。服务器不发送邮件，也不接收这里的邮箱：邮箱只用来把结果对应到人，并在成功行拼一封由你本机邮件客户端发出的邀请。</p>
+          <p class="wizard-hint">团队已经建好，也可以直接去 <a href="/members">成员页</a> 管理成员和邀请，或去 <a href="/chat">聊天</a> 开始工作。</p>
         </div>
         <div class="actions">
           <button type="button" id="back" hidden>上一步</button>
