@@ -3914,9 +3914,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function searchHitRow(hit, query) {
     const li = document.createElement('li');
     li.className = 'search-hit';
+    if (hit.messageId) li.dataset.messageId = hit.messageId;
     li.tabIndex = 0;
     li.setAttribute('role', 'button');
-    li.setAttribute('aria-label', '跳到这条消息');
+    // Name the hit for screen readers instead of a generic "jump" label.
+    li.setAttribute('aria-label', '跳到这条消息：' + (hit.preview || ''));
     const jump = () => jumpToMessage(hit.messageId);
     li.addEventListener('click', jump);
     li.addEventListener('keydown', event => {

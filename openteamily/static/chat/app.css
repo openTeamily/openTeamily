@@ -1412,6 +1412,8 @@ html[data-theme-resolved="dark"] { --ot-bubble-mine: var(--ot-accent-soft); }
 .search-hit-head time { flex: none; font-size: .75rem; color: var(--ot-muted); }
 .search-hit-text { grid-area: text; font-size: .75rem; line-height: 1.5; color: var(--ot-muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .search-hit-text mark { background: transparent; color: var(--ot-accent); font-weight: 650; }
+.search-hit[role="button"] { cursor: pointer; }
+.search-hit[role="button"]:focus-visible { outline: 2px solid var(--ot-accent); outline-offset: -2px; }
 #conversation-search-more { align-self: center; }
 @media (max-width: 700px) {
   #conversation-search-panel { position: fixed; top: auto; left: .5rem; right: .5rem; bottom: .5rem; width: auto; max-height: 80vh; }
