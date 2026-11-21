@@ -11,6 +11,8 @@ export const API_ROUTE = `${MOUNT}/api/openteamily`;
 
 // Page-facing route -> feature that serves it inside DS-Bot.
 export const MOVED = [
+  // B1: the personal agent is served by the owner's DS-Bot.
+  [/^\/v1\/personal-agent$/, 'personal'],
   [/^\/v1\/skills\/(?:catalog|bindings|installed|packages(?:\/import-[a-z0-9][a-z0-9-]{1,39}(?:\/(?:revoke|versions(?:\/[0-9.]+)?))?)?)$/, 'skills'],
   [/^\/v1\/skill-secrets$/, 'skill-secrets'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/overview$/, 'overview'],

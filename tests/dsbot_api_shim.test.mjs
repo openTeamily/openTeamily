@@ -24,6 +24,10 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/bogus`, ORIGIN), null);
   assert.equal(movedTarget(`/v1/workspaces/${WS}/search/messages?q=x`, ORIGIN).feature, 'search');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/search/resources?kind=links`, ORIGIN).feature, 'search');
+  // B1: the personal agent is served by the owner's DS-Bot. The old homepage
+  // start route is retired in favour of Bot Social's discover start.
+  assert.equal(movedTarget('/v1/personal-agent', ORIGIN).feature, 'personal');
+  assert.equal(movedTarget('/v1/agent-homepages/start', ORIGIN), null);
   assert.equal(movedTarget('/v1/auth/session', ORIGIN), null);
   assert.equal(movedTarget('/v1/automation-templates', ORIGIN).feature, 'automations');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/automations`, ORIGIN).feature, 'automations');

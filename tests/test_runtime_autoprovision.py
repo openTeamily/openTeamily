@@ -38,6 +38,7 @@ class AutoProvisionTests(unittest.TestCase):
     def user(self, name, peer):
         client = Client(self.app, peer=peer)
         self.assertEqual(client.register(name)['status'], 201)
+        client.username = name
         return client
 
     def manager(self, method, path, body=None, token=None, name='auto-mgr'):
@@ -51,9 +52,15 @@ class AutoProvisionTests(unittest.TestCase):
         return result['body']['items']
 
     def ensure(self, client):
-        result = client.call('POST', '/v1/personal-agent')
-        self.assertIn(result['status'], (200, 201), result)
-        return result['body']['personal_agent']
+        # B1 moved /v1/personal-agent to the owner's DS-Bot (410 on the platform), so
+        # the platform side calls the same server code path directly: personal.ensure
+        # plus the auto-provisioning binding it used to expose through that route.
+        with self.store.transaction() as db:
+            user = db.execute('SELECT * FROM users WHERE username=?', (client.username,)).fetchone()
+            status, payload, _headers = self.app.personal_agent_ensure(
+                db, {'user_id': user['id'], 'username': user['username']}, self.now)
+        self.assertIn(status, (200, 201), payload)
+        return payload['personal_agent']
 
     def run_job(self, iid, observed, process_ref=None, issue=False):
         claim = self.manager('POST', '/v1/internal/jobs/claim', {'instance_id': iid})
@@ -130,7 +137,10 @@ class AutoProvisionTests(unittest.TestCase):
         results, errors = [], []
         def go():
             try:
-                results.append(Client.call(alice, 'POST', '/v1/personal-agent'))
+                with self.store.transaction() as db:
+                    user = db.execute("SELECT * FROM users WHERE username='alice'").fetchone()
+                    results.append(self.app.personal_agent_ensure(
+                        db, {'user_id': user['id'], 'username': user['username']}, self.now))
             except Exception as error:  # pragma: no cover - surfaced below
                 errors.append(error)
         threads = [threading.Thread(target=go) for _ in range(6)]
@@ -139,7 +149,7 @@ class AutoProvisionTests(unittest.TestCase):
         for t in threads:
             t.join()
         self.assertEqual(errors, [])
-        self.assertTrue(all(r['status'] in (200, 201) for r in results), results)
+        self.assertTrue(all(r[0] in (200, 201) for r in results), results)
         self.assertEqual(self.count('SELECT COUNT(*) FROM instances'), 1)
         self.assertEqual(self.count('SELECT COUNT(*) FROM runtime_auto_provisions'), 1)
         self.assertEqual(self.count('SELECT COUNT(*) FROM workspace_agent_bindings'), 1)
