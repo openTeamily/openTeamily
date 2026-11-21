@@ -5,6 +5,7 @@ import {
   CONTROL, HEX32, digest, idempotencyKey, newId, pagination, refuse, requireBodyKeys, stableJson, validLongText,
 } from '../../featurekit/http.js'
 import {speechStatus, transcribe} from './speech.js'
+import {transcriptionMigrations, transcriptionRoutes} from './transcription.js'
 
 export const LIMITS = {
   TITLE_MAX: 120, ATTENDEES_MAX: 50, ATTENDEE_MAX: 80, TRANSCRIPT_MAX: 40000, SUMMARY_MAX: 8000,
@@ -230,7 +231,7 @@ export function search(store, needle, limit) {
 export const spec = {
   name: 'meetings',
   pages: ['meetings'],
-  migrations: [`CREATE TABLE IF NOT EXISTS meetings (
+  migrations: [...transcriptionMigrations, `CREATE TABLE IF NOT EXISTS meetings (
     id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL, title_hash TEXT NOT NULL,
     started_at INTEGER NOT NULL, attendees TEXT NOT NULL, transcript TEXT NOT NULL, summary TEXT NOT NULL,
     action_items TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision >= 1), created INTEGER NOT NULL,
@@ -239,6 +240,7 @@ export const spec = {
     CREATE INDEX IF NOT EXISTS meeting_workspace ON meetings(workspace_id, id);`],
   importTables: { meetings: COLUMNS },
   routes: [
+    ...transcriptionRoutes,
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/speech$/, handle: speechStatus },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/transcribe$/, handle: transcribe },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/draft$/, handle: draftNotes },

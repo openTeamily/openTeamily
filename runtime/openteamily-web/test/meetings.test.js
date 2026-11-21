@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { boot, deliverBundle, key, legacyBundles, volume, WS } from './helpers.js'
 import { attachRuntime, detachRuntime } from '../src/host.js'
 import {waveBase64} from '../../../openteamily/static/meetings/audio.mjs'
@@ -172,4 +173,202 @@ test('legacy meetings of one test account import into that account\'s DS-Bot, id
   deliverBundle(evil, 'x.bundle', JSON.stringify(tampered))
   const rejected = await boot(evil)
   assert.equal((await rejected.endpoint('meetings/routes')).value.imported[0].status, 'rejected')
+})
+
+// --- transcript sessions (legacy openteamily/transcription.py → meetings feature) ---
+const transcripts = (id = '', ws = WS) => `/v1/workspaces/${ws}/meetings/transcripts${id ? '/' + id : ''}`
+const WS2 = 'b'.repeat(32)
+const sessionInput = { meeting_id: 'meeting-1', language: 'zh-CN', consent: true }
+const startTranscript = async (bot, extra = {}, ws = WS) => {
+  const created = await bot.call('meetings', 'POST', transcripts('', ws), { ...sessionInput, ...extra })
+  assert.equal(created.status, 201, JSON.stringify(created.body))
+  return created.body.session
+}
+const appendSegment = (bot, id, fields = {}, ws = WS) => bot.call('meetings', 'POST', transcripts(id, ws) + '/segments', {
+  speaker_id: 'alice', start_ms: 0, end_ms: 1000, text: 'hello', ...fields,
+})
+const segmentPage = (bot, id, query = {}, ws = WS) => bot.call('meetings', 'GET', transcripts(id, ws) + '/segments?' + new URLSearchParams(query))
+
+test('transcript sessions are consent-gated, feature-local and survive a reboot', async () => {
+  const vol = volume()
+  const bot = await boot(vol)
+  assert.ok(bot.features.loaded.includes('meetings'), JSON.stringify(bot.features.failed))
+  const refused = await bot.call('meetings', 'POST', transcripts('', WS), { meeting_id: 'meeting-1' })
+  assert.equal(refused.status, 403)
+  assert.equal(refused.body.error.code, 'consent_required')
+  const wrong = await bot.call('meetings', 'POST', transcripts('', WS), { meeting_id: 'meeting-1', consent: 'yes' })
+  assert.equal(wrong.body.error.code, 'invalid_consent')
+  const session = await startTranscript(bot)
+  assert.equal(session.status, 'recording')
+  assert.equal(session.consent, true)
+  assert.equal(session.consent_by, 'owner')
+  assert.equal(session.language, 'zh-CN')
+  assert.equal(session.meeting_id, 'meeting-1')
+  assert.ok(session.started > 0)
+  assert.equal(session.ended, null)
+  const again = await boot(vol)
+  const read = await again.call('meetings', 'GET', transcripts(session.id))
+  assert.equal(read.status, 200)
+  assert.equal(read.body.session.id, session.id)
+  assert.equal(read.body.session.status, 'recording')
+  const db = new DatabaseSync(join(vol.data, 'openteamily', 'features', 'meetings', 'meetings.sqlite3'))
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((row) => row.name)
+  assert.ok(tables.includes('transcription_sessions') && tables.includes('transcript_segments'))
+  assert.deepEqual(db.prepare("SELECT version FROM ot_feature_migrations WHERE feature='meetings' ORDER BY version").all().map((row) => row.version), [1, 2])
+  db.close()
+})
+
+test('transcript segments stay ordered and non-overlapping with bounded confidence', async () => {
+  const bot = await boot()
+  const session = await startTranscript(bot)
+  const first = await appendSegment(bot, session.id)
+  assert.equal(first.status, 201, JSON.stringify(first.body))
+  assert.equal(first.body.segment.text, 'hello')
+  assert.equal(first.body.segment.confidence, null)
+  const second = await appendSegment(bot, session.id, { speaker_id: 'bob', start_ms: 1000, end_ms: 2000, text: 'second' })
+  assert.equal(second.status, 201)
+  for (const fields of [{ start_ms: 1500, end_ms: 2500 }, { start_ms: 500, end_ms: 800 }]) {
+    const overlap = await appendSegment(bot, session.id, fields)
+    assert.equal(overlap.status, 409, JSON.stringify(fields))
+    assert.equal(overlap.body.error.code, 'overlap')
+  }
+  for (const [start, end] of [[-1, 1000], [1000, 1000], [2000, 1500], [0, 604800001], [true, 1000], ['0', 1000]]) {
+    const bad = await appendSegment(bot, session.id, { start_ms: start, end_ms: end })
+    assert.equal(bad.status, 400, JSON.stringify([start, end]))
+    assert.equal(bad.body.error.code, 'invalid_time_range')
+  }
+  const low = await appendSegment(bot, session.id, { start_ms: 2000, end_ms: 3000, confidence: 0 })
+  assert.equal(low.body.segment.confidence, 0)
+  const high = await appendSegment(bot, session.id, { start_ms: 3000, end_ms: 4000, confidence: 1 })
+  assert.equal(high.body.segment.confidence, 1)
+  for (const confidence of [-0.01, 1.01, 'high', true]) {
+    const bad = await appendSegment(bot, session.id, { start_ms: 4000, end_ms: 5000, confidence })
+    assert.equal(bad.status, 400, String(confidence))
+    assert.equal(bad.body.error.code, 'invalid_confidence')
+  }
+  assert.equal((await segmentPage(bot, session.id)).body.items.length, 4)
+})
+
+test('transcript sessions finalize, fail and withdraw consent as terminal states', async () => {
+  const bot = await boot()
+  const session = await startTranscript(bot)
+  await appendSegment(bot, session.id)
+  const final = await bot.call('meetings', 'POST', transcripts(session.id) + '/finalize', {})
+  assert.equal(final.status, 200)
+  assert.equal(final.body.session.status, 'transcribed')
+  assert.ok(final.body.session.ended >= final.body.session.started)
+  const late = await appendSegment(bot, session.id, { start_ms: 1000, end_ms: 2000 })
+  assert.equal(late.status, 409)
+  assert.equal(late.body.error.code, 'not_recording')
+  assert.equal((await bot.call('meetings', 'POST', transcripts(session.id) + '/finalize', {})).body.error.code, 'not_recording')
+  const second = await startTranscript(bot, { meeting_id: 'meeting-2' })
+  const failed = await bot.call('meetings', 'POST', transcripts(second.id) + '/fail', {})
+  assert.equal(failed.body.session.status, 'failed')
+  assert.equal((await appendSegment(bot, second.id)).body.error.code, 'not_recording')
+  const third = await startTranscript(bot, { meeting_id: 'meeting-3' })
+  await appendSegment(bot, third.id)
+  const withdrawn = await bot.call('meetings', 'POST', transcripts(third.id) + '/withdraw', {})
+  assert.equal(withdrawn.body.session.consent, false)
+  assert.equal(withdrawn.body.session.status, 'failed')
+  assert.ok(withdrawn.body.session.ended >= withdrawn.body.session.started)
+  const blocked = await appendSegment(bot, third.id, { start_ms: 1000, end_ms: 2000 })
+  assert.equal(blocked.status, 403)
+  assert.equal(blocked.body.error.code, 'consent_required')
+  assert.equal((await segmentPage(bot, third.id)).body.items.length, 1)
+})
+
+test('transcript segments page by cursor and filter by time range', async () => {
+  const bot = await boot()
+  const session = await startTranscript(bot)
+  const ids = []
+  for (let index = 0; index < 5; index += 1) {
+    const made = await appendSegment(bot, session.id, { start_ms: index * 1000, end_ms: index * 1000 + 1000, text: 'segment-' + index })
+    ids.push(made.body.segment.id)
+  }
+  const first = await segmentPage(bot, session.id, { limit: '2' })
+  assert.deepEqual(first.body.items.map((item) => item.id), ids.slice(0, 2))
+  assert.equal(first.body.cursor, ids[1])
+  const second = await segmentPage(bot, session.id, { limit: '2', cursor: first.body.cursor })
+  assert.deepEqual(second.body.items.map((item) => item.id), ids.slice(2, 4))
+  const third = await segmentPage(bot, session.id, { limit: '2', cursor: second.body.cursor })
+  assert.deepEqual(third.body.items.map((item) => item.id), ids.slice(4))
+  assert.equal(third.body.cursor, null)
+  assert.deepEqual((await segmentPage(bot, session.id, { limit: '2', cursor: ids[4] })).body.items, [])
+  assert.deepEqual((await segmentPage(bot, session.id, { start_ms: '2000', end_ms: '4000' })).body.items.map((item) => item.start_ms), [2000, 3000])
+  assert.deepEqual((await segmentPage(bot, session.id, { start_ms: '3500' })).body.items.map((item) => item.start_ms), [3000, 4000])
+  assert.deepEqual((await segmentPage(bot, session.id, { cursor: 'missing' })).body.items, [])
+  for (const limit of ['0', '201', '-1', 'x']) {
+    const bad = await segmentPage(bot, session.id, { limit })
+    assert.equal(bad.status, 400, limit)
+    assert.equal(bad.body.error.code, 'invalid_limit')
+  }
+  assert.equal((await segmentPage(bot, session.id, { start_ms: '-1' })).body.error.code, 'invalid_time_range')
+  assert.equal((await segmentPage(bot, session.id, { bogus: '1' })).status, 400)
+  assert.equal((await segmentPage(bot, session.id, { cursor: 'x'.repeat(65) })).body.error.code, 'invalid_cursor')
+})
+
+test('transcript search is literal, consent-aware and workspace-scoped', async () => {
+  const bot = await boot()
+  const searchPath = (ws = WS) => transcripts('search', ws)
+  const search = (query, extra = '', ws = WS) => bot.call('meetings', 'GET', searchPath(ws) + '?q=' + encodeURIComponent(query) + extra)
+  const first = await startTranscript(bot, { meeting_id: 'meeting-search-1' })
+  await appendSegment(bot, first.id, { start_ms: 0, end_ms: 1000, text: 'Alpha budget review' })
+  await appendSegment(bot, first.id, { start_ms: 1000, end_ms: 2000, text: 'Beta 100% done' })
+  const second = await startTranscript(bot, { meeting_id: 'meeting-search-2' })
+  await appendSegment(bot, second.id, { start_ms: 0, end_ms: 1000, text: 'Alpha in second session' })
+  const foreign = await startTranscript(bot, { meeting_id: 'meeting-search-3' }, WS2)
+  await appendSegment(bot, foreign.id, { start_ms: 0, end_ms: 1000, text: 'Alpha elsewhere' }, WS2)
+  const hits = await search('alpha')
+  assert.equal(hits.status, 200)
+  assert.equal(hits.body.items.length, 2)
+  assert.deepEqual(new Set(hits.body.items.map((item) => item.session_id)), new Set([first.id, second.id]))
+  assert.ok(hits.body.items.every((item) => item.meeting_id))
+  assert.deepEqual((await search('alpha', '', WS2)).body.items.map((item) => item.session_id), [foreign.id])
+  assert.deepEqual((await search('100%')).body.items.map((item) => item.text), ['Beta 100% done'])
+  for (const query of ['', '   ', 'x'.repeat(201)]) {
+    const bad = await search(query)
+    assert.equal(bad.status, 400, query.length)
+    assert.equal(bad.body.error.code, 'invalid_query')
+  }
+  assert.equal((await search('alpha', '&limit=0')).body.error.code, 'invalid_limit')
+  await bot.call('meetings', 'POST', transcripts(second.id) + '/withdraw', {})
+  assert.deepEqual((await search('alpha')).body.items.map((item) => item.session_id), [first.id])
+})
+
+test('deleting a transcript session cascades and never crosses workspaces', async () => {
+  const bot = await boot()
+  const session = await startTranscript(bot)
+  await appendSegment(bot, session.id)
+  await appendSegment(bot, session.id, { start_ms: 1000, end_ms: 2000 })
+  assert.equal((await bot.call('meetings', 'GET', transcripts(session.id, WS2))).status, 404)
+  assert.equal((await appendSegment(bot, session.id, {}, WS2)).status, 404)
+  assert.deepEqual((await segmentPage(bot, session.id, {}, WS2)).body.items, [])
+  assert.deepEqual((await bot.call('meetings', 'GET', transcripts('search', WS2) + '?q=hello')).body.items, [])
+  assert.equal((await bot.call('meetings', 'POST', transcripts(session.id, WS2) + '/remove', {})).status, 404)
+  assert.equal((await bot.call('meetings', 'POST', transcripts(session.id) + '/remove', {})).status, 200)
+  assert.equal((await bot.call('meetings', 'GET', transcripts(session.id))).status, 404)
+  assert.deepEqual((await segmentPage(bot, session.id)).body.items, [])
+  assert.equal((await bot.call('meetings', 'POST', transcripts(session.id) + '/remove', {})).status, 404)
+  const db = new DatabaseSync(join(bot.vol.data, 'openteamily', 'features', 'meetings', 'meetings.sqlite3'))
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM transcript_segments WHERE session_id=?').get(session.id).n, 0)
+  db.close()
+})
+
+test('transcript input bounds reject oversize and control text', async () => {
+  const bot = await boot()
+  assert.equal((await bot.call('meetings', 'POST', transcripts('', WS), { meeting_id: 'meeting-1', consent: true, language: 'x'.repeat(36) })).body.error.code, 'invalid_language')
+  assert.equal((await bot.call('meetings', 'POST', transcripts('', WS), { meeting_id: 'x'.repeat(129), consent: true })).body.error.code, 'invalid_meeting')
+  const session = await startTranscript(bot)
+  const cases = [
+    [{ speaker_id: 'x'.repeat(81), text: 'ok', start_ms: 0, end_ms: 1000 }, 'invalid_speaker'],
+    [{ text: 'x'.repeat(8001), start_ms: 1000, end_ms: 2000 }, 'invalid_text'],
+    [{ text: '   ', start_ms: 2000, end_ms: 3000 }, 'invalid_text'],
+    [{ text: 'bad\u0000text', start_ms: 3000, end_ms: 4000 }, 'invalid_text'],
+  ]
+  for (const [fields, code] of cases) {
+    const bad = await appendSegment(bot, session.id, fields)
+    assert.equal(bad.status, 400, JSON.stringify(fields))
+    assert.equal(bad.body.error.code, code)
+  }
+  assert.deepEqual((await segmentPage(bot, session.id)).body.items, [])
 })
