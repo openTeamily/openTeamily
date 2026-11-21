@@ -229,6 +229,20 @@ function clampNumber(value, low, high, fallback) {
 
 // The list row says the same thing as the schedule picker, and never leaks the
 // stored kind (`now`, `once`, `daily`, ...) to the reader.
+export function inlineToggleState(item) {
+  const enabled = Boolean(item && item.enabled);
+  return {
+    label: enabled ? '已启用' : '未启用',
+    checked: enabled,
+    action: enabled ? '停用' : '启用',
+    next: !enabled,
+  };
+}
+
+export function toggleChanges(item) {
+  return {revision: item.revision, changes: {enabled: !Boolean(item.enabled)}};
+}
+
 export function scheduleSummary(schedule, enabled) {
   const state = enabled ? '已启用' : '未启用';
   const kind = schedule && schedule.kind ? schedule.kind : 'now';
@@ -301,7 +315,7 @@ function monogram(name) {
   return {label, tone: (tone % 6) + 1};
 }
 
-function renderList(items, list, empty, onOpen) {
+function renderList(items, list, empty, onOpen, onToggle) {
   list.textContent = '';
   list.classList.remove('template-catalog');
   setBusy(list, false);
@@ -328,9 +342,25 @@ function renderList(items, list, empty, onOpen) {
     const state = document.createElement('span');
     state.className = 'status-pill' + (item.enabled ? ' is-on' : '');
     state.textContent = item.enabled ? '已启用' : '未启用';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'inline-toggle';
+    toggle.dataset.automation = item.id;
+    const toggleState = inlineToggleState(item);
+    toggle.setAttribute('role', 'switch');
+    toggle.setAttribute('aria-checked', String(toggleState.checked));
+    toggle.setAttribute('aria-label', `${toggleState.action} ${item.title}`);
+    toggle.textContent = toggleState.action;
+    if (onToggle) {
+      toggle.addEventListener('click', (event) => {
+        if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
+        onToggle(item, toggle, state);
+      });
+    }
     row.appendChild(avatar);
     row.appendChild(copy);
     row.appendChild(state);
+    row.appendChild(toggle);
     list.appendChild(row);
   }
 }
@@ -430,6 +460,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function workspaceId() {
     return workspaceSelect.value;
+  }
+
+  function showListAlert(message) {
+    const alert = document.getElementById('automations-alert');
+    if (!alert) return;
+    alert.textContent = message || '';
+    alert.hidden = !message;
+  }
+
+  async function toggleAutomation(item, button, pill) {
+    const id = workspaceId();
+    if (!id || !item || !item.id) return;
+    button.disabled = true;
+    const result = await request('POST', `/v1/workspaces/${id}/automations/${item.id}`, toggleChanges(item));
+    button.disabled = false;
+    if (result.status === 409) {
+      await loadList();
+      showListAlert('这条自动化已在别处更新，已重新读取列表；请确认后再切换一次。');
+      return;
+    }
+    if (result.status !== 200 || !result.body.automation) {
+      showListAlert(messageFor(result.body.error, '切换失败，状态保持不变。'));
+      return;
+    }
+    item.enabled = Boolean(result.body.automation.enabled);
+    item.revision = result.body.automation.revision;
+    const next = inlineToggleState(item);
+    if (pill) {
+      pill.textContent = next.label;
+      pill.className = 'status-pill' + (item.enabled ? ' is-on' : '');
+    }
+    button.setAttribute('aria-checked', String(next.checked));
+    button.setAttribute('aria-label', `${next.action} ${item.title}`);
+    button.textContent = next.action;
+    showListAlert('');
   }
 
   let pendingConfirm = null;
@@ -787,7 +852,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     empty.textContent = '这个分类下还没有自动化。';
-    renderList(listed.body.items || [], list, empty, item => openEditor(item));
+    showListAlert('');
+    renderList(listed.body.items || [], list, empty, item => openEditor(item),
+      (item, button, pill) => toggleAutomation(item, button, pill));
   }
 
   function fillWorkspaces(items) {

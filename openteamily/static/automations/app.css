@@ -124,7 +124,7 @@ body.app-workspace #main-panel {
 
 #automation-list li {
   display: grid;
-  grid-template-columns: 2.5rem minmax(0, 1fr) auto;
+  grid-template-columns: 2.5rem minmax(0, 1fr) auto auto;
   gap: 0.75rem;
   align-items: center;
   min-height: 2.5rem;
@@ -664,4 +664,35 @@ body.app-workspace #main-panel {
   .editor-option-fields {
     grid-template-columns: minmax(0, 1fr);
   }
+
+/* Issue 305: enable or disable a row without opening the editor. */
+.inline-toggle {
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--ot-line-strong);
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.inline-toggle:hover:not(:disabled) {
+  border-color: var(--ot-accent);
+  color: var(--ot-accent);
+}
+
+.inline-toggle:disabled { opacity: 0.6; cursor: progress; }
+
+.inline-toggle[aria-checked="true"] {
+  background: var(--ot-accent-soft);
+  border-color: var(--ot-accent);
+  color: var(--ot-accent);
+}
+
+#automations-alert {
+  margin: 0.1rem 0 0;
+  color: var(--ot-danger);
+  font-size: 0.85rem;
 }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { cancellationPrompt, catalogItems, csrfCookie, deletePrompt, draftFromTemplate, listQuery, matchesRunFilter, mount, namesFromList, readEditor, RUN_DETAIL_EMPTY, runDetailFields, runErrorReason, runFilterFromSearch, runFilterSearchText, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory } from '../openteamily/static/automations/app.mjs';
+import {cancellationPrompt, catalogItems, csrfCookie, deletePrompt, draftFromTemplate, inlineToggleState, listQuery, matchesRunFilter, mount, namesFromList, readEditor, RUN_DETAIL_EMPTY, runDetailFields, runErrorReason, runFilterFromSearch, runFilterSearchText, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory, toggleChanges} from '../openteamily/static/automations/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -615,6 +615,127 @@ test('?template= accepts only a plain template id', () => {
   assert.equal(templateFromSearch('?template=daily_brief'), 'daily_brief');
   assert.equal(templateFromSearch('?template=../x'), '');
   assert.equal(templateFromSearch(''), '');
+});
+
+// --- Issue 305: enable/disable a row from the list, without the editor. ---
+
+test('inlineToggleState and toggleChanges describe one row toggle', () => {
+  const on = {id: 'a1', revision: 3, enabled: true};
+  const off = {id: 'a1', revision: 4, enabled: false};
+  assert.deepEqual(inlineToggleState(on),
+    {label: '已启用', checked: true, action: '停用', next: false});
+  assert.deepEqual(inlineToggleState(off),
+    {label: '未启用', checked: false, action: '启用', next: true});
+  assert.deepEqual(toggleChanges(on), {revision: 3, changes: {enabled: false}});
+  assert.deepEqual(toggleChanges(off), {revision: 4, changes: {enabled: true}});
+});
+
+async function mountToggleList(items, respond) {
+  const {doc, elements} = fakeDocument();
+  const calls = [];
+  const fetcher = async (path, options = {}) => {
+    calls.push({method: options.method || 'GET', path, body: options.body});
+    if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    if (path === '/v1/workspaces?limit=100') return {status: 200, json: async () => ({items: [{id: 'ws1', name: '团队'}]})};
+    if (path === '/v1/automation-templates') return {status: 200, json: async () => ({items: []})};
+    if (path === '/v1/workspaces/ws1/automations?category=mine') {
+      return {status: 200, json: async () => ({items})};
+    }
+    if (options.method === 'POST' && /\/v1\/workspaces\/ws1\/automations\/[a-z0-9]+$/.test(path)) {
+      return respond(path, JSON.parse(options.body));
+    }
+    throw new Error('unexpected ' + path);
+  };
+  const saved = globalThis.document;
+  globalThis.document = doc;
+  try {
+    await mount(doc, {fetcher});
+  } finally {
+    if (saved === undefined) delete globalThis.document; else globalThis.document = saved;
+  }
+  return {list: elements.get('automation-list'), calls, doc, elements};
+}
+
+function rowSwitch(row) {
+  return row.children.find(child => child.attributes && child.attributes.role === 'switch');
+}
+
+function rowPill(row) {
+  return row.children.find(child => String(child.className).includes('status-pill'));
+}
+
+const TOGGLE_ROW = {
+  id: 'a1', title: '每日简报', revision: 3, enabled: true,
+  schedule: {kind: 'now', time_zone: 'Asia/Shanghai'},
+};
+
+test('a list row toggles enabled through the existing update route and repaints the pill', async () => {
+  const {list, calls} = await mountToggleList([{...TOGGLE_ROW}], () => ({
+    status: 200,
+    json: async () => ({automation: {...TOGGLE_ROW, enabled: false, revision: 4}}),
+  }));
+  const row = list.children[0];
+  const toggle = rowSwitch(row);
+  assert.ok(toggle, 'the row must carry a role=switch control');
+  assert.equal(toggle.attributes['aria-checked'], 'true');
+  assert.equal(toggle.textContent, '停用');
+  assert.match(rowPill(row).textContent, /已启用/);
+
+  await toggle.handlers.click[0]();
+  await flush();
+
+  const post = calls.find(entry => entry.method === 'POST');
+  assert.equal(post.path, '/v1/workspaces/ws1/automations/a1');
+  assert.deepEqual(JSON.parse(post.body), {revision: 3, changes: {enabled: false}});
+  assert.equal(toggle.attributes['aria-checked'], 'false');
+  assert.equal(toggle.textContent, '启用');
+  assert.equal(rowPill(row).textContent, '未启用');
+  assert.equal(rowPill(row).className.includes('is-on'), false);
+});
+
+test('a refused toggle keeps the old state and reports the server reason in an alert', async () => {
+  const {list, elements} = await mountToggleList([{...TOGGLE_ROW}], () => ({
+    status: 403,
+    json: async () => ({error: {code: 'forbidden', message: 'Not allowed to change automations'}}),
+  }));
+  const row = list.children[0];
+  const toggle = rowSwitch(row);
+  await toggle.handlers.click[0]();
+  await flush();
+
+  assert.equal(toggle.attributes['aria-checked'], 'true', 'a refused toggle must not flip the switch');
+  assert.equal(rowPill(row).textContent, '已启用');
+  const alert = elements.get('automations-alert');
+  assert.equal(alert.hidden, false);
+  assert.match(alert.textContent, /Not allowed to change automations/);
+});
+
+test('a stale revision asks for a reload instead of pretending the toggle worked', async () => {
+  const {list, calls, elements, doc} = await mountToggleList([{...TOGGLE_ROW}], () => ({
+    status: 409,
+    json: async () => ({
+      error: {code: 'conflict', message: 'Automation changed elsewhere; reload and retry'},
+      automation: {...TOGGLE_ROW, revision: 9},
+    }),
+  }));
+  const row = list.children[0];
+  // The 409 path re-reads the list, and those handlers resolve `document` at
+  // call time, so the fake document stays installed for the whole click.
+  const savedDoc = globalThis.document;
+  globalThis.document = doc;
+  try {
+    await rowSwitch(row).handlers.click[0]();
+    await flush();
+  } finally {
+    if (savedDoc === undefined) delete globalThis.document; else globalThis.document = savedDoc;
+  }
+
+  const alert = elements.get('automations-alert');
+  assert.equal(alert.hidden, false);
+  assert.match(alert.textContent, /别处|重新/);
+  const reloads = calls.filter(entry => entry.method === 'GET'
+    && entry.path === '/v1/workspaces/ws1/automations?category=mine');
+  assert.equal(reloads.length, 2, 'a 409 must re-read the list so the row shows the stored state');
 });
 
 test('runFilterFromSearch and runFilterSearchText round-trip the runs query', () => {
