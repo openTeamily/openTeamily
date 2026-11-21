@@ -593,7 +593,63 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
     }
     await renderSkillSecrets();
+    await renderNotificationPrefs();
     await syncComposio();
+  }
+
+  // One switch per notification category the server offers: the response carries
+  // `categories` (key, label, about) so the wording comes from the same place the
+  // stored preference does, and a build that drops a category hides its row
+  // instead of leaving a switch that saves nothing. 任务完成提醒 above stays on the
+  // general settings document; these three are the notification prefs the inbox
+  // read path honours.
+  const NOTIFY_CATEGORIES = ['mentions', 'task_completion', 'artifacts'];
+  const notifyId = (prefix, category) => prefix + category.replace(/_/g, '-');
+
+  async function renderNotificationPrefs() {
+    const state = document.getElementById('notification-prefs-state');
+    const rows = NOTIFY_CATEGORIES.map((category) => ({
+      category,
+      row: document.getElementById(notifyId('row-notify-', category)),
+      input: document.getElementById(notifyId('notify-', category)),
+      label: document.getElementById(notifyId('notify-label-', category)),
+      about: document.getElementById(notifyId('notify-about-', category)),
+    })).filter((entry) => entry.input);
+    if (!rows.length) return;
+    const listed = await request('GET', '/v1/notification-prefs');
+    if (listed.status !== 200) {
+      for (const { input } of rows) input.disabled = true;
+      if (state) state.textContent = '通知偏好读取失败，稍后重试。';
+      return;
+    }
+    const prefs = listed.body.prefs || {};
+    const offered = new Map((listed.body.categories || []).map((item) => [item.key, item]));
+    for (const { category, row, input, label, about } of rows) {
+      const described = offered.get(category);
+      if (offered.size && !described) {
+        if (row) row.hidden = true;
+        continue;
+      }
+      if (row) row.hidden = false;
+      if (label && described?.label) label.textContent = described.label;
+      if (about && described?.about) about.textContent = described.about;
+      input.disabled = false;
+      input.checked = prefs[category] !== false;
+      input.onchange = async () => {
+        const wanted = input.checked;
+        input.disabled = true;
+        const saved = await request('PUT', '/v1/notification-prefs', {changes: {[category]: wanted}});
+        input.disabled = false;
+        if (saved.status !== 200) {
+          input.checked = !wanted;
+          if (state) state.textContent = '没保存：' + messageFor(saved.body.error, '稍后再试。');
+          return;
+        }
+        const stored = (saved.body.prefs || {})[category];
+        input.checked = stored !== false;
+        if (state) state.textContent = input.checked ? '这类通知已开启。' : '这类通知已关闭，不再出现在列表与未读数里。';
+      };
+    }
   }
 
   async function renderProviders() {

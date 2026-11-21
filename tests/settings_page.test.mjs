@@ -461,6 +461,9 @@ function settingsDocument() {
     fire(type, event = {}) {
       const payload = {type, preventDefault() {}, ...event};
       if (payload.target && typeof payload.target === 'object') {
+        // Real elements run the inline on<type> property before listeners.
+        const inline = payload.target['on' + type];
+        if (typeof inline === 'function') inline(payload);
         for (const handler of payload.target.handlers?.[type] || []) handler(payload);
       }
       for (const handler of doc.handlers[type] || []) handler(payload);
@@ -472,9 +475,12 @@ function settingsDocument() {
 
 function settingsJson(status, body) { return {status, json: async () => body}; }
 
-function makeSettingsApi({secrets = ['GITHUB_TOKEN', 'OPENAI_KEY']}) {
+function makeSettingsApi({secrets = ['GITHUB_TOKEN', 'OPENAI_KEY'],
+                          prefs = {mentions: true, task_completion: false, artifacts: true},
+                          prefsFail = false} = {}) {
   const calls = [];
   const items = secrets.map(name => ({name}));
+  const stored = {...prefs};
   async function fetcher(path, options = {}) {
     const method = options.method || 'GET';
     const body = options.body ? JSON.parse(options.body) : undefined;
@@ -494,9 +500,21 @@ function makeSettingsApi({secrets = ['GITHUB_TOKEN', 'OPENAI_KEY']}) {
         return settingsJson(200, {saved: body.name});
       }
     }
+    if (path === '/v1/notification-prefs' && method === 'GET') {
+      return settingsJson(200, {prefs: {...stored}, categories: [
+        {key: 'mentions', label: '@提及', about: '别人在会话里 @ 你'},
+        {key: 'task_completion', label: '任务完成', about: '任务结束'},
+        {key: 'artifacts', label: '作品通知', about: '别人保存作品'},
+      ]});
+    }
+    if (path === '/v1/notification-prefs' && method === 'PUT') {
+      if (prefsFail) return settingsJson(500, {error: {code: 'internal', message: '通知偏好暂时不可写'}});
+      Object.assign(stored, body.changes);
+      return settingsJson(200, {prefs: {...stored}, categories: []});
+    }
     throw new Error('unexpected request ' + method + ' ' + path);
   }
-  return {fetcher, calls, items};
+  return {fetcher, calls, items, prefs: stored};
 }
 
 async function settleSettings(rounds = 24) {
@@ -528,9 +546,13 @@ function stubWindowListeners() {
   return () => { globalThis.addEventListener = previous; };
 }
 
-async function mountSettingsPage({secrets} = {}) {
+async function mountSettingsPage({secrets, prefs, prefsFail} = {}) {
   const {doc} = settingsDocument();
-  const {fetcher, calls, items} = makeSettingsApi(secrets === undefined ? {} : {secrets});
+  const options = {};
+  if (secrets !== undefined) options.secrets = secrets;
+  if (prefs !== undefined) options.prefs = prefs;
+  if (prefsFail !== undefined) options.prefsFail = prefsFail;
+  const {fetcher, calls, items, prefs: storedPrefs} = makeSettingsApi(options);
   stubFormData(doc.getElementById('settings-form'));
   const restoreListeners = stubWindowListeners();
   try {
@@ -541,7 +563,11 @@ async function mountSettingsPage({secrets} = {}) {
     restoreListeners();
   }
   return {
-    doc, calls, items,
+    doc, calls, items, prefs: storedPrefs,
+    notify: ['mentions', 'task_completion', 'artifacts'].map(key => [key, doc.getElementById(
+      'notify-' + key.replace(/_/g, '-'))]),
+    notifyLabel: key => doc.getElementById('notify-label-' + key.replace(/_/g, '-')),
+    notifyState: doc.getElementById('notification-prefs-state'),
     list: doc.getElementById('skill-secret-list'),
     secretForm: doc.getElementById('skill-secrets-form'),
     status: doc.getElementById('status'),
@@ -750,4 +776,36 @@ test('connected-tool approvals do not imply a connected account before key setup
   assert.match(source, /允许此调用一次/);
   assert.match(source, /decision/);
   assert.doesNotMatch(source, /innerHTML/);
+});
+
+test('the notification switches load the server preference and save one change', async () => {
+  const {doc, calls, prefs, notify, notifyLabel, notifyState} =
+    await mountSettingsPage({prefs: {mentions: true, task_completion: false, artifacts: true}});
+  assert.deepEqual(notify.map(([key, input]) => [key, input.checked]),
+                   [['mentions', true], ['task_completion', false], ['artifacts', true]],
+                   'every category the server offers has a switch showing the stored value');
+  assert.equal(notifyLabel('mentions').textContent, '@提及', 'the label comes from the server categories');
+  const mentions = notify[0][1];
+  mentions.checked = false;
+  doc.fire('change', {target: mentions});
+  await settleSettings();
+  const writes = calls.filter(call => call.method === 'PUT' && call.path === '/v1/notification-prefs');
+  assert.deepEqual(writes.map(call => call.body), [{changes: {mentions: false}}]);
+  assert.equal(prefs.mentions, false);
+  assert.match(notifyState.textContent, /已关闭/);
+  assert.equal(mentions.disabled, false);
+});
+
+test('a failed notification save puts the switch back and shows the server reason', async () => {
+  const {doc, prefs, notify, notifyState} =
+    await mountSettingsPage({prefs: {mentions: true, task_completion: true, artifacts: true}, prefsFail: true});
+  const artifacts = notify[2][1];
+  assert.equal(artifacts.checked, true);
+  artifacts.checked = false;
+  doc.fire('change', {target: artifacts});
+  await settleSettings();
+  assert.equal(artifacts.checked, true, 'a rejected save must not leave the switch off');
+  assert.equal(prefs.artifacts, true);
+  assert.match(notifyState.textContent, /通知偏好暂时不可写/);
+  assert.equal(artifacts.disabled, false);
 });

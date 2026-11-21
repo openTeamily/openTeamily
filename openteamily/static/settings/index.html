@@ -167,6 +167,36 @@
         </a>
         </div>
       </section>
+      <section class="settings-cluster" aria-labelledby="group-notifications">
+        <h2 id="group-notifications">通知</h2>
+        <div class="settings-group" id="notification-prefs">
+          <label class="settings-row settings-toggle" id="row-notify-mentions">
+            <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 3a4 4 0 0 1 4 4v4.2c0 .5.2 1 .6 1.4l1.4 1.4H6l1.4-1.4c.4-.4.6-.9.6-1.4V7a4 4 0 0 1 4-4zm-1 14h2v1.5a1 1 0 0 1-2 0V17z"/></svg></span>
+            <span class="settings-row-copy">
+              <span class="settings-row-label" id="notify-label-mentions">提及我</span>
+              <span class="settings-row-meta" id="notify-about-mentions">别人在会话里 @ 你时通知</span>
+            </span>
+            <input type="checkbox" id="notify-mentions" role="switch" aria-describedby="notification-prefs-state">
+          </label>
+          <label class="settings-row settings-toggle" id="row-notify-task-completion">
+            <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-1.2 14.3-3.5-3.5 1.4-1.4 2.1 2.1 4.9-4.9 1.4 1.4-6.3 6.3z"/></svg></span>
+            <span class="settings-row-copy">
+              <span class="settings-row-label" id="notify-label-task-completion">任务完成</span>
+              <span class="settings-row-meta" id="notify-about-task-completion">你发起的智能体任务结束</span>
+            </span>
+            <input type="checkbox" id="notify-task-completion" role="switch" aria-describedby="notification-prefs-state">
+          </label>
+          <label class="settings-row settings-toggle" id="row-notify-artifacts">
+            <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M5 4h9l5 5v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm8 1.5V10h4.5L13 5.5z"/></svg></span>
+            <span class="settings-row-copy">
+              <span class="settings-row-label" id="notify-label-artifacts">作品通知</span>
+              <span class="settings-row-meta" id="notify-about-artifacts">同会话的其他人保存了作品</span>
+            </span>
+            <input type="checkbox" id="notify-artifacts" role="switch" aria-describedby="notification-prefs-state">
+          </label>
+        </div>
+        <p class="note" id="notification-prefs-state" role="status" aria-live="polite">关掉之后，这类通知不再出现在列表与未读数里。</p>
+      </section>
       <section class="settings-cluster" aria-labelledby="group-support">
         <h2 id="group-support">支持与法律</h2>
         <div class="settings-group">
