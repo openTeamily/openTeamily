@@ -186,6 +186,26 @@
         </ul>
       </section>
 
+      <section class="doc-section" id="channels">
+        <h2>Agent 渠道</h2>
+        <p>设置页「Agent 渠道」里的四个按钮会跳到这里。这一节说明 WeChat Official Account、Apple iMessage、Slack、WhatsApp 现在各自是什么状态。</p>
+        <h3>现在能做什么</h3>
+        <ul>
+          <li>和助手通信现在只有两条真实可用的路：站内<a href="/chat">会话</a>，以及智能体的 <a href="/settings/agent-access">Agent API</a>（该页显示当前是否已向外开放）。</li>
+          <li>这两条路都能在本实例里当场验证，不需要外部账号审批。</li>
+        </ul>
+        <h3>已知边界</h3>
+        <p>这四种外部渠道一个都还没有接入：服务端没有渠道回调、账号绑定或消息投递接口，所以设置页不再放禁用的「+ 连接」，改成跳到下面的说明。接入之前，任何「已连接」的说法都是假的。</p>
+        <h3 id="channel-wechat">WeChat Official Account</h3>
+        <p>未接入：需要公众号主体、服务器地址校验和消息加解密流程，本实例都没有。现在不能从微信找到你的助手。</p>
+        <h3 id="channel-imessage">Apple iMessage</h3>
+        <p>未接入：需要 Apple 侧的消息通道，本实例没有对应接口。现在不能从 iMessage 找到你的助手。</p>
+        <h3 id="channel-slack">Slack</h3>
+        <p>未接入：需要 Slack app 的安装授权、事件订阅和公网回调，本实例没有这些接口。现在不能从 Slack 找到你的助手。</p>
+        <h3 id="channel-whatsapp">WhatsApp</h3>
+        <p>未接入：需要 WhatsApp Business 账号、Cloud API 审批和公网回调，本实例没有。现在不能从 WhatsApp 找到你的助手。</p>
+      </section>
+
       <p class="doc-callout">找不到对应的功能？先看 <a href="/guide">功能指引</a> 里的操作路径，或到 <a href="https://github.com/openTeamily/openTeamily/issues" rel="noreferrer" target="_blank">仓库 issue 列表</a> 报告；这个页面不承诺 Teamily 官方支持。</p>
     </article>
   </main>

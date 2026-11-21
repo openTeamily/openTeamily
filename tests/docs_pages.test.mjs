@@ -43,7 +43,7 @@ test('every account menu links to the help centre, terms and privacy pages', () 
 test('the help centre lists each feature with what works and where it stops', () => {
   const html = read('help/index.html');
   assert.ok(html.includes('<h1>帮助中心</h1>'));
-  for (const anchor of ['chat', 'agents', 'artifacts', 'automations', 'meetings', 'memory', 'team', 'runtimes']) {
+  for (const anchor of ['chat', 'agents', 'artifacts', 'automations', 'meetings', 'memory', 'team', 'runtimes', 'channels']) {
     assert.ok(html.includes(`id="${anchor}"`), `the help centre has no section for ${anchor}`);
   }
   assert.ok(html.includes('现在能做什么'));

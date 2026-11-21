@@ -251,6 +251,17 @@ a.settings-row:focus-visible {
   white-space: nowrap;
 }
 
+.channel-link {
+  margin: 0;
+  white-space: nowrap;
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--ot-accent);
+}
+
+.channel-link:hover { text-decoration: underline; }
+.channel-link:focus-visible { outline: 2px solid var(--ot-accent); outline-offset: 2px; }
+
 .settings-empty {
   padding: 0.85rem 0.9rem;
   color: var(--ot-muted);

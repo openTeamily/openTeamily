@@ -476,12 +476,18 @@ async function main() {
       const channels = page.locator('[data-settings-page="channels"]');
       await channels.waitFor({ state: 'visible', timeout: 15000 });
       const channelsText = `${await visibleText(channels)}`;
-      const connectButtons = page.locator('[data-settings-page="channels"] button');
-      const connectCount = await connectButtons.count();
-      const allDisabled = (await connectButtons.evaluateAll((buttons) => buttons.every((button) => button.disabled))) && connectCount === 4;
+      // No external channel is connected yet: there is no button to press, each
+      // row links to the help-centre section that says what that channel needs.
+      const channelButtons = await page.locator('[data-settings-page="channels"] button').count();
+      const channelLinks = page.locator('[data-settings-page="channels"] a.channel-link');
+      const channelLinkCount = await channelLinks.count();
+      const channelHrefs = await channelLinks.evaluateAll((links) => links.map((link) => link.getAttribute('href')));
+      const expectedHrefs = ['/help#channel-wechat', '/help#channel-imessage', '/help#channel-slack', '/help#channel-whatsapp'];
       record(
         'settings_channels',
-        allDisabled
+        channelButtons === 0
+          && channelLinkCount === 4
+          && expectedHrefs.every((href, index) => channelHrefs[index] === href)
           && channelsText.includes('Agent 渠道')
           && channelsText.includes('WeChat Official Account')
           && channelsText.includes('Apple iMessage')
@@ -489,8 +495,21 @@ async function main() {
           && channelsText.includes('WhatsApp')
           && !channelsText.includes('Teamily Agent')
           && !/积分|套餐|升级/.test(channelsText),
-        `buttons=${connectCount}; disabled=${allDisabled}; ${channelsText || 'channels page empty'}`,
+        `buttons=${channelButtons}; links=${channelLinkCount}; hrefs=${channelHrefs.join(',')}; ${channelsText || 'channels page empty'}`,
       );
+      // Following Slack's link lands on the help section that explains it.
+      await channelLinks.nth(2).click();
+      await page.waitForURL(/\/help#channel-slack$/, { timeout: 15000 });
+      await page.locator('#channel-slack').waitFor({ state: 'visible', timeout: 15000 });
+      const slackHeading = `${await visibleText(page.locator('#channel-slack h2, #channel-slack h3'))}`;
+      const slackTop = await page.locator('#channel-slack').evaluate((node) => Math.round(node.getBoundingClientRect().top));
+      record(
+        'settings_channels_help_link',
+        slackHeading.includes('Slack') && slackTop >= 0 && slackTop < 900,
+        `url=${new URL(page.url()).pathname}${new URL(page.url()).hash}; heading=${slackHeading}; top=${slackTop}`,
+      );
+      await page.goto(`${origin}/settings/channels`, { waitUntil: 'load' });
+      await page.locator('[data-settings-page="channels"]').waitFor({ state: 'visible', timeout: 15000 });
       screenshots.push(path.basename(await shot(page, outDir, '44-settings-channels.png')));
     } catch (error) {
       record('settings_channels', false, String(error));

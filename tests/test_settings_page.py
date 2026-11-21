@@ -241,9 +241,16 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('Slack', html)
         self.assertIn('WhatsApp', html)
         channels = html[html.find('data-settings-page="channels"'):html.find('data-settings-page="agent-access"')]
-        self.assertEqual(channels.count('+ 连接'), 4)
-        self.assertEqual(html.count('title="未实现：OpenTeamily 还没有接入'), 4)
-        self.assertIn('disabled', html)
+        # Every unconnected channel now points at its own explanation instead of
+        # a dead disabled button: the next step has to be reachable by click.
+        for slug in ('wechat', 'imessage', 'slack', 'whatsapp'):
+            self.assertIn(f'<a class="channel-link" href="/help#channel-{slug}">如何接入</a>', channels)
+        self.assertEqual(channels.count('+ 连接'), 0)
+        self.assertEqual(channels.count('disabled'), 0)
+        self.assertEqual(html.count('title="未实现：OpenTeamily 还没有接入'), 0)
+        help_html = (Path(__file__).resolve().parents[1] / 'openteamily' / 'static' / 'help' / 'index.html').read_text(encoding='utf-8')
+        for slug in ('wechat', 'imessage', 'slack', 'whatsapp'):
+            self.assertIn(f'id="channel-{slug}"', help_html)
         self.assertNotIn('Teamily Agent', html)
         agent = self.raw.call('GET', '/settings/agent-access')['body'].decode()
         self.assertIn('你的 agent 还没有向本实例之外开放。', agent)
