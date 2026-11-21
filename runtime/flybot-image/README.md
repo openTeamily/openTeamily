@@ -18,7 +18,8 @@ service:
 - Ships a Docker HEALTHCHECK.
 - Loads `@openteamily/flybot-runtime`, which calls upstream `createRuntime()`
   and then `applyOnRuntime()` from `runtime/flybot-social-host/` so
-  `@flybot/social` injects a `flybot` service. The vendor tree is not edited.
+  `@flybot/social` injects a `flybot` service. The vendor tree in git is not edited;
+  image-build patches in `runtime/ds-bot-patches/` are applied to the image copy only.
 
 The web UI is official `dsh web`. `@openteamily/flybot-web-slots` installs
 `globalThis.__flybot__` so `@flybot/social`'s client can register, posts

@@ -3,7 +3,7 @@
 # OpenTeamily FlyBot runtime image. Build context is the repository's runtime/ directory:
 #   docker build -f runtime/flybot-image/Dockerfile -t openteamily-flybot:local runtime
 #
-# Layers the unmodified vendored DS-Bot v0.3.6 tree and the FlyBot social plugin onto
+# Layers the pinned vendored DS-Bot tree (plus image-build patches) and the FlyBot social plugin onto
 # DeepSeek Harness, with @openteamily/flybot-runtime as the single DSH plugin entry
 # (it calls createRuntime + the social façade). Matches the compose manager contract:
 # USER 1000:1000, EXPOSE 8080, HEALTHCHECK, writable /data, no root entrypoint.
@@ -57,6 +57,10 @@ COPY --from=build /usr/local/ /usr/local/
 COPY ds-bot-upstream/ds-bot /opt/openteamily/runtime/ds-bot-upstream/ds-bot
 COPY ds-bot-upstream/LICENSE /opt/licenses/ds-bot/LICENSE
 COPY ds-bot-upstream/NOTICE /opt/licenses/ds-bot/NOTICE
+# OpenTeamily seams a plugin cannot reach. The git vendor tree stays
+# pin-identical; these patches apply only to the image copy.
+COPY ds-bot-patches /opt/openteamily/runtime/ds-bot-patches
+RUN node /opt/openteamily/runtime/ds-bot-patches/apply.mjs --root /opt/openteamily/runtime/ds-bot-upstream/ds-bot
 COPY flybot/plugins/social /opt/openteamily/runtime/flybot/plugins/social
 COPY flybot/LICENSE /opt/licenses/flybot/LICENSE
 COPY flybot/NOTICE /opt/licenses/flybot/NOTICE
@@ -120,7 +124,7 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD ["node", "/opt/openteamily/runtime/flybot-image/healthcheck.mjs"]
 
 LABEL org.opencontainers.image.title="OpenTeamily FlyBot runtime" \
-      org.opencontainers.image.description="Self-host FlyBot runtime: unmodified DS-Bot v0.3.6 plus the social host adapter, served by dsh web on 8080." \
+      org.opencontainers.image.description="Self-host FlyBot runtime: pinned DS-Bot plus image-build patches and the social host adapter, served by dsh web on 8080." \
       org.opencontainers.image.source="https://github.com/openTeamily/openTeamily" \
       org.opencontainers.image.licenses="MIT AND Apache-2.0"
 

@@ -59,9 +59,10 @@ again. The plan is:
 2. **OpenTeamily features as separate DSH plugins** next to ds-bot in the same profile, as FlyBot's
    `plugins/social` already is. A plugin reaches ds-bot only through its exported runtime and
    HTTP API.
-3. **Small, ordered patches** (a later `runtime/ds-bot-patches/`, applied at image build, each with
-   a test and an upstream-issue link) only where a plugin cannot reach a seam. Every patch is a
-   candidate for an upstream pull request, so the series shrinks over time.
+3. **Small, ordered patches** in [`runtime/ds-bot-patches/`](../ds-bot-patches/), applied at FlyBot
+   image build, each with a test. Use these only where a plugin cannot reach a seam. Every patch is
+   a candidate for an upstream pull request, so the series shrinks over time. The vendor tree in git
+   must stay pin-identical; never edit files under this directory except this document.
 4. **Group chat:** upstream 0.3.5 moved group rounds onto a write-ahead ledger (`src/host/ledger.js`).
    OpenTeamily adopts upstream's ledger model. FlyBot's room and social model (Bot Social remote
    rooms, membership and seats) is to be re-implemented as an adapter on that ledger. Anything

@@ -444,7 +444,6 @@ export function install(rt) {
           await rt.load()
           const { room, changes } = await rt.updateRoom(body.id, {
             name: body.name,
-            remoteParticipants: Array.isArray(body.remoteParticipants) ? body.remoteParticipants : undefined,
             notice: body.notice,
             mode: body.mode,
             admin: body.admin,
