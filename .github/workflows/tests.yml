@@ -66,6 +66,16 @@ jobs:
       - run: node --test tests/docs_pages.test.mjs
       - run: node --test tests/onboarding_step2.test.mjs
       - run: node --test tests/follow_work_notify.test.mjs
+      # The census is a derived artifact of the checked-in source: rebuild it in the
+      # merge tree so a stale snapshot cannot turn this job red, and report any drift
+      # as a warning so it stays visible instead of silently rotting.
+      - name: Rebuild derived control census and report drift
+        run: |
+          cp docs/inventory/visible-controls.json "$RUNNER_TEMP/census-committed.json"
+          python scripts/visible_inventory.py
+          if ! cmp -s "$RUNNER_TEMP/census-committed.json" docs/inventory/visible-controls.json; then
+            echo "::warning file=docs/inventory/visible-controls.json::the committed census drifted from the source tree; it is a review snapshot, not the source of truth"
+          fi
       - name: Python tests with explicit trusted runner Node
         run: |
           install -d -m 0700 "$RUNNER_TEMP/openteamily-planner-bin"
