@@ -95,10 +95,6 @@ export function GroupSettingsForm({ room, roster, actions, run, onDeleted }) {
         h(InlineText, { label: t('Group name'), value: room.named ? room.name : '', placeholder: t('Name after members'), maxLength: 60, onSave: name => update({ name }) })),
       h(Row, { label: t('Notice'), hint: t('Every member reads it before speaking in this group.'), stack: true },
         h(InlineText, { label: t('Group notice'), value: room.notice, multiline: true, maxLength: 2000, placeholder: t('Shared instructions every member reads before speaking…'), onSave: notice => update({ notice }) }))),
-    room.openteamily?.conversation_id ? h(Card, { title: 'Shared human participants' },
-      h(Row, { label: 'Bot Social handles', hint: 'Comma-separated handles. Membership and history are shared with OpenTeamily.', stack: true },
-        h(InlineText, { label: 'Shared human participants', value: (room.remoteParticipants || []).map(m=>m.handle).join(', '), maxLength: 4000,
-          onSave: text => update({ remoteParticipants: text.split(',').map(x=>x.trim()).filter(Boolean) }) }))) : null,
     h(Card, { title: t('Who answers') },
       h('div', { className: 'bt-set-row bt-bs-row bt-bs-stack' },
         h(Segmented, { label: t('Who answers'), value: mode }, ROOM_MODES.map(([id, label]) => h('button', {
