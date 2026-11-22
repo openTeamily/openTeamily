@@ -3,7 +3,7 @@
 This directory holds a **byte-identical copy** of selected paths from
 [Fei2411/DS-Bot](https://github.com/Fei2411/DS-Bot), pinned in
 [`../ds-bot-upstream.pin.json`](../ds-bot-upstream.pin.json). The current pin is the release
-**v0.3.9**, commit `881b57b54046fb355095e9c11f7918bd62b8bf1e`, ds-bot package `0.3.9`. Its tests
+**v0.3.8**, commit `5e9b7da8882da3b68d8a0624342708c2150a9156`, ds-bot package `0.3.8`. Its tests
 expect DeepSeek Harness (DSH) `0.2.2-rc.1`.
 
 This file is the only OpenTeamily-authored file in this directory. Every other file is upstream's,
@@ -59,9 +59,10 @@ again. The plan is:
 2. **OpenTeamily features as separate DSH plugins** next to ds-bot in the same profile, as FlyBot's
    `plugins/social` already is. A plugin reaches ds-bot only through its exported runtime and
    HTTP API.
-3. **Small, ordered patches** (a later `runtime/ds-bot-patches/`, applied at image build, each with
-   a test and an upstream-issue link) only where a plugin cannot reach a seam. Every patch is a
-   candidate for an upstream pull request, so the series shrinks over time.
+3. **Small, ordered patches** in [`runtime/ds-bot-patches/`](../ds-bot-patches/), applied at FlyBot
+   image build, each with a test. Use these only where a plugin cannot reach a seam. Every patch is
+   a candidate for an upstream pull request, so the series shrinks over time. The vendor tree in git
+   must stay pin-identical; never edit files under this directory except this document.
 4. **Group chat:** upstream 0.3.5 moved group rounds onto a write-ahead ledger (`src/host/ledger.js`).
    OpenTeamily adopts upstream's ledger model. FlyBot's room and social model (Bot Social remote
    rooms, membership and seats) is to be re-implemented as an adapter on that ledger. Anything

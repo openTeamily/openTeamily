@@ -28,6 +28,7 @@ jobs:
       - run: node scripts/ds-bot-upstream.mjs check
       - run: node --test scripts/ds-bot-upstream.test.mjs
       - run: node --test --test-timeout=5000 scripts/upstream-test-clock.test.mjs scripts/upstream-test-cleanup-overlay.test.mjs
+      - run: node --test runtime/ds-bot-patches/apply.test.mjs
 
   upstream-suite:
     name: Upstream suite · Node ${{ matrix.node }} · DSH from pin
