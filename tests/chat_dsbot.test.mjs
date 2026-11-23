@@ -52,8 +52,8 @@ test('native Chat starts scoped reads without the browser transport or optional 
   try {
     const {takeChatReads} = await import('../openteamily/static/chat/startup.mjs?test-direct-early-read');
     assert.equal(calls[0].path, '/v1/auth/session');
-    const [first, second] = calls;
-    assert.equal(calls.length, 2);
+    const [first, second, third] = calls;
+    assert.equal(calls.length, 3);
     assert.equal(first.init.credentials, 'same-origin');
     const {pathname, searchParams} = new URL(second.path, location.href);
     assert.equal(pathname, '/v1/workspaces');
@@ -62,8 +62,12 @@ test('native Chat starts scoped reads without the browser transport or optional 
     });
     assert.equal(second.init.credentials, 'same-origin');
     assert.ok(second.init.signal instanceof AbortSignal);
+    assert.equal(third.path, '/v1/workspaces?limit=100');
+    assert.equal(third.init.credentials, 'same-origin');
+    assert.ok(third.init.signal instanceof AbortSignal);
     const early = takeChatReads(document);
     assert.equal((await early.localRequest).status, 200);
+    assert.equal((await early.sharedRequest).status, 200);
     assert.equal(takeChatReads(document), null);
 
     calls.length = 0;
@@ -72,6 +76,54 @@ test('native Chat starts scoped reads without the browser transport or optional 
     const publicPage = await import('../openteamily/static/chat/startup.mjs?test-public-early-read');
     assert.deepEqual(calls.map(entry => entry.path), ['/v1/auth/session']);
     assert.equal(publicPage.takeChatReads(document).localRequest, null);
+  } finally {
+    if (original === undefined) delete globalThis.window;
+    else globalThis.window = original;
+  }
+});
+
+test('desktop prepares the newest owned private snapshot while the Chat module is loading', async () => {
+  const original = globalThis.window;
+  const owner = {id: 'a'.repeat(32), username: 'alice'};
+  const workspace = 'b'.repeat(32), agent = 'c'.repeat(32), newest = 'd'.repeat(32), older = 'e'.repeat(32);
+  const document = {querySelector: () => ({})};
+  const path = `/v1/workspaces/${workspace}/agents/${agent}/conversations/${newest}?limit=50&snapshot=1`;
+  const calls = [];
+  let snapshotOwner = owner.id;
+  let desktop = true;
+  const location = {hash:'', search:'', href:'https://openteamily.example/chat'};
+  globalThis.window = {document, location, matchMedia: () => ({matches: desktop}), fetch: async endpoint => {
+    calls.push(endpoint);
+    if (endpoint === '/v1/auth/session') return Response.json({user: owner});
+    if (endpoint === '/v1/workspaces?scope=personal&include=chat') return Response.json({
+      items:[{id:workspace,kind:'personal',owner_id:snapshotOwner}], personal_agent_id:agent,
+      chat:{items:[{id:agent,workspace_id:workspace}], conversations:[
+        {id:older,agent_id:agent,updated:5}, {id:newest,agent_id:agent,updated:10},
+        {id:'f'.repeat(32),agent_id:agent,updated:25,archived:true},
+      ]},
+    });
+    assert.equal(endpoint,path);
+    return Response.json({items: []});
+  }};
+  document.defaultView = globalThis.window;
+  try {
+    const {takeChatReads} = await import('../openteamily/static/chat/startup.mjs?test-desktop-early-history');
+    const prepared = await takeChatReads(document).desktopTranscript;
+    assert.equal(prepared.owner,owner.id);
+    assert.equal(prepared.conversation,newest);
+    assert.equal((await prepared.result).status,200);
+    assert.deepEqual(calls,['/v1/auth/session','/v1/workspaces?scope=personal&include=chat',path]);
+    calls.length = 0;
+    snapshotOwner = older;
+    const foreign = await import('../openteamily/static/chat/startup.mjs?test-desktop-foreign-history');
+    assert.equal(await foreign.takeChatReads(document).desktopTranscript,null);
+    assert.equal(calls.length,2);
+    calls.length = 0;
+    desktop = false;
+    snapshotOwner = owner.id;
+    const mobile = await import('../openteamily/static/chat/startup.mjs?test-no-mobile-early-history');
+    assert.equal(mobile.takeChatReads(document).desktopTranscript,null);
+    assert.equal(calls.length,2);
   } finally {
     if (original === undefined) delete globalThis.window;
     else globalThis.window = original;

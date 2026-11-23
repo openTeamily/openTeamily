@@ -332,6 +332,11 @@ export function memoryPageFromSearch(search) {
 
 const MEMORY_ID = /^[0-9a-f]{32}$/;
 
+function memoryRevisionFromSearch(params) {
+  const revision = params.get('revision');
+  return /^[1-9][0-9]{0,7}$/.test(revision || '') ? Number(revision) : undefined;
+}
+
 export function memoryCitationFromSearch(search) {
   const params = new URLSearchParams(search || '');
   const [from] = params.getAll('from');
@@ -395,6 +400,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const emptyEl = document.getElementById('list-empty');
   const searchInput = document.getElementById('search');
   const clearSearch = document.getElementById('memory-search-clear');
+  const resetFilters = document.getElementById('memory-directory-reset');
   const directoryStatus = document.getElementById('memory-directory-status');
   const directoryMore = document.getElementById('memory-load-more');
   const directoryRetry = document.getElementById('memory-directory-retry');
@@ -469,6 +475,37 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return workspaceSelect.value;
   }
 
+  function directoryAddress() {
+    const saved = document.defaultView?.history?.state?.memoryDirectory;
+    return currentUser?.id && workspaceId() && saved?.owner === currentUser.id && saved.workspace === workspaceId()
+      ? saved : null;
+  }
+
+  function writeDirectoryAddress(url, {push = false, result = directoryAddress()?.result === true} = {}) {
+    const view = document.defaultView;
+    const history = view?.history;
+    if (!history?.replaceState || !view.location) return;
+    const method = push && history.pushState ? 'pushState' : 'replaceState';
+    const memoryDirectory = currentUser?.id && workspaceId() ? {
+      owner: currentUser.id, workspace: workspaceId(), query: searchInput.value,
+      filter: listFilter, topic: topicFilter, result: result && (!push || method === 'pushState'),
+    } : null;
+    if (!url) {
+      const previous = history.state?.memoryDirectory;
+      if (!memoryDirectory || (previous && Object.keys(memoryDirectory).every(key => previous[key] === memoryDirectory[key]))) return;
+      const {pathname, search, hash} = view.location;
+      url = (pathname || '/memory') + (search || '') + (hash || '');
+    }
+    history[method]({...history.state, memoryDirectory}, '', url);
+  }
+
+  function restoreDirectoryAddress() {
+    const saved = directoryAddress();
+    searchInput.value = typeof saved?.query === 'string' ? saved.query.slice(0, 80) : '';
+    topicFilter = saved?.filter === 'topics' && typeof saved.topic === 'string' ? saved.topic : '';
+    setDirectoryFilter(['updated', 'topics'].includes(saved?.filter) ? saved.filter : 'all');
+  }
+
   function setCitationStatus(message) {
     if (citationStatus) citationStatus.textContent = message;
   }
@@ -496,9 +533,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       ? activeCitation : null;
   }
 
-  function syncCitationUrl(params, citation = activeCitation) {
+  function syncCitationUrl(params, citation = activeCitation, address = {result: false}) {
     if (citation) params.set('from', citation.from);
-    document.defaultView?.history?.replaceState?.({}, '', '/memory?' + params);
+    writeDirectoryAddress('/memory?' + params, address);
   }
 
   function randomKey() {
@@ -786,7 +823,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     meta.textContent = memoryPageMeta(item);
     if (meta.textContent) text.appendChild(meta);
     button.appendChild(text);
-    button.addEventListener('click', () => openPage(item.id));
+    button.addEventListener('click', () => openPage(item.id, undefined, undefined, {fromDirectory: true}));
     return button;
   }
 
@@ -827,6 +864,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     emptyEl.textContent = state?.needle ? MEMORY_EMPTY_NO_MATCH : state?.topic
       ? '这个标签下还没有记忆页。'
       : state?.updatedAfter != null ? '最近 7 天没有更新过的记忆页。' : MEMORY_EMPTY_WORKSPACE;
+    if (resetFilters) resetFilters.hidden = emptyEl.hidden || (!state?.topic && state?.updatedAfter == null);
     if (clearSearch) clearSearch.hidden = !searchInput.value;
     if (directoryStatus) {
       directoryStatus.textContent = state?.error || (busy ? (state.needle ? '正在搜索…' : '正在加载记忆…')
@@ -922,6 +960,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function searchDirectory({delay = 0, force = false} = {}) {
     if (!browseDirectory?.workspace || browseDirectory.owner !== currentUser) return;
+    writeDirectoryAddress();
     const needle = searchInput.value.trim();
     const topic = listFilter === 'topics' ? topicFilter : '';
     const recent = listFilter === 'updated';
@@ -996,7 +1035,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (/^[0-9a-f]{32}$/.test(id)) params.set('workspace', id);
     const query = params.toString();
-    view?.history?.replaceState?.({}, '', (view.location?.pathname || '/memory') + (query ? '?' + query : ''));
+    writeDirectoryAddress((view?.location?.pathname || '/memory') + (query ? '?' + query : ''), {result: false});
   }
 
   let profileRevision = null;
@@ -1698,8 +1737,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const deepLink = scopedLink && /^[0-9a-f]{32}$/.test(pageId || '');
     const actionId = linked.get('action');
     const deepAction = scopedLink && pageId === 'todos' && /^[0-9a-f]{32}$/.test(actionId || '');
-    const linkedRevision = linked.get('revision');
-    const revision = /^[1-9][0-9]{0,7}$/.test(linkedRevision || '') ? Number(linkedRevision) : undefined;
+    const revision = memoryRevisionFromSearch(linked);
     let {initial, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces');
     if (scopedLink && !initial.body.items?.some(item => item.id === workspace) && supplemental) {
       const shared = await supplemental;
@@ -1766,9 +1804,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     browseDirectory = id ? directoryWindow() : null;
     activeDirectory = browseDirectory;
     if (switched) {
-      searchInput.value = '';
-      topicFilter = '';
-      setDirectoryFilter('all');
+      restoreDirectoryAddress();
       currentGraph = {nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}};
       renderGraph(currentGraph);
       renderActions([]);
@@ -2277,7 +2313,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     citationTitle.focus?.();
   }
 
-  async function openPage(pageId, revision, graphId) {
+  async function openPage(pageId, revision, graphId, {fromDirectory = false} = {}) {
     if (groupShareDialog?.open) groupShareDialog.close();
     closeDeleteConfirm({restoreFocus: false});
     closePageHistory({restoreFocus: false});
@@ -2300,7 +2336,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const page = seen.body.page;
     hideCitationPreview();
-    showPage(page, revision, graphId);
+    showPage(page, revision, graphId, fromDirectory && listPanel.dataset.view === 'overview');
     if (citation) setCitationStatus('');
     if (revision && revision !== page.revision && historyPanel) {
       const listing = openPageHistory({focus:false});
@@ -2311,7 +2347,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  function showPage(page, revision, graphId) {
+  function showPage(page, revision, graphId, push = false) {
     persistPageDraft();
     if (activeCitation && !citationFor(page.id)) setCitation(null);
     hideCitationPreview();
@@ -2334,17 +2370,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     applyPageToEditor(page);
     showPageDraft({restore: true});
     syncExportButton();
-    syncPageUrl(revision);
+    syncPageUrl(revision, push);
     syncDirectorySelection();
     focusDetailBack('close-editor');
   }
 
-  function syncPageUrl(revision) {
+  function syncPageUrl(revision, push = false) {
     const id = workspaceId();
     if (!/^[0-9a-f]{32}$/.test(id) || !/^[0-9a-f]{32}$/.test(currentPage?.id || '')) return;
     const params = new URLSearchParams({workspace:id, page:currentPage.id});
     if (revision) params.set('revision', String(revision));
-    syncCitationUrl(params, citationFor(currentPage.id));
+    const citation = citationFor(currentPage.id);
+    syncCitationUrl(params, citation, {push, result: !citation && (push || directoryAddress()?.result === true)});
   }
 
   citationEdit?.addEventListener('click', async () => {
@@ -3073,6 +3110,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   });
   clearSearch?.addEventListener('click', clearDirectorySearch);
+  resetFilters?.addEventListener('click', () => {
+    topicFilter = '';
+    setDirectoryFilter('all');
+    renderTopicFilters();
+    clearDirectorySearch();
+  });
   directoryMore?.addEventListener('click', () => {
     const state = activeDirectory;
     if (state?.cursor) return loadDirectoryPage(state, state.cursor, document.activeElement === directoryMore);
@@ -3107,14 +3150,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
   const memoryWindow = document.defaultView;
+  let directoryBackPending = false;
   if (memoryWindow && memoryWindow.addEventListener) {
     memoryWindow.addEventListener('popstate', () => {
+      directoryBackPending = false;
       const search = memoryWindow.location.search;
       const view = memoryPageFromSearch(search);
-      if (memoryCitationFromSearch(search)) {
+      const params = new URLSearchParams(search);
+      const workspace = params.get('workspace');
+      if (memoryCitationFromSearch(search) || (MEMORY_ID.test(workspace || '') && workspace !== workspaceId())) {
         currentView = view;
         void loadSession();
-      } else showView(view, {sync: false});
+        return;
+      }
+      const saved = directoryAddress();
+      if (view !== 'overview' || !saved || workspace !== workspaceId()) {
+        showView(view, {sync: false});
+        return;
+      }
+      currentView = view;
+      restoreDirectoryAddress();
+      renderTopicFilters();
+      searchDirectory();
+      const page = params.get('page');
+      if (saved.result && MEMORY_ID.test(page || '')) void openPage(page, memoryRevisionFromSearch(params));
+      else returnToList({sync: false});
     });
   }
   function setDirectoryFilter(filter) {
@@ -3448,7 +3508,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
 
-  function returnToList() {
+  function returnToList({sync = true} = {}) {
     persistPageDraft();
     const page = currentPage?.id;
     const action = currentAction?.id;
@@ -3461,7 +3521,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (groupShareDialog?.open) groupShareDialog.close();
     const returnToGraph = currentView === 'overview' && previous?.mobileGraph === true;
     setMobileGraph(returnToGraph);
-    showView(currentView);
+    showView(currentView, {sync});
     syncExportButton();
     syncDirectorySelection();
     if (previous?.state && previous.state === activeDirectory && ownsDirectoryWindow(previous.state)) {
@@ -3480,7 +3540,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     target?.focus?.({preventScroll: true});
   }
 
-  document.getElementById('close-editor').addEventListener('click', returnToList);
+  document.getElementById('close-editor').addEventListener('click', () => {
+    if (directoryAddress()?.result && memoryWindow?.history?.back) {
+      if (directoryBackPending) return;
+      directoryBackPending = true;
+      memoryWindow.history.back();
+    } else returnToList();
+  });
   document.getElementById('close-memory-citation-preview')?.addEventListener('click', returnToList);
 
   const newActionAttempts = new Map();

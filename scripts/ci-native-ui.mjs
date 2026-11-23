@@ -17,10 +17,11 @@ import {buildServer} from '../services/bot-social/src/server.ts';
 import {bulkAuth} from '../services/bot-social/test/helpers.ts';
 import agents from '../runtime/openteamily-web/features/agents/index.js';
 import {featureHost, registerFeature} from '../runtime/openteamily-web/src/features.js';
-import {createDispatch, createReplyStreamDispatch} from '../runtime/openteamily-web/src/dispatch.js';
+import {createDispatch, createLegacyDispatch, createReplyStreamDispatch} from '../runtime/openteamily-web/src/dispatch.js';
 import {createPageHandler} from '../runtime/openteamily-web/src/pages.js';
 import {createBotSocial, setSharedBotSocial} from '../runtime/openteamily-web/lib/c/bot-social.js';
 import {messengerV1} from '../runtime/openteamily-web/lib/c/legacy-v1.js';
+import {movedTarget} from '../openteamily/static/shell/dsbot-api.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const answer = '来自当前账号 DS-Bot 的验收回复。';
@@ -200,6 +201,7 @@ export async function startNativeUI() {
         table['messenger/v1'] = messengerV1(host('messenger'),()=>{});
       });
       active.dispatch = createDispatch({endpoints:table});
+      active.legacy = createLegacyDispatch({endpoints:table});
       active.replyStream = createReplyStreamDispatch({endpoints:table});
       active.page = createPageHandler({pagesDir:join(root,'openteamily','static'),identity});
       active.rpc = async (endpoint,payload) => scope.run(active,()=>table[endpoint](payload,
@@ -259,6 +261,14 @@ export async function startNativeUI() {
         if (path === '/v1/personal-agent') return send(res,200,{personal_agent:{
           workspace:{id:bound.instanceId,name:'个人工作区',kind:'personal'},agent:bound.agent}});
         if (path === '/v1/auth/runtime-readiness') return send(res,200,{state:'ready',user_id:bound.user.id});
+        // Early page reads go straight to the gateway before the browser shim installs.
+        const moved = req.method === 'GET' && movedTarget(url, url.origin);
+        if (moved) {
+          const legacy = new URL('/api/openteamily/legacy', url);
+          legacy.search = new URLSearchParams({feature:moved.feature,path,query:url.search.slice(1)});
+          const request = new Request(legacy,{headers:{'x-ot-owner-username':bound.user.username}});
+          return relay(res,await scope.run(bound,() => bound.legacy(request)));
+        }
         if (path.startsWith('/v1/')) return relay(res,await platformRequest(path+url.search,{headers:{cookie}}));
         const page = new URL('http://localhost/api/openteamily/page');
         page.searchParams.set('path',path === '/' ? '/home' : path === '/space' ? '/artifacts' : path);

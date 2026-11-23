@@ -71,11 +71,11 @@
       <div class="feed-controls">
         <header class="feed-toolbar">
           <div id="feed-sections" class="feed-sections">
-            <nav class="feed-tabs" aria-label="动态类型">
-              <button type="button" id="feed-tab-following" data-feed-tab="following" aria-selected="false">关注</button>
-              <button type="button" id="feed-tab-activity" data-feed-tab="activity" aria-selected="true">动态</button>
-              <button type="button" id="feed-tab-collected" data-feed-tab="collected" aria-selected="false">已收录</button>
-            </nav>
+            <div class="feed-tabs" role="tablist" aria-label="动态类型">
+              <button type="button" id="feed-tab-following" data-feed-tab="following" role="tab" aria-controls="feed-results" aria-selected="false" tabindex="-1">关注</button>
+              <button type="button" id="feed-tab-activity" data-feed-tab="activity" role="tab" aria-controls="feed-results" aria-selected="true" tabindex="0">动态</button>
+              <button type="button" id="feed-tab-collected" data-feed-tab="collected" role="tab" aria-controls="feed-results" aria-selected="false" tabindex="-1">已收录</button>
+            </div>
           </div>
           <form id="feed-search" role="search" aria-label="搜索公开作品">
             <label class="visually-hidden" for="feed-query">搜索作品标题、内容或创作者</label>
@@ -106,17 +106,20 @@
           <button type="button" id="feed-retry" aria-describedby="feed-error" hidden>重试</button>
         </div>
       </div>
-      <section id="feed-following-empty" class="feed-following-empty" hidden>
-        <h2>关注列表暂无动态</h2>
-        <p>你关注的人发布动态后会显示在这里。</p>
-      </section>
-      <section id="feed-activity-empty" class="feed-activity-empty" aria-label="动态信息流">
-        <div class="feed-grid" id="feed-grid" data-empty="true"></div>
-      </section>
-      <p id="feed-count" role="status" aria-live="polite"></p>
-      <button type="button" id="feed-more" hidden>加载更多</button>
-      <p id="feed-note" class="note" role="status">暂时没有公开作品。</p>
-      <p id="feed-search-note" class="note" hidden></p>
+      <div id="feed-results" role="tabpanel" aria-labelledby="feed-tab-activity" tabindex="0">
+        <section id="feed-following-empty" class="feed-following-empty" hidden>
+          <h2>关注列表暂无动态</h2>
+          <p>你关注的人发布动态后会显示在这里。</p>
+        </section>
+        <section id="feed-activity-empty" class="feed-activity-empty" aria-label="动态信息流">
+          <div class="feed-grid" id="feed-grid" data-empty="true"></div>
+        </section>
+        <p id="feed-count" role="status" aria-live="polite"></p>
+        <button type="button" id="feed-more" hidden>加载更多</button>
+        <p id="feed-note" class="note" role="status">暂时没有公开作品。</p>
+        <button type="button" id="feed-empty-reset" hidden>清除筛选</button>
+        <p id="feed-search-note" class="note" hidden></p>
+      </div>
     </section>
     <section id="work-detail" class="work-detail-view" aria-labelledby="work-detail-title" hidden>
       <header class="work-detail-toolbar">

@@ -116,7 +116,8 @@ def run(args):
     def start(account, ref):
         base.IMAGE = ref
         started.add(account['name'])
-        base.start_runtime(account['name'], network, account['id'])
+        # The fixture volume retains the same native identity across image swaps.
+        base.start_runtime(account['name'], network, account['id'], volume_id=account['id'])
         account['containerId'] = base.docker('inspect', '-f', '{{.Id}}', account['name']).stdout.strip()
         account['address'] = base.gw.validate_address(base.ip_on(account['name'], network)+':8080')
         base.wait_for(lambda: base.request(account['address'],'GET','/',{'Host':account['address']})[0] in (200,401),
