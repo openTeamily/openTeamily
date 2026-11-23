@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { createHash } from 'node:crypto'
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -175,6 +176,13 @@ test('native pages and their module dependencies are served from one versioned p
     assert.equal(page.status, 200, path)
     assert.equal(page.headers.get(SERVED_BY_HEADER), 'ds-bot; instance=page-modules')
     const html = await page.text()
+    if (path === '/chat') {
+      const startup = /<script type="module" async>([\s\S]*?)<\/script>/.exec(html)?.[1]
+      assert.ok(startup?.startsWith('export function chatStartFromHash'))
+      const hash = createHash('sha256').update(startup).digest('base64')
+      assert.equal(page.headers.get('content-security-policy'), `script-src 'self' 'sha256-${hash}'`)
+      assert.doesNotMatch(html, /<script[^>]+src="[^"]*\/chat\/startup\.mjs"/)
+    }
     const stylesheet = /href="(\/chat\/assets\/[a-f0-9]{32})\/shell\/app\.css"/.exec(html)?.[1]
     assert.ok(stylesheet, path + ' uses the runtime shell stylesheet')
     base ??= stylesheet

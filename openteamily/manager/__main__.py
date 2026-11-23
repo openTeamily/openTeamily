@@ -1,6 +1,7 @@
 """Operator CLI; no real HTTP/Docker unless config AND --execute explicitly enable it."""
 import argparse
-from concurrent.futures import ThreadPoolExecutor
+from collections import deque
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import json
 import signal
 from pathlib import Path
@@ -32,6 +33,37 @@ def initialize(args):
     write_new(state / 'grants.json', [{'id': args.manager_id, 'credential_hash': digest(token),
               'instance_ids': [args.instance_id], 'backend_mode': 'compose'}])
     return {'status': 'initialized_disabled', 'config': str(state / 'manager.json'), 'server_grants': str(state / 'grants.json')}
+
+
+def _poll_with_spare_worker(items, initial_work, read_work, poll_instance):
+    queue = deque(initial_work)
+    scheduled = {item['id'] for item in initial_work}
+    reported = {item['id']: item for item in items}
+    results = {}
+    active = {}
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        while queue or active:
+            while queue and len(active) < 2:
+                item = queue.popleft()
+                active[workers.submit(poll_instance, item)] = item['id']
+            done, _ = wait(active, timeout=1 if len(active) == 1 else None, return_when=FIRST_COMPLETED)
+            for future in done:
+                results[active.pop(future)] = future.result()
+            if not done:
+                # While one owner's startup is blocking, let new assignments
+                # use the idle worker at the regular discovery cadence.
+                for item in read_work():
+                    iid = item['id']
+                    if iid in scheduled:
+                        continue
+                    scheduled.add(iid)
+                    reported[iid] = item
+                    queue.append(item)
+    report = []
+    for iid, item in reported.items():
+        outcome = results[iid] if iid in results else poll_instance(item)
+        report.extend(outcome)
+    return report
 
 
 def poll_once(args):
@@ -102,27 +134,25 @@ def poll_once(args):
     # Keep signup priority and fenced per-instance jobs. Bound concurrent checks
     # so one slow container does not block another owner's queued start.
     items = sorted(client.assigned(), key=priority)
-    pending = [item for item in items if not item['converged'] and not item['blocked']]
-    repairs = [item for item in items if gateway and item['converged'] and not item['blocked']
-               and item['observed'] == 'running' and item['health'] == 'healthy'
-               and item.get('gateway_route_present') is False]
-    if pending and repairs and not args.import_legacy:
-        # A cold start can hold its worker for the entire readiness budget.
-        # Keep one worker available to reconnect already running accounts.
-        def poll_group(group):
-            return {item['id']: poll_instance(item) for item in group}
 
-        completed = {}
-        with ThreadPoolExecutor(max_workers=2) as workers:
-            for group in workers.map(poll_group, (pending, repairs)):
-                completed.update(group)
-        results = []
-        for item in items:
-            result = completed.get(item['id'])
-            results.extend(result if result is not None else poll_instance(item))
-    elif len(pending) > 1 and not args.import_legacy:
-        with ThreadPoolExecutor(max_workers=2) as workers:
-            results = [result for group in workers.map(poll_instance, items) for result in group]
+    def needs_work(item):
+        return not item['converged'] and not item['blocked']
+
+    def needs_route_repair(item):
+        return (gateway and item['converged'] and not item['blocked']
+                and item['observed'] == 'running' and item['health'] == 'healthy'
+                and item.get('gateway_route_present') is False)
+
+    pending = [item for item in items if needs_work(item)]
+    if pending and not args.import_legacy:
+        # Give the second slot to a disconnected running owner where possible.
+        repairs = [item for item in items if needs_route_repair(item)]
+
+        def read_work():
+            latest = sorted(client.assigned(), key=priority)
+            return [item for item in latest if needs_route_repair(item)] + [item for item in latest if needs_work(item)]
+
+        results = _poll_with_spare_worker(items, pending[:1] + repairs + pending[1:], read_work, poll_instance)
     else:
         results = [result for item in items for result in poll_instance(item)]
     uncertain = any(r.get('status') == 'uncertain' for r in results)

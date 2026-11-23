@@ -65,7 +65,9 @@ test('native Chat starts scoped reads without the browser transport or optional 
     assert.equal(third.path, '/v1/workspaces?limit=100');
     assert.equal(third.init.credentials, 'same-origin');
     assert.ok(third.init.signal instanceof AbortSignal);
-    const early = takeChatReads(document);
+    const imported = await import('../openteamily/static/chat/startup.mjs?test-module-after-inline');
+    assert.equal(calls.length,3);
+    const early = imported.takeChatReads(document);
     assert.equal((await early.localRequest).status, 200);
     assert.equal((await early.sharedRequest).status, 200);
     assert.equal(takeChatReads(document), null);
@@ -86,7 +88,7 @@ test('desktop prepares the newest owned private snapshot while the Chat module i
   const original = globalThis.window;
   const owner = {id: 'a'.repeat(32), username: 'alice'};
   const workspace = 'b'.repeat(32), agent = 'c'.repeat(32), newest = 'd'.repeat(32), older = 'e'.repeat(32);
-  const document = {querySelector: () => ({})};
+  let document = {querySelector: () => ({})};
   const path = `/v1/workspaces/${workspace}/agents/${agent}/conversations/${newest}?limit=50&snapshot=1`;
   const calls = [];
   let snapshotOwner = owner.id;
@@ -106,6 +108,10 @@ test('desktop prepares the newest owned private snapshot while the Chat module i
     return Response.json({items: []});
   }};
   document.defaultView = globalThis.window;
+  const nextDocument = () => {
+    document = {querySelector: () => ({}), defaultView: globalThis.window};
+    globalThis.window.document = document;
+  };
   try {
     const {takeChatReads} = await import('../openteamily/static/chat/startup.mjs?test-desktop-early-history');
     const prepared = await takeChatReads(document).desktopTranscript;
@@ -115,12 +121,14 @@ test('desktop prepares the newest owned private snapshot while the Chat module i
     assert.deepEqual(calls,['/v1/auth/session','/v1/workspaces?scope=personal&include=chat',path]);
     calls.length = 0;
     snapshotOwner = older;
+    nextDocument();
     const foreign = await import('../openteamily/static/chat/startup.mjs?test-desktop-foreign-history');
     assert.equal(await foreign.takeChatReads(document).desktopTranscript,null);
     assert.equal(calls.length,2);
     calls.length = 0;
     desktop = false;
     snapshotOwner = owner.id;
+    nextDocument();
     const mobile = await import('../openteamily/static/chat/startup.mjs?test-no-mobile-early-history');
     assert.equal(mobile.takeChatReads(document).desktopTranscript,null);
     assert.equal(calls.length,2);

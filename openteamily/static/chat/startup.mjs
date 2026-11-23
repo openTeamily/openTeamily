@@ -90,10 +90,11 @@ function fitChatToKeyboard(view) {
   schedule();
 }
 
-let early;
+const startupKey = Symbol.for('openteamily.chat.initial-reads');
 const view = typeof window === 'undefined' ? null : window;
-if (view) fitChatToKeyboard(view);
-if (view?.document.querySelector('meta[name="openteamily-instance"]')) {
+const previous = view?.document[startupKey];
+if (view && !previous) fitChatToKeyboard(view);
+if (view?.document.querySelector('meta[name="openteamily-instance"]') && previous?.href !== view.location.href) {
   const {href, hash, search} = view.location;
   // The gateway can start account and private history reads while Chat loads.
   const read = async (path, signal) => {
@@ -116,11 +117,14 @@ if (view?.document.querySelector('meta[name="openteamily-instance"]')) {
   // The app later chooses between that thread and the shared conversation list.
   const desktopTranscript = !hash && !search && view.matchMedia?.('(min-width: 901px)').matches
     ? prepareDesktopTranscript(read, reads) : null;
-  early = {document: view.document, href, ...reads, sharedRequest, desktopTranscript};
+  // The inline entry and the imported module share the same native requests.
+  view.document[startupKey] = {href, requests: {...reads, sharedRequest, desktopTranscript}};
 }
 
 export function takeChatReads(document) {
-  const requests = early;
-  early = null;
-  return requests && requests.document === document && requests.href === document.defaultView?.location.href ? requests : null;
+  const entry = document[startupKey];
+  if (!entry || entry.href !== document.defaultView?.location.href) return null;
+  const {requests} = entry;
+  entry.requests = null;
+  return requests;
 }

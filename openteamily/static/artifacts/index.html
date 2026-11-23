@@ -188,11 +188,11 @@
         </div>
       </div>
       <div class="layout-toggle" id="layout-toggle" role="tablist" aria-label="排列方式">
-        <button type="button" role="tab" data-layout="grid" aria-selected="true" aria-label="网格视图" title="网格视图">
+        <button type="button" role="tab" data-layout="grid" aria-selected="true" aria-controls="artifact-list" aria-label="网格视图" title="网格视图">
           <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5 5h6v6H5V5zm8 0h6v6h-6V5zM5 13h6v6H5v-6zm8 0h6v6h-6v-6z"/></svg>
           <span class="visually-hidden">网格视图</span>
         </button>
-        <button type="button" role="tab" data-layout="list" aria-selected="false" aria-label="列表视图" title="列表视图">
+        <button type="button" role="tab" data-layout="list" aria-selected="false" aria-controls="artifact-list" aria-label="列表视图" title="列表视图" tabindex="-1">
           <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5 6h14v2H5V6zm0 5h14v2H5v-2zm0 5h14v2H5v-2z"/></svg>
           <span class="visually-hidden">列表视图</span>
         </button>
@@ -258,7 +258,10 @@
         </div>
         <button type="button" id="more-shared-meetings" class="secondary" hidden>加载更多共享纪要</button>
         <div id="list-empty" hidden>
-          <p id="empty-no-match" class="note" hidden>没有找到符合条件的作品。</p>
+          <div id="empty-no-match" hidden>
+            <p class="note" role="status">没有找到符合条件的作品。</p>
+            <button type="button" id="reset-artifact-search" class="secondary">清除条件</button>
+          </div>
           <div id="empty-all">
             <div class="empty-hero" aria-hidden="true"><span class="empty-cta-icon" data-tone="stack" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 8.5 12 5l8 3.5-8 3.5L4 8.5zm0 4.2 8 3.5 8-3.5v1.8L12 18 4 14.5v-1.8z"/></svg></span></div>
             <h2>你的资料空间从这里开始</h2>
