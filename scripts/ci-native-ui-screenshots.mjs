@@ -198,6 +198,105 @@ async function meetingActionContinuity(page, account, name) {
   await waitForRows(0);
 }
 
+async function agentApiKey(page, account) {
+  await openNative(page,'/agents',account.instanceId,'#agent-search');
+  const open = page.locator('#agent-list button[data-id="'+account.agent.id+'"]');
+  await open.click();
+  const form = page.locator('#api-key-form');
+  const name = 'CI 一次性验收密钥 '+page.viewportSize().width;
+  await form.locator('#api-key-name').fill(name);
+  await form.locator('button[type="submit"]').click();
+  const row = page.locator('#api-key-list li').filter({hasText:name});
+  await row.getByRole('button',{name:'撤销'}).waitFor();
+  assert.equal(await page.locator('#api-key-token').isVisible(),true,
+    'the one-time token must stay visible after the key list has reloaded');
+  const value = page.locator('#api-key-value');
+  const token = await value.textContent();
+  assert.ok(token?.startsWith('ota_'+account.instanceId+'_'));
+  await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin:fixture.origin});
+  await page.getByRole('button',{name:'复制密钥'}).click();
+  assert.ok(await page.evaluate(async expected => await navigator.clipboard.readText() === expected,token));
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),true);
+  await row.getByRole('button',{name:'撤销'}).click();
+  await row.getByText(name+' · 10 次/分钟 · 已撤销 · 未使用',{exact:true}).waitFor();
+  assert.equal(await page.locator('#api-key-token').isVisible(),false);
+  assert.equal((await value.textContent()).trim(),'');
+  await page.locator('#cancel-edit').click();
+}
+
+async function spaceCatalogQueryReturn(page, account) {
+  const workspace = account.instanceId;
+  const root = '/v1/workspaces/'+workspace+'/artifacts';
+  const title = 'CI 工作区链接验收 '+page.viewportSize().width;
+  const created = await account.rpc('artifacts/v1',{method:'POST',path:root,
+    idempotency_key:randomUUID().replaceAll('-',''),body:{title,kind:'document',body:'用于验证筛选往返。'}});
+  assert.equal(created.status,201);
+
+  await openNative(page,'/space?workspace='+workspace,workspace,'#search');
+  const search = page.locator('#search');
+  const item = page.locator('#artifact-list').getByRole('button',{name:title,exact:true});
+  await search.fill(title);
+  await search.press('Enter');
+  await item.click();
+  await page.locator('#editor-title').waitFor();
+  assert.equal(await page.locator('#editor-title').inputValue(),title);
+  await page.reload({waitUntil:'domcontentloaded'});
+  await page.waitForFunction(title => document.querySelector('#editor-title')?.value === title,title);
+  await page.locator(page.viewportSize().width < 700 ? '#cancel-editor-load' : '#cancel-editor').click();
+  await item.waitFor();
+  assert.equal(await search.inputValue(),title,'a workspace-qualified catalog URL restores its saved search');
+  assert.equal(await item.evaluate(el => el === document.activeElement),true);
+  assert.deepEqual([...new URL(page.url()).searchParams],[['workspace',workspace]]);
+}
+
+async function memoryGraphReturn(page, account) {
+  const workspace = account.instanceId;
+  const base = '/v1/workspaces/'+workspace+'/memory';
+  const mobile = page.viewportSize().width < 700;
+  const title = mobile ? 'CI 手机图谱来源' : 'CI 桌面图谱来源';
+  const create = async title => {
+    const result = await account.rpc('memory/v1',{method:'POST',path:base,
+      idempotency_key:randomUUID().replaceAll('-',''),body:{title,body:'图谱返回验收'}});
+    assert.equal(result.status,201);
+    return result.body.page.id;
+  };
+  const id = await create(title);
+  await create(title+'关联节点');
+
+  await openNative(page,'/memory?workspace='+workspace,workspace,'#main-panel');
+  const graphToggle = page.locator('#memory-mobile-graph');
+  if (mobile) await graphToggle.click();
+  const filter = page.locator('#topic-search');
+  await filter.fill(title);
+  await page.locator('#graph-zoom-in').click();
+  const graph = page.locator('#graph-world');
+  const zoom = await graph.getAttribute('transform');
+  const node = graph.locator('[data-id="'+id+'"]');
+  if (mobile) await node.locator('circle').click();
+  else await node.press('Enter');
+  const editor = page.locator('#editor-form');
+  const back = page.locator('#close-editor');
+  await editor.waitFor();
+  assert.equal(await editor.locator('[name="title"]').inputValue(),title);
+  assert.equal(new URL(page.url()).searchParams.get('page'),id);
+  await back.click();
+  await editor.waitFor({state:'hidden'});
+  if (mobile) assert.equal(await graphToggle.getAttribute('aria-expanded'),'true',
+    'closing a graph node on mobile returns to the graph');
+  assert.equal(await node.evaluate(element => element === document.activeElement),true,
+    'closing a graph node restores focus to that node');
+  assert.equal(await filter.inputValue(),title);
+  assert.equal(await graph.getAttribute('transform'),zoom);
+  assert.equal(new URL(page.url()).searchParams.get('page'),null);
+
+  if (!mobile) {
+    await node.press('Space');
+    await editor.waitFor();
+    assert.equal(await editor.locator('[name="title"]').inputValue(),title);
+    await back.click();
+  }
+}
+
 async function memoryHistory(page, account, name) {
   const workspace = account.instanceId;
   const base = '/v1/workspaces/'+workspace+'/memory';
@@ -270,6 +369,9 @@ try {
     if (expected) await page.getByText(expected,{exact:true}).first().waitFor();
     await screenshot(page,name);
   }
+  await agentApiKey(page,fixture.owner);
+  await spaceCatalogQueryReturn(page,fixture.owner);
+  await memoryGraphReturn(page,fixture.owner);
   await memoryHistory(page,fixture.owner,'desktop-memory-history');
   await connectors(page);
   await meetingActionContinuity(page,fixture.owner,'desktop-meeting-actions');
@@ -293,6 +395,7 @@ try {
   const mobile = await contextFor({width:390,height:844});
   await signIn(mobile.page,fixture.owner);
   await chat(mobile.page,'mobile-chat',false);
+  await agentApiKey(mobile.page,fixture.owner);
   await mobile.context.close();
 
   const peer = await contextFor({width:1440,height:900});
@@ -309,6 +412,8 @@ try {
   assert.ok(!JSON.stringify(isolation).includes(fixture.owner.chat.reply));
   await peer.page.setViewportSize({width:390,height:844});
   await meetingActionContinuity(peer.page,fixture.peer,'mobile-meeting-actions');
+  await spaceCatalogQueryReturn(peer.page,fixture.peer);
+  await memoryGraphReturn(peer.page,fixture.peer);
   await memoryHistory(peer.page,fixture.peer,'mobile-memory-history');
   await peer.context.close();
   await desktop.context.close();

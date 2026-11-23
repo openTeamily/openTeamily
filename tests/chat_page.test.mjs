@@ -12,8 +12,8 @@ import {mountWorkspaceInvite} from '../openteamily/static/chat/workspace-invite.
 import {mountMessageUtilities} from '../openteamily/static/chat/utilities.mjs';
 import {readMarkdownTable, renderMarkdownTable} from '../openteamily/static/shell/markdown-table.mjs';
 import {countMentionedGroupMembers} from '../openteamily/static/chat/mentions.mjs';
-import {pendingSignupSession, readChatDraftMentions, readChatDrafts, readPendingPrivateText, rememberSignupSession,
-  savePendingPrivateText, writeChatDraftMentions, writeChatDrafts} from '../openteamily/static/home/runtime-readiness.mjs';
+import {pendingSignupSession, readChatDraftMentions, readChatDrafts, readPendingChatText, rememberSignupSession,
+  savePendingChatText, writeChatDraftMentions, writeChatDrafts} from '../openteamily/static/home/runtime-readiness.mjs';
 import {agentDirectoryHref, directAgentAccessHref, directAgentAccessFromHash} from '../openteamily/static/shell/chat-utils.mjs';
 
 test('Agent directory links preserve the native workspace and optional exact agent', () => {
@@ -4248,15 +4248,86 @@ test('pending private text keeps its send key alongside an independent newer dra
   const fresh = JSON.stringify([alice,linkWork,'agent',linkAgent,null]);
   const key = 'msg-confirm-original-key';
   const message = {body:'先发出的消息',chat_language:'zh-CN'};
-  assert.equal(savePendingPrivateText(view,scope,key,message),true);
+  assert.equal(savePendingChatText(view,scope,key,message),true);
   assert.equal(writeChatDrafts(view,alice,new Map([[scope,'后写的草稿']])),true);
-  assert.deepEqual(readPendingPrivateText(view,scope),[{key,message}]);
-  assert.deepEqual(readPendingPrivateText(view,other),[]);
-  assert.equal(savePendingPrivateText(view,fresh,key,message),false);
-  assert.equal(savePendingPrivateText(view,scope,key),true);
-  assert.deepEqual(readPendingPrivateText(view,scope),[]);
+  assert.deepEqual(readPendingChatText(view,scope),[{key,message}]);
+  assert.deepEqual(readPendingChatText(view,other),[]);
+  assert.equal(savePendingChatText(view,fresh,key,message),false);
+  assert.equal(savePendingChatText(view,scope,key),true);
+  assert.deepEqual(readPendingChatText(view,scope),[]);
   assert.equal(readChatDrafts(view,alice).get(scope),'后写的草稿');
 });
+
+test('pending shared text preserves the exact mention payload and its destination alongside a newer draft', () => {
+  const {view} = publicOpeningView();
+  const scope = JSON.stringify([alice,linkTeam,'social',null,linkSocial]);
+  const key = 'socialmsg-original-request';
+  const message = {body:'先发出的群消息',agent_mentions:[{owner_id:bob,agent_id:linkAgent}],direct_agent_request:true};
+  assert.equal(savePendingChatText(view,scope,key,message),true);
+  assert.equal(writeChatDrafts(view,alice,new Map([[scope,'新草稿']])),true);
+  assert.deepEqual(readPendingChatText(view,scope),[{key,message}]);
+  assert.deepEqual(readPendingChatText(view,JSON.stringify([bob,linkTeam,'social',null,linkSocial])),[]);
+  assert.deepEqual(readPendingChatText(view,JSON.stringify([alice,linkWork,'social',null,linkSocial])),[]);
+  assert.deepEqual(readPendingChatText(view,JSON.stringify([alice,linkTeam,'social',null,linkSocial+'X'])),[]);
+  assert.equal(savePendingChatText(view,scope,key,{...message,reply_to:linkSocialLatest}),false);
+  assert.equal(savePendingChatText(view,scope,key),true);
+  assert.equal(readChatDrafts(view,alice).get(scope),'新草稿');
+});
+
+test('existing private pending text can still be recovered from browser storage', () => {
+  const {saved,view} = publicOpeningView();
+  const scope = JSON.stringify([alice,linkWork,'agent',linkAgent,linkThread]);
+  const pendingPrivateText = [{key:'msg-before-release-key',message:{body:'加载前发送的消息'}}];
+  saved.set('openteamily.chat-drafts:'+alice,JSON.stringify({[scope]:{body:'编辑中的草稿',pendingPrivateText}}));
+  assert.deepEqual(readPendingChatText(view,scope),pendingPrivateText);
+  assert.equal(readChatDrafts(view,alice).get(scope),'编辑中的草稿');
+});
+
+for (const alreadyDelivered of [false,true]) {
+  test(`reopening a shared chat ${alreadyDelivered ? 'recognizes delivery from its receipt' : 'restores its pending message without an automatic resend'}`, async () => {
+    const fixture = linkedChatFixture(`#workspace=${linkTeam}&social=${linkSocial}`);
+    const {doc, el, calls, routes, restore} = fixture;
+    const {view} = publicOpeningView();
+    doc.defaultView = view;
+    const scope = JSON.stringify([alice,linkTeam,'social',null,linkSocial]);
+    const path = linkBase(linkTeam) + linkSocialPath + '/messages';
+    const key = 'socialmsg-original-request';
+    const body = '加载前发送的群消息';
+    const receipt = {id:'otm_'+'B'.repeat(26),client_key:key,user_id:alice,workspace_id:linkTeam,
+      conversation_id:linkSocial,body,seq:9,created:15};
+    savePendingChatText(view,scope,key,{body});
+    writeChatDrafts(view,alice,new Map([[scope,'继续写的草稿']]));
+    routes.set(path+'?limit=50', () => json(200,{items:[alreadyDelivered ? receipt : {...receipt,user_id:bob}]}));
+    const writes = [];
+    const fetcher = async (url, options = {}) => {
+      if (url !== path || options.method !== 'POST') return fixture.fetcher(url, options);
+      writes.push({key:options.headers['Idempotency-Key'],body:JSON.parse(options.body)});
+      return json(201,{message:receipt});
+    };
+    try {
+      await mount(doc,{fetcher});
+      await settle();
+      assert.deepEqual(writes,[]);
+      assert.equal(el('chat-body').value,'继续写的草稿');
+      assert.equal(calls.filter(call => call.path === path+'?limit=50' && call.method === 'GET').length,1);
+      const failed = el('message-list').children.find(row => row.dataset.sendPending === 'failed');
+      if (alreadyDelivered) {
+        assert.equal(failed,undefined);
+      } else {
+        assert.ok(failed);
+        const retry = failed.children.find(node => node.className === 'send-actions').children[0];
+        await fire(retry,'click');
+        await settle();
+        assert.deepEqual(writes,[{key,body:{body}}]);
+      }
+      assert.deepEqual(readPendingChatText(view,scope),[]);
+      assert.equal(fixture.messages().filter(id => id === receipt.id).length,1);
+      assert.equal(el('chat-body').value,'继续写的草稿');
+    } finally {
+      restore();
+    }
+  });
+}
 
 test('an interrupted group send checks for its exact receipt and retries the original key if no receipt exists', async () => {
   const fixture = linkedChatFixture(`#workspace=${linkTeam}&social=${linkSocial}`);

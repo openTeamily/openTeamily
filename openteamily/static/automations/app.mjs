@@ -200,6 +200,26 @@ function draftFields(values) {
   return fields;
 }
 
+function editorChanges(fields, baseline) {
+  return Object.fromEntries(Object.entries(fields).filter(([field, value]) => value !== baseline[field]));
+}
+
+function matchesAutomationUpdate(saved, item, workspace, changes) {
+  if (saved?.id !== item.id || saved.workspace_id !== workspace || saved.revision !== item.revision + 1) return false;
+  return Object.entries(changes).every(([field, expected]) => {
+    const actual = saved[field];
+    if (Array.isArray(expected)) {
+      return Array.isArray(actual) && actual.length === expected.length &&
+        expected.every((value, index) => (field === 'participants' ? actual[index]?.username : actual[index]) === value);
+    }
+    if (field === 'schedule') {
+      return actual && Object.keys(actual).length === Object.keys(expected).length &&
+        Object.entries(expected).every(([key, value]) => actual[key] === value);
+    }
+    return actual === expected;
+  });
+}
+
 function exactRunForTarget(run, target) {
   return /^[a-f0-9]{32}$/.test(run?.id || '') && run.workspace_id === target.workspace && run.automation_id === target.automation;
 }
@@ -1016,7 +1036,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!editorDraft || editorDraft.stale || form.hidden || mainPanel.hidden) return;
     const {key, revision, base} = editorDraft;
     const values = snapshotDraft();
-    const patch = Object.fromEntries(Object.entries(values).filter(([field, value]) => value !== base[field]));
+    const patch = editorChanges(values, base);
     const fresh = !current?.id && !followupSource;
     const changed = Boolean(draftSave || (fresh && current?.edition) || Object.keys(patch).length);
     editorDraft.stored = false;
@@ -2491,6 +2511,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     const values = readEditor(form);
+    const submittedFields = snapshotDraft();
     if (!native) delete values.notification_policy;
     const workspace = workspaceId();
     if (!workspace) {
@@ -2509,7 +2530,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const editor = editorRequest;
     const loadSeq = loadRequest;
     const draftKey = editorDraft?.key;
-    const isCurrent = () => editorRequest === editor && loadRequest === loadSeq && workspaceId() === workspace && !form.hidden;
+    const viewer = viewerId();
+    const isCurrent = () => editorRequest === editor && loadRequest === loadSeq &&
+      viewerId() === viewer && workspaceId() === workspace && !form.hidden;
     if (source) values.enabled = false;
     const path = `/v1/workspaces/${workspace}/automations`;
     const {template_id, ...changes} = values;
@@ -2523,7 +2546,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     let result;
     try {
       if (item) {
-        result = await request('POST', `${path}/${item.id}`, {revision: item.revision, changes});
+        const resource = `${path}/${item.id}`;
+        result = await runRequestWithTimeout('POST', resource, {revision: item.revision, changes});
+        if (native && EDITOR_ID.test(workspace) && EDITOR_ID.test(item.id) && isCurrent()) {
+          const incomplete = result.status === 200 &&
+            !matchesAutomationUpdate(result.body.automation, item, workspace, changes);
+          if (incomplete || result.status === 0 || result.status === 408 || result.status >= 500 || result.status === 409) {
+            show('loading', '正在核对已保存的设置…');
+            const verified = await runRequestWithTimeout('GET', resource);
+            if (isCurrent() && verified.status === 200 &&
+                matchesAutomationUpdate(verified.body.automation, item, workspace, changes)) result = verified;
+            else if (incomplete) result = {status:0, body:{}};
+          }
+        }
       } else {
         const ref = source?.target;
         const provenance = ref?.memoryAction ? {source_memory_action: {action_id: ref.memoryAction, revision: ref.revision}}
@@ -2578,7 +2613,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (result.status !== 200 && result.status !== 201) {
-      show('error', messageFor(result.body.error, '保存失败。'));
+      const message = result.status === 0 || result.status === 408 || result.status >= 500
+        ? '暂时无法确认保存结果。草稿已保留，请重试。' : '保存失败。';
+      show('error', messageFor(result.body.error, message));
       return;
     }
     if (native && EDITOR_ID.test(workspace) &&
@@ -2587,6 +2624,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', '暂时无法确认是否保存成功，请重试。');
       return;
     }
+    const newerFields = editorChanges(snapshotDraft(), submittedFields);
+    const hasNewerFields = Object.keys(newerFields).length > 0;
+    const focusedInput = document.activeElement;
+    const selection = hasNewerFields && form.contains?.(focusedInput) && typeof focusedInput?.selectionStart === 'number'
+      ? [focusedInput.selectionStart, focusedInput.selectionEnd, focusedInput.selectionDirection] : null;
     forgetEditorDraft(draftKey);
     draftSave = null;
     current = result.body.automation;
@@ -2620,6 +2662,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     form.elements.template_id.disabled = true;
     rememberEditorSettings();
     openEditorDraft(current, null);
+    if (hasNewerFields) {
+      applyEditorDraft(newerFields);
+      syncEditorDraft();
+      watchEditorExit();
+      if (selection && document.activeElement === focusedInput) focusedInput.setSelectionRange(...selection);
+    }
     const heading = document.getElementById('editor-heading');
     if (heading) heading.textContent = current.title;
     document.getElementById('remove-automation').hidden = false;
@@ -2627,11 +2675,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (runHistoryButton) runHistoryButton.hidden = false;
     syncRunControls();
     renderManualRunNote();
-    show('ok', startedSample ? '已保存。可在下方查看本次试运行结果。' : sample ? '自动化已保存。点击「运行一次」生成样例。'
+    show('ok', hasNewerFields ? '已保存提交的设置。仍有未保存的修改。'
+      : startedSample ? '已保存。可在下方查看本次试运行结果。' : sample ? '自动化已保存。点击「运行一次」生成样例。'
       : source && result.status === 200 ? '已打开这条行动项的现有跟进。'
       : result.body.cancelled_scheduled_runs > 0 ? '已暂停自动运行，排队中的计划运行已取消。'
       : current.enabled ? '已保存，自动运行已启用。' : '已保存，自动运行未启用。');
-    await loadRuns({focus: Boolean(startedSample)});
+    await loadRuns({focus: Boolean(startedSample && !hasNewerFields)});
   });
 
   runButton.addEventListener('click', () => {

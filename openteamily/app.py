@@ -100,7 +100,7 @@ def object_only(pairs):
 
 
 class App:
-    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, automation_backend=None, operator_admin=None, oidc_registry=None, composio_transport=None, model_http_policy=None, auto_provision=None, mcp_transport=None):
+    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, operator_admin=None, oidc_registry=None, composio_transport=None, model_http_policy=None, auto_provision=None, mcp_transport=None):
         from .model_http_policy import ModelHttpPolicy
         if model_http_policy is not None and not isinstance(model_http_policy, ModelHttpPolicy):
             raise ValueError("Invalid operator model HTTP policy")
@@ -668,17 +668,6 @@ class App:
     @staticmethod
     def workspace(row):
         return {key: row[key] for key in ('id', 'owner_id', 'name', 'created')}
-
-
-
-
-    # Automations run on each user's DS-Bot (features/automations). The platform has no
-    # scheduler; these stay as no-ops for deployments whose wsgi.py still calls them.
-    def start_automation_worker(self):
-        return None
-
-    def stop_automation_worker(self):
-        return None
 
     def _media_upload(self, env, limit=None, mimes=None, unsupported=400):
         limit = artifacts.MAX_MEDIA_BYTES + 8192 if limit is None else limit

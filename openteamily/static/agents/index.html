@@ -184,7 +184,11 @@
           <label>每分钟上限 <input id="api-key-rate" type="number" min="1" max="60" value="10"></label>
           <button type="submit">生成密钥</button>
         </form>
-        <p id="api-key-token" class="note" hidden></p>
+        <div id="api-key-token" class="note" hidden>
+          <p>密钥只显示一次，请先复制并妥善保管。</p>
+          <code id="api-key-value"></code>
+          <button id="api-key-copy" type="button">复制密钥</button>
+        </div>
         <ul id="api-key-list"></ul>
       </section>
       <section id="chat-panel" hidden>

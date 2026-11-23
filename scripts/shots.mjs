@@ -236,7 +236,6 @@ async function startServerSide({ name, ref, port, tree, seedData, login, timeout
     '--origin', origin,
     '--port', String(port),
     '--insecure-local',
-    '--no-automation-worker',
   ], { cwd: tree, env: { ...process.env, PYTHONPATH: tree }, stdio: ['ignore', log, log], detached: true });
   children.add(child);
   child.unref();

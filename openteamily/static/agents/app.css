@@ -285,6 +285,8 @@ body.app-workspace:not(.chat-open) > main > #main-panel:has(> .directory-top) { 
 .directory-list-heading select { width:auto; min-height:2.75rem; font-size:.8125rem; }
 #agent-list .agent-card .chat-cta { min-height:2.75rem; }
 #agent-list .agent-card .archive-label { flex:none; color:var(--ot-muted); font-size:.75rem; }
+#api-key-token { overflow-wrap: anywhere; }
+#api-key-value { display: block; margin-bottom: .5rem; user-select: all; }
 #agent-share-dialog {
   box-sizing: border-box;
   width: min(28rem, calc(100vw - 2rem));

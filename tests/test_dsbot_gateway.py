@@ -508,6 +508,40 @@ class GatewayTest(unittest.TestCase):
         # steer to a browser page.
         self.assertEqual(self.call(self.tokens['a' * 32], uri='/v1/gateway/invocations/' + 'c' * 32)[0], 401)
 
+    def test_external_agent_api_requires_the_canonical_runtime(self):
+        owner, canonical, legacy = 'a' * 32, '1' * 32, '3' * 32
+        with self.store.transaction() as db:
+            db.execute("INSERT INTO instances(id,workspace_id,owner_id,profile,backend_mode,image_ref,volume_ref,"
+                       "desired,revision,operation_id,operation_type,observed,observed_revision,health,create_key,created) "
+                       "VALUES(?,?,?,'p','compose','img','legacy-volume','running',1,'op','create','running',1,'healthy','legacy',0)",
+                       (legacy, '0' * 32, owner))
+            gw.record_upstream(db, legacy, '172.30.0.13:8080', 'dsh-auth-legacy=' + 'S' * 20, 1)
+
+        def call(iid, method, uri):
+            return self.call(uri=uri, method=method, Authorization=f'Bearer ota_{iid}_' + 'K' * 43)
+
+        operations = (
+            ('POST', f'/v1/gateway/agents/{owner}/invocations'),
+            ('GET', '/v1/gateway/invocations/' + 'c' * 32),
+        )
+        for iid in (canonical, legacy):
+            for method, uri in operations:
+                status, headers = call(iid, method, uri)
+                self.assertEqual((status, headers.get('X-OT-Gateway-Error')), (503, 'dsbot_not_ready'))
+                self.assertNotIn('X-OT-Upstream', headers)
+
+        with self.store.transaction() as db:
+            db.execute('INSERT INTO runtime_auto_provisions VALUES(?,?,?,?,?,?)',
+                       (owner, '0' * 32, 'a' * 32, canonical, 'manager', 1))
+
+        for method, uri in operations:
+            status, headers = call(canonical, method, uri)
+            self.assertEqual((status, headers.get('X-OT-Instance')), (204, canonical))
+            status, headers = call(legacy, method, uri)
+            self.assertEqual((status, headers.get('X-OT-Gateway-Error')), (503, 'dsbot_not_ready'))
+            self.assertNotIn('X-OT-Upstream', headers)
+        self.assertEqual(self.call(self.tokens[owner])[1].get('X-OT-Instance'), canonical)
+
     def test_nginx_config_has_external_agent_location(self):
         conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)
         self.assertIn('location ^~ /v1/gateway/ {', conf)
@@ -515,6 +549,10 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('proxy_set_header Authorization $http_authorization;', conf)
         # The caller's Authorization still never reaches a runtime.
         self.assertIn('proxy_set_header Authorization "";', conf)
+        external = conf.split('location ^~ /v1/gateway/ {', 1)[1].split('recursive_error_pages', 1)[0]
+        self.assertIn('error_page 401 = @ot_gateway_unauthorized;', external)
+        self.assertIn('error_page 500 = @ot_gateway_error;', external)
+        self.assertIn('return 503 \'{"error":{"code":"dsbot_not_ready"}}\';', external)
 
     def test_nginx_sets_runtime_owner_from_the_authorization_response(self):
         conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)

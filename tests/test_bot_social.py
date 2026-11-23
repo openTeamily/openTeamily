@@ -9,7 +9,6 @@ from pathlib import Path
 
 from openteamily import bot_social
 from openteamily.app import App, Config
-from openteamily.fake_runtime import FakeRuntimeBackend
 from openteamily.operator_config import OperatorAdmin
 from openteamily.security import digest
 from openteamily.store import Store
@@ -48,7 +47,6 @@ class BotSocialAPITests(unittest.TestCase):
             Store(Path(self.temp.name) / 'state'),
             Config(ORIGIN, allow_registration=True),
             clock=lambda: self.now,
-            automation_backend=FakeRuntimeBackend(),
             operator_admin=OperatorAdmin(digest(TOKEN)),
         )
         self.alice = Client(self.app)

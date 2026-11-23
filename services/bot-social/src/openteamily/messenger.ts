@@ -1932,7 +1932,13 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         if (state === "passed") return {ok: true};
         ot.run("UPDATE ot_agent_reply_jobs SET status='replied',passed=1,updated_at=?,lease_expires_at=NULL WHERE id=?", now, job.id);
       } else {
-        assert(state === "running" && job.claim_id === claim, 409, "reply_job_unavailable", "这次回复的状态已更新。");
+        // The native turn can end while delivery is offline. Allow that exact
+        // claim to settle after expiry unless the sender has already retried.
+        const sameFailure = job.status === "failed" && claim !== null && job.claim_id === claim
+          && job.available && job.studio_available && job.source_revision === job.current_revision;
+        assert(sameFailure || currentRunningClaim(job, claim) || (state === "running" && job.claim_id === claim),
+          409, "reply_job_unavailable", "这次回复的状态已更新。");
+        if (sameFailure) return {ok: true};
         ot.run("UPDATE ot_agent_reply_jobs SET status='failed',updated_at=?,lease_expires_at=NULL WHERE id=?", now, job.id);
       }
       replyProgress.delete(job.id);

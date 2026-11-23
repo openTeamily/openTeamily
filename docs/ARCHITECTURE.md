@@ -36,6 +36,11 @@ The platform answers any moved route that still reaches it, and the removed
 central execution routes (`/v1/agent/*`, `/v1/gateway/*` on the platform,
 `/v1/runtime*`, `/v1/agent-homepages/start`), with `410 moved_to_dsbot`.
 
+The public Agent API at `/v1/gateway/` uses the instance identifier in the key
+to find its account. The edge only forwards to that account's assigned DS-Bot,
+which verifies the key and runs the agent turn. A preserved older instance
+cannot serve these requests after the account has moved to its assigned runtime.
+
 ## Credentials
 
 Manager delivers each runtime only `{server, displayName?, source}` for Bot
