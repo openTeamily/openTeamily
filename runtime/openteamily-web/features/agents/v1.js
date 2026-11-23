@@ -44,9 +44,7 @@ export function agentsV1({ endpoints, log }) {
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}$`), handle: wrap(async (req, workspaceId, id, conversationId) => {
       if (req.method !== 'GET') throw new FeatureError(400, 'invalid', 'Invalid conversation request')
       const { agent } = await call('get', { workspace_id: workspaceId, id })
-      const listed = await call('conversations', { workspace_id: workspaceId, id })
-      const conversation = listed.items.find((row) => row.id === conversationId)
-      if (!conversation) throw new FeatureError(404, 'not_found', 'Conversation not found')
+      const conversation = await call('conversation-get', { workspace_id: workspaceId, id, conversation_id: conversationId })
       const { items } = await call('messages', { workspace_id: workspaceId, id, conversation_id: conversationId })
       return { status: 200, body: { conversation: publicConversation(conversation, workspaceId, id), agent: publicAgent(agent), items: items.map((row) => publicMessage(row, workspaceId, id)) } }
     }) },

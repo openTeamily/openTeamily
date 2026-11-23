@@ -60,6 +60,7 @@ export function view(row) {
 
 export function createAgents({ db, host }) {
   db.exec(SCHEMA)
+  db.function('ot_search_fold', { deterministic: true }, text => text.toLocaleLowerCase('en-US'))
   const native = nativeAgents({ host, db })
   const one = (sql, ...a) => db.prepare(sql).get(...a)
   const all = (sql, ...a) => db.prepare(sql).all(...a)
@@ -223,6 +224,41 @@ export function createAgents({ db, host }) {
       run('INSERT INTO agent_conversations VALUES(?,?,?,?,?)', row.id, row.agent_id, row.title, row.created, row.updated)
       const mapping = await native.session(agent, `agent:${agent.id}:${row.id}`, row.title)
       return { status: 201, conversation: { ...row, ...mapping } }
+    },
+    async 'conversation-get'(p) {
+      const agent = load(ws(p), p.id)
+      const row = conversation(agent, p.conversation_id)
+      return { ...row, ...await native.session(agent, `agent:${agent.id}:${row.id}`, row.title) }
+    },
+    async searchMessages(p) {
+      const workspaceId = ws(p)
+      const { q, limit, position, cursor, conversation_id: conversationId = null } = p
+      if (typeof q !== 'string' || q.length < 1 || q.length > 80 || CONTROL.test(q)
+          || !Number.isInteger(limit) || limit < 1 || limit > 51
+          || (conversationId !== null && !ID.test(conversationId))
+          || (cursor && !ID.test(cursor))
+          || (position && (!Array.isArray(position) || position.length !== 2
+            || !Number.isSafeInteger(position[0]) || !ID.test(position[1])))) {
+        fail('invalid', 'Invalid message search', 400)
+      }
+      const scope = `FROM agents a JOIN agent_conversations c ON c.agent_id=a.id
+        JOIN agent_messages m ON m.conversation_id=c.id
+        WHERE a.workspace_id=? AND (? IS NULL OR c.id=?)`
+      const bindings = [workspaceId, conversationId, conversationId]
+      let [created, id] = position || [null, null]
+      if (cursor) {
+        const row = one(`SELECT m.created ${scope} AND m.id=?`, ...bindings, cursor)
+        if (!row) fail('invalid', 'Invalid search cursor', 400)
+        created = row.created
+        id = cursor
+      }
+      const comparison = p.ascending === true ? '>' : '<'
+      const order = p.ascending === true ? 'ASC' : 'DESC'
+      const linkFilter = p.links === true ? "AND (instr(m.text,'http://')>0 OR instr(m.text,'https://')>0)" : ''
+      return { items: all(`SELECT m.id, c.id AS conversation_id, a.id AS agent_id, c.title, m.text AS body, m.created
+        ${scope} AND instr(ot_search_fold(m.text),ot_search_fold(?))>0 ${linkFilter}
+        AND (? IS NULL OR (m.created,m.id) ${comparison} (?,?))
+        ORDER BY m.created ${order}, m.id ${order} LIMIT ?`, ...bindings, q, created, created, id, limit) }
     },
     async messages(p) {
       const agent = load(ws(p), p.id)
