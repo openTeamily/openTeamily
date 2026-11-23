@@ -49,20 +49,27 @@
 
 #appearance .choice,
 #appearance-schedule-card .choice,
-#message-display .choice,
-#appearance .choice span,
-#appearance-schedule-card .choice span,
-#message-display .choice span {
-  align-items: flex-start;
-}
-
-#appearance .choice,
-#appearance-schedule-card .choice,
 #message-display .choice {
-  display: flex;
-  gap: 0.55rem;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  column-gap: 0.55rem;
   padding: 0.7rem 0;
   border-bottom: 1px solid var(--ot-line);
+}
+
+#appearance .choice > input,
+#appearance-schedule-card .choice > input,
+#message-display .choice > input {
+  width: auto;
+  margin: 0.2em 0 0;
+}
+
+#appearance .choice > span,
+#appearance-schedule-card .choice > span,
+#message-display .choice > span {
+  min-width: 0;
+  display: block;
 }
 
 #appearance .choice:last-of-type,
@@ -92,6 +99,10 @@
   margin: 0.65rem 0 1rem;
   color: var(--ot-text);
   font-size: 0.95rem;
+}
+
+#appearance-schedule-card > #appearance-status {
+  margin: 0.75rem 0 0.35rem;
 }
 
 
