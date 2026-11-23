@@ -1,4 +1,4 @@
-import { createLookAvatar } from '../look/app.mjs';
+import { AGENT_PORTRAITS, agentPortraitLook, createLookAvatar } from '../look/app.mjs';
 import { AGENT_CATEGORIES, AGENT_CATEGORY_SLUGS, categoryFromSearch, categoryLabel } from '../shell/agent-categories.mjs';
 import { csrfCookie, canManage, idempotencyKey } from '../shell/chat-utils.mjs';
 import { servedByDsBot } from '../shell/dsbot-api.mjs';
@@ -30,7 +30,8 @@ export function searchWithCategory(search, slug) {
 }
 
 const directoryId = /^[0-9a-f]{32}$/;
-const editLimits = {name:80, summary:500, instructions:16000, quick_starts:404, category:80};
+const editLimits = {name:80, summary:500, instructions:16000, quick_starts:404, category:80, portrait:16};
+const portraitIds = new Set(AGENT_PORTRAITS.map(item => item.id));
 const editFields = Object.keys(editLimits);
 
 function directoryTarget(hash) {
@@ -53,11 +54,13 @@ export function teamDirectoryLink(search) {
 export function readAgentForm(form) {
   const data = new FormData(form);
   const quickStarts = data.get('quick_starts');
+  const portrait = data.get('portrait');
   return {
     name: (data.get('name') || '').trim(),
     summary: (data.get('summary') || '').trim(),
     instructions: data.get('instructions') || '',
     category: AGENT_CATEGORY_SLUGS.has(data.get('category')) ? data.get('category') : null,
+    ...(typeof portrait === 'string' ? {portrait: portraitIds.has(portrait) ? portrait : null} : {}),
     ...(typeof quickStarts === 'string' ? {quick_starts: quickStarts.split(/\r?\n/).map(line => line.trim()).filter(Boolean)} : {}),
   };
 }
@@ -145,6 +148,7 @@ function validCreateReceipt(attempt) {
     values && typeof values.name === 'string' && values.name.trim() &&
     ['name', 'summary', 'instructions'].every(field => typeof values[field] === 'string' && values[field].length <= editLimits[field]) &&
     (values.category === null || AGENT_CATEGORY_SLUGS.has(values.category)) &&
+    (values.portrait == null || portraitIds.has(values.portrait)) &&
     (values.quick_starts === undefined || (Array.isArray(values.quick_starts) && values.quick_starts.length <= 5 &&
       values.quick_starts.every(line => typeof line === 'string' && line.length <= 80)));
 }
@@ -198,6 +202,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const createAttempts = new Map();
   fillCategoryOptions(createForm.elements.category, document);
   fillCategoryOptions(editForm.elements.category, document);
+  for (const form of [createForm, editForm]) {
+    const select = form.elements.portrait;
+    const field = form.querySelector('.agent-portrait-field');
+    if (nativeSharing && field && select) {
+      field.hidden = false;
+      for (const preset of AGENT_PORTRAITS) {
+        const option = document.createElement('option');
+        option.value = preset.id;
+        option.textContent = preset.label;
+        select.append(option);
+      }
+      select.addEventListener('change', () => paintPortraitPreview(form));
+    }
+  }
+
+  function paintPortraitPreview(form) {
+    const preview = form.querySelector('.agent-portrait-preview');
+    if (!preview || !nativeSharing) return;
+    const agent = form === editForm ? currentAgent : null;
+    const personal = agent && agent.id === personalIdentity?.agentId && personalIdentity.workspaceId === workspaceId();
+    const look = agentPortraitLook(agent?.id, form.elements.portrait?.value, personal ? personalIdentity.look : null);
+    const image = createLookAvatar(look, document);
+    preview.replaceChildren(...(image ? [image] : []));
+    preview.hidden = !image;
+  }
   const categoryButtons = [...document.querySelectorAll('.filter-row .pill[data-category]')];
   const creatorFilter = document.getElementById('creator-filter');
   let selectedCategory = categoryFromSearch(globalThis.location && globalThis.location.search);
@@ -411,7 +440,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (draftAssist) draftAssist.hidden = !nativeSharing || Boolean(attempt);
     if (draftGenerate) draftGenerate.disabled = Boolean(attempt || activeDraftGeneration);
     for (const field of editFields) {
-      if (createForm.elements[field]) createForm.elements[field].disabled = Boolean(attempt);
+      if (createForm.elements[field]) createForm.elements[field].disabled = Boolean(attempt) || (field === 'portrait' && !nativeSharing);
     }
     const submit = createForm.querySelector('button[type="submit"]');
     submit.disabled = Boolean(attempt?.sending);
@@ -606,7 +635,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const li = document.createElement('li');
       li.className = 'agent-card';
       const isPersonal = item.id === personalIdentity?.agentId && (!personalIdentity.workspaceId || personalIdentity.workspaceId === id);
-      const lookAvatar = isPersonal ? createLookAvatar(personalIdentity.look, document) : null;
+      const lookAvatar = createLookAvatar(agentPortraitLook(item.id, item.portrait, isPersonal ? personalIdentity.look : null), document);
       const avatar = lookAvatar || document.createElement('span');
       if (!lookAvatar) {
         avatar.className = 'avatar';
@@ -813,6 +842,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     for (const [field, value] of Object.entries(values)) {
       if (editForm.elements[field]) editForm.elements[field].value = value;
     }
+    paintPortraitPreview(editForm);
   }
 
   function readEditDraft() {
@@ -822,7 +852,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!Number.isSafeInteger(draft?.revision) || !draft.values) return null;
       const values = Object.fromEntries(editFields.filter(field => typeof draft.values[field] === 'string' &&
         draft.values[field].length <= editLimits[field] &&
-        (field !== 'category' || !draft.values[field] || AGENT_CATEGORY_SLUGS.has(draft.values[field])))
+        (field !== 'category' || !draft.values[field] || AGENT_CATEGORY_SLUGS.has(draft.values[field])) &&
+        (field !== 'portrait' || !draft.values[field] || portraitIds.has(draft.values[field])))
         .map(field => [field,draft.values[field]]));
       for (const field of Object.keys(values)) {
         if (values[field] === originalEdits[field]) delete values[field];
@@ -850,7 +881,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function setEditFieldsEnabled(enabled) {
     for (const field of editFields) {
-      if (editForm.elements[field]) editForm.elements[field].disabled = !enabled;
+      if (editForm.elements[field]) editForm.elements[field].disabled = !enabled || (field === 'portrait' && !nativeSharing);
     }
     editForm.querySelector('button[type="submit"]').disabled = !enabled;
   }
@@ -871,6 +902,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (editForm.elements.category) {
       editForm.elements.category.value = AGENT_CATEGORY_SLUGS.has(agent.category) ? agent.category : '';
     }
+    if (editForm.elements.portrait) editForm.elements.portrait.value = portraitIds.has(agent.portrait) ? agent.portrait : '';
     const starts = editForm.elements.quick_starts;
     if (starts) starts.value = (agent.quick_starts || []).join('\n');
     const active = !agent.archived && !agent.native_deleted;
@@ -888,6 +920,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else if (draftKey) storeEditDraft();
     else if (draftNotice) draftNotice.hidden = true;
     setEditFieldsEnabled(writable && !waitingDraft);
+    paintPortraitPreview(editForm);
     document.getElementById('archive-button').hidden = !writable;
     if (openSharing) {
       openSharing.hidden = !nativeSharing || !canManage(actor);
@@ -1239,12 +1272,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const attempt = readCreateReceipt(createScope());
     if (attempt) {
       const {values} = attempt;
-      for (const field of ['name', 'summary', 'instructions', 'category']) {
+      for (const field of ['name', 'summary', 'instructions', 'category', 'portrait']) {
         if (createForm.elements[field]) createForm.elements[field].value = values[field] ?? '';
       }
       if (createForm.elements.quick_starts) createForm.elements.quick_starts.value = (values.quick_starts || []).join('\n');
     }
     paintCreateControls(attempt);
+    paintPortraitPreview(createForm);
     if (attempt) createForm.querySelector('button[type="submit"]').focus?.();
     else if (nativeSharing && draftPrompt) draftPrompt.focus();
     else createForm.elements.name.focus?.();

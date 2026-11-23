@@ -77,7 +77,7 @@ export function nativeAgents({ host, db }) {
       const main = rt.botOf(await s.mainBot())
       bot.model = main?.model
       bot.capabilities = row.inherit_capabilities === 0 ? [] : [...(main?.capabilities || [])]
-      bot.openteamily = { agent_id: row.id, workspace_id: row.workspace_id, summary: row.summary, category: row.category, quick_starts: JSON.parse(row.quick_starts) }
+      bot.openteamily = { agent_id: row.id, workspace_id: row.workspace_id, summary: row.summary, category: row.category, quick_starts: JSON.parse(row.quick_starts), portrait: row.portrait }
       if (row.archived) bot.hidden = true
       await rt.save()
     }
@@ -108,7 +108,7 @@ export function nativeAgents({ host, db }) {
     if (patch.summary !== undefined) nativePatch.role = patch.summary.slice(0,24)
     if (Object.keys(nativePatch).length) await rt.updateBot(bot.id, nativePatch)
     if (patch.archived !== undefined) await rt.setFlags(bot.id, { hidden: !!patch.archived })
-    bot.openteamily = { ...bot.openteamily, ...Object.fromEntries(['summary','category','quick_starts'].filter(k => patch[k] !== undefined).map(k => [k,patch[k]])) }
+    bot.openteamily = { ...bot.openteamily, ...Object.fromEntries(['summary','category','quick_starts','portrait'].filter(k => patch[k] !== undefined).map(k => [k,patch[k]])) }
     await rt.save()
     run('UPDATE native_agent_objects SET last_name=? WHERE agent_id=?', bot.name, row.id)
     return { native_bot_id: bot.id, native_name: bot.name }

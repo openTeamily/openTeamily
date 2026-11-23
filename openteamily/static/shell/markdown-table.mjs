@@ -1,3 +1,5 @@
+import { domToMarkdown, renderMarkdown } from './markdown.mjs';
+
 export const MAX_TABLE_COLUMNS = 24;
 export const MAX_TABLE_ROWS = 120;
 const MAX_LINE_LENGTH = 16_384;
@@ -107,4 +109,75 @@ export function renderMarkdownTable(document, block, appendCell) {
   table.append(head, body);
   scroll.append(table);
   return scroll;
+}
+
+export const tableMarkdownOptions = {readTable:readMarkdownTable, renderTable:renderMarkdownTable};
+
+// Replace only with markup from the safe renderer. Using the native editing
+// command keeps structural changes in the editor's undo history.
+export function insertRichTable(document, editor, markdown, range, row = 0, column = 0) {
+  const replacement = document.createElement('div');
+  renderMarkdown(document, replacement, markdown, tableMarkdownOptions);
+  const rendered = replacement.firstElementChild;
+  if (!rendered?.querySelector('table')) return false;
+  rendered.setAttribute('data-table-editing', '');
+  const selection = document.getSelection();
+  editor.focus();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  document.execCommand('insertHTML', false, replacement.innerHTML);
+  const updated = editor.querySelector('[data-table-editing]');
+  if (!updated) return false;
+  updated.removeAttribute('data-table-editing');
+  const cell = updated.querySelector('table')?.rows[row]?.cells[column];
+  if (cell) {
+    range.selectNodeContents(cell);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+  return true;
+}
+
+export function editRichTable(document, editor, activeCell, action) {
+  const current = activeCell.closest('.chat-markdown-table-scroll');
+  const snapshot = document.createElement('div');
+  const wrapper = current.cloneNode(true);
+  snapshot.append(wrapper);
+  const table = wrapper.querySelector('table');
+  const originalRow = activeCell.parentElement.rowIndex;
+  const column = activeCell.cellIndex;
+  const header = table.rows[0];
+  const rowCount = table.rows.length - 1;
+  const columnCount = header.cells.length;
+  let nextRow = originalRow;
+  let nextColumn = column;
+
+  if (action === 'add-row' && rowCount < MAX_TABLE_ROWS) {
+    const body = table.tBodies[0] || table.createTBody();
+    const row = body.insertRow(originalRow);
+    for (const source of header.cells) {
+      const cell = row.insertCell();
+      const alignment = source.getAttribute('data-align');
+      if (alignment) cell.setAttribute('data-align', alignment);
+    }
+    nextRow += 1;
+  } else if (action === 'add-column' && columnCount < MAX_TABLE_COLUMNS) {
+    nextColumn += 1;
+    const cell = document.createElement('th');
+    cell.setAttribute('scope', 'col');
+    cell.textContent = '列 ' + (columnCount + 1);
+    header.insertBefore(cell, header.cells[nextColumn] ?? null);
+    for (const row of Array.from(table.rows).slice(1)) row.insertCell(nextColumn);
+  } else if (action === 'remove-row' && originalRow > 0) {
+    table.deleteRow(originalRow);
+    nextRow = Math.min(originalRow, table.rows.length - 1);
+  } else if (action === 'remove-column' && columnCount > 1) {
+    for (const row of table.rows) row.deleteCell(column);
+    nextColumn = Math.min(column, header.cells.length - 1);
+  } else return false;
+
+  const range = document.createRange();
+  range.selectNode(current);
+  return insertRichTable(document, editor, domToMarkdown(snapshot), range, nextRow, nextColumn);
 }

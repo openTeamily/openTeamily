@@ -44,7 +44,19 @@ async function shared(req, workspace) {
       refuse(400, 'invalid', '无效的收到行动项查询。')
     }
     const data = await social(req, workspace, 'GET', '/meeting-shares' + qs({view:'actions', owner:req.ownerUsername, limit, cursor}))
-    return {body:{...data, workspace_id:workspace, viewer_username:req.ownerUsername}}
+    const actions = Array.isArray(data.items) ? data.items.map(({share_id, revision, action_index}) =>
+      ({share_id, revision, action_index})) : []
+    const saved = actions.length ? await req.host.call('memory/sharedMeetingActions', {
+      workspace_id:workspace, actions,
+    }).catch(() => []) : []
+    const key = ({share_id, revision, action_index}) => `${share_id}.${revision}.${action_index}`
+    const receipts = new Map((Array.isArray(saved) ? saved : []).map(({id, workspace_id, ...source}) =>
+      [key(source), {id, workspace_id}]))
+    const items = receipts.size ? data.items.map(item => {
+      const saved_action = receipts.get(key(item))
+      return saved_action ? {...item, saved_action} : item
+    }) : data.items
+    return {body:{...data, items, workspace_id:workspace, viewer_username:req.ownerUsername}}
   }
   const { limit, cursor } = pagination(req.query, ['sent'])
   const sent = req.query.get('sent') ?? undefined

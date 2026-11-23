@@ -143,6 +143,12 @@
           <label class="stack">快捷开场 <textarea name="quick_starts" maxlength="404" rows="3" placeholder="每行一条，最多 5 条，每条不超过 80 字" aria-describedby="new-agent-quick-starts-help"></textarea></label>
           <p class="note" id="new-agent-quick-starts-help">你可以在私聊中点选快捷开场，再编辑并发送。</p>
           <label>类目 <select name="category"><option value="">未分类</option></select></label>
+          <div class="agent-portrait-field" hidden>
+            <label>头像
+              <select name="portrait"><option value="">自动</option></select>
+            </label>
+            <span class="agent-portrait-preview" aria-hidden="true"></span>
+          </div>
           <p class="note" id="agent-create-status" role="status" hidden></p>
           <div class="actions">
             <button type="submit">创建</button>
@@ -161,6 +167,12 @@
           <label class="stack">快捷开场 <textarea name="quick_starts" maxlength="404" rows="3" placeholder="每行一条，最多 5 条，每条不超过 80 字" aria-describedby="edit-agent-quick-starts-help"></textarea></label>
           <p class="note" id="edit-agent-quick-starts-help">你可以在私聊中点选快捷开场，再编辑并发送。</p>
           <label>类目 <select name="category"><option value="">未分类</option></select></label>
+          <div class="agent-portrait-field" hidden>
+            <label>头像
+              <select name="portrait"><option value="">自动</option></select>
+            </label>
+            <span class="agent-portrait-preview" aria-hidden="true"></span>
+          </div>
           <p class="note" id="agent-edit-conflict" role="status" hidden>设置已在别处更新。载入最新设置后，可以核对并恢复草稿。</p>
           <div id="agent-edit-draft" hidden>
             <p class="note" id="agent-edit-draft-note" role="status"></p>

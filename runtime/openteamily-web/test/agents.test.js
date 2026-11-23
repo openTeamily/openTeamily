@@ -64,6 +64,24 @@ test('an agent description drafts with the owner model, without creating an agen
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM agents').get().count,0)
 })
 
+test('portraits are validated, saved in the owner runtime, and returned by directory reads', async () => {
+  const {e} = fixture()
+  const body = {workspace_id:W,name:'助手',portrait:'coral',idempotency_key:'portrait-test-001'}
+  assert.equal((await e.v1({method:'POST',path:`/v1/workspaces/${W}/agents`,body:{...body,portrait:'unsupported'},
+    idempotency_key:body.idempotency_key})).status,400)
+  const made = await e.create(body)
+  assert.equal(made.agent.portrait,'coral')
+  const replay = await e.create(body)
+  assert.equal(replay.status,200)
+  assert.equal(replay.agent.id,made.agent.id)
+  const path=`/v1/workspaces/${W}/agents/${made.agent.id}`
+  const edited=await e.v1({method:'POST',path,body:{revision:made.agent.revision,portrait:'violet'}})
+  assert.equal(edited.status,200)
+  assert.equal((await e.list({workspace_id:W})).items[0].portrait,'violet')
+  const reset=await e.v1({method:'POST',path,body:{revision:edited.body.agent.revision,portrait:null}})
+  assert.equal(reset.body.agent.portrait,null)
+})
+
 test('agent CRUD: idempotent create, unique names, revisions, archive, search', async () => {
   const { e } = fixture()
   const body = { workspace_id: W, name: '研究员', summary: '查资料', instructions: '只给有出处的结论', category: 'research', quick_starts: ['帮我查'], idempotency_key: 'k'.repeat(16) }

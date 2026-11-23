@@ -372,6 +372,7 @@
           <button type="button" data-doc-format="bold" aria-label="加粗">B</button>
           <button type="button" data-doc-format="italic" aria-label="斜体">I</button>
           <button type="button" data-doc-format="strike" aria-label="删除线">S</button>
+          <button type="button" data-doc-format="table" aria-label="插入表格">表格</button>
           <button type="button" data-doc-format="h1">H1</button>
           <button type="button" data-doc-format="h2">H2</button>
           <button type="button" data-doc-format="h3">H3</button>
@@ -383,6 +384,15 @@
           <button type="button" id="document-source-toggle" aria-pressed="false">Markdown</button>
           <button type="submit" id="document-save">保存</button>
         </div>
+        <details id="document-table-actions" hidden>
+          <summary>表格操作</summary>
+          <div class="document-table-buttons">
+            <button type="button" data-doc-table="add-row">下方插入行</button>
+            <button type="button" data-doc-table="add-column">右侧插入列</button>
+            <button type="button" data-doc-table="remove-row">删除这一行</button>
+            <button type="button" data-doc-table="remove-column">删除这一列</button>
+          </div>
+        </details>
         <div id="document-rich" contenteditable="true" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="开始写作…"></div>
         <textarea id="document-source" aria-label="文档 Markdown 源码" maxlength="8000" rows="16" hidden></textarea>
         <p id="document-length" class="note" hidden></p>

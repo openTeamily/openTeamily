@@ -22,7 +22,7 @@ const loadRichContent = deferModule('./rich-content.mjs');
 let richContent;
 import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, memberChoices, validMessage,
   agentDirectoryHref, chatPathId, socialMessageHref, socialMessageFromHash, directAgentAccessFromHash } from '../shell/chat-utils.mjs';
-import { createLookAvatar } from '../look/app.mjs';
+import { agentPortraitLook, createLookAvatar } from '../look/app.mjs';
 import { dsbotServed } from './dsbot.mjs';
 import { agentSavePath, artifactKindLabel, artifactVersionLabel, defaultSaveTitle, saveableAgentMessage, saveableSocialMessage, socialSavePath, spaceHref } from '../shell/thumb.mjs';
 
@@ -2832,6 +2832,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       readAll.disabled = markingConversationsRead;
     }
     const items = [];
+    const portraits = new Map(agents.map(agent => [agent.id,agent.portrait]));
     let lastGroup = '';
     const now = Date.now();
     for (const session of groupSessionsForDisplay(visible)) {
@@ -2847,7 +2848,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (currentConversation && currentConversation.id === session.id && currentSource === session.source) {
         button.setAttribute('aria-current', 'true');
       }
-      const lookAvatar = session.agent_id === personalAgentId ? createLookAvatar(personalLook, document) : null;
+      const lookAvatar = session.source === 'agent' && createLookAvatar(agentPortraitLook(session.agent_id,
+        portraits.get(session.agent_id), session.agent_id === personalAgentId ? personalLook : null), document);
       const avatar = lookAvatar || document.createElement('span');
       if (!lookAvatar) {
         avatar.className = 'avatar';
@@ -5353,9 +5355,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!currentNotificationScope(scope) || !notificationSnapshot) return;
     notificationSeq += 1;
     const body = notificationSnapshot.body;
+    const wasUnread = (body.items || []).some(item => item.id === id && !item.read);
     notificationSnapshot.body = {
       ...body,
-      unread_count: result.body?.unread_count ?? body.unread_count,
+      // Individual acknowledgements can arrive in a different order from the writes.
+      unread_count: id ? Math.max(0, Number(body.unread_count || 0) - Number(wasUnread))
+        : result.body?.unread_count ?? body.unread_count,
       items: (body.items || []).map(item => !id || item.id === id ? {...item, read: true} : item),
     };
     renderNotifications(notificationSnapshot.body, scope);
@@ -5377,8 +5382,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     list.replaceChildren(...items.map(item => {
       const li = document.createElement('li');
       const target = notificationTarget(item, scope.workspace);
+      const conversation = !target && chatPathId(item.conversation_id) &&
+        (!item.workspace_id || item.workspace_id === scope.workspace) ? item.conversation_id : '';
       const button = document.createElement(target ? 'a' : 'button');
-      const invalidLink = LINKED_NOTIFICATION_KINDS.has(item.kind) && !target;
+      const invalidLink = !target && (LINKED_NOTIFICATION_KINDS.has(item.kind) || (item.conversation_id && !conversation));
       if (target) button.href = target;
       else {
         button.type = 'button';
@@ -5399,24 +5406,37 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       button.append(time);
       button.addEventListener('click', async event => {
         if (target) event.preventDefault();
-        if (invalidLink || !currentNotificationScope(scope) || notificationReads.has(readKey)) return;
+        if (invalidLink || !currentNotificationScope(scope) || (!conversation && notificationReads.has(readKey))) return;
         setNotificationStatus();
-        if (!item.read) {
+        let read;
+        if (!item.read && !notificationReads.has(readKey)) {
           notificationReads.add(readKey);
           button.setAttribute('aria-busy', 'true');
-          const read = request('POST', `/v1/workspaces/${scope.workspace}/notifications/read`,
+          read = request('POST', `/v1/workspaces/${scope.workspace}/notifications/read`,
             {notification_id: item.id}, undefined, AbortSignal.timeout(5000), {keepalive: Boolean(target)})
             .catch(() => ({status: 0, body: {}}))
             .then(result => {
               notificationReads.delete(readKey);
               button.removeAttribute('aria-busy');
+              if (!currentNotificationScope(scope)) return result;
               if (result.status === 200) applyNotificationRead(scope, result, item.id);
+              else if (conversation && !document.getElementById('notifications-panel').hidden) {
+                setNotificationStatus(uiLabel('无法标记这条通知为已读，请重试。', 'Could not mark this notification as read. Try again.'));
+                if (notificationSnapshot) renderNotifications(notificationSnapshot.body, scope);
+              }
               return result;
             });
+        }
+        if (conversation) {
+          setNotificationsOpen(false);
+          await openSessionTarget({source:'social', cid:conversation, message:item.message_id,
+            title:item.title || uiLabel('会话', 'conversation')});
+          return;
+        }
+        if (read) {
           const result = target ? await waitForLinkedNotificationRead(read) : await read;
           if (!currentNotificationScope(scope)) return;
-          if (result && result.status !== 200
-            && ((result.status !== 0 && result.status < 500) || (!target && !item.conversation_id))) {
+          if (result && result.status !== 200 && (!target || (result.status !== 0 && result.status < 500))) {
             setNotificationStatus('无法标记这条通知为已读，请重新打开通知后重试。');
             if (notificationSnapshot) renderNotifications(notificationSnapshot.body, scope);
             return;
@@ -5424,10 +5444,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         }
         setNotificationsOpen(false);
         if (target) { globalThis.location.assign(target); return; }
-        if (item.conversation_id) {
-          await openSessionTarget({source:'social', cid:item.conversation_id, message:item.message_id,
-            title:item.title || uiLabel('会话', 'conversation')});
-        }
         await loadNotifications();
       });
       li.append(button);
@@ -6425,7 +6441,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('social-agent-members').hidden = true;
     document.getElementById('pin-conversation').hidden = true;
     setDirectoryLink({source:'agent'});
-    applyChatIdentity(document, agent.name, null, agent.id === personalAgentId ? personalLook : null);
+    applyChatIdentity(document, agent.name, null, agentPortraitLook(agent.id, agent.portrait, agent.id === personalAgentId ? personalLook : null));
     writeHash({workspace:workspaceId(), agent:agentId});
     setSessionsOpen(false);
     renderAgentMessages([]);
@@ -6582,7 +6598,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('social-agent-members').hidden = true;
     setDirectoryLink({source: 'agent'});
     syncPlusState();
-    applyChatIdentity(document, agent.name, null, agent.id === personalAgentId ? personalLook : null);
+    applyChatIdentity(document, agent.name, null, agentPortraitLook(agent.id, agent.portrait, agent.id === personalAgentId ? personalLook : null));
     if (currentConversation?.id !== conversation.id) {
       const autoReplyNotice = document.getElementById('group-agent-auto-reply-status');
       if (autoReplyNotice) autoReplyNotice.hidden = true;
@@ -7690,7 +7706,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           personalLook = settings.look;
           renderSessions();
           if (currentSource === 'agent' && currentAgent?.id === personalAgentId) {
-            applyChatIdentity(document, currentAgent.name, null, personalLook);
+            applyChatIdentity(document, currentAgent.name, null, agentPortraitLook(currentAgent.id, currentAgent.portrait, personalLook));
           }
         }
         const presentationChanged = values && (values.auto_translate === true
@@ -7839,7 +7855,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         if (workspaceId() === personalWorkspaceId) {
           renderSessions();
           if (currentSource === 'agent' && currentAgent?.id === personalAgentId) {
-            applyChatIdentity(document, currentAgent.name, null, personalLook);
+            applyChatIdentity(document, currentAgent.name, null, agentPortraitLook(currentAgent.id, currentAgent.portrait, personalLook));
           }
         }
       });

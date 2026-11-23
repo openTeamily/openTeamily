@@ -212,6 +212,8 @@ async function agentDraftFromCatalog(page, account, name) {
   assert.equal(await form.locator('[name="name"]').inputValue(),'访谈整理员');
   assert.equal(await form.locator('[name="instructions"]').inputValue(),'按主题归纳访谈，列出待确认问题。');
   assert.equal((await list()).length,before);
+  await form.getByLabel('头像').selectOption('mint');
+  await form.locator('.agent-portrait-preview .look-avatar[data-color="薄荷绿"]').waitFor();
   assert.equal(await form.locator('fieldset').evaluate(el=>{
     const box=el.getBoundingClientRect();
     const fields = [...el.querySelectorAll('input:not([type="hidden"]), textarea, select')];

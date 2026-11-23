@@ -1916,6 +1916,24 @@ test('an authorized direct link opens editable content with the catalog and opti
   assert.equal(artifactRows(page.elements.get('artifact-list')).length, 1);
 });
 
+test('Space opens a saved Markdown table in the document editor without changing its source', async () => {
+  const markdown = '原始内容\n\n| 事项 |  进展 |\n| :--- | ---: |\n| **初稿** | 待核对 |';
+  const page = linkFixture(path => {
+    if (path === linkedDetail) return reply({body:{artifact:{...linkedRecord,body:markdown}}});
+    if (path === linkedCatalog) return reply({body:{items:[]}});
+  });
+  await page.mounted;
+  const rich = page.elements.get('document-rich');
+  const table = rich.children.find(child => child.className === 'chat-markdown-table-scroll').children[0];
+  const [head, body] = table.children;
+  assert.equal(table.tagName,'TABLE');
+  assert.equal(head.children[0].children[1].getAttribute('data-align'),'right');
+  assert.equal(body.children[0].children[0].children[0].tagName,'STRONG');
+  assert.equal(page.form.elements.body.value,markdown);
+  await page.elements.get('document-source-toggle').dispatch('click');
+  assert.equal(page.elements.get('document-source').value,markdown);
+});
+
 test('Space follows a saved revision while idle and keeps an edit typed during the next read', async () => {
   const activityPath = linkedCatalog + '/activity?artifact=' + linkedArtifact;
   const stale = {...linkedRecord, revision: 2, body: '另一会话已保存'};

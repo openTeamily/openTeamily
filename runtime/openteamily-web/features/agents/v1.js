@@ -282,7 +282,7 @@ export function agentsV1({ endpoints, chatDirectory, host, log }) {
         const body = await req.json()
         const { revision, ...fields } = body
         const changes = {}
-        for (const key of ['name', 'summary', 'instructions', 'category', 'quick_starts']) if (key in fields) changes[key] = fields[key]
+        for (const key of ['name', 'summary', 'instructions', 'category', 'quick_starts', 'portrait']) if (key in fields) changes[key] = fields[key]
         const result = await call('update', { workspace_id: workspaceId, id, revision, changes })
         return { status: 200, body: { agent: publicAgent(result.agent) } }
       }

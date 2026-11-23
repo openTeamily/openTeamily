@@ -236,6 +236,8 @@ body.app-workspace:has(#profile-home:not([hidden])) > main > #main-panel {
   flex: none;
 }
 
+#profile-agent-list .look-avatar { width: 1.85rem; height: 1.85rem; }
+
 .profile-agents-all {
   margin: 0.75rem 0 0;
   align-self: center;

@@ -47,6 +47,10 @@ and received meeting notes also offer a print preview for the selected revision.
 the summary and action items with their owners, deadlines, and status. Use the browser print
 dialog to print or save the preview as PDF.
 
+The meeting action inbox lists tasks assigned to you in received meeting notes. Save an item
+directly from the list to your personal Memory to-dos, then reopen the saved copy from the same
+row. Each saved copy has its own completion status in Memory.
+
 The container launch overlay activates DSH's local SenseVoice recognizer. Profiles with the
 official Voice Input bundle use its configured local recognizer. The first preparation downloads
 the model into the user's volume. The browser previews audio locally and submits segments only

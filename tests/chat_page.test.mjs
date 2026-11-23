@@ -2850,6 +2850,51 @@ test('mention notifications show a badge, open the conversation and mark read', 
   } finally { restore(); }
 });
 
+test('native mentions open their exact messages while acknowledgements arrive out of order', async () => {
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+  const {doc,el,routes,calls,restore} = fixture;
+  const notices = `${linkBase(linkWork)}/notifications`;
+  const otherRoom = 'otc_' + 'B'.repeat(26);
+  const otherMessage = 'otm_' + 'C'.repeat(26);
+  const first = {id:'first', kind:'messenger.mention', conversation_id:linkSocial, message_id:linkSocialOlder};
+  const second = {id:'second', kind:'messenger.mention', conversation_id:otherRoom, message_id:otherMessage};
+  const pending = {first:Promise.withResolvers(),second:Promise.withResolvers()};
+  const otherPath = `${linkBase(linkWork)}/social/conversations/${otherRoom}?around=${otherMessage}`;
+  routes.set(notices,()=>json(200,{unread_count:2,items:[first,second]}));
+  routes.set(notices + '/read',({body})=>pending[body.notification_id].promise);
+  routes.set(otherPath,()=>json(200,{conversation:{id:otherRoom,workspace_id:linkWork,kind:'group',title:'Other group'},
+    items:[{id:otherMessage,conversation_id:otherRoom,user_id:bob,body:'Second target',seq:3}],has_newer:true}));
+  const clickNotice = async index => {
+    await fire(el('notifications-toggle'),'click');
+    await fire(el('notification-list').children[index].children[0],'click');
+  };
+  try {
+    await mount(doc,{fetcher:fixture.fetcher});
+    await clickNotice(0);
+    assert.equal(el('notifications-panel').hidden,true);
+    assert.equal(el('notification-count').textContent,'2');
+    assert.equal(el('message-list').children[0].dataset.searchJump,'true');
+    assert.deepEqual(fixture.messages(),[linkSocialOlder]);
+    await clickNotice(1);
+    assert.deepEqual(fixture.messages(),[otherMessage]);
+    assert.equal(el('message-list').children[0].dataset.searchJump,'true');
+    pending.second.resolve(json(200,{unread_count:0}));
+    await settle();
+    assert.equal(el('notification-count').textContent,'1');
+    pending.first.resolve(json(200,{unread_count:1}));
+    await settle();
+    assert.equal(el('notification-count').hidden,true);
+    assert.deepEqual(fixture.messages(),[otherMessage]);
+    assert.equal(calls.filter(call=>call.path===otherPath).length,1);
+    assert.deepEqual(calls.filter(call=>call.path===notices+'/read').map(call=>call.body),
+      [{notification_id:first.id},{notification_id:second.id}]);
+  } finally {
+    pending.first.resolve(json(503,{}));
+    pending.second.resolve(json(503,{}));
+    restore();
+  }
+});
+
 test('automation notification opens only the exact run, keeps raw output out of the inbox and marks all workspace notices read', async () => {
   const fixture = linkedChatFixture('');
   const {doc, el, routes, restore} = fixture;

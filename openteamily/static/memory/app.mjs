@@ -2,7 +2,7 @@ import {mountCandidates, sourceHref} from './candidates.mjs';
 import {ACTION_EDIT_FIELDS, actionSaveAttempt, encodeActionReview, decodeActionReview, decodeNewActionAttempt,
   actionEditCommitted, advanceActionEdit, decodeActionEdit, reconcileActionEdit} from './action-review.mjs';
 import { domToMarkdown, renderMarkdown, safeHref } from './rich.mjs';
-import { MAX_TABLE_COLUMNS, MAX_TABLE_ROWS, readMarkdownTable, renderMarkdownTable } from '../shell/markdown-table.mjs';
+import { editRichTable, MAX_TABLE_COLUMNS, MAX_TABLE_ROWS, readMarkdownTable, renderMarkdownTable } from '../shell/markdown-table.mjs';
 import { readWorkspaceChoices } from '../shell/dsbot-api.mjs';
 import { actionFollowupChannel } from '../shell/action-followup-events.mjs';
 export function csrfCookie(source) {
@@ -2121,64 +2121,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function applyTableEdit(action) {
     if (sourceMode || !rich?.contains(activeTableCell)) return;
-    const current = activeTableCell.closest('.chat-markdown-table-scroll');
-    const snapshot = document.createElement('div');
-    const wrapper = current.cloneNode(true);
-    snapshot.appendChild(wrapper);
-    const table = wrapper.querySelector('table');
-    const originalRow = activeTableCell.parentElement.rowIndex;
-    const column = activeTableCell.cellIndex;
-    const header = table.rows[0];
-    const rowCount = table.rows.length - 1;
-    const columnCount = header.cells.length;
-    let nextRow = originalRow;
-    let nextColumn = column;
-
-    if (action === 'add-row' && rowCount < MAX_TABLE_ROWS) {
-      const body = table.tBodies[0] || table.createTBody();
-      const row = body.insertRow(originalRow);
-      for (const source of header.cells) {
-        const cell = row.insertCell();
-        const alignment = source.getAttribute('data-align');
-        if (alignment) cell.setAttribute('data-align', alignment);
-      }
-      nextRow += 1;
-    } else if (action === 'add-column' && columnCount < MAX_TABLE_COLUMNS) {
-      nextColumn += 1;
-      const cell = document.createElement('th');
-      cell.setAttribute('scope', 'col');
-      cell.textContent = '列 ' + (columnCount + 1);
-      header.insertBefore(cell, header.cells[nextColumn] ?? null);
-      for (const row of Array.from(table.rows).slice(1)) row.insertCell(nextColumn);
-    } else if (action === 'remove-row' && originalRow > 0) {
-      table.deleteRow(originalRow);
-      nextRow = Math.min(originalRow, table.rows.length - 1);
-    } else if (action === 'remove-column' && columnCount > 1) {
-      for (const row of table.rows) row.deleteCell(column);
-      nextColumn = Math.min(column, header.cells.length - 1);
-    } else return;
-
-    const replacement = document.createElement('div');
-    renderMarkdown(document, replacement, domToMarkdown(snapshot),
-      {readTable:readMarkdownTable, renderTable:renderMarkdownTable});
-    const rendered = replacement.firstElementChild;
-    rendered.setAttribute('data-table-editing', '');
-    const selection = document.getSelection();
-    const range = document.createRange();
-    rich.focus();
-    range.selectNode(current);
-    selection.removeAllRanges();
-    selection.addRange(range);
-    document.execCommand('insertHTML', false, replacement.innerHTML);
-    const updated = rich.querySelector('[data-table-editing]');
-    updated?.removeAttribute('data-table-editing');
-    const next = updated?.querySelector('table')?.rows[nextRow]?.cells[nextColumn];
-    if (next) {
-      range.selectNodeContents(next);
-      range.collapse(true);
-      selection.removeAllRanges();
-      selection.addRange(range);
-    }
+    if (!editRichTable(document, rich, activeTableCell, action)) return;
     tableActions.open = false;
     syncTableActions();
   }

@@ -344,3 +344,9 @@ body.app-workspace:not(.chat-open) > main > #main-panel:has(> .directory-top) { 
 @media (max-width: 480px) {
   #manage-drawer:not([hidden]) { padding: .875rem; }
 }
+
+.agent-portrait-field { display: flex; align-items: end; gap: .75rem; margin-block: .5rem; }
+.agent-portrait-field[hidden], .agent-portrait-preview[hidden] { display: none; }
+.agent-portrait-field label { display: grid; gap: .375rem; margin: 0; }
+.agent-portrait-preview { display: block; flex: none; }
+.agent-portrait-preview .look-avatar { display: block; width: 2.75rem; height: 2.75rem; }
