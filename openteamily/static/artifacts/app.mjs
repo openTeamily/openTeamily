@@ -570,6 +570,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const listPanel = document.getElementById('list-panel');
   const editorLoading = document.getElementById('editor-loading');
   const main = document.getElementById('main');
+  const catalogScrollers = [main, listPanel, listPanel.querySelector?.('.artifact-main')];
   const actionMenus = mountActionMenus(document);
   const newMenuButton = document.getElementById('new-menu-button');
   const newMenu = actionMenus.bind(newMenuButton, document.getElementById('new-menu'));
@@ -1492,6 +1493,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     filterSessions = [];
     filterUpdated = {};
     readFilterDates();
+    renderFilterControls();
+  }
+
+  function restoreCatalogFilters({filters}) {
+    if (!filters) return;
+    search.value = filters.query;
+    if (clearSearch) clearSearch.hidden = !search.value;
+    filterTypes = filters.types;
+    filterCreators = filters.creators;
+    filterSessions = filters.sessions;
+    for (const input of document.querySelectorAll('#filter-panel input[name="file-type"]')) {
+      input.checked = filterTypes.includes(input.value);
+    }
+    for (const input of document.querySelectorAll('#filter-panel input[name="modified"]')) {
+      input.checked = input.value === filters.dateMode;
+    }
+    if (dateStart) dateStart.value = filters.start;
+    if (dateEnd) dateEnd.value = filters.end;
+    readFilterDates();
+    // Keep the applied range shown before the work opened, including an
+    // already-applied range while the user was typing the next date.
+    filterUpdated = filters.updated;
     renderFilterControls();
   }
 
@@ -2633,7 +2656,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (!canLeaveEditor()) return false;
     const target = artifactTargetFromSearch(document.defaultView?.location?.search);
     const catalogView = !listPanel.hidden && !target?.artifact ? {
-      workspace, kind:catalogKind, scope:catalogScope, scroll:main?.scrollTop ?? 0, focus:item?.id,
+      account:currentUser.id, workspace, kind:catalogKind, scope:catalogScope,
+      scroll:catalogScrollers.map(node => node?.scrollTop ?? 0), focus:item?.id,
+      depth:sameSelection(catalog) ? catalog.depth : CATALOG_PAGE_SIZE,
+      filters:{query:search.value, types:filterTypes, creators:filterCreators, sessions:filterSessions,
+        dateMode:dateMode(), start:dateStart?.value || '', end:dateEnd?.value || '', updated:filterUpdated},
     } : null;
     hideEditor();
     closeNewMenu();
@@ -3407,7 +3434,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     }
   }
 
-  async function loadList({reuse = false, background = false, signal, initial} = {}) {
+  async function loadList({reuse = false, background = false, signal, initial, minDepth = CATALOG_PAGE_SIZE} = {}) {
     if (background && searchTimer !== null) return 'defer';
     if (!background) cancelScheduledSearch();
     if (catalogKind === 'meetings') {
@@ -3424,7 +3451,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     activity.setScope(workspace);
     const query = catalogQuery();
     const sameCatalog = sameSelection(catalog);
-    if (reuse && sameCatalog && catalog.state !== 'stale' && !catalog.controller?.signal.aborted) {
+    if (reuse && sameCatalog && catalog.depth >= minDepth && catalog.state !== 'stale' && !catalog.controller?.signal.aborted) {
       listStatus(catalog.message, catalog.state === 'error');
       if (!listPanel.hidden) showCatalog();
       return;
@@ -3437,7 +3464,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const requestSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
     const bookmarkBefore = bookmarkRevision;
     if (!sameCatalog) allItems = [];
-    const depth = sameCatalog ? before.depth : CATALOG_PAGE_SIZE;
+    const depth = Math.max(minDepth, sameCatalog ? before.depth : CATALOG_PAGE_SIZE);
     const loading = {
       workspace, account: currentUser, query, depth, controller, state: 'loading',
       message: search.value.trim() ? '正在搜索作品…' : '正在加载资料…',
@@ -4786,7 +4813,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       sharedWorkCopy.instance?.close();
       studio.instance?.leaveForNavigation();
       show('', '');
-      const catalogView = tracked ? next.catalogView : null;
+      const catalogView = tracked && currentUser?.id && next.catalogView?.account === currentUser.id
+        ? next.catalogView : null;
       const {kind, scope} = catalogView || viewFromSearch(view.location.search);
       applyView(kind, scope, {sync: false});
       const studioTarget = studioTargetFromSearch(view.location.search);
@@ -4809,9 +4837,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         notifications.setWorkspace(workspaceId());
         syncStudioWorkspace();
       }
-      await loadList({reuse: true});
-      if (catalogView && main && spaceAddress === address && !listPanel.hidden) {
-        main.scrollTop = catalogView.scroll;
+      const returningToCatalog = catalogView?.workspace === workspaceId();
+      if (returningToCatalog) restoreCatalogFilters(catalogView);
+      await loadList({reuse: true, minDepth:returningToCatalog ? catalogView.depth : undefined});
+      if (returningToCatalog && spaceAddress === address && !listPanel.hidden) {
+        catalogScrollers.forEach((node, index) => {
+          if (node) node.scrollTop = catalogView.scroll[index];
+        });
         const rows = document.getElementById('artifact-list').children;
         const row = [...rows].find(node => node.dataset.artifactId === catalogView.focus);
         row?.firstElementChild?.focus?.({preventScroll: true});

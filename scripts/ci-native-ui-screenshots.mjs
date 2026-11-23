@@ -224,6 +224,54 @@ async function agentApiKey(page, account) {
   await page.locator('#cancel-edit').click();
 }
 
+async function memoryGraphReturn(page, account) {
+  const workspace = account.instanceId;
+  const base = '/v1/workspaces/'+workspace+'/memory';
+  const mobile = page.viewportSize().width < 700;
+  const title = mobile ? 'CI 手机图谱来源' : 'CI 桌面图谱来源';
+  const create = async title => {
+    const result = await account.rpc('memory/v1',{method:'POST',path:base,
+      idempotency_key:randomUUID().replaceAll('-',''),body:{title,body:'图谱返回验收'}});
+    assert.equal(result.status,201);
+    return result.body.page.id;
+  };
+  const id = await create(title);
+  await create(title+'关联节点');
+
+  await openNative(page,'/memory?workspace='+workspace,workspace,'#main-panel');
+  const graphToggle = page.locator('#memory-mobile-graph');
+  if (mobile) await graphToggle.click();
+  const filter = page.locator('#topic-search');
+  await filter.fill(title);
+  await page.locator('#graph-zoom-in').click();
+  const graph = page.locator('#graph-world');
+  const zoom = await graph.getAttribute('transform');
+  const node = graph.locator('[data-id="'+id+'"]');
+  if (mobile) await node.locator('circle').click();
+  else await node.press('Enter');
+  const editor = page.locator('#editor-form');
+  const back = page.locator('#close-editor');
+  await editor.waitFor();
+  assert.equal(await editor.locator('[name="title"]').inputValue(),title);
+  assert.equal(new URL(page.url()).searchParams.get('page'),id);
+  await back.click();
+  await editor.waitFor({state:'hidden'});
+  if (mobile) assert.equal(await graphToggle.getAttribute('aria-expanded'),'true',
+    'closing a graph node on mobile returns to the graph');
+  assert.equal(await node.evaluate(element => element === document.activeElement),true,
+    'closing a graph node restores focus to that node');
+  assert.equal(await filter.inputValue(),title);
+  assert.equal(await graph.getAttribute('transform'),zoom);
+  assert.equal(new URL(page.url()).searchParams.get('page'),null);
+
+  if (!mobile) {
+    await node.press('Space');
+    await editor.waitFor();
+    assert.equal(await editor.locator('[name="title"]').inputValue(),title);
+    await back.click();
+  }
+}
+
 async function memoryHistory(page, account, name) {
   const workspace = account.instanceId;
   const base = '/v1/workspaces/'+workspace+'/memory';
@@ -297,6 +345,7 @@ try {
     await screenshot(page,name);
   }
   await agentApiKey(page,fixture.owner);
+  await memoryGraphReturn(page,fixture.owner);
   await memoryHistory(page,fixture.owner,'desktop-memory-history');
   await connectors(page);
   await meetingActionContinuity(page,fixture.owner,'desktop-meeting-actions');
@@ -337,6 +386,7 @@ try {
   assert.ok(!JSON.stringify(isolation).includes(fixture.owner.chat.reply));
   await peer.page.setViewportSize({width:390,height:844});
   await meetingActionContinuity(peer.page,fixture.peer,'mobile-meeting-actions');
+  await memoryGraphReturn(peer.page,fixture.peer);
   await memoryHistory(peer.page,fixture.peer,'mobile-memory-history');
   await peer.context.close();
   await desktop.context.close();
