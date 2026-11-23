@@ -198,6 +198,32 @@ async function meetingActionContinuity(page, account, name) {
   await waitForRows(0);
 }
 
+async function agentApiKey(page, account) {
+  await openNative(page,'/agents',account.instanceId,'#agent-search');
+  const open = page.locator('#agent-list button[data-id="'+account.agent.id+'"]');
+  await open.click();
+  const form = page.locator('#api-key-form');
+  const name = 'CI 一次性验收密钥 '+page.viewportSize().width;
+  await form.locator('#api-key-name').fill(name);
+  await form.locator('button[type="submit"]').click();
+  const row = page.locator('#api-key-list li').filter({hasText:name});
+  await row.getByRole('button',{name:'撤销'}).waitFor();
+  assert.equal(await page.locator('#api-key-token').isVisible(),true,
+    'the one-time token must stay visible after the key list has reloaded');
+  const value = page.locator('#api-key-value');
+  const token = await value.textContent();
+  assert.ok(token?.startsWith('ota_'+account.instanceId+'_'));
+  await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin:fixture.origin});
+  await page.getByRole('button',{name:'复制密钥'}).click();
+  assert.ok(await page.evaluate(async expected => await navigator.clipboard.readText() === expected,token));
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),true);
+  await row.getByRole('button',{name:'撤销'}).click();
+  await row.getByText(name+' · 10 次/分钟 · 已撤销 · 未使用',{exact:true}).waitFor();
+  assert.equal(await page.locator('#api-key-token').isVisible(),false);
+  assert.equal((await value.textContent()).trim(),'');
+  await page.locator('#cancel-edit').click();
+}
+
 async function memoryHistory(page, account, name) {
   const workspace = account.instanceId;
   const base = '/v1/workspaces/'+workspace+'/memory';
@@ -270,6 +296,7 @@ try {
     if (expected) await page.getByText(expected,{exact:true}).first().waitFor();
     await screenshot(page,name);
   }
+  await agentApiKey(page,fixture.owner);
   await memoryHistory(page,fixture.owner,'desktop-memory-history');
   await connectors(page);
   await meetingActionContinuity(page,fixture.owner,'desktop-meeting-actions');
@@ -293,6 +320,7 @@ try {
   const mobile = await contextFor({width:390,height:844});
   await signIn(mobile.page,fixture.owner);
   await chat(mobile.page,'mobile-chat',false);
+  await agentApiKey(mobile.page,fixture.owner);
   await mobile.context.close();
 
   const peer = await contextFor({width:1440,height:900});

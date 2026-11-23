@@ -31,7 +31,7 @@ const fixtureResponse = [
 ].join('\n');
 const password = randomUUID() + 'CiFixture!';
 const uid = () => randomUUID().replaceAll('-', '');
-const featureNames = ['settings', 'model-api', 'skills', 'teams', 'team-templates', 'artifacts', 'discover', 'social',
+const featureNames = ['settings', 'model-api', 'agent-api', 'skills', 'teams', 'team-templates', 'artifacts', 'discover', 'social',
   'search', 'studio', 'memory', 'meetings', 'automations', 'team-runs', 'members', 'invites', 'overview', 'shell', 'chat', 'stickers', 'connectors'];
 const platformScript = `
 import sys
