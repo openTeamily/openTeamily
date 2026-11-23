@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { boot, deliverBundle, key, legacyBundles, volume, WS } from './helpers.js'
 import { attachRuntime, detachRuntime } from '../src/host.js'
+import {waveBase64} from '../../../openteamily/static/meetings/audio.mjs'
 
 const base = (id = '', ws = WS) => `/v1/workspaces/${ws}/meetings${id ? '/' + id : ''}`
 const body = { title: '周会', attendees: ['alice', 'bob'], summary: '同步进度。', transcript: '讨论排期。', action_items: [{ text: '订会议室', owner: 'bob' }] }
@@ -56,6 +57,46 @@ test('meetings run inside this DS-Bot: create, idempotent replay, list, read, up
 
   assert.equal((await call('POST', base(meeting.id) + '/remove', {})).status, 200)
   assert.equal((await call('GET', base(meeting.id))).status, 404)
+})
+
+test('meeting speech prepares and uses the local provider in the signed-in runtime', async (t) => {
+  const bot = await boot()
+  const call = (method, path, body) => bot.call('meetings', method, base(path), body)
+  assert.equal((await call('GET', 'speech')).body.phase, 'unavailable')
+  let phase = 'unprepared'
+  let location = 'host-local'
+  let accepted = false
+  let calls = 0
+  const providerId = 'sensevoice-local'
+  const speech = {
+    snapshot: () => ({selection: {providerId}, providers: [{id: providerId, location, preparation: {phase}}]}),
+    prepare(id) { assert.equal(id, providerId); accepted = true },
+    resolve(spec) { return spec },
+    async transcribe(spec, signal) {
+      calls += 1
+      assert.equal(spec.providerId, providerId)
+      assert.equal(spec.audio.readUInt32LE(24), 16000)
+      assert.equal(spec.audio.readInt16LE(44), -32768)
+      assert.equal(signal.aborted, false)
+      return {text: ' 周四发布 ' }
+    },
+  }
+  attachRuntime({rt: {}, ctx: {get: name => name === 'speechToText' ? speech : undefined}})
+  t.after(detachRuntime)
+  const body = {audio_base64: waveBase64(new Float32Array([-1, 0, 1]))}
+  assert.equal((await call('POST', 'transcribe', body)).status, 409)
+  assert.deepEqual((await call('POST', 'speech', {})).body, {phase: 'checking', ready: false, progress: null})
+  assert.equal(accepted, true)
+  phase = 'ready'
+  assert.equal((await call('GET', 'speech')).body.ready, true)
+  assert.equal((await call('POST', 'transcribe', {audio_base64: 'AAAA'})).status, 400)
+  assert.equal((await call('POST', 'transcribe', {audio_base64: waveBase64(new Float32Array(240001))})).status, 400)
+  assert.deepEqual((await call('POST', 'transcribe', body)).body, {text: '周四发布'})
+  assert.equal(calls, 1)
+  location = 'cloud'
+  assert.equal((await call('POST', 'transcribe', body)).status, 503)
+  assert.equal(calls, 1)
+  assert.deepEqual((await call('GET', '')).body.items, [])
 })
 
 test('meeting draft uses only the native text inference service and never saves without a separate request', async (t) => {

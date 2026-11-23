@@ -1,3 +1,5 @@
+import {mountMeetingAudio} from './audio.mjs';
+
 function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
@@ -74,9 +76,9 @@ export function attendeeInsert(text, username) {
   return parts.join(',').replace(/^\s+/, '').replace(/[\s,]+$/, '') + ', ';
 }
 
-async function request(method, path, body, extra) {
+async function request(method, path, body, extra, signal) {
   const headers = { Accept: 'application/json', ...(extra || {}) };
-  const options = { method, headers, credentials: 'same-origin' };
+  const options = { method, headers, credentials: 'same-origin', signal };
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
     headers['X-CSRF-Token'] = csrfCookie(document.cookie);
@@ -105,6 +107,7 @@ function mount() {
   let selection = 0;
   const titleInput = document.getElementById('meeting-title');
   const transcript = document.getElementById('meeting-transcript');
+  const audio = mountMeetingAudio(document, {request, base, transcript});
   const summary = document.getElementById('meeting-summary');
   const draftPanel = document.getElementById('meeting-draft');
   const draftButton = document.getElementById('generate-meeting-draft');
@@ -378,6 +381,7 @@ function mount() {
 
   function fill(meeting) {
     selection += 1;
+    audio.reset();
     hideAttendees();
     current = meeting;
     form.hidden = false;
@@ -428,6 +432,7 @@ function mount() {
 
   async function openMeeting(id) {
     const workspace = workspaceId(), pendingSelection = ++selection;
+    audio.reset();
     clearDraft();
     const result = await request('GET', `${base()}/${id}`);
     if (workspaceId() !== workspace || pendingSelection !== selection) return;
@@ -441,6 +446,7 @@ function mount() {
   async function load() {
     const session = await request('GET', '/v1/auth/session');
     if (session.status !== 200) {
+      audio.reset();
       loginPanel.hidden = false;
       mainPanel.hidden = true;
       show('', '');
@@ -564,6 +570,7 @@ function mount() {
 
   workspaceSelect.addEventListener('change', () => {
     selection += 1;
+    audio.reset();
     clearDraft();
     hideAttendees();
     memberCache = {workspace: '', items: [], failed: false};

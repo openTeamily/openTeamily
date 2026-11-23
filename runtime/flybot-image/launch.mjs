@@ -4,6 +4,7 @@
 // reads the secret file itself. The management task loop also runs in-plugin.
 import { spawn } from 'node:child_process'
 import { applyModelApi, loadModelApi, ModelApiError, redact } from './model-api.js'
+import { withSpeechOverlay } from './speech-overlay.mjs'
 
 try {
   const config = loadModelApi(process.env)
@@ -22,7 +23,8 @@ try {
   process.exit(1)
 }
 
-const child = spawn('dsh', process.argv.slice(2), { stdio: 'inherit', env: process.env })
+const args = withSpeechOverlay(process.argv.slice(2), process.env.DSH_HOME)
+const child = spawn('dsh', args, { stdio: 'inherit', env: process.env })
 const forward = (signal) => {
   try { child.kill(signal) } catch { /* child already gone */ }
 }

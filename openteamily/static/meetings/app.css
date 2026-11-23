@@ -54,6 +54,9 @@
 .meeting-draft h3 { margin: 0; }
 #meeting-draft-summary { white-space: pre-wrap; overflow-wrap: anywhere; }
 #meeting-draft-items { overflow-wrap: anywhere; }
+#meeting-audio .meeting-actions { margin-block: .6rem; }
+#meeting-audio audio { width: 100%; }
+#meeting-audio-status:empty { display: none; }
 @media (max-width: 900px) {
   .meeting-layout { grid-template-columns: 1fr; }
   .action-row { grid-template-columns: 1fr; }

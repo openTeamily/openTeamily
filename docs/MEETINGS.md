@@ -4,6 +4,7 @@ Related: [#212](https://github.com/openTeamily/openTeamily/issues/212), [#1](htt
 
 Meeting notes are stored by workspace in the user's DS-Bot. Users can enter a transcript,
 generate a draft summary and action items, review and edit the result, and save the meeting.
+They can also record or upload up to ten minutes of audio and add the transcription to the notes.
 
 ## Routes
 
@@ -15,6 +16,8 @@ Outsiders get `404`.
 | GET | `/` | Keyset page of meetings (`limit=1..100`, optional UUID-hex `cursor`). Items omit transcript/actions but include `action_count`/`done_count`. |
 | POST | `/` | Create `{title, started_at?, attendees?, transcript?, summary?, action_items?}` + `Idempotency-Key`. |
 | POST | `/draft` | Generate `{draft: {summary, action_items}}` from `{title?, attendees?, transcript}` through the user's DS-Bot text inference. The result remains a draft until the user saves the meeting. |
+| GET, POST | `/speech` | Read the local recognizer's readiness or start preparing its model. |
+| POST | `/transcribe` | Recognize one base64-encoded 16 kHz mono PCM WAV segment of up to 15 seconds. Returns `{text}`. |
 | GET | `/{meeting_id}` | Full meeting incl. transcript and action items. |
 | POST | `/{meeting_id}` | `{revision, changes:{...}}`; stale revision `409` with `error.current`. |
 | POST | `/{meeting_id}/remove` | Delete (author, owner or admin). |
@@ -40,10 +43,17 @@ summary, transcript and action-item rows (text, owner, done). The editor preview
 summary and action items before adding them to the form. Existing completed actions keep their
 status. Open a new record in the current workspace from the chat create menu, or return to a saved
 record through its link. The editor exports the selected meeting as Markdown.
+
+The container launch overlay activates DSH's local SenseVoice recognizer. Profiles with the
+official Voice Input bundle use its configured local recognizer. The first preparation downloads
+the model into the user's volume. The browser previews audio locally and submits segments only
+when transcription starts. The meeting stores the reviewed text through the regular save flow.
+The default local worker uses one thread and releases its model after one minute idle.
+The Compose manager allows 1.5 GiB per user runtime for DS-Bot and the speech worker.
 `docs/screenshots/meetings/` holds synthetic review captures.
 
 ## Remaining meeting features
 
-- Audio/video recording, live transcription, speaker separation, or call integration.
+- Live calls, streaming captions and speaker separation.
 - Automatically creating tasks/automations from action items.
-- PDF/DOCX export, attachments, audio/video, or server-side HTML rendering.
+- PDF/DOCX export, saved audio/video attachments, or server-side HTML rendering.

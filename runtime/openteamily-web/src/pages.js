@@ -77,6 +77,9 @@ export function createPageHandler({ pagesDir, identity }) {
       }
       if (type.startsWith('text/html')) {
         headers['x-frame-options'] = 'DENY'
+        if (parts[0] === 'meetings' && parts[1] === 'index.html') {
+          headers['permissions-policy'] = 'camera=(), microphone=(self), geolocation=()'
+        }
         return new Response(markHtml(await readFile(file, 'utf8'), identity), { status: 200, headers })
       }
       return new Response(await readFile(file), { status: 200, headers })
