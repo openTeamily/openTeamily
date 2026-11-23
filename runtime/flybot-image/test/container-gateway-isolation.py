@@ -9,14 +9,16 @@ as a browser would:
 
 * each user's ``/b/api/openteamily/page?path=/chat/`` is served by @openteamily/web
   inside *their* DS-Bot (instance marker + the real OpenTeamily chat page);
-* ``POST /b/api/openteamily`` and ``POST /b/api/bot`` execute in their own DS-Bot;
+* ``POST /b/api/openteamily``, ``POST /b/api/bot`` and a private workspace-agent turn
+  execute in their own DS-Bot;
 * forged routing headers, a smuggled foreign DSH cookie, no session and a
   cross-site Origin never reach the other user's runtime;
 * a runtime's DSH cookie is useless against the other runtime;
 * no DSH cookie is ever sent to the browser.
 
-No model, Bot Social, firewall, proxy or published port is involved; the bridge
-and containers are removed afterwards. Secrets (DSH tokens/cookies) are never printed.
+A fixture model runs inside one runtime's loopback. No external provider, Bot
+Social or published port is involved. The bridge and containers are removed
+afterwards. Secrets (DSH tokens/cookies) are never printed.
 """
 from __future__ import annotations
 
@@ -153,6 +155,7 @@ def seed(store, runtimes, now):
         gw.ensure_schema(db)
         for n, rt in enumerate(runtimes):
             user, ws = uuid4().hex, uuid4().hex
+            rt['workspace_id'] = ws
             db.execute('INSERT INTO users VALUES(?,?,?,?)', (user, f'ci-gateway-user-{n}', 'x', now))
             db.execute('INSERT INTO workspaces VALUES(?,?,?,?,?,?)', (ws, user, 'ci', now, f'k{n}', f'r{n}'))
             db.execute("INSERT INTO instances(id,workspace_id,owner_id,profile,backend_mode,image_ref,volume_ref,desired,revision,"
@@ -258,8 +261,10 @@ def main():
         for token, rt in ((token_a, a), (token_b, b)):
             status, headers, body = browse(token, 'GET', '/chat/')
             assert status == 200 and headers.get('x-openteamily-served-by') == f'ds-bot; instance={rt["id"]}', f'/chat/ moved: {status}'
-            status, headers, _b = browse(token, 'GET', '/chat/dsbot.mjs')
-            assert status == 200 and headers.get('x-openteamily-served-by', '').endswith(rt['id']), 'chat adapter bundled'
+            asset = re.search(rb'href="(/chat/assets/[0-9a-f]{32}/chat/dsbot\.mjs)"', body)
+            assert asset, 'chat page preloads its release-scoped adapter'
+            status, headers, _b = browse(token, 'GET', asset[1].decode())
+            assert status == 200 and headers.get('ETag', '').startswith('"sha256-'), 'chat adapter bundled'
         # User A cannot steer to B: forged routing headers and B's own DSH cookie are dropped.
         status, headers, _b = browse(token_a, 'GET', '/b/api/openteamily/page?path=%2Fchat%2F',
                                      **{'X-OT-Upstream': b['address'], 'X-OT-Instance': b['id'],
@@ -267,9 +272,9 @@ def main():
         assert status == 200 and headers['x-openteamily-served-by'] == f'ds-bot; instance={a["id"]}', 'A stays on A'
         status, _h, _b = browse(token_a, 'GET', f'/b/api/openteamily/page?path=%2Fchat%2F&instance={b["id"]}')
         assert _h['x-openteamily-served-by'].endswith(a['id'])
-        # No session: never reaches any runtime (redirect to registration).
+        # No session: never reaches any runtime (redirect to platform sign-in).
         status, headers, _b = browse(None, 'GET', '/b/api/openteamily/page?path=%2Fchat%2F')
-        assert status == 302 and headers['Location'].endswith('/register/'), f'no session: {status}'
+        assert status == 302 and headers['Location'] == '/login', f'no session: {status}'
         status, _h, _b = browse(None, 'GET', '/b/', Cookie=b['cookie'])
         assert status == 302, 'a smuggled DSH cookie alone opens nothing'
         # Cross-site writes are refused before routing.
@@ -290,25 +295,36 @@ def main():
         docker('exec', '-d', a['name'], 'node', '-e', FAKE_MODEL_SERVER)
         wait_for(lambda: docker('exec', a['name'], 'node', '-e', FAKE_MODEL_PROBE, check=False).returncode == 0, 'fake model')
 
-        def call(token, endpoint, payload, timeout=20):
-            status, _h, body = request(edge_address, 'POST', '/b/api/openteamily',
-                                       {'Host': edge_address, 'Cookie': f'{COOKIE}={token}', 'Origin': public_origin,
-                                        'Content-Type': 'application/json'},
-                                       json.dumps({'endpoint': endpoint, 'payload': payload}), timeout=timeout)
-            result = json.loads(body)
-            assert status == 200 and result.get('ok'), f'{endpoint}: {status} {redact(body[:300])}'
-            return result['value']
+        def api(token, method, path, payload=None, expected=200, timeout=20):
+            headers = {'Host': edge_address, 'Cookie': f'{COOKIE}={token}', 'Origin': public_origin}
+            if payload is not None:
+                headers.update({'Content-Type': 'application/json', 'Idempotency-Key': uuid4().hex})
+            status, _h, body = request(edge_address, method, path, headers,
+                                       json.dumps(payload) if payload is not None else None, timeout=timeout)
+            assert status == expected, f'{method} {path}: {status} {redact(body[:300])}'
+            return json.loads(body)
 
-        call(token_a, 'personal/set', {'name': 'CI assistant', 'instructions': 'CI-PROFILE-MARK'})
-        convo = call(token_a, 'chat/create', {'title': 'CI chat'})
-        sent = call(token_a, 'chat/send', {'conversation_id': convo['id'], 'text': 'hello from the CI test account'}, timeout=150)
+        # Use the same workspace-agent routes as the real chat UI. An unseeded
+        # runtime has no personal binding; the Compose lifecycle test proves
+        # signup/manager bootstrapping separately.
+        agents = f'/v1/workspaces/{a["workspace_id"]}/agents'
+        agent = api(token_a, 'POST', agents, {'name': 'CI assistant', 'instructions': 'CI-PROFILE-MARK'},
+                    expected=201)['agent']
+        assert agent['served_by'] == 'ds-bot' and agent['native_bot_id'], 'agent has an owned native Bot'
+        conversations = f'{agents}/{agent["id"]}/conversations'
+        convo = api(token_a, 'POST', conversations, {'title': 'CI chat'}, expected=201)['conversation']
+        chat = f'{conversations}/{convo["id"]}'
+        sent = api(token_a, 'POST', f'{chat}/messages', {'body': 'hello from the CI test account'},
+                   expected=201, timeout=150)
         reply = sent['reply']
-        assert reply['text'].startswith('CI-DSBOT-REPLY'), f'reply: {redact(reply["text"][:200])}'
-        assert 'profile=yes' in reply['text'], 'personal agent instructions reach the DS-Bot turn'
-        assert reply['meta']['engine'] == 'ds-bot' and reply['meta']['session_id'], 'native DS-Bot session'
-        history = call(token_a, 'chat/messages', {'conversation_id': convo['id']})
+        assert reply['status'] == 'succeeded', 'native DS-Bot reply completed'
+        assert reply['body'].startswith('CI-DSBOT-REPLY'), f'reply: {redact(reply["body"][:200])}'
+        assert 'profile=yes' in reply['body'], 'agent instructions reach the DS-Bot turn'
+        history = api(token_a, 'GET', chat)
+        assert history['conversation']['native_session_id'], 'private chat uses a native Session'
         assert [m['role'] for m in history['items']] == ['user', 'assistant']
-        assert call(token_b, 'chat/conversations', {})['items'] == [], "B never sees A's chats"
+        assert api(token_b, 'GET', agents)['items'] == [], "B never sees A's agents"
+        api(token_b, 'GET', chat, expected=404)
         print(json.dumps({'gateway_isolation': 'ok', 'runtimes': 2, 'served_by': 'ds-bot', 'chat': 'ds-bot-native',
                           'instances': [a['id'], b['id']]}))
     except Exception as error:

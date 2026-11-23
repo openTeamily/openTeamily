@@ -24,9 +24,9 @@ export function createLookAvatar(look, document) {
   root.className = 'look-avatar';
   root.setAttribute('aria-hidden', 'true');
   for (const name of LOOK_FIELDS) root.dataset[name] = look[name];
-  for (const part of ['head', 'eye eye-left', 'eye eye-right', 'mouth', 'hat', 'glasses', 'hand']) {
+  for (const classes of ['look-portrait', 'look-glasses', 'look-hand']) {
     const node = document.createElement('span');
-    node.className = 'look-' + part;
+    node.className = classes;
     root.append(node);
   }
   return root;

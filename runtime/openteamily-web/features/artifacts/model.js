@@ -51,6 +51,7 @@ export const ROW_JOINS = ` FROM artifacts a
  LEFT JOIN artifact_media md ON md.artifact_id=a.id
  LEFT JOIN artifact_boards b ON b.artifact_id=a.id
  LEFT JOIN artifact_chat_sources cs ON cs.artifact_id=a.id
+ LEFT JOIN artifact_team_run_sources tr ON tr.artifact_id=a.id AND tr.workspace_id=a.workspace_id
  LEFT JOIN artifact_slides sl ON sl.artifact_id=a.id
  LEFT JOIN artifact_dashboards d ON d.artifact_id=a.id
  LEFT JOIN artifact_spreadsheets x ON x.artifact_id=a.id `
@@ -61,6 +62,7 @@ export const ROW_SELECT = `SELECT a.*, m.render AS render, s.source_kind AS sour
  md.mime AS media_mime, md.byte_count AS media_bytes, md.sha256 AS media_sha256, md.filename AS media_filename,
  b.board AS board_json, cs.message_id AS chat_message_id, cs.conversation_id AS chat_conversation_id,
  cs.agent_id AS chat_agent_id, cs.conversation_title AS chat_conversation_title,
+ tr.run_id AS team_run_id, tr.position AS team_run_position, tr.run_title AS team_run_title,
  sl.deck AS slides_json, d.dashboard AS dashboard_json, x.workbook AS spreadsheet_json` + ROW_JOINS
 
 export function publicKind(row) {
@@ -73,6 +75,7 @@ export function publicKind(row) {
 }
 
 export function sourceView(row) {
+  if (row.team_run_id) return {kind:'team_run_step', id:row.team_run_id, position:row.team_run_position, run_title:row.team_run_title}
   if (row.chat_message_id) {
     const data = { kind: 'agent_message', id: row.chat_message_id, conversation_id: row.chat_conversation_id }
     if (row.chat_agent_id) data.agent_id = row.chat_agent_id

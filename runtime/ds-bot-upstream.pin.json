@@ -19,6 +19,26 @@
       "id": "2e8f3f56ce98c91d8a31cbb9088abefd03470ccd",
       "mode": "040000"
     },
+    "app/package.json": {
+      "type": "blob",
+      "id": "b3e8e96a978c858c359aa0232e7faf44a2b0b324",
+      "mode": "100644"
+    },
+    "app/ui/src": {
+      "type": "tree",
+      "id": "ede19500824dc95a434feac0ef82b4e7accc4853",
+      "mode": "040000"
+    },
+    "mobile/src/team/gated.ts": {
+      "type": "blob",
+      "id": "962134406c3bb87df2fe97a4720995164a5ea81a",
+      "mode": "100644"
+    },
+    "start.ps1": {
+      "type": "blob",
+      "id": "8b9fa46128bf866b8b8f7b4812a0ab696e84a8ec",
+      "mode": "100644"
+    },
     "docker/Dockerfile": {
       "type": "blob",
       "id": "a9ae387faa21e080914619111c4005c3f22ef6bb",

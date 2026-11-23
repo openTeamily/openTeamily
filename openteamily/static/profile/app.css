@@ -703,6 +703,34 @@ html[data-theme-resolved="dark"]
   text-decoration: none;
 }
 
+.profile-work-item:has(.profile-work-action) {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: .15rem;
+}
+
+.profile-work-item:has(.profile-work-action) .profile-work-card {
+  align-self: stretch;
+  flex: 1;
+  height: auto;
+}
+
+.profile-work-action {
+  min-height: 2.75rem;
+  padding: .35rem .65rem;
+  border: 0;
+  border-radius: .55rem;
+  background: transparent;
+  color: var(--ot-muted);
+  font: inherit;
+  font-size: .82rem;
+  cursor: pointer;
+}
+
+.profile-work-action:hover:not(:disabled) { color: var(--ot-ink); background: var(--ot-bg-accent); }
+.profile-work-action:disabled { opacity: .5; cursor: default; }
+
 .profile-work-card:hover { border-color: var(--ot-line-strong); background: var(--ot-surface-2); }
 .profile-work-card:focus-visible { outline-offset: -3px; }
 

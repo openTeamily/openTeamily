@@ -64,6 +64,7 @@ class FakeElement {
   addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }
   removeEventListener() {}
   setAttribute(name, value) { this.attributes[name] = value; }
+  removeAttribute(name) { delete this.attributes[name]; }
   getAttribute(name) { return this.attributes[name]; }
   appendChild(child) {
     child.parentElement = this;
@@ -488,6 +489,8 @@ function setView(doc, hash = '') {
   doc.defaultView = {
     location: new URL('https://example.test/members' + hash),
     history: {replaceState(_state, _title, next) { doc.defaultView.location = new URL(next, doc.defaultView.location); }},
+    handlers: {},
+    addEventListener(type, handler) { this.handlers[type] = handler; },
   };
 }
 
@@ -517,6 +520,103 @@ test('an exact members fragment selects only the accessible team and inaccessibl
       assert.equal(elements.get('member-workspace-field').hidden, false);
       assert.match(elements.get('status').textContent, /无法打开此工作区/);
       assert.deepEqual(rosterReads, []);
+    }
+  });
+});
+
+test('same-tab workspace fragments change the roster and hide a foreign team before validation', async () => {
+  const {doc, elements} = fakeDocument();
+  setView(doc, '#workspace=' + teamA);
+  const rosterReads = [];
+  const refreshed = Promise.withResolvers();
+  let hold = false;
+  await mount(doc, {fetcher: async path => {
+    if (path === '/v1/auth/session') return jsonResponse(200, {user: self});
+    if (path === '/v1/workspaces?limit=100') {
+      if (hold) await refreshed.promise;
+      return jsonResponse(200, {items: workspaceListing});
+    }
+    if (path === '/v1/join-requests') return jsonResponse(200, {items: []});
+    if (path.endsWith('/members')) {
+      rosterReads.push(path);
+      return jsonResponse(200, {items: [{...ALICE, role: 'member'}]});
+    }
+    throw new Error(path);
+  }});
+  const view = doc.defaultView;
+  view.location.hash = '#workspace=' + teamB;
+  await view.handlers.hashchange();
+  assert.equal(elements.get('workspace-chat').getAttribute('href'), '/chat#workspace=' + teamB);
+
+  hold = true;
+  view.location.hash = '#workspace=' + 'f'.repeat(32);
+  const change = view.handlers.hashchange();
+  assert.equal(elements.get('workspace-chat').hidden, true);
+  assert.equal(elements.get('member-list').children.length, 0);
+  refreshed.resolve();
+  await change;
+  assert.equal(elements.get('workspace').value, '');
+  assert.match(elements.get('status').textContent, /无法打开此工作区/);
+  assert.deepEqual(rosterReads, [`/v1/workspaces/${teamA}/members`, `/v1/workspaces/${teamB}/members`]);
+});
+
+test('joining pins the verified team, including after a lost receipt, without overriding a newer workspace switch', async t => {
+  const invited = 'c'.repeat(32);
+  const token = 'browser-invite-with-access';
+  for (const lostReceipt of [false, true]) for (const manual of [false, true]) await t.test(
+    `${lostReceipt ? 'lost receipt' : 'successful receipt'} with ${manual ? 'manual switch' : 'no switch'}`, async () => {
+    const {doc, elements} = fakeDocument();
+    setView(doc);
+    const accept = Promise.withResolvers();
+    const issued = Promise.withResolvers();
+    let joined = false;
+    let writes = 0;
+    let reads = 0;
+    const original = globalThis.FormData;
+    globalThis.FormData = class { get(name) { return name === 'token' ? token : null; } };
+    try {
+      await mount(doc, {fetcher: async path => {
+        if (path === '/v1/auth/session') return jsonResponse(200, {user: self});
+        if (path === '/v1/workspaces?limit=100') return jsonResponse(200, {
+          items: joined ? [...workspaceListing, {id: invited, name:'新加入的团队'}] : workspaceListing,
+        });
+        if (path === '/v1/join-requests') return jsonResponse(200, {items: []});
+        if (path === '/v1/invites/preview') {
+          reads++;
+          return jsonResponse(200, {invitation: {team_name: '新加入的团队', role:'member',
+            ...(joined ? {membership:'member', workspace_id:invited} : {})}});
+        }
+        if (path === '/v1/invites/accept') {
+          writes++;
+          issued.resolve();
+          await accept.promise;
+          joined = true;
+          return lostReceipt ? jsonResponse(503, {}) : jsonResponse(200, {workspace: {id: invited}});
+        }
+        if (path.endsWith('/members')) return jsonResponse(200, {items: [{...ALICE, role: 'member'}]});
+        throw new Error(path);
+      }});
+      const form = elements.get('accept-form');
+      const submit = () => form.handlers.submit[0]({preventDefault() {}, currentTarget: form});
+      await submit();
+      const response = submit();
+      await issued.promise;
+      if (manual) {
+        const select = elements.get('workspace');
+        select.value = teamB;
+        await select.handlers.change[0]();
+      }
+      accept.resolve();
+      await response;
+      const expected = manual ? teamB : invited;
+      assert.equal(elements.get('workspace').value, expected);
+      assert.equal(doc.defaultView.location.hash, '#workspace=' + expected);
+      assert.equal(elements.get('workspace-chat').hidden, false);
+      assert.equal(elements.get('workspace-chat').getAttribute('href'), '/chat#workspace=' + expected);
+      assert.equal(writes, 1);
+      assert.equal(reads, lostReceipt ? 2 : 1);
+    } finally {
+      globalThis.FormData = original;
     }
   });
 });
@@ -580,6 +680,58 @@ test('late invite and approval reads cannot populate another workspace', async (
   assert.equal(elements.get('invite-list').children.length, 0);
   assert.equal(elements.get('join-requests-panel').hidden, true);
   assert.equal(elements.get('join-request-list').children.length, 0);
+});
+
+test('adding a member sends once and keeps its success and the other workspace draft separate', async () => {
+  const {doc,elements} = fakeDocument();
+  setView(doc, '#workspace=' + teamA);
+  const form = doc.getElementById('add-form');
+  const username = form.elements.username = {value:''};
+  form.reset = () => { username.value = ''; form.elements.role.value = 'member'; };
+  const original = globalThis.FormData;
+  globalThis.FormData = class { constructor(node) { this.node = node; } get(name) { return this.node.elements[name]?.value; } };
+  const pending = Promise.withResolvers();
+  const writes = [];
+  try {
+    await mount(doc,{fetcher: async (path,{method,body}) => {
+      if (path === '/v1/auth/session') return jsonResponse(200,{user:self});
+      if (path === '/v1/workspaces?limit=100') return jsonResponse(200,{items:workspaceListing});
+      if (path === `/v1/workspaces/${teamA}/members` && method === 'POST') {
+        writes.push(JSON.parse(body));
+        return pending.promise;
+      }
+      if (path.endsWith('/members')) return jsonResponse(200,{items:[ALICE]});
+      if (path.endsWith('/directory')) return jsonResponse(200,{listing:{listed:false}});
+      return jsonResponse(200,{items:[]});
+    }});
+    const submit = () => form.handlers.submit[0]({preventDefault() {}});
+    username.value = 'target-A';
+    const sending = submit();
+    await submit();
+    assert.deepEqual(writes,[{username:'target-A',role:'member'}]);
+    assert.equal(elements.get('add-member-submit').disabled,true);
+    const picker = elements.get('workspace');
+    picker.value = teamB;
+    await picker.handlers.change[0]();
+    assert.equal(username.value,'');
+    assert.equal(elements.get('add-member-submit').disabled,false);
+    username.value = 'target-B draft';
+    form.handlers.input[0]();
+    pending.resolve(jsonResponse(201,{}));
+    await sending;
+    assert.equal(username.value,'target-B draft');
+    assert.equal(elements.get('add-member-status').hidden,true);
+    picker.value = teamA;
+    await picker.handlers.change[0]();
+    assert.equal(username.value,'');
+    assert.equal(elements.get('add-member-status').textContent,'已添加成员。');
+    picker.value = teamB;
+    await picker.handlers.change[0]();
+    assert.equal(username.value,'target-B draft');
+  } finally {
+    pending.resolve(jsonResponse(500,{}));
+    globalThis.FormData = original;
+  }
 });
 
 test('admins cannot approve administrator applications and one pending member decision sends one request', async () => {

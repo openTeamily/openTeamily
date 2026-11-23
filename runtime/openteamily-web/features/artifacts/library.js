@@ -1,7 +1,7 @@
 // Works-library operations (legacy artifacts.py + app.py artifact_*), executed
 // inside this user's DS-Bot. Share records live here; the public /share/<token>
 // page is rendered by the dedicated Bot Social from a published snapshot.
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { digest, HEX32, newId, nowSeconds, refuse, stableJson } from '../../featurekit/http.js'
 import { GLB_MIME, MAX_GLB_BYTES } from '../../lib/glb.js'
 import { catalogContentMatch, catalogMatch } from './catalog-search.js'
@@ -111,11 +111,12 @@ export function listing(store, workspaceId, cursor, limit, filters) {
     boundary += ' AND a.updated<?'
     bindings.push(filters.before)
   }
-  const metadata = filters.scope !== 'all' || filters.kind !== 'all' ||
+  if (filters.scope === 'automation') boundary += " AND s.source_kind='automation_run'"
+  const metadata = ['favorites', 'mine', 'memory'].includes(filters.scope) || filters.kind !== 'all' ||
     filters.types.size || filters.creators.size || filters.sessions.size
   const names = filters.creators.size ? usernames(store) : null
   const rows = filters.needle || metadata
-    ? filteredPage(store, {boundary, bindings, order, metadata}, limit, filters, names)
+    ? filteredPage(store, {boundary, bindings, order, metadata: metadata || filters.scope === 'automation'}, limit, filters, names)
     : store.all(ROW_SELECT + boundary + order + ' LIMIT ?', ...bindings, limit)
   if (!rows.length) return rows
   const user = names || usernames(store)
@@ -233,6 +234,7 @@ export function uniqueTitle(store, workspaceId, title, suffix) {
 export function versionView(row, includeBody = true, user = (id) => id) {
   let kind = row.kind
   const data = { revision: row.revision, title: row.title, kind, created: row.created, created_by: row.created_by_username ?? user(row.created_by) }
+  if (Number.isSafeInteger(row.restored_from)) data.restored_from = row.restored_from
   if (kind === 'media') {
     data.media = { mime: row.mime, bytes: row.byte_count, filename: row.filename }
   } else {
@@ -272,6 +274,10 @@ function attachKind(store, id, kind, { board, slides, dashboard } = {}) {
 
 function attachSource(store, id, workspaceId, now, source) {
   if (!source) return
+  if (source.kind === 'team_run_step') {
+    attachTeamRunSource(store, id, workspaceId, source)
+    return
+  }
   if (source.kind === 'agent_message') {
     store.run('INSERT INTO artifact_chat_sources(artifact_id, workspace_id, conversation_id, message_id, agent_id, created, conversation_title) VALUES(?,?,?,?,?,?,?)',
       id, workspaceId, source.conversation_id, source.id ?? source.message_id, source.agent_id ?? null, now, source.conversation_title ?? null)
@@ -283,8 +289,17 @@ function attachSource(store, id, workspaceId, now, source) {
   }
 }
 
+export function attachTeamRunSource(store, artifactId, workspaceId, source) {
+  store.run('INSERT INTO artifact_team_run_sources VALUES(?,?,?,?,?)', artifactId, workspaceId, source.id, source.position, source.run_title)
+}
+
 function existingSource(store, workspaceId, source) {
   if (!source) return null
+  if (source.kind === 'team_run_step') {
+    const row = store.get('SELECT artifact_id FROM artifact_team_run_sources WHERE workspace_id=? AND run_id=? AND position=?',
+      workspaceId, source.id, source.position)
+    return row ? load(store, workspaceId, row.artifact_id) : null
+  }
   if (source.kind === 'agent_message') {
     const row = store.get('SELECT artifact_id FROM artifact_chat_sources WHERE workspace_id=? AND message_id=?', workspaceId, source.id ?? source.message_id)
     return row ? load(store, workspaceId, row.artifact_id) : null
@@ -302,6 +317,11 @@ export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = 
   const title = input.title
   const content = input.body ?? ''
   const kind = input.kind ?? 'document'
+  const source = input.source
+  if (source?.kind === 'agent_message' && source.agent_id && !reuseChatSource) {
+    refuse(403, 'forbidden', 'Save private replies from their conversation')
+  }
+  if (source?.kind === 'team_run_step' && !reuseSource) refuse(403, 'forbidden', 'Save results from their team run')
   let board, slides, dashboard, spreadsheet
   if (kind === 'media') refuse(400, 'invalid', 'Upload media as multipart form data')
   if (kind === 'whiteboard') {
@@ -330,13 +350,17 @@ export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = 
   const keyHash = digest('artifact:' + key)
   const requestHash = receiptHash ?? digest(stableJson(payload))
   return store.transaction(() => {
-    const source = input.source
     const already = existingSource(store, workspaceId, source)
     // Saved source snapshots survive later edits and title changes.
     if (already && (reuseChatSource || reuseSource)) return { status: 200, body: { artifact: view(already) } }
     const prior = store.get('SELECT * FROM artifacts WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
     if (prior) {
       const row = load(store, workspaceId, prior.id)
+      if (source?.kind === 'team_run_step' && !sourceView(row) && publicKind(row) === 'document' &&
+          store.get('SELECT body FROM artifact_versions WHERE artifact_id=? AND revision=1', row.id)?.body === bodyText) {
+        attachTeamRunSource(store, row.id, workspaceId, source)
+        return {status:200, body:{artifact:view(load(store, workspaceId, row.id))}}
+      }
       // Older Bot Social saves used the same key without recording the source.
       if (reuseChatSource && !source.agent_id && !row.chat_message_id && !row.source_kind && publicKind(row) === 'document') {
         const first = store.get('SELECT body FROM artifact_versions WHERE artifact_id=? AND revision=1', row.id)
@@ -558,7 +582,7 @@ export function updateArtifact(ctx, row, changes, revision) {
     guardVersions(store, row.id)
     const hash = titleHash(title)
     if (title !== row.title && store.get('SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=? AND id!=?', row.workspace_id, hash, row.id)) {
-      refuse(409, 'conflict', 'A document with this title already exists')
+      refuse(409, 'title_conflict', 'A document with this title already exists')
     }
     store.run('UPDATE artifacts SET title=?, title_hash=?, body=?, revision=?, updated=?, updated_by=? WHERE id=?',
       title, hash, content, row.revision + 1, nowSeconds(), owner, row.id)
@@ -587,7 +611,7 @@ export function replaceMedia(ctx, row, { title, data, filename, mime, revision }
   return store.transaction(() => {
     const hash = titleHash(newTitle)
     if (newTitle !== row.title && store.get('SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=? AND id!=?', row.workspace_id, hash, row.id)) {
-      refuse(409, 'conflict', 'A document with this title already exists')
+      refuse(409, 'title_conflict', 'A document with this title already exists')
     }
     guardVersions(store, row.id)
     let digestHex
@@ -607,21 +631,33 @@ function guardVersions(store, artifactId) {
   }
 }
 
-export function restoreArtifact(ctx, row, revision, to) {
+export function restoreArtifact(ctx, target, revision, to, key) {
   const { store, owner } = ctx
   if (!Number.isInteger(revision) || !Number.isInteger(to) || to < 1 || to > 2 ** 31 || revision < 0 || revision > 2 ** 31) {
     refuse(400, 'invalid', 'Provide the current revision and a version to restore')
   }
-  if (revision !== row.revision) refuse(409, 'conflict', 'Document changed elsewhere; reload and retry', view(row))
-  const snapshot = store.get('SELECT * FROM artifact_versions WHERE artifact_id=? AND revision=?', row.id, to)
-  if (!snapshot) refuse(404, 'not_found', 'Version not found')
-  if (sameAsVersion(row, snapshot)) return { status: 200, body: { artifact: view(row) } }
+  if (key != null && !KEY.test(key)) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+  const requestKey = key == null ? null : digest('artifact-restore:' + key)
+  const receipt = (resultRevision) => ({ base_revision: revision, source_revision: to, result_revision: resultRevision })
   return store.transaction(() => {
+    const row = load(store, target.workspace_id, target.id)
+    if (!row) refuse(404, 'not_found', 'Artifact not found')
+    const prior = requestKey && store.get('SELECT revision,source_revision FROM artifact_restores WHERE artifact_id=? AND request_key=?', row.id, requestKey)
+    if (prior) {
+      if (prior.revision !== revision + 1 || prior.source_revision !== to) {
+        refuse(409, 'idempotency_conflict', 'This request already restored another version')
+      }
+      return { status: 200, body: { artifact: view(row), restore: receipt(prior.revision) } }
+    }
+    if (revision !== row.revision) refuse(409, 'conflict', 'Document changed elsewhere; reload and retry', view(row))
+    const snapshot = store.get('SELECT * FROM artifact_versions WHERE artifact_id=? AND revision=?', row.id, to)
+    if (!snapshot) refuse(404, 'not_found', 'Version not found')
+    if (sameAsVersion(row, snapshot)) return { status: 200, body: { artifact: view(row), restore: receipt(revision) } }
     guardVersions(store, row.id)
     const title = snapshot.title
     const hash = titleHash(title)
     if (title !== row.title && store.get('SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=? AND id!=?', row.workspace_id, hash, row.id)) {
-      refuse(409, 'conflict', 'A document with this title already exists')
+      refuse(409, 'title_conflict', 'A document with this title already exists')
     }
     let kind = snapshot.kind
     let structured = null
@@ -653,7 +689,10 @@ export function restoreArtifact(ctx, row, revision, to) {
     } else {
       clear('artifact_media', 'artifact_boards', 'artifact_slides', 'artifact_dashboards')
     }
-    return saved(store, row.workspace_id, row.id, 200)
+    const result = saved(store, row.workspace_id, row.id, 200)
+    store.run('INSERT INTO artifact_restores VALUES(?,?,?,?)', row.id, row.revision + 1, to, requestKey)
+    result.body.restore = receipt(row.revision + 1)
+    return result
   })
 }
 
@@ -727,15 +766,34 @@ export function parseExportFormat(query) {
   return format === 'original' ? null : format
 }
 
-export function opaque() { return randomBytes(32).toString('base64url') }
+function shareToken(store, id, create = false) {
+  const key = 'SELECT secret FROM artifact_share_keys WHERE id=1'
+  let row = store.get(key)
+  if (!row && create) {
+    store.run('INSERT OR IGNORE INTO artifact_share_keys(id,secret) VALUES(1,?)', randomBytes(32).toString('hex'))
+    row = store.get(key)
+  }
+  if (!row?.secret) return null
+  return createHmac('sha256',Buffer.from(row.secret,'hex')).update('artifact-read-only:' + id).digest('base64url')
+}
 
-export function shareView(row, { includeToken = false, token = null, store } = {}) {
+export function recoverShareToken(store, row) {
+  if (row.recovery_version !== 1) return null
+  const token = shareToken(store,row.id)
+  return token && digest('share:' + token) === row.token_hash ? token : null
+}
+
+export function shareView(row, { includeToken = false, token = null, store, now = null } = {}) {
   const user = store ? usernames(store) : () => null
+  const revoked = Boolean(row.revoked && row.revocation_confirmed_at != null)
   const data = {
     id: row.id, artifact_id: row.artifact_id, workspace_id: row.workspace_id, prefix: row.token_prefix,
     created: row.created, created_by: row.created_by_username ?? user(row.created_by),
-    expires: row.expires, revoked: Boolean(row.revoked), scope: 'read',
+    expires: row.expires, revoked, revocation_pending: Boolean(row.revoked && !revoked), scope: 'read',
+    ...(Number.isSafeInteger(row.source_revision) ? {revision:row.source_revision} : {}),
+    ...(row.recovery_version === 1 ? {recoverable:true} : {}),
   }
+  if (now != null) data.expired = row.expires != null && row.expires <= now
   if (includeToken && token) { data.token = token; data.path = '/share/' + token }
   return data
 }
@@ -750,20 +808,26 @@ export function createShare(store, row, owner, now, expiresIn) {
     if (!Number.isInteger(expiresIn) || expiresIn < 1 || expiresIn > 2592000) refuse(400, 'invalid', 'expires_in must be 1..2592000 seconds')
     expires = now + expiresIn
   }
-  const active = store.get('SELECT COUNT(*) AS n FROM artifact_shares WHERE artifact_id=? AND revoked=0 AND (expires IS NULL OR expires>?)', row.id, now).n
+  const active = store.get(`SELECT COUNT(*) AS n FROM artifact_shares WHERE artifact_id=?
+    AND revocation_confirmed_at IS NULL AND (expires IS NULL OR expires>?)`, row.id, now).n
   if (active >= MAX_SHARES) refuse(429, 'quota', 'Share capacity reached')
-  const token = opaque()
   const id = newId()
-  store.run('INSERT INTO artifact_shares VALUES(?,?,?,?,?,?,?,?,0,NULL)',
-    id, row.id, row.workspace_id, digest('share:' + token), token.slice(0, PREFIX_LEN), now, owner, expires)
+  const token = shareToken(store,id,true)
+  store.run(`INSERT INTO artifact_shares
+    (id,artifact_id,workspace_id,token_hash,token_prefix,created,created_by,expires,revoked,revoked_at,source_revision,recovery_version)
+    VALUES(?,?,?,?,?,?,?,?,0,NULL,?,1)`,
+    id, row.id, row.workspace_id, digest('share:' + token), token.slice(0, PREFIX_LEN), now, owner, expires, row.revision)
   const item = store.get('SELECT * FROM artifact_shares WHERE id=? AND artifact_id=?', id, row.id)
   return { status: 201, body: { share: shareView(item, { includeToken: true, token, store }) } }
 }
 
-export function revokeShare(store, artifactId, shareId, now) {
+export function revokeShare(store, artifactId, shareId, now, { confirmed = false } = {}) {
   const item = store.get('SELECT * FROM artifact_shares WHERE id=? AND artifact_id=?', shareId, artifactId)
   if (!item) refuse(404, 'not_found', 'Share not found')
   store.run('UPDATE artifact_shares SET revoked=1, revoked_at=? WHERE id=? AND revoked=0', now, item.id)
+  if (confirmed) {
+    store.run('UPDATE artifact_shares SET revocation_confirmed_at=? WHERE id=? AND revocation_confirmed_at IS NULL', now, item.id)
+  }
   return { status: 200, body: { share: shareView(store.get('SELECT * FROM artifact_shares WHERE id=?', shareId), { store }) } }
 }
 
@@ -809,7 +873,9 @@ export function listFiles(store, workspaceId, text, cursor, limit) {
 export function search(store, needle, limit) {
   const like = '%' + needle.replace(/[\\%_]/g, (c) => '\\' + c) + '%'
   return store.all(ROW_SELECT + "WHERE a.title LIKE ? ESCAPE '\\' OR a.body LIKE ? ESCAPE '\\' ORDER BY a.updated DESC LIMIT ?", like, like, limit)
-    .map((row) => ({ kind: 'artifact', id: row.id, workspace_id: row.workspace_id, title: row.title, snippet: (row.body || row.title).slice(0, 160), updated: row.updated, href: `/artifacts/?artifact=${row.id}` }))
+    .map((row) => ({kind:'artifact', id:row.id, workspace_id:row.workspace_id, title:row.title,
+      snippet:(row.body || row.title).slice(0,160), updated:row.updated,
+      href:'/space?' + new URLSearchParams({workspace:row.workspace_id,artifact:row.id})}))
 }
 
 export { HEX32, mediaDigests, unlinkMedia, TOKEN }

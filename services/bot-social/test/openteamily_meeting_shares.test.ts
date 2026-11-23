@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { bulkAuth, startServer } from "./helpers.js";
 import { home } from "./openteamily_helpers.js";
+import { Platform } from "../src/platform.js";
+import { OtContext } from "../src/openteamily/core.js";
+import { migrateMeetingShareAudience } from "../src/openteamily/meeting-shares.js";
 
 type Home = Awaited<ReturnType<typeof home>>;
 const ROOT = "/v1/ot";
@@ -50,6 +53,86 @@ function meetingNotices(page: { notifications: Notice[] }) {
   return page.notifications.filter(row => row.kind === "meeting.shared");
 }
 
+test("finished invite-link call shares survive room cleanup and reach only selected attendees", async () => {
+  const [author, reader, unselected, previewOnly] = await Promise.all([
+    member("call-notes-author"), member("call-notes-reader"), member("call-notes-unselected"), member("call-notes-preview"),
+  ]);
+  const calls = ROOT + "/meeting-calls";
+  const started = await author.ok("POST", calls + "/create", { title: "Standalone notes", peer_id: "noteshare-host-peer" });
+  for (const [participant, peer] of [[reader, "noteshare-reader-peer"], [unselected, "noteshare-other-peer"]] as const) {
+    await participant.ok("POST", calls + "/join", { code: started.meeting.code, peer_id: peer });
+  }
+  await previewOnly.ok("POST", calls + "/preview", { code: started.meeting.code });
+  const select = ROOT + "/meeting-share-recipients?call_id=" + started.call.id;
+  assert.equal((await author.call("GET", select)).status, 409);
+  assert.equal((await previewOnly.call("GET", select)).status, 404);
+  await author.ok("POST", calls + "/end", {call_id: started.call.id, peer_id: started.peer_id});
+  assert.deepEqual((await author.ok("GET", select)).items.map((row: {id: string}) => row.id).sort(),
+    [reader.id, unselected.id].sort());
+  assert.equal((await previewOnly.call("GET", select)).status, 404);
+  assert.deepEqual((await author.ok("GET", ROOT + "/conversations")).conversations, []);
+  const {conversation_id: _, ...notes} = sharing("unused", reader.id);
+  const payload = { ...notes, call_id: started.call.id };
+  const shares = ROOT + "/meeting-shares";
+  assert.equal((await previewOnly.call("POST", shares, payload)).status, 404);
+  assert.equal((await author.call("POST", shares, { ...payload, recipient_ids: [previewOnly.id] })).status, 404);
+  assert.equal((await author.call("POST", shares, { ...payload, conversation_id: "unused" })).status, 400);
+  const { meeting } = await author.ok("POST", shares, payload);
+  assert.deepEqual((await author.ok("POST", shares, payload)), {meeting, replayed: true});
+  assert.deepEqual((await reader.ok("GET", shares)).items.map((row: {id: string}) => row.id), [meeting.id]);
+  assert.deepEqual((await reader.ok("GET", shares + "/" + meeting.id)).meeting, meeting);
+  assert.deepEqual(meetingNotices(await reader.ok("GET", INBOX + "?personal=1")).map(row => row.data.share_id), [meeting.id]);
+  assert.equal("transcript" in meeting || "attendees" in meeting, false);
+  for (const noAccess of [unselected, previewOnly]) {
+    assert.deepEqual(await noAccess.ok("GET", shares), {items: [], cursor: null});
+    assert.equal((await noAccess.call("GET", shares + "/" + meeting.id)).status, 404);
+    assert.deepEqual(meetingNotices(await noAccess.ok("GET", INBOX)), []);
+  }
+  await author.ok("POST", shares + "/" + meeting.id + "/revoke", {});
+  assert.equal((await reader.call("GET", shares + "/" + meeting.id)).status, 404);
+  assert.deepEqual(meetingNotices(await reader.ok("GET", INBOX)), []);
+});
+
+test("meeting audience migration preserves existing receipts and their cursor counter", () => {
+  const platform = new Platform();
+  try {
+    const ot = new OtContext(platform);
+    ot.db.exec(`
+      CREATE TABLE ot_conversations(id TEXT PRIMARY KEY);
+      CREATE TABLE ot_call_records(id TEXT PRIMARY KEY);
+      CREATE TABLE ot_meeting_shares (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, workspace_id TEXT,
+        conversation_id TEXT NOT NULL REFERENCES ot_conversations(id) ON DELETE CASCADE,
+        sender_id TEXT NOT NULL, source_id TEXT NOT NULL, client_key TEXT NOT NULL, request_hash TEXT NOT NULL,
+        revision INTEGER NOT NULL, title TEXT NOT NULL, started_at INTEGER NOT NULL,
+        organizer TEXT NOT NULL, summary TEXT NOT NULL, action_items TEXT NOT NULL,
+        action_count INTEGER NOT NULL, done_count INTEGER NOT NULL, created INTEGER NOT NULL, revoked_at INTEGER,
+        UNIQUE (sender_id, client_key)
+      );
+      CREATE TABLE ot_meeting_share_recipients (
+        share_id TEXT NOT NULL REFERENCES ot_meeting_shares(id) ON DELETE CASCADE,
+        recipient_id TEXT NOT NULL, display_name TEXT NOT NULL, PRIMARY KEY (share_id, recipient_id)
+      );
+      INSERT INTO ot_conversations VALUES ('existing-conversation');
+      INSERT INTO ot_meeting_shares VALUES
+        (13,'existing-share',NULL,'existing-conversation','owner','note','key','hash',2,'Title',1,'Host','Notes','[]',0,0,2,NULL);
+      INSERT INTO ot_meeting_share_recipients VALUES ('existing-share','reader','Reader');
+      UPDATE sqlite_sequence SET seq=15 WHERE name='ot_meeting_shares';
+    `);
+    const oldShare = ot.get("SELECT * FROM ot_meeting_shares");
+    const oldAudience = ot.get("SELECT * FROM ot_meeting_share_recipients");
+    migrateMeetingShareAudience(ot);
+    migrateMeetingShareAudience(ot);
+    assert.deepEqual(ot.get("SELECT * FROM ot_meeting_shares"), {...oldShare, call_id: null});
+    assert.deepEqual(ot.get("SELECT * FROM ot_meeting_share_recipients"), oldAudience);
+    assert.deepEqual(ot.get("SELECT seq FROM sqlite_sequence WHERE name='ot_meeting_shares'"), {seq:15});
+    assert.deepEqual(ot.all("PRAGMA foreign_key_check"), []);
+    ot.run("DELETE FROM ot_conversations WHERE id='existing-conversation'");
+    assert.equal(ot.get("SELECT * FROM ot_meeting_shares"), undefined);
+    assert.equal(ot.get("SELECT * FROM ot_meeting_share_recipients"), undefined);
+  } finally { platform.close(); }
+});
+
 test("personal receipts save distinct immutable versions, page privately and revoke by author", async () => {
   const [author, reader, unselected, outsider] = await Promise.all([
     member("note-author"), member("note-reader"), member("note-unselected"), member("note-outsider"),
@@ -64,13 +147,16 @@ test("personal receipts save distinct immutable versions, page privately and rev
     { id: reader.id, name: reader.name }, { id: unselected.id, name: unselected.name },
   ]);
   assert.equal((await outsider.call("GET", selector)).status, 404);
-  const payload = sharing(group.id, reader.id);
+  const originalPayload = sharing(group.id, reader.id);
+  const payload = {...originalPayload, action_items: originalPayload.action_items.map((item,index) =>
+    index ? item : {...item, due_date: "2032-02-29"})};
   assert.equal((await author.call("POST", shares, { ...payload, recipient_ids: [reader.id, outsider.id] })).status, 404);
   assert.equal((await author.call("POST", shares, { ...payload, recipient_ids: [reader.handle] })).status, 404);
   assert.equal((await author.call("POST", shares, { ...payload, recipient_ids: [author.id] })).status, 404);
   assert.equal((await author.call("POST", shares, { ...payload, transcript: "private" })).status, 400);
   assert.equal((await author.call("POST", shares, { ...payload, live_code: "private" })).status, 400);
   assert.equal((await author.call("POST", shares, { ...payload, action_items: [{ text: "task", done: "true" }] })).status, 400);
+  assert.equal((await author.call("POST", shares, { ...payload, action_items: [{ text: "task", due_date: "2031-02-29" }] })).status, 400);
   assert.equal((await author.call("POST", shares, { ...payload, action_items: [{ text: "task", transcript: "private" }] })).status, 400);
   assert.deepEqual(await reader.ok("GET", shares), { items: [], cursor: null });
 
@@ -108,7 +194,8 @@ test("personal receipts save distinct immutable versions, page privately and rev
     { id: second.id, title: payload.title, revision: 2, started_at: payload.started_at, created: second.created,
       organizer: author.name, action_count: 2, done_count: 1, shared: true },
   ]);
-  assert.deepEqual((await reader.ok("GET", shares + "/" + first.id)).meeting, first);
+  assert.deepEqual(await reader.ok("GET", shares + "/" + first.id), { meeting: first, received: true });
+  assert.deepEqual(await author.ok("GET", shares + "/" + first.id), { meeting: first, received: false });
   assert.deepEqual(await unselected.ok("GET", shares), { items: [], cursor: null });
   assert.equal((await unselected.call("GET", shares + "/" + first.id)).status, 404);
   assert.equal((await outsider.call("GET", shares + "/" + first.id)).status, 404);

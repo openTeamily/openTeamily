@@ -235,6 +235,55 @@ test('a ?category= deep link filters on first load', async () => {
   });
 });
 
+test('an exact agent link opens the authorized workspace and never falls back to personal', async () => {
+  await withLocation('?category=operations', async () => {
+    const personal = {id: 'a'.repeat(32), name: 'Personal', kind:'personal', role:'owner'};
+    const team = {id: 'b'.repeat(32), name: 'Team', owner_id: 'user-1'};
+    const agent = {id: 'c'.repeat(32), workspace_id: team.id, revision: 1, name: '团队智能体', category: 'operations'};
+    const requests = [];
+    const base = '/v1/workspaces/' + team.id;
+    const fetcher = async (path) => {
+      requests.push(path);
+      if (path === '/v1/auth/session') return json(200, {user: {id: 'user-1', username: 'alice'}});
+      if (path === '/v1/workspaces?limit=100') return json(200, {items: [personal, team]});
+      if (path === '/v1/personal-agent') return json(200, {});
+      if (path === base) return json(404, {});
+      if (path === base + '/members') return json(200, {items: [{user_id:'user-1',role:'owner'}]});
+      if (path === '/v1/workspaces/' + personal.id + '/members') return json(404, {});
+      if (path === '/v1/workspaces/' + personal.id + '/agents?limit=100') return json(200, {items: []});
+      if (path === base + '/agents?limit=100') return json(200, {items: [agent]});
+      if (path === base + '/agents/' + agent.id) return json(200, {agent});
+      if (path.endsWith('/api-keys')) return json(200, {items: []});
+      assert.fail('Unexpected workspace read: ' + path);
+    };
+    globalThis.location.hash = '#workspace=' + team.id + '&agent=' + agent.id;
+    const exact = fakeDocument();
+    exact.doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+    await mount(exact.doc, {fetcher});
+    assert.equal(exact.el('workspace').value, team.id);
+    assert.equal(exact.el('edit-form').elements.name.value, agent.name);
+    assert.equal(exact.el('open-in-chat').href, '/chat#workspace=' + team.id + '&agent=' + agent.id);
+    assert.deepEqual(names(exact.el), [agent.name]);
+    assert.equal(exact.el('open-create').hidden, false);
+    assert.ok(!requests.includes(base));
+    assert.equal(requests.filter(path => path === base + '/agents/' + agent.id).length, 1);
+
+    requests.length = 0;
+    globalThis.location.hash = '#workspace=' + 'd'.repeat(32) + '&agent=' + agent.id;
+    const denied = fakeDocument();
+    await mount(denied.doc, {fetcher});
+    assert.equal(denied.el('workspace').value, '');
+    assert.equal(denied.el('open-create').hidden, true);
+    assert.equal(denied.el('manage-drawer').hidden, true);
+    assert.ok(!requests.some(path => /^\/v1\/workspaces\/[^/]+/.test(path)));
+    globalThis.location.hash = '#workspace=' + personal.id;
+    const own = fakeDocument();
+    own.doc.querySelector = exact.doc.querySelector;
+    await mount(own.doc, {fetcher});
+    assert.equal(own.el('open-create').hidden, false);
+  });
+});
+
 test('the create and edit forms carry the category and offer all 17 options', async () => {
   const requests = [];
   const {doc, el} = fakeDocument();

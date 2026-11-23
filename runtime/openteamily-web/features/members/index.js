@@ -11,7 +11,7 @@ export default function members(host) {
       v1: membersV1(host),
       // Wizard step 3 (#281): static OpenTeamily role copy, not a Teamily claim.
       roles: async () => ({ roles: [
-        { role: 'owner', title: 'Owner', summary: 'Creates and can delete the team, assigns admin/member roles, and can never be removed or suspended.' },
+        { role: 'owner', title: 'Owner', summary: 'Can delete the team, assign admin/member roles, and transfer ownership before leaving. Cannot be removed or suspended.' },
         { role: 'admin', title: 'Admin', summary: 'Manages members (except the owner), invites and join requests; cannot change roles.' },
         { role: 'member', title: 'Member', summary: 'Works in the team and can leave; cannot manage invites or other members.' },
       ] }),

@@ -13,6 +13,14 @@ CREATE TABLE IF NOT EXISTS chat_state (key TEXT PRIMARY KEY, value TEXT NOT NULL
 `
 const ID = /^[0-9a-f]{32}$/
 
+function legacyConversations(db) {
+  const messages = db.prepare('SELECT * FROM messages WHERE conversation_id=? ORDER BY created, rowid')
+  return db.prepare('SELECT * FROM conversations ORDER BY created,id').all().map(conversation => ({
+    ...conversation,
+    messages: messages.all(conversation.id).map(message => ({...message, meta: JSON.parse(message.meta)})),
+  }))
+}
+
 export default function chat(host) {
   let db
   const database = async () => {
@@ -23,8 +31,7 @@ export default function chat(host) {
     pages: ['chat'],
     endpoints: {
       async exportLegacy() {
-        const d = await database()
-        return {conversations:d.prepare('SELECT * FROM conversations ORDER BY created,id').all().map(c=>({...c,messages:d.prepare('SELECT * FROM messages WHERE conversation_id=? ORDER BY created,id').all(c.id).map(m=>({...m,meta:JSON.parse(m.meta)}))}))}
+        return {conversations: legacyConversations(await database())}
       },
     },
   }
@@ -38,7 +45,7 @@ export default function chat(host) {
     if (existing && (existing.agent_id !== scope.agent_id || existing.workspace_id !== scope.workspace_id)) fail('chat/identity-conflict', 'Personal agent mapping differs from its durable binding')
     if (!linked) {
       linked = (async () => {
-        const conversations = d.prepare('SELECT * FROM conversations ORDER BY created,id').all().map(c => ({...c,messages:d.prepare('SELECT * FROM messages WHERE conversation_id=? ORDER BY created,id').all(c.id).map(m=>({...m,meta:JSON.parse(m.meta)}))}))
+        const conversations = legacyConversations(d)
         const result = await host.call('agents/adopt-personal-chat',{...scope,id:scope.agent_id,conversations})
         d.prepare("INSERT OR REPLACE INTO chat_state VALUES('native_personal_binding',?)").run(JSON.stringify(scope))
         return result

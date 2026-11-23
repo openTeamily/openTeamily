@@ -395,18 +395,19 @@ class Lifecycle:
             if manager.backend_mode == 'compose':
                 running = [item['id'] for item in items
                            if item['converged'] and item['observed'] == 'running' and item['health'] == 'healthy']
-                recent = set()
+                published = {}
+                now = int(self.clock())
                 if running and db.execute("SELECT 1 FROM sqlite_master WHERE name='dsbot_upstreams' AND type='table'").fetchone():
                     # Successful stop/restart observations invalidate the previous process route.
-                    # Give the poller only a freshness hint, never credentials or addresses.
+                    # Give the poller route state without credentials or addresses.
                     placeholders = ','.join('?' for _ in running)
-                    now = int(self.clock())
-                    recent = {row['instance_id'] for row in db.execute(
-                        f'SELECT instance_id FROM dsbot_upstreams WHERE instance_id IN ({placeholders}) AND updated>? AND updated<=?',
-                        (*running, now - GATEWAY_REFRESH_SECONDS, now),
+                    published = {row['instance_id']: row['updated'] for row in db.execute(
+                        f'SELECT instance_id, updated FROM dsbot_upstreams WHERE instance_id IN ({placeholders})', running,
                     )}
                 for item in items:
-                    item['gateway_route_fresh'] = item['id'] in recent
+                    updated = published.get(item['id'])
+                    item['gateway_route_present'] = updated is not None
+                    item['gateway_route_fresh'] = updated is not None and now - GATEWAY_REFRESH_SECONDS < updated <= now
             return {'items': items, 'cursor': rows[limit-1]['id'] if len(rows) > limit else None}
 
     def claim(self, manager, iid):

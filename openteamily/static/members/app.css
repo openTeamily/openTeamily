@@ -66,6 +66,23 @@ body.app-workspace #main-panel {
   font-size: 0.8125rem;
 }
 
+#workspace-chat {
+  margin-inline-start: auto;
+  min-height: 2.75rem;
+  padding-inline: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--ot-line);
+  border-radius: 999px;
+  color: var(--ot-accent);
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+
+#workspace-chat[hidden] { display: none; }
+#workspace-chat:hover { background: var(--ot-accent-soft); }
+#directory-results button { min-height: 2.75rem; }
+
 #members-panel h2,
 #invites-panel h2,
 #join-requests-panel h2,
@@ -115,7 +132,7 @@ body.app-workspace #main-panel {
 }
 
 .requests-heading { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-block-end: .4rem; }
-#my-join-requests .requests-heading h2, #join-requests-panel .requests-heading h2 { margin: 0; }
+#members-panel .requests-heading h2, #my-join-requests .requests-heading h2, #join-requests-panel .requests-heading h2 { margin: 0; }
 .requests-heading button, #my-join-request-list button, #join-request-list button { min-height: 2.75rem; }
 #my-join-request-list:empty, #join-request-list:empty, :is(#my-join-requests-status, #join-requests-status):empty { display: none; }
 #my-join-request-list .role-pill[data-state="approved"] { color: var(--ot-success, #147044); }
@@ -187,6 +204,10 @@ body.app-workspace #main-panel {
   background: transparent;
 }
 
+@media (pointer: coarse) {
+  #member-list li button { min-height: 2.75rem; }
+}
+
 #join-request-list li button:first-of-type {
   background: var(--ot-accent);
   color: #fff;
@@ -194,7 +215,7 @@ body.app-workspace #main-panel {
 }
 
 #join-request-list li button + button,
-#member-list li button[data-row-action="remove"],
+#member-list li button:is([data-row-action="remove"], [data-row-action="transfer"]),
 #invite-list li button[data-row-action="revoke"] {
   background: transparent;
   color: var(--ot-danger);
@@ -372,6 +393,8 @@ body.app-workspace #main-panel {
 .invite-link { display: flex; align-items: flex-end; flex-wrap: wrap; gap: .625rem; margin-top: .75rem; }
 .invite-link label { flex: 1 1 12rem; min-width: 0; }
 .invite-link input { width: 100%; min-height: 2.75rem; }
+.workspace-write-status { margin: .55rem 0 0; overflow-wrap: anywhere; }
+.workspace-write-status[data-kind="error"] { color: var(--ot-danger); }
 #invitation-preview { margin: .25rem 0; color: var(--ot-ink); }
 #accept-form[data-linked="true"] { max-width: 34rem; margin-top: 0; }
 #accept-form[data-linked="true"] #confirm-invite {
@@ -379,3 +402,20 @@ body.app-workspace #main-panel {
   background: var(--ot-accent);
   color: var(--ot-on-accent);
 }
+
+#group-invite-panel {
+  box-sizing: border-box;
+  width: min(calc(100% - 2rem), 29rem);
+  margin: clamp(1rem, 7vh, 4rem) auto 1.5rem;
+  padding: 1.25rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 1rem;
+  background: var(--ot-surface);
+}
+#group-invite-panel h1 { margin: 0 0 .75rem; font-size: 1.25rem; }
+#group-invite-title { margin: 0 0 .25rem; font-weight: 650; overflow-wrap: anywhere; }
+#group-invite-title:empty { display: none; }
+#group-invite-message { margin: 0 0 1rem; color: var(--ot-muted); }
+.group-invite-actions { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; }
+.group-invite-actions :is(button,a) { min-height: 2.75rem; }
+.group-invite-actions a { display: inline-flex; align-items: center; }

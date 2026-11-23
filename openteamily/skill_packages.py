@@ -1,6 +1,5 @@
 """Original, immutable prompt-only packages. No archives, scripts or path inputs."""
 import hashlib
-import re
 from . import imported_skills
 
 SCHEMA = """
@@ -16,8 +15,6 @@ CREATE TABLE IF NOT EXISTS skill_task_material (
  manifest TEXT NOT NULL, acknowledged INTEGER NOT NULL DEFAULT 0);
 """
 SCHEMA += imported_skills.SCHEMA
-# Capability is advertised, not proof of successful inference; per-task acknowledgement remains mandatory.
-FORMAT = 'openteamily.prompt-skill.v1'
 SCHEMA += """
 CREATE TABLE IF NOT EXISTS runtime_skill_capabilities (
  connection_id TEXT PRIMARY KEY REFERENCES runtime_connections(id) ON DELETE CASCADE,
@@ -30,42 +27,6 @@ CREATE TABLE IF NOT EXISTS skill_runs (
  skill_id TEXT NOT NULL, key_hash TEXT NOT NULL, request_hash TEXT NOT NULL, created INTEGER NOT NULL,
  UNIQUE(user_id,key_hash));
 """
-
-
-def scope_context(db, uid, scope, allow_member=False):
-    from . import members, agents
-    if scope == 'account':
-        return {'kind':'account', 'workspace_id':None, 'label':'我的账户'}
-    if not isinstance(scope,str):
-        return None
-    match = re.fullmatch(r'(?:(automation):)?([0-9a-f]{32}):([0-9a-f]{32})',scope)
-    if not match:
-        return None
-    kind, wid, ident = match.groups()
-    workspace = members.load(db,wid,uid)
-    role = members.role_of(db,workspace,uid) if workspace else None
-    if workspace is None or (role not in ('owner','admin') and not (allow_member and not kind and role == 'member')):
-        return None
-    if kind:
-        row = db.execute('SELECT * FROM automations WHERE workspace_id=? AND id=?',(wid,ident)).fetchone()
-    else:
-        row = agents.load(db,wid,ident)
-    if row is None or (not kind and row['archived']):
-        return None
-    return {'kind':'automation' if kind else 'agent','workspace_id':wid,'id':ident,
-            'label':workspace['name']+' / '+(row['title'] if kind else row['name']), 'administration':role in ('owner','admin')}
-
-
-def supports(db, connection_id, formats=None):
-    import json
-    row = db.execute('SELECT formats FROM runtime_skill_capabilities WHERE connection_id=?',(connection_id,)).fetchone()
-    return bool(row and set(formats or [FORMAT]) <= set(json.loads(row['formats'])))
-
-
-def selection(db, task_id):
-    import json
-    row = db.execute('SELECT manifest FROM skill_task_selection WHERE task_id=?',(task_id,)).fetchone()
-    return json.loads(row['manifest']) if row else None
 
 
 VERSION = '1.0.0'
@@ -244,51 +205,3 @@ def catalogue(db=None, uid=None):
                       'digest':hashlib.sha256(markdown.encode()).hexdigest(), 'permissions':PERMISSIONS,
                       'format':'openteamily.prompt-skill.v1', 'source':'bundled-original'})
     return items + (imported_skills.catalogue(db,uid) if db is not None and uid else [])
-
-
-def resolve(ident, db=None, uid=None):
-    return next((i for i in catalogue(db,uid) if i['id']==ident),None)
-
-
-def material(db, task_id):
-    owner = db.execute('SELECT * FROM skill_task_owners WHERE task_id=?',(task_id,)).fetchone()
-    if owner is None: return []
-    context = scope_context(db,owner['user_id'],owner['scope'],allow_member=True)
-    if context is None:
-        return []
-    # Automation consent is explicit: never inherit private account instructions.
-    inherited = 'account' if context['kind'] != 'automation' else owner['scope']
-    rows = db.execute('SELECT * FROM skill_bindings WHERE user_id=? AND scope IN (?,?)',
-                      (owner['user_id'],inherited,owner['scope'])).fetchall()
-    result = {}
-    for row in rows:
-        if context['kind']=='agent' and not context['administration'] and row['scope']!='account':
-            continue
-        item = resolve(row['skill_id'],db,owner['user_id'])
-        if item and item['version']==row['version'] and item['digest']==row['digest']:
-            result[item['id']] = item
-    # The merged per-account skill-library UI is an installation surface too.
-    # Its bundled installs must reach the same digest-verified native material;
-    # automation tasks still never inherit private account instructions.
-    if inherited == 'account':
-        for library in db.execute('SELECT skill_id FROM skill_installs WHERE user_id=?', (owner['user_id'],)):
-            item = resolve(library['skill_id'], db, owner['user_id'])
-            if item and item['source'] == 'bundled-original':
-                result[item['id']] = item
-    expected = selection(db,task_id)
-    if expected is not None:
-        if any(result.get(i['id']) != i for i in expected):
-            return []
-        result = {i['id']:i for i in expected}
-    return sorted(result.values(),key=lambda i:i['id'])
-
-
-def required_formats(db,uid,scope):
-    inherited = scope if scope.startswith('automation:') else 'account'
-    rows = db.execute('SELECT * FROM skill_bindings WHERE user_id=? AND scope IN (?,?)',(uid,inherited,scope)).fetchall()
-    formats = {FORMAT}
-    for row in rows:
-        item = resolve(row['skill_id'],db,uid)
-        if item and item['version']==row['version'] and item['digest']==row['digest']:
-            formats.add(item['format'])
-    return formats

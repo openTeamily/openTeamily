@@ -21,7 +21,6 @@ class HomePageTests(unittest.TestCase):
         self.raw = RawClient(self.app)
         self.client = Client(self.app)
         self.client.register('alice')
-        self.wid = self.client.workspace()['body']['workspace']['id']
 
     def test_home_page_and_assets_are_served_with_strict_headers(self):
         page = self.raw.call('GET', '/')
@@ -34,7 +33,8 @@ class HomePageTests(unittest.TestCase):
         self.assertIn('欢迎回来', html)
         self.assertIn('最近对话', html)
         self.assertIn('href="/home/app.css"', html)
-        self.assertIn('href="/look/app.css"', html)
+        self.assertIn('rel="modulepreload" href="/home/runtime-readiness.mjs"', html)
+        self.assertNotIn('href="/look/app.css"', html)
         self.assertIn('default-src \'none\'', page['headers']['Content-Security-Policy'])
         self.assertEqual(page['headers']['Cache-Control'], 'no-store')
         self.assertEqual(self.raw.call('GET', '/home')['status'], 200)
@@ -47,55 +47,44 @@ class HomePageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('POST', '/')['status'], 405)
         self.assertEqual(self.raw.call('GET', '/home/missing')['status'], 404)
 
-    def test_overview_requires_membership_and_returns_real_summaries(self):
-        agent = self.client.call(
-            'POST', f'/v1/workspaces/{self.wid}/agents',
-            {'name': '值班助手', 'summary': '简短回答'}, {'HTTP_IDEMPOTENCY_KEY': 'home-agent-000001'})
-        self.assertEqual(agent['status'], 201, agent)
-        aid = agent['body']['agent']['id']
-        conv = self.client.call(
-            'POST', f'/v1/workspaces/{self.wid}/agents/{aid}/conversations',
-            {'title': '首页晨会'}, {'HTTP_IDEMPOTENCY_KEY': 'home-conv-000001'})
-        self.assertEqual(conv['status'], 201, conv)
-        artifact = self.client.call(
-            'POST', f'/v1/workspaces/{self.wid}/artifacts',
-            {'title': '首页文档', 'body': '不要出现在摘要里的正文'},
-            {'HTTP_IDEMPOTENCY_KEY': 'home-artifact-000001'})
-        self.assertEqual(artifact['status'], 201, artifact)
-        meeting = self.client.call(
-            'POST', f'/v1/workspaces/{self.wid}/meetings',
-            {'title': '首页会议', 'transcript': '不要出现在摘要里的转写'},
-            {'HTTP_IDEMPOTENCY_KEY': 'home-meeting-000001'})
-        self.assertEqual(meeting['status'], 201, meeting)
-
-        overview = self.client.call('GET', f'/v1/workspaces/{self.wid}/overview?limit=5')
-        self.assertEqual(overview['status'], 200, overview)
-        body = overview['body']
-        self.assertEqual(body['workspace']['id'], self.wid)
-        self.assertEqual(body['counts']['agents'], 1)
-        self.assertEqual(body['counts']['artifacts'], 1)
-        self.assertEqual(body['counts']['meetings'], 1)
-        self.assertEqual(body['counts']['automations'], 0)
-        self.assertEqual(body['unread_notifications'], 0)
-        conversation = body['recent_conversations'][0]
-        self.assertEqual((conversation['source'], conversation['title']), ('agent', '首页晨会'))
-        self.assertEqual(conversation['agent_name'], '值班助手')
-        self.assertNotIn('items', conversation)
-        item = body['recent_artifacts'][0]
-        self.assertEqual(item['title'], '首页文档')
-        self.assertNotIn('body', item)
-        meeting_item = body['recent_meetings'][0]
-        self.assertEqual(meeting_item['title'], '首页会议')
-        self.assertNotIn('transcript', meeting_item)
-        self.assertNotIn('summary', meeting_item)
-        self.assertNotIn('action_items', meeting_item)
-
-        self.assertEqual(self.client.call('GET', f'/v1/workspaces/{self.wid}/overview?limit=11')['status'], 400)
-        self.assertEqual(self.client.call('GET', f'/v1/workspaces/{self.wid}/overview?x=1')['status'], 400)
-        self.assertEqual(self.client.call('POST', f'/v1/workspaces/{self.wid}/overview')['status'], 405)
+    def test_platform_does_not_serve_the_runtime_workspace_overview(self):
+        personal = self.client.call('POST', '/v1/personal-agent')
+        self.assertEqual(personal['status'], 201)
+        workspace = personal['body']['personal_agent']['workspace']['id']
+        overview = f'/v1/workspaces/{workspace}/overview?limit=5'
         bob = Client(self.app, peer='127.0.0.2')
-        bob.register('bob')
-        self.assertEqual(bob.call('GET', f'/v1/workspaces/{self.wid}/overview')['status'], 404)
+        self.assertEqual(bob.register('bob')['status'], 201)
+        for actor, client in (('owner', self.client), ('other account', bob), ('signed-out', Client(self.app))):
+            with self.subTest(actor=actor):
+                result = client.call('GET', overview)
+                self.assertEqual(result['status'], 410)
+                self.assertEqual(result['body']['error']['code'], 'moved_to_dsbot')
+                self.assertNotIn('workspace', result['body'])
+                self.assertNotIn('recent_conversations', result['body'])
+
+
+class HomeSessionTests(unittest.TestCase):
+    def test_home_session_reads_only_the_signed_in_personal_card(self):
+        with tempfile.TemporaryDirectory() as directory:
+            api = App(Store(Path(directory) / 'state'), Config(ORIGIN, allow_registration=True))
+            app = SettingsPage(api)
+            alice = Client(app)
+            self.assertEqual(alice.register('alice')['status'], 201)
+            path = '/v1/auth/session?include=home'
+            checked = alice.call('GET', path)
+            self.assertEqual(checked['status'], 200)
+            self.assertEqual(checked['body']['home'], {'runtime_state': 'unmanaged', 'personal_agent': None})
+            self.assertIsNone(alice.call('GET', '/v1/personal-agent')['body']['personal_agent'])
+            self.assertNotIn('home', alice.call('GET', '/v1/auth/session')['body'])
+            binding = alice.call('POST', '/v1/personal-agent')['body']['personal_agent']
+            card = alice.call('GET', path)['body']['home']['personal_agent']
+            self.assertEqual(card['workspace'], binding['workspace'])
+            self.assertEqual(card['agent'], {field: binding['agent'][field] for field in ('id', 'name', 'summary')})
+            self.assertEqual(card['look'], binding['look'])
+            bob = Client(app, peer='127.0.0.2')
+            self.assertEqual(bob.call('GET', path)['status'], 401)
+            self.assertEqual(bob.register('bob')['status'], 201)
+            self.assertIsNone(bob.call('GET', path)['body']['home']['personal_agent'])
 
 
 if __name__ == '__main__':

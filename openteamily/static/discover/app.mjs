@@ -7,11 +7,16 @@ import { renderThumb, spaceHref, thumbModel } from '../shell/thumb.mjs';
 import { commentsLabel, mountWorkComments } from './comments.mjs';
 
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
+const AGENT_COPY_GRANT = /^otag_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
 const VIEWER_USERNAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/;
 const CREATOR_HANDLE = /^[a-z0-9][a-z0-9._-]{1,79}$/i;
 const MATCH_KINDS = new Set(['title', 'summary', 'body', 'creator']);
 const MEDIA_LABELS = {image: '图片', audio: '音频', video: '视频'};
 const SEARCH_DELAY = 300;
+const WORK_REMIX_KINDS = new Set(['document','website','media','slides','whiteboard']);
+const WORK_REMIX_PENDING = '上次复制结果尚未确认。可以重试原请求。';
+const BROWSE_RESTORE_PAGES = 12;
+const CATALOG_RETURN_LINKS = ['catalog-profile', 'catalog-chat', 'catalog-author'];
 
 export function validSlug(value) {
   return typeof value === 'string' && SLUG.test(value);
@@ -63,8 +68,9 @@ export const FEED_CATEGORIES = ['网页', '文档', '图片', '音乐', '幻灯�
 
 export const CATALOG_CATEGORIES = AGENT_CATEGORIES.map(({label}) => label);
 
-const TEAM_DIRECTORY_LIMIT = 100;
+const TEAM_DIRECTORY_LIMIT = 24;
 const TEAM_DIRECTORY_ID = /^[A-Za-z0-9_-]{1,80}$/;
+const directoryTeamId = team => team?.team_id || team?.workspace_id || '';
 const TEAM_MEMBERSHIP = {member: '已加入', pending: '等待审批', suspended: '已暂停'};
 const TEAM_SEARCH_LIMIT = 60;
 
@@ -100,7 +106,7 @@ export function feedStateFromSearch(search) {
   const requestedKind = params.get('kind');
   const kind = FEED_KINDS.includes(requestedKind) ? requestedKind : '';
   const requestedCreator = params.get('creator');
-  const creator = CREATOR_HANDLE.test(requestedCreator || '') ? requestedCreator : '';
+  const creator = CREATOR_HANDLE.test(requestedCreator || '') ? requestedCreator.toLowerCase() : '';
   return {
     tab,
     kind,
@@ -117,7 +123,7 @@ export function feedSearchText(state) {
   if (state && state.kind && FEED_KINDS.includes(state.kind)) params.set('kind', state.kind);
   if (tab === 'activity' && !state.kind && !state.creator && state.sort === 'popular') params.set('sort', 'popular');
   if (state && state.query) params.set('q', state.query);
-  if (state && CREATOR_HANDLE.test(state.creator || '')) params.set('creator', state.creator);
+  if (state && CREATOR_HANDLE.test(state.creator || '')) params.set('creator', state.creator.toLowerCase());
   const text = params.toString();
   return text ? '?' + text : '';
 }
@@ -226,10 +232,41 @@ export function detailExcerpt(preview) {
   return kept;
 }
 
+function creatorHandle(item) {
+  const handle = item?.creator?.handle;
+  return typeof handle === 'string' && CREATOR_HANDLE.test(handle) ? handle.toLowerCase() : '';
+}
+
+function authorName(item) {
+  return item.creator?.name || item.author || creatorHandle(item);
+}
+
+function creatorDirectoryHref(handle, directory = 'works') {
+  const params = new URLSearchParams();
+  if (directory === 'agents') params.set('tab', 'agents');
+  if (handle) params.set('creator', handle);
+  return '/discover' + (params.size ? '?' + params : '');
+}
+
+function workAuthorLink(document, item) {
+  const link = document.createElement('a');
+  link.className = 'work-author-link';
+  link.href = creatorDirectoryHref(creatorHandle(item));
+  link.textContent = authorName(item);
+  link.setAttribute('aria-label', '查看 ' + link.textContent + ' 的公开作品');
+  return link;
+}
+
+function sameWorkCreator(first, second) {
+  const handle = creatorHandle(first);
+  const other = creatorHandle(second);
+  return handle || other ? Boolean(handle && handle === other) : Boolean(first.author && first.author === second.author);
+}
+
 export function detailMetaText(item) {
   return [
     item.kind_label || KIND_LABELS[item.kind] || item.kind || '',
-    item.author || '',
+    authorName(item),
     formatFeedTime(item.updated),
   ].filter(Boolean).join(' · ');
 }
@@ -271,7 +308,34 @@ function appendMatch(document, target, {text, start, end}) {
   target.append(text.slice(0, start), mark, text.slice(end));
 }
 
-export function renderFeedCard(document, item, {legacyImage = false} = {}) {
+function renderFeedByline(document, item, {linkAuthor = false} = {}) {
+  const meta = document.createElement('p');
+  meta.className = 'meta feed-byline';
+  const mark = document.createElement('span');
+  mark.className = 'feed-author-mark avatar';
+  mark.setAttribute('aria-hidden', 'true');
+  const author = authorName(item);
+  mark.dataset.tone = String(catalogTone(author || item.title || ''));
+  mark.textContent = catalogMonogram(author || item.title || '');
+  const who = document.createElement('span');
+  const when = formatFeedTime(item.updated);
+  if (linkAuthor) {
+    who.append(workAuthorLink(document, item));
+    if (when) who.append(' · ' + when);
+  } else {
+    who.textContent = [author, when].filter(Boolean).join(' · ');
+  }
+  meta.append(mark, who);
+  if (item.likes != null) {
+    const likes = document.createElement('span');
+    likes.className = 'feed-likes';
+    likes.textContent = '♡ ' + (item.likes || 0);
+    meta.append(likes);
+  }
+  return meta;
+}
+
+export function renderFeedCard(document, item, {legacyImage = false, includeByline = true} = {}) {
   const card = document.createElement('a');
   card.className = 'feed-card';
   card.href = publicWorkPath(item) || '/discover';
@@ -304,22 +368,6 @@ export function renderFeedCard(document, item, {legacyImage = false} = {}) {
   const titleMatch = match?.kind === 'title' && match.text === item.title;
   if (titleMatch) appendMatch(document, title, match);
   else title.textContent = item.title || '';
-  const meta = document.createElement('p');
-  meta.className = 'meta';
-  const mark = document.createElement('span');
-  mark.className = 'feed-author-mark avatar';
-  mark.dataset.tone = String(catalogTone(item.author || item.title || ''));
-  mark.textContent = catalogMonogram(item.author || item.title || '');
-  const who = document.createElement('span');
-  const when = formatFeedTime(item.updated);
-  who.textContent = [item.author || '', when].filter(Boolean).join(' · ');
-  meta.append(mark, who);
-  if (item.likes != null) {
-    const likes = document.createElement('span');
-    likes.className = 'feed-likes';
-    likes.textContent = '♡ ' + (item.likes || 0);
-    meta.append(likes);
-  }
   card.append(cover, kind, title);
   if (match && !titleMatch) {
     const excerpt = document.createElement('p');
@@ -327,7 +375,7 @@ export function renderFeedCard(document, item, {legacyImage = false} = {}) {
     appendMatch(document, excerpt, match);
     card.append(excerpt);
   }
-  card.append(meta);
+  if (includeByline) card.append(renderFeedByline(document, item));
   return card;
 }
 
@@ -343,9 +391,10 @@ export function isTeamsCatalog(location) {
   return params.get('tab') === 'agents' && params.get('section') === 'groups';
 }
 
-function teamDirectoryQuery(text) {
+function teamDirectoryQuery(text, cursor = '') {
   const params = new URLSearchParams({limit: String(TEAM_DIRECTORY_LIMIT)});
   if (text) params.set('q', text);
+  if (cursor) params.set('cursor', cursor);
   return '/v1/team-directory?' + params.toString();
 }
 
@@ -382,7 +431,15 @@ export function renderTeamCard(document, team, {joining = false, onJoin} = {}) {
     state.dataset.state = team.membership;
     state.textContent = membership;
     foot.append(state);
-  } else if (onJoin && TEAM_DIRECTORY_ID.test(team.workspace_id || '')) {
+    if (team.membership === 'member' && /^[a-f0-9]{32}$/.test(team.workspace_id || '')) {
+      const open = document.createElement('a');
+      open.className = 'team-open';
+      open.href = '/members#workspace=' + team.workspace_id;
+      open.textContent = '打开工作区';
+      open.setAttribute('aria-label', '打开工作区：' + team.name);
+      foot.append(open);
+    }
+  } else if (onJoin && TEAM_DIRECTORY_ID.test(directoryTeamId(team))) {
     const join = document.createElement('button');
     join.type = 'button';
     join.className = 'team-join';
@@ -426,21 +483,27 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const catalogViewers = new WeakMap();
   const catalogActions = new Map();
   let cursor = '';
+  let catalogPages = 0;
+  let catalogDeparture = null;
   let activeQuery = '';
   let activeCategory = categoryFromSearch(location?.search);
-  let activeCreator = null;
   let remix = null;
-  let remixLoading = false;
   let manageRequest = 0;
   let catalogRequest = 0;
-  let directoryItems = [];
-  let directoryLoading = false;
   let activeTeamQuery = '';
   const joiningTeams = new Set();
+  const directoryItems = new Map();
+  const directoryRows = new Map();
+  const directoryReceipts = new Map();
   const agentsView = isAgentsCatalog(location);
   const manageParams = new URLSearchParams(location?.search || '');
+  const requestedAuthor = agentsView && manageParams.get('creator');
+  let activeCreator = CREATOR_HANDLE.test(requestedAuthor || '')
+    ? {handle: requestedAuthor.toLowerCase(), name: '@' + requestedAuthor.toLowerCase()} : null;
   const manageWorkspace = manageParams.get('workspace');
   const manageAgent = manageParams.get('agent');
+  const agentShare = agentsView && nativeCatalog && manageParams.getAll('share').length === 1 &&
+    AGENT_COPY_GRANT.test(manageParams.get('share')) ? manageParams.get('share') : null;
   const teamsView = isTeamsCatalog(location);
   const catalogView = agentsView || teamsView;
   const catalogSearch = document.getElementById('catalog-query');
@@ -485,6 +548,13 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     else if (node.attributes) delete node.attributes['aria-current'];
   }
 
+  function setCreatorDirectoryTabs(handle) {
+    const feed = document.getElementById('catalog-tab-feed');
+    const agents = document.getElementById('catalog-tab-agents');
+    if (feed) feed.href = creatorDirectoryHref(handle);
+    if (agents) agents.href = creatorDirectoryHref(handle, 'agents');
+  }
+
   function applyCatalogChrome() {
     setCurrent('catalog-tab-feed', !catalogView);
     setCurrent('catalog-tab-agents', agentsView);
@@ -493,6 +563,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (agentFilters) agentFilters.hidden = !agentsView;
     const createAgent = document.getElementById('catalog-create-agent');
     const createTeam = document.getElementById('catalog-create-team');
+    const createAgentTeam = document.getElementById('catalog-create-agent-team');
+    if (createAgentTeam) createAgentTeam.hidden = !teamsView || !currentUser;
     if (createAgent) createAgent.hidden = !agentsView || !currentUser;
     if (createTeam) createTeam.hidden = !teamsView;
     const query = document.getElementById('catalog-query');
@@ -513,25 +585,30 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
   }
 
-  function renderTeamDirectory() {
-    const list = document.getElementById('discover-list');
-    list.replaceChildren();
-    for (const team of directoryItems) {
-      const row = document.createElement('li');
-      row.append(renderTeamCard(document, team, {
-        joining: joiningTeams.has(team.workspace_id),
-        onJoin: applyTeam,
-      }));
-      list.append(row);
+  function renderTeamRow(team) {
+    const id = directoryTeamId(team);
+    let row = directoryRows.get(id);
+    if (!row) {
+      row = document.createElement('li');
+      row.dataset.teamDirectoryRef = id;
+      directoryRows.set(id, row);
+      document.getElementById('discover-list').append(row);
     }
+    row.replaceChildren(renderTeamCard(document, team, {
+      joining: joiningTeams.has(id),
+      onJoin: applyTeam,
+    }));
   }
 
   async function applyTeam(team) {
-    const id = team.workspace_id;
+    const id = directoryTeamId(team);
     const user = currentUser;
     if (!user || joiningTeams.has(id) || !TEAM_DIRECTORY_ID.test(id)) return;
+    const row = directoryRows.get(id);
+    const button = row?.querySelector?.('.team-join');
+    const hadFocus = button && document.activeElement === button;
     joiningTeams.add(id);
-    renderTeamDirectory();
+    renderTeamRow(team);
     show('', '');
     try {
       const response = await request('POST', '/v1/team-directory/' + encodeURIComponent(id) + '/join', {});
@@ -541,66 +618,126 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         show('error', messageFor(response.body.error, '无法提交加入申请，请重试。'));
         return;
       }
-      directoryItems = directoryItems.map(item => item.workspace_id === id ? {...item, membership: next} : item);
-      show('ok', next === 'pending' ? '已提交申请，等待团队管理员审批。' : TEAM_MEMBERSHIP[next]);
-      // A search started before the write can return pre-application membership.
-      if (directoryLoading) void loadTeams(activeTeamQuery);
+      const current = directoryItems.get(id);
+      const keepStatus = current?.membership === 'suspended' || (current?.membership === 'member' && next === 'pending');
+      const membership = keepStatus ? current.membership : next;
+      const workspace = response.body.workspace_id;
+      const changes = {membership, ...(membership === 'member' && /^[a-f0-9]{32}$/.test(workspace || '') ? {workspace_id:workspace} : {})};
+      directoryReceipts.set(id, {changes, read:catalogRequest});
+      if (current) directoryItems.set(id, {...current, ...changes});
+      show('ok', membership === 'pending' ? '已提交申请，等待团队管理员审批。' : TEAM_MEMBERSHIP[membership]);
     } catch {
       if (currentUser === user) show('error', '连接失败，暂时无法确认申请结果。可刷新重试。');
     } finally {
       joiningTeams.delete(id);
-      if (currentUser === user) renderTeamDirectory();
+      const current = directoryItems.get(id);
+      if (currentUser === user && current) {
+        renderTeamRow(current);
+        if (hadFocus && document.activeElement === document.body) {
+          const target = directoryRows.get(id)?.querySelector?.('.team-join, .team-membership');
+          if (target) {
+            if (target.matches('.team-membership')) target.tabIndex = -1;
+            target.focus({preventScroll:true});
+          }
+        }
+      }
     }
   }
 
-  async function loadTeams(query = document.getElementById('catalog-query').value.trim().slice(0, TEAM_SEARCH_LIMIT)) {
-    const seq = ++catalogRequest;
+  async function loadTeams(append = false) {
     const panel = document.getElementById('catalog-panel');
+    if (append && (!cursor || panel.getAttribute('aria-busy') === 'true')) return;
+    const seq = ++catalogRequest;
+    const user = currentUser;
     const empty = document.getElementById('discover-empty');
     const error = document.getElementById('catalog-error');
     const retry = document.getElementById('teams-retry');
     const count = document.getElementById('catalog-count');
-    activeTeamQuery = query;
-    directoryItems = [];
-    renderTeamDirectory();
-    document.getElementById('catalog-more').hidden = true;
+    const more = document.getElementById('catalog-more');
+    const shouldFocus = append && (document.activeElement === more || document.activeElement === retry);
+    if (!append) {
+      activeTeamQuery = catalogSearch.value.trim().slice(0, TEAM_SEARCH_LIMIT);
+      directoryItems.clear();
+      directoryRows.clear();
+      directoryReceipts.clear();
+      document.getElementById('discover-list').replaceChildren();
+      cursor = '';
+      catalogPages = 0;
+      catalogDeparture = null;
+    }
+    more.hidden = !append;
+    more.disabled = true;
+    more.textContent = '加载更多';
     empty.hidden = true;
     error.hidden = true;
     retry.hidden = true;
-    if (!currentUser) {
-      directoryLoading = false;
+    if (!user) {
       panel.setAttribute('aria-busy', 'false');
       count.textContent = '';
       empty.textContent = '登录后可查看并申请加入公开团队。';
       empty.hidden = false;
       return;
     }
-    directoryLoading = true;
     panel.setAttribute('aria-busy', 'true');
-    count.textContent = '正在加载团队…';
+    count.textContent = append ? '正在加载更多团队…' : '正在加载团队…';
+    const requested = cursor;
+    const isCurrent = () => seq === catalogRequest && user === currentUser;
     try {
-      const result = await request('GET', teamDirectoryQuery(query));
-      if (seq !== catalogRequest) return;
+      const result = await request('GET', teamDirectoryQuery(activeTeamQuery, requested));
+      if (!isCurrent()) return;
       if (result.status !== 200) throw new Error(messageFor(result.body.error, '无法加载团队目录。'));
-      directoryItems = catalogItems(result.body);
-      renderTeamDirectory();
-      count.textContent = directoryItems.length >= TEAM_DIRECTORY_LIMIT
-        ? `已显示前 ${TEAM_DIRECTORY_LIMIT} 个团队，可用搜索缩小范围。`
-        : directoryItems.length ? `${directoryItems.length} 个团队` : '';
-      empty.textContent = query ? '没有匹配的团队。' : '暂无公开团队。';
-      empty.hidden = directoryItems.length > 0;
+      let firstAdded;
+      for (const item of catalogItems(result.body)) {
+        const id = directoryTeamId(item);
+        if (!TEAM_DIRECTORY_ID.test(id) || directoryItems.has(id)) continue;
+        const receipt = directoryReceipts.get(id);
+        const newerMembership = item.membership === 'suspended' ||
+          (item.membership === 'member' && receipt?.changes.membership === 'pending');
+        const team = receipt?.read === seq && !newerMembership ? {...item, ...receipt.changes} : item;
+        directoryItems.set(id, team);
+        renderTeamRow(team);
+        firstAdded ??= directoryRows.get(id);
+      }
+      const next = result.body.cursor;
+      cursor = typeof next === 'string' && next !== requested ? next : '';
+      catalogPages += 1;
+      more.hidden = !cursor;
+      more.disabled = false;
+      if (shouldFocus && [document.body, more, retry].includes(document.activeElement)) {
+        const first = firstAdded?.querySelector?.('h3');
+        const last = !cursor && document.getElementById('discover-list').lastElementChild?.querySelector?.('h3');
+        const heading = first || last;
+        if (heading) {
+          heading.tabIndex = -1;
+          heading.focus();
+        } else if (cursor) more.focus({preventScroll:true});
+      }
+      count.textContent = directoryItems.size ? `已显示 ${directoryItems.size} 个团队` : '';
+      empty.textContent = activeTeamQuery ? '没有匹配的团队。'
+        : '暂无公开团队。创建团队后，可在成员页的「团队目录」中公开。';
+      empty.hidden = directoryItems.size > 0;
+      return seq;
     } catch (failure) {
-      if (seq !== catalogRequest) return;
-      count.textContent = '';
+      if (!isCurrent()) return;
+      count.textContent = directoryItems.size ? `已显示 ${directoryItems.size} 个团队` : '';
       error.textContent = failure.message || '无法加载团队目录。';
       error.hidden = false;
-      retry.hidden = false;
+      retry.hidden = append;
+      if (append) {
+        more.textContent = '重试加载更多';
+        more.disabled = false;
+        if (shouldFocus && document.activeElement === document.body) more.focus({preventScroll:true});
+      }
     } finally {
-      if (seq === catalogRequest) {
-        directoryLoading = false;
+      if (isCurrent()) {
+        more.disabled = false;
         panel.setAttribute('aria-busy', 'false');
       }
     }
+  }
+
+  async function loadMoreTeams() {
+    if (await loadTeams(true) === catalogRequest) rememberCatalogPosition();
   }
 
   function showDiscoverView() {
@@ -628,7 +765,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const clearSearch = document.getElementById('feed-clear');
   const retryFeed = document.getElementById('feed-retry');
   const detail = Object.fromEntries([
-    'back', 'paper', 'title', 'meta', 'status', 'retry', 'preview', 'actions', 'open', 'download',
+    'back', 'paper', 'title', 'meta', 'status', 'retry', 'resume-remix', 'preview', 'reader', 'actions', 'open', 'download',
     'like', 'collect', 'follow', 'comments', 'share', 'remix', 'previous', 'next',
   ].map(name => [name, document.getElementById('work-detail-' + name)]));
   const share = Object.fromEntries(['dialog', 'url', 'status', 'copy', 'native', 'close']
@@ -638,6 +775,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const detailPanel = document.getElementById('work-detail');
   const initialView = document.getElementById('main');
   const engagement = [['like', 'liked', '点赞'], ['collect', 'collected', '收录'], ['follow', 'following', '关注作者']];
+  const workRemixAttempts = new Map();
   let activeWork;
   let activeRemix;
   let feedReturn;
@@ -665,6 +803,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   function disposeWorkPreview() {
+    activeWork?.disposeReader?.();
+    detail.reader.replaceChildren();
     activeWork?.model?.setSource('');
     if (activeWork?.media) {
       const player = activeWork.media;
@@ -678,10 +818,14 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   function restoreFeedPosition(position) {
     const control = position.focusId && document.getElementById(position.focusId);
-    const target = position.trigger?.isConnected ? position.trigger :
-      workTriggers.get(position.slug) || (control && !control.hidden ? control : null);
+    const card = workTriggers.get(position.slug);
+    const workTrigger = position.detailButton ? card?.closest?.('.feed-entry')?.querySelector?.('.feed-detail-toggle') || card : card;
+    const target = position.trigger?.isConnected ? position.trigger : workTrigger || (control && !control.hidden ? control : null);
     initialView.scrollTop = position.scroll;
     (target || document.getElementById('feed-tab-' + feedState.tab))?.focus?.({preventScroll: true});
+    if (target && Number.isFinite(position.offset)) {
+      initialView.scrollTop += target.getBoundingClientRect().top - initialView.getBoundingClientRect().top - position.offset;
+    }
   }
 
   function closeWorkDetail({restore = true} = {}) {
@@ -712,6 +856,38 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     button.title = slug ? String(neighbor.title || '') : '';
   }
 
+  function syncGuestWorkNavigation(entry = activeWork) {
+    if (!entry?.ready || entry.viewer !== null) return;
+    const works = feedViewer === null && feedState.tab === 'activity' ? feedState.items : [];
+    const index = works.findIndex(item => item.slug === entry.slug);
+    const fallback = index < 0 && entry.publicNeighbors?.scope === feedSearchText(feedState) ? entry.publicNeighbors : null;
+    setAdjacent(entry, 'previous', index > 0 ? works[index - 1] : fallback?.previous);
+    setAdjacent(entry, 'next', index >= 0 ? works[index + 1] : fallback?.next);
+    entry.canPageNext = index >= 0 && index === works.length - 1 && Boolean(feedState.cursor);
+    detail.next.disabled = Boolean(entry.loadingNext || (!entry.next && (!entry.canPageNext || feedState.loading || feedRestore)));
+    detail.next.setAttribute('aria-busy', String(Boolean(entry.loadingNext)));
+  }
+
+  function openAdjacentWork(entry, slug) {
+    const item = entry.viewer === null ? feedState.items.find(work => work.slug === slug) : null;
+    return openWorkDetail({slug}, {item, navigate: true});
+  }
+
+  async function loadNextGuestWork(entry) {
+    if (!entry.canPageNext || feedState.loading || feedRestore || entry.loadingNext) return;
+    entry.loadingNext = true;
+    syncGuestWorkNavigation(entry);
+    detail.status.textContent = '正在加载下一件作品…';
+    const loaded = await loadFeed({append: true});
+    if (!activeWorkEntry(entry)) return;
+    entry.loadingNext = false;
+    syncGuestWorkNavigation(entry);
+    if (loaded && entry.next) return openAdjacentWork(entry, entry.next);
+    if (!loaded) detail.status.textContent = '未能加载下一件作品，请重试。';
+    else if (entry.canPageNext) detail.status.textContent = '这页没有新的作品，可以继续加载。';
+    else detail.status.textContent = '当前列表没有可继续浏览的作品。';
+  }
+
   function workUrl(intent) {
     return '/discover' + workDetailSearchText(feedState, intent);
   }
@@ -721,7 +897,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     cancelSearch();
     const existing = activeWork;
     if (!existing) {
-      feedReturn = {scroll: initialView.scrollTop || 0, trigger, slug: intent.slug};
+      feedReturn = {...captureFeedPosition(trigger, intent.slug), trigger};
+      if (navigate) rememberFeedPosition(feedReturn, {persist: true});
     }
     if (navigate) {
       const url = workUrl(intent);
@@ -739,14 +916,16 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     setWorkView(true);
     initialView.scrollTop = 0;
     detail.title.textContent = item?.title || '作品详情';
-    detail.meta.textContent = item ? detailMetaText(item) : '';
+    renderWorkMeta(item);
     detail.status.textContent = '正在加载作品…';
     detail.retry.hidden = true;
+    detail['resume-remix'].hidden = true;
     detail.actions.hidden = true;
     detail.comments.hidden = true;
     detail.paper.setAttribute('aria-busy', 'true');
     setAdjacent(entry, 'previous');
     setAdjacent(entry, 'next');
+    detail.next.setAttribute('aria-busy', 'false');
     setWorkEngagement(entry);
     detail.title.focus?.({preventScroll: true});
 
@@ -761,6 +940,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       if (!entry.item) return failWorkDetail(entry, result.status);
       return finishWorkDetail(entry, null);
     }
+    showWorkRemixRecovery(entry);
 
     const path = '/v1/discover/works/' + intent.slug + workDetailQuery(feedState);
     const readScopedWork = () => request('GET', path).catch(() => ({status: 0}));
@@ -783,23 +963,43 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   async function loadPublicWork(entry) {
-    const path = '/w/' + entry.slug + '?view=preview';
+    const scope = feedSearchText(feedState);
+    const useNeighbors = feedState.tab === 'activity' && feedState.sort === 'latest' &&
+      (feedViewer !== null || !feedState.items.some(item => item.slug === entry.slug));
+    const parameters = new URLSearchParams(useNeighbors ? scope : '');
+    parameters.set('view', 'preview');
+    if (useNeighbors) parameters.set('nav', 'latest');
+    const path = '/w/' + entry.slug + '?' + parameters;
     const result = await request('GET', path).catch(() => ({status: 0}));
     if (!activeWorkEntry(entry) || entry.outcome === 'confirmed' || entry.outcome === 'denied') return result;
     const work = result.body;
     if (result.status !== 200 || work?.slug !== entry.slug ||
         typeof work.title !== 'string' || typeof work.kind !== 'string') return result;
 
+    if (useNeighbors) entry.publicNeighbors = {scope, previous:work.previous, next:work.next};
     showWork(entry, work, work.preview);
     if (entry.outcome === 'unavailable') failWorkDetail(entry, 0);
     else if (entry.outcome === 'loading') detail.status.textContent = '';
     return result;
   }
 
+  function renderWorkMeta(work) {
+    if (!work || !creatorHandle(work)) {
+      detail.meta.textContent = work ? detailMetaText(work) : '';
+      return;
+    }
+    const type = work.kind_label || KIND_LABELS[work.kind] || work.kind || '';
+    const when = formatFeedTime(work.updated);
+    detail.meta.replaceChildren();
+    if (type) detail.meta.append(type + ' · ');
+    detail.meta.append(workAuthorLink(document, work));
+    if (when) detail.meta.append(' · ' + when);
+  }
+
   function showWork(entry, work, inlinePreview) {
     entry.item = work;
     detail.title.textContent = work.title || work.slug;
-    detail.meta.textContent = detailMetaText(work);
+    renderWorkMeta(work);
     detail.open.href = publicWorkPath(work);
     const file = workMediaPath(work, !nativeCatalog);
     detail.download.hidden = !file;
@@ -830,8 +1030,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     detail.comments.hidden = false;
     detail.comments.textContent = commentsLabel(entry.item.comment_count);
     setWorkEngagement(entry);
-    setAdjacent(entry, 'previous', previous);
-    setAdjacent(entry, 'next', next);
+    if (viewer) {
+      setAdjacent(entry, 'previous', previous);
+      setAdjacent(entry, 'next', next);
+    } else syncGuestWorkNavigation(entry);
     if (entry.intent.comments) return Promise.all([entry.preview, workComments.open(entry.item, detail.comments)]);
     if (entry.intent.share) openWorkShare();
     return entry.preview;
@@ -855,7 +1057,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   function setWorkEngagement(entry) {
     const canEngage = Boolean(entry.viewer && entry.viewer === currentUser);
-    if (detail.remix) detail.remix.hidden = !nativeCatalog || !canEngage || entry.item?.remix_available !== true;
+    const recoverable = showWorkRemixRecovery(entry);
+    if (detail.remix) detail.remix.hidden = !nativeCatalog || !canEngage ||
+      entry.item?.remix_available !== true || recoverable;
     for (const [action, flag, label] of engagement) {
       const button = detail[action];
       button.hidden = !canEngage || (action === 'follow' && entry.item.own_work);
@@ -865,6 +1069,39 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         button.setAttribute('aria-pressed', String(Boolean(entry.item[flag])));
       }
     }
+  }
+
+  function workRemixScope(entry, viewer = currentUser) {
+    return typeof viewer?.id === 'string' && viewer.id && validSlug(entry.slug)
+      ? 'openteamily.work-remix.' + JSON.stringify([viewer.id, entry.slug]) : '';
+  }
+
+  function readWorkRemixAttempt(scope) {
+    if (!scope) return null;
+    if (workRemixAttempts.has(scope)) return workRemixAttempts.get(scope);
+    try {
+      const attempt = JSON.parse(window.sessionStorage.getItem(scope));
+      if (typeof attempt?.title === 'string' && attempt.title.trim() && attempt.title.length <= 80 &&
+          WORK_REMIX_KINDS.has(attempt.kind) && /^[0-9a-f]{64}$/.test(attempt.revision) &&
+          /^[A-Za-z0-9_-]{16,64}$/.test(attempt.key)) return attempt;
+    } catch { /* Storage is optional. */ }
+    return null;
+  }
+
+  function storeWorkRemixAttempt(scope, attempt) {
+    if (!scope) return;
+    if (attempt) workRemixAttempts.set(scope, attempt);
+    else workRemixAttempts.delete(scope);
+    try {
+      if (attempt) window.sessionStorage.setItem(scope, JSON.stringify(attempt));
+      else window.sessionStorage.removeItem(scope);
+    } catch { /* The open page retains the request if storage is unavailable. */ }
+  }
+
+  function showWorkRemixRecovery(entry) {
+    const recoverable = Boolean(nativeCatalog && readWorkRemixAttempt(workRemixScope(entry)));
+    detail['resume-remix'].hidden = !recoverable;
+    return recoverable;
   }
 
   function closeWorkRemix() {
@@ -889,7 +1126,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (!sameWorkRemix(state) || state.read !== controller) return;
     const template = result.body?.template;
     if (result.status !== 200 || !matchesNativeViewer(result.body?.viewer_username,state.viewer) ||
-        !['document','website','media','slides','whiteboard'].includes(template?.kind) || typeof template.title !== 'string' ||
+        !WORK_REMIX_KINDS.has(template?.kind) || typeof template.title !== 'string' ||
         !/^[0-9a-f]{64}$/.test(template.revision || '')) {
       workRemix.status.textContent = messageFor(result.body?.error,'无法读取公开版本。');
       workRemix.refresh.hidden = result.status === 404;
@@ -907,44 +1144,53 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   function openWorkRemix() {
     const entry = activeWork;
-    if (!nativeCatalog || !entry?.ready || entry.viewer !== currentUser || !entry.viewer || entry.item?.remix_available !== true ||
-        !workRemix.dialog || workRemix.dialog.open) return;
-    const state = {entry,viewer:entry.viewer,path:`/v1/discover/works/${entry.slug}/remix`,keys:new Map()};
+    if (!nativeCatalog || !entry || !currentUser || !workRemix.dialog || workRemix.dialog.open) return;
+    const scope = workRemixScope(entry);
+    const attempt = readWorkRemixAttempt(scope);
+    if (!attempt && (!entry.ready || entry.viewer !== currentUser || entry.item?.remix_available !== true)) return;
+    const state = {entry,viewer:currentUser,path:`/v1/discover/works/${entry.slug}/remix`,scope,attempt};
     activeRemix = state;
     workRemix.source.textContent = '';
-    workRemix.name.value = '';
-    workRemix.name.disabled = false;
+    workRemix.name.value = attempt?.title || '';
+    workRemix.name.disabled = Boolean(attempt);
     workRemix['name-field'].hidden = false;
     workRemix.open.hidden = true;
     workRemix.open.removeAttribute('href');
     workRemix.close.disabled = workRemix.submit.hidden = false;
     workRemix.close.textContent = '取消';
-    workRemix.submit.textContent = '创建副本';
+    workRemix.submit.textContent = attempt ? '确认副本' : '创建副本';
+    workRemix.submit.disabled = !attempt;
+    workRemix.refresh.hidden = true;
+    workRemix.status.textContent = attempt ? WORK_REMIX_PENDING : '';
     workRemix.dialog.showModal();
-    void readWorkRemix(state);
+    if (attempt) workRemix.submit.focus();
+    else void readWorkRemix(state);
   }
 
   async function submitWorkRemix(event) {
     event.preventDefault();
     const state = activeRemix;
     const title = workRemix.name.value.trim();
-    if (!state || !sameWorkRemix(state) || !state.template || state.pending || !title) return;
-    const {revision} = state.template;
-    const stamp = JSON.stringify([revision,title]);
-    const key = state.keys.get(stamp) || reuseKey();
-    state.keys.set(stamp,key);
+    if (!state || !sameWorkRemix(state) || state.pending || (!state.attempt && (!state.template || !title))) return;
+    const recovering = Boolean(state.attempt);
+    const attempt = state.attempt ||= {title,revision:state.template.revision,kind:state.template.kind,key:reuseKey()};
+    storeWorkRemixAttempt(state.scope, attempt);
+    setWorkEngagement(state.entry);
     state.pending = true;
     workRemix.submit.disabled = workRemix.close.disabled = workRemix.name.disabled = true;
-    workRemix.status.textContent = '正在创建副本…';
-    const result = await request('POST',state.path,{title,revision},{'Idempotency-Key':key},AbortSignal.timeout(12000))
+    workRemix.status.textContent = recovering ? '正在确认副本…' : '正在创建副本…';
+    const result = await request('POST',state.path,{title:attempt.title,revision:attempt.revision},
+      {'Idempotency-Key':attempt.key},AbortSignal.timeout(12000))
       .catch(() => ({status:0}));
     if (!sameWorkRemix(state)) return;
     state.pending = false;
-    workRemix.close.disabled = workRemix.name.disabled = false;
+    workRemix.close.disabled = false;
     const artifact = result.body?.artifact;
     if ([200,201].includes(result.status) && matchesNativeViewer(result.body?.viewer_username,state.viewer)
         && /^[a-f0-9]{32}$/.test(artifact?.workspace_id || '') && /^[a-f0-9]{32}$/.test(artifact?.id || '')
-        && artifact.kind === state.template.kind) {
+        && artifact.kind === attempt.kind) {
+      storeWorkRemixAttempt(state.scope, null);
+      setWorkEngagement(state.entry);
       state.template = null;
       workRemix['name-field'].hidden = workRemix.submit.hidden = true;
       workRemix.open.href = spaceHref(artifact.workspace_id,artifact.id);
@@ -954,11 +1200,22 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       workRemix.open.focus();
       return;
     }
+    if (!result.status || result.status >= 500 || [200,201,401,408].includes(result.status)) {
+      workRemix.submit.textContent = '确认副本';
+      workRemix.submit.disabled = false;
+      workRemix.status.textContent = WORK_REMIX_PENDING;
+      return;
+    }
+    storeWorkRemixAttempt(state.scope, null);
+    setWorkEngagement(state.entry);
+    state.attempt = null;
+    workRemix.name.disabled = false;
+    workRemix.submit.textContent = '创建副本';
     const unavailable = result.status === 404 || result.body?.error?.code === 'listing_changed';
     workRemix.status.textContent = result.status === 404 ? '这个作品已下架或没有可复制的公开版本。'
       : messageFor(result.body?.error,'暂时无法确认是否已创建副本，可以重试。');
-    workRemix.submit.disabled = unavailable;
-    workRemix.refresh.hidden = result.body?.error?.code !== 'listing_changed';
+    workRemix.submit.disabled = unavailable || !state.template;
+    workRemix.refresh.hidden = unavailable ? result.body?.error?.code !== 'listing_changed' : Boolean(state.template);
     if (unavailable) state.template = null;
     if (result.body?.error?.code === 'title_conflict') { workRemix.name.focus(); workRemix.name.select(); }
   }
@@ -980,7 +1237,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       entry.item[flag] = changes[flag] ?? enabled;
       if (action === 'like') entry.item.likes = changes.likes ?? Math.max(0, (entry.item.likes || 0) + (enabled ? 1 : -1));
       for (const item of feedState.items) {
-        if (item.slug === entry.slug || (action === 'follow' && entry.item.author && item.author === entry.item.author)) {
+        if (item.slug === entry.slug || (action === 'follow' && sameWorkCreator(entry.item, item))) {
           item[flag] = entry.item[flag];
           if (action === 'like') item.likes = entry.item.likes;
         }
@@ -989,7 +1246,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         feedState.items = feedState.items.filter(item => item.slug !== entry.slug);
       }
       if (action === 'follow' && !enabled && feedState.tab === 'following') {
-        feedState.items = feedState.items.filter(item => item.slug !== entry.slug && (!entry.item.author || item.author !== entry.item.author));
+        feedState.items = feedState.items.filter(item => item.slug !== entry.slug && !sameWorkCreator(entry.item, item));
       }
       renderFeed();
     }
@@ -1035,8 +1292,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   });
   for (const name of ['previous', 'next']) {
     detail[name].addEventListener('click', () => {
-      const slug = activeWork?.[name];
-      if (slug) return openWorkDetail({slug}, {navigate: true});
+      const entry = activeWork;
+      if (!entry?.ready || !activeWorkEntry(entry)) return;
+      if (entry[name] && !detail[name].disabled) return openAdjacentWork(entry, entry[name]);
+      if (name === 'next' && entry.viewer === null && !detail.next.disabled) return loadNextGuestWork(entry);
     });
   }
   detail.retry.addEventListener('click', () => activeWork && openWorkDetail(activeWork.intent));
@@ -1045,6 +1304,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   });
   detail.share.addEventListener('click', openWorkShare);
   detail.remix?.addEventListener('click',openWorkRemix);
+  detail['resume-remix']?.addEventListener('click',openWorkRemix);
   workRemix.form?.addEventListener('submit',submitWorkRemix);
   workRemix.close?.addEventListener('click',closeWorkRemix);
   workRemix.refresh?.addEventListener('click',() => activeRemix && readWorkRemix(activeRemix));
@@ -1076,8 +1336,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const popularButton = document.getElementById('feed-sort-popular');
     if (popularButton) {
       popularButton.hidden = feedState.tab !== 'activity' || Boolean(feedState.creator);
-      popularButton.setAttribute('aria-current', String(popular));
+      setFeedCategory(popularButton, popular);
     }
+    setCreatorDirectoryTabs(feedState.creator);
     const creatorFilter = document.getElementById('feed-creator-filter');
     if (creatorFilter) {
       creatorFilter.hidden = !feedState.creator;
@@ -1086,7 +1347,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
     for (const kind of FEED_KINDS) {
       const node = document.getElementById('feed-kind-' + (kind || 'all'));
-      if (node) node.setAttribute('aria-current', String(!popular && kind === feedState.kind));
+      if (node) setFeedCategory(node, !popular && kind === feedState.kind);
     }
     const filters = document.getElementById('feed-filters');
     if (filters?.scrollWidth > filters.clientWidth) {
@@ -1100,6 +1361,12 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (clearSearch) clearSearch.hidden = !searchInput?.value;
   }
 
+  function setFeedCategory(button, current) {
+    button.setAttribute('aria-current', String(current));
+    if (current && (currentUser || feedState.tab === 'activity')) button.setAttribute('aria-description', '重新加载分类');
+    else button.removeAttribute?.('aria-description');
+  }
+
   function feedUrl() {
     const pathname = location && typeof location.pathname === 'string' ? location.pathname : '/discover';
     return pathname + feedSearchText(feedState);
@@ -1110,29 +1377,52 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     searchTimer = undefined;
   }
 
-  function rememberFeedPosition() {
-    if (!feedPages || feedRestore) return;
-    const key = feedSearchText(feedState);
-    const focused = document.activeElement;
-    const position = activeWork ? feedReturn : {
+  function captureFeedPosition(control, slug = control?.closest?.('.feed-entry')?.dataset.slug) {
+    const offset = validSlug(slug) && control?.getBoundingClientRect?.().top - initialView.getBoundingClientRect?.().top;
+    return {
       scroll: initialView.scrollTop || 0,
-      slug: focused?.closest?.('.feed-entry')?.dataset.slug,
-      focusId: focused?.id?.startsWith('feed-') && focused.id,
+      ...(validSlug(slug) && {slug, detailButton: Boolean(control?.classList?.contains('feed-detail-toggle'))}),
+      ...(Number.isFinite(offset) && {offset}),
+      ...(control?.id?.startsWith('feed-') && {focusId: control.id}),
     };
-    if (!position) return;
-    feedPositions.delete(key);
-    feedPositions.set(key, {
-      pageCount: feedPages, scroll: position.scroll, slug: position.slug, focusId: position.focusId,
-    });
-    if (feedPositions.size > 16) feedPositions.delete(feedPositions.keys().next().value);
   }
 
-  async function readFeedPosition(position) {
+  function feedHistoryKey() {
+    const viewer = currentUser?.id;
+    if (sessionState !== 'guest' && (sessionState !== 'signed-in' || typeof viewer !== 'string')) return '';
+    return JSON.stringify([sessionState, viewer || null, feedSearchText(feedState)]);
+  }
+
+  function recordedFeedPosition() {
+    const position = history?.state?.discoverWorkFeed;
+    const key = feedHistoryKey();
+    if (!key || position?.key !== key || !Number.isInteger(position.pageCount) || position.pageCount < 1 ||
+        position.pageCount > BROWSE_RESTORE_PAGES || !Number.isFinite(position.scroll) || position.scroll < 0) return null;
+    return position;
+  }
+
+  function rememberFeedPosition(position = activeWork ? feedReturn : captureFeedPosition(document.activeElement), {persist = false} = {}) {
+    if (!feedPages || feedRestore || !position) return;
+    const {scroll, slug, detailButton, offset, focusId} = position;
+    const record = {pageCount: Math.min(feedPages, BROWSE_RESTORE_PAGES), scroll, slug, detailButton, offset, focusId};
+    const key = feedSearchText(feedState);
+    feedPositions.delete(key);
+    feedPositions.set(key, record);
+    if (feedPositions.size > 16) feedPositions.delete(feedPositions.keys().next().value);
+    const historyKey = persist && feedHistoryKey();
+    if (historyKey && history?.replaceState && 'state' in history) {
+      try { history.replaceState({...history.state, discoverWorkFeed: {...record, key: historyKey}}, ''); }
+      catch { /* The browser may disable history changes while leaving. */ }
+    }
+  }
+
+  async function readFeedPosition(position, {reuseCurrent = false} = {}) {
     if (!position || sessionPending) return loadFeed();
     const restoring = {position};
     feedRestore = restoring;
-    let loaded = await loadFeed();
-    for (let page = 1; page < position.pageCount && loaded && feedRestore === restoring && feedState.cursor; page++) {
+    let loaded = reuseCurrent && feedPages > 0 || await loadFeed();
+    let remaining = position.pageCount;
+    while (remaining-- > 0 && feedPages < position.pageCount && loaded && feedRestore === restoring && feedState.cursor) {
       loaded = await loadFeed({append: true});
     }
     if (feedRestore !== restoring) return;
@@ -1141,12 +1431,23 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (!activeWork) restoreFeedPosition(position);
   }
 
-  function applyFeedFilters(changes) {
+  function restoreRecordedFeedPosition() {
+    if (activeWork || feedRestore || feedState.loading || feedFailure) return;
+    const saved = recordedFeedPosition();
+    if (saved) return readFeedPosition(saved, {reuseCurrent: true});
+  }
+
+  function applyFeedFilters(changes, {refresh = false} = {}) {
     cancelSearch();
     const current = feedSearchText(feedState);
     const next = {...feedState, ...changes};
-    if (feedSearchText(next) === current) return;
-    rememberFeedPosition();
+    if (feedSearchText(next) === current) {
+      if (refresh && !feedState.loading && !feedRestore && (currentUser || feedState.tab === 'activity')) {
+        return loadFeed({refresh: true});
+      }
+      return;
+    }
+    rememberFeedPosition(undefined, {persist: !activeWork});
     feedRestore = null;
     Object.assign(feedState, changes);
     applyFeedChrome({restoreQuery: true});
@@ -1184,6 +1485,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   if (!catalogView && window && typeof window.addEventListener === 'function') {
     if (history && 'scrollRestoration' in history) history.scrollRestoration = 'manual';
+    window.addEventListener('pagehide', () => { if (!activeWork) rememberFeedPosition(undefined, {persist: true}); });
     window.addEventListener('popstate', () => {
       syncLoginLink();
       cancelSearch();
@@ -1203,7 +1505,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       }
       if (feedChanged) {
         initialView.scrollTop = 0;
-        const position = feedPositions.get(nextKey);
+        const position = feedPositions.get(nextKey) || recordedFeedPosition();
         const loaded = readFeedPosition(position);
         if (!intent) return loaded;
         const opened = openWorkDetail(intent);
@@ -1211,6 +1513,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         return Promise.all([loaded, opened]);
       }
       if (intent) return openWorkDetail(intent);
+      return restoreRecordedFeedPosition();
     });
   }
 
@@ -1229,6 +1532,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return;
     }
     if (feedState.tab !== 'activity' && !currentUser) note.textContent = '请先登录，再查看关注或收录作品。';
+    else if (feedState.tab === 'activity' && feedState.creator && !feedState.query && !feedState.kind && !feedState.items.length)
+      note.textContent = '该作者还没有公开作品。';
     else if (feedState.query && !feedState.items.length) note.textContent = FEED_SEARCH_EMPTY_NOTE;
     else if (feedState.tab === 'following') note.textContent = FEED_FOLLOWING_NOTE;
     else if (feedState.tab === 'collected') note.textContent = '这里只展示你收录且仍公开的作品。';
@@ -1378,6 +1683,22 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return;
     }
     detail.preview.textContent = FEED_DETAIL_LOADING;
+    if (item.kind === 'document') {
+      void import('./document-reader.mjs').then(({mountDocumentReader}) => {
+        if (!stillShowing()) return;
+        entry.disposeReader = mountDocumentReader(document, detail.reader, {
+          stillShowing,
+          async read(signal) {
+            const result = await request('GET', '/w/' + item.slug, undefined, {}, signal);
+            const work = result.body;
+            if (result.status !== 200 || work?.kind !== 'work' || work.slug !== item.slug || work.work_kind !== 'document') {
+              return {status:result.status};
+            }
+            return {status:200, source:work.snapshot ?? ''};
+          },
+        });
+      }).catch(() => {});
+    }
     const result = inlinePreview === undefined ? await cachedPreview(item) : {ok: true, preview: inlinePreview};
     if (!stillShowing()) return;
     if (!result.ok) { detail.preview.textContent = FEED_DETAIL_UNREADABLE; return; }
@@ -1463,13 +1784,15 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       grid.replaceChildren();
     }
     for (const item of feedState.items.slice(start)) {
-      const card = renderFeedCard(document, item, {legacyImage: !nativeCatalog});
+      const linkedAuthor = Boolean(creatorHandle(item));
+      const card = renderFeedCard(document, item, {legacyImage: !nativeCatalog, includeByline: !linkedAuthor});
       const cover = typeof card.querySelector === 'function' ? card.querySelector('.work-cover') : null;
       hydrateThumb(cover, item);
       const entry = document.createElement('article');
       entry.className = 'feed-entry';
       entry.dataset.slug = item.slug || '';
       entry.append(card);
+      if (linkedAuthor) entry.append(renderFeedByline(document, item, {linkAuthor: true}));
       const actions = document.createElement('div');
       actions.className = 'feed-card-actions';
       if (validSlug(item.slug)) {
@@ -1497,10 +1820,16 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   function updateFeedStatus() {
-    document.getElementById('feed-activity-empty')?.setAttribute('aria-busy', String(Boolean(feedRestore || feedState.loading)));
+    syncGuestWorkNavigation();
+    const results = document.getElementById('feed-activity-empty');
+    results?.setAttribute('aria-busy', String(Boolean(feedRestore || feedState.loading)));
+    if (results) results.dataset.initialLoading = String(feedState.loading && !feedState.items.length);
+    const filters = document.getElementById('feed-filters');
+    if (filters) filters.dataset.refreshing = String(Boolean(feedState.refreshing));
     const count = document.getElementById('feed-count');
     if (count) {
       if (feedRestore) count.textContent = '正在恢复浏览位置…';
+      else if (feedState.refreshing) count.textContent = '正在刷新作品…';
       else if (feedState.loading && feedState.cursor) count.textContent = '正在加载更多作品…';
       else if (feedState.loading && !feedState.items.length) count.textContent = '正在加载作品…';
       else if (feedState.items.length) count.textContent =
@@ -1531,12 +1860,12 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     return !sessionPending && viewer !== null;
   }
 
-  async function loadFeed({append = false, retainItems = false, retryViewer = true} = {}) {
+  async function loadFeed({append = false, retainItems = false, retryViewer = true, refresh = false} = {}) {
     if (feedState.loading && append) return;
     const seq = ++feedRequest;
     const scope = sessionRequest;
     feedReader?.abort();
-    if (!append) {
+    if (!append && !refresh) {
       if (!retainItems) feedState.items = [];
       feedState.cursor = '';
       feedViewer = undefined;
@@ -1545,15 +1874,16 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const needsViewer = feedState.tab !== 'activity';
     const waitingForViewer = needsViewer && !currentUser;
     feedState.loading = !waitingForViewer || Boolean(sessionPending);
+    feedState.refreshing = refresh;
     setFeedError('');
-    if (append || retainItems) updateFeedStatus();
+    if (append || retainItems || refresh) updateFeedStatus();
     else renderFeed();
     if (waitingForViewer) return;
     // The native all-works route includes the same viewer state as /me/works?tab=all.
     const viewer = currentUser;
     const privateFeed = needsViewer || (viewer && !nativeCatalog);
     const sort = needsViewer ? 'latest' : feedState.sort;
-    const params = feedQuery(feedState.query, feedState.cursor, feedState.kind, sort, feedState.creator);
+    const params = feedQuery(feedState.query, append ? feedState.cursor : '', feedState.kind, sort, feedState.creator);
     const tab = feedState.tab === 'activity' ? 'all' : feedState.tab;
     const path = privateFeed ? `/v1/discover/me/works?${params}&tab=${tab}` : `/v1/discover/works?${params}`;
     const reader = new AbortController();
@@ -1564,13 +1894,14 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (seq !== feedRequest || scope !== sessionRequest) return;
     feedReader = null;
     feedState.loading = false;
+    feedState.refreshing = false;
     if (append && sort === 'popular' && result.status === 409 && result.body?.error?.code === 'popularity_expired') {
       return loadFeed();
     }
     if (result.status !== 200) {
       const message = result.body?.error?.message || '无法加载公开作品。';
       const position = feedRestore?.position;
-      const retry = position ? () => readFeedPosition(position) : () => loadFeed({append, retainItems});
+      const retry = position ? () => readFeedPosition(position, {reuseCurrent: append}) : () => loadFeed({append, retainItems, refresh});
       setFeedError(message, retry);
       updateFeedStatus();
       return;
@@ -1579,7 +1910,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const nativeViewer = typeof name === 'string' && VIEWER_USERNAME.test(name) ? name : null;
     const mismatch = mismatchedNativeFeed(nativeViewer);
     if (mismatch && (needsViewer || append)) {
-      if (retryViewer) return loadFeed({retryViewer: false});
+      if (retryViewer) return loadFeed({retryViewer: false, refresh});
       setFeedError('登录状态已变化，重新检查后可再试。', () => load());
       updateFeedStatus();
       return;
@@ -1598,8 +1929,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
     feedViewer = nativeCatalog ? nativeViewer : (privateFeed ? viewer : null);
     feedState.cursor = mismatch ? '' : result.body?.cursor || '';
-    if (!mismatch) feedPages++;
+    if (!mismatch) feedPages = (append ? feedPages : 0) + 1;
     renderFeed(start);
+    if (refresh && !mismatch && !activeWork) initialView.scrollTop = 0;
     if (mismatch && retryViewer) return loadFeed({retainItems: true, retryViewer: false});
     if (mismatch) {
       setFeedError('登录状态已变化，重新检查后可再试。', () => load());
@@ -1628,6 +1960,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   function applyCatalogFilters() {
+    setCreatorDirectoryTabs(activeCreator?.handle);
     for (const chip of document.querySelectorAll('[data-catalog-category]')) {
       chip.setAttribute('aria-pressed', String(chip.dataset.catalogCategory === activeCategory));
     }
@@ -1674,8 +2007,87 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const remixWorkspace = document.getElementById('catalog-remix-workspace');
   const remixStatus = document.getElementById('catalog-remix-status');
   const remixSubmit = document.getElementById('catalog-remix-submit');
+  const remixRefresh = document.getElementById('catalog-remix-refresh');
+  const remixCancel = document.getElementById('catalog-remix-cancel');
+  const shareSender = document.getElementById('catalog-remix-share-sender');
+  const remixLabel = (zh, en) => document.documentElement?.lang?.startsWith('en') ? en : zh;
+  const receivedShares = document.getElementById('received-agent-shares');
+  const receivedList = document.getElementById('received-agent-shares-list');
+  const receivedStatus = document.getElementById('received-agent-shares-status');
+  const receivedMore = document.getElementById('received-agent-shares-more');
+  let receivedView;
+
+  function renderReceived(state) {
+    receivedList.replaceChildren(...[...state.items.values()].map(grant => {
+      const item = document.createElement('li');
+      const label = document.createElement('span');
+      label.textContent = grant.agent_name + ' · ' + (grant.sender?.display_name || grant.sender?.handle || '');
+      item.append(label);
+      const action = document.createElement(grant.state === 'active' ? 'a' : 'span');
+      if (grant.state === 'active') {
+        action.href = '/discover?' + new URLSearchParams({tab:'agents', share:grant.id});
+        action.textContent = remixLabel('查看并复制','Review and copy');
+      } else action.textContent = grant.state === 'revoked' ? remixLabel('已撤销','Revoked') : remixLabel('已关闭','Closed');
+      item.append(action);
+      return item;
+    }));
+  }
+
+  async function loadReceived({reset = false} = {}) {
+    if (!nativeCatalog || !currentUser || !receivedShares.open) return;
+    if (reset || !receivedView) {
+      receivedView = {viewer:currentUser, items:new Map(), cursor:''};
+      receivedList.replaceChildren();
+      receivedMore.hidden = true;
+    }
+    const state = receivedView;
+    if (state.loading) return;
+    state.loading = true;
+    const params = new URLSearchParams({direction:'received', limit:'30'});
+    if (state.cursor) params.set('after',state.cursor);
+    receivedMore.disabled = true;
+    receivedStatus.textContent = remixLabel('正在读取收到的分享…','Loading received shares…');
+    const result = await request('GET','/v1/agent-copy-grants?' + params).catch(() => ({status:0}));
+    if (receivedView !== state || currentUser !== state.viewer || !receivedShares.open) return;
+    state.loading = false;
+    receivedMore.disabled = false;
+    if (result.status !== 200) {
+      receivedStatus.textContent = remixLabel('无法读取分享，请重试。','Could not load shares. Try again.');
+      receivedMore.textContent = remixLabel('重试','Try again');
+      receivedMore.hidden = false;
+      return;
+    }
+    for (const grant of result.body.items || []) if (AGENT_COPY_GRANT.test(grant.id)) state.items.set(grant.id,grant);
+    state.cursor = result.body.next_cursor || '';
+    renderReceived(state);
+    receivedMore.textContent = remixLabel('加载更多','Load more');
+    receivedMore.hidden = !state.cursor;
+    receivedStatus.textContent = state.items.size ? '' : remixLabel('还没有收到的分享。','No shares received yet.');
+  }
+
+  function currentRemix(entry) {
+    return remix === entry && entry.viewer === currentUser && remixDialog.open;
+  }
+
+  function closeAgentRemix() {
+    remix?.read?.abort();
+    remix = null;
+    renderAgentRemixContent();
+    shareSender.textContent = '';
+    shareSender.hidden = true;
+    document.getElementById('catalog-remix-summary').textContent = '';
+    if (remixDialog.open) remixDialog.close();
+  }
+
+  function updateRemixControls() {
+    const pending = Boolean(remix?.pending);
+    remixSubmit.disabled = !remix?.template || (!remix.shareId && !remixWorkspace.value) || !remixName.value.trim() || pending;
+    remixName.disabled = remixWorkspace.disabled = remixCancel.disabled = pending;
+    remixSubmit.textContent = pending ? '正在创建…' : '创建副本';
+  }
 
   function syncRemixWorkspaces() {
+    if (remix?.shareId) { updateRemixControls(); return; }
     const previous = remixWorkspace.value || workspaceSelect.value;
     remixWorkspace.replaceChildren(...Array.from(workspaceSelect.options, option => {
       const choice = document.createElement('option');
@@ -1684,7 +2096,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return choice;
     }));
     if (Array.from(remixWorkspace.options).some(option => option.value === previous)) remixWorkspace.value = previous;
-    remixSubmit.disabled = !remix?.template || !remixWorkspace.value || remixLoading;
+    updateRemixControls();
     if (remix?.template && !remixWorkspace.value) {
       remixStatus.textContent = {
         loading: '正在读取可用工作区…', failed: '无法读取工作区。请刷新后重试。', ready: '暂无可用工作区。',
@@ -1694,69 +2106,144 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
   }
 
-  async function openRemix(item) {
-    if (!canUseCatalogItem(item)) return;
-    const entry = {slug: item.slug, key: reuseKey(), template: null, viewer: currentUser};
-    remix = entry;
-    remixName.value = item.name;
-    document.getElementById('catalog-remix-summary').textContent = item.summary || '';
+  function renderAgentRemixContent(template) {
     const instructions = document.getElementById('catalog-remix-instructions');
-    instructions.hidden = true;
+    const prompt = template?.instructions || '';
+    document.getElementById('catalog-remix-prompt').textContent = prompt;
+    instructions.hidden = !prompt;
     instructions.open = false;
+    const quickStarts = Array.isArray(template?.quick_starts)
+      ? template.quick_starts.filter(start => typeof start === 'string' && start.trim()) : [];
+    const quickStartsList = document.getElementById('catalog-remix-quick-starts-list');
+    quickStartsList.replaceChildren(...quickStarts.map(text => {
+      const line = document.createElement('li');
+      line.setAttribute('dir', 'auto');
+      line.textContent = text;
+      return line;
+    }));
+    document.getElementById('catalog-remix-quick-starts').hidden = !quickStarts.length;
+    document.getElementById('catalog-remix-quick-starts-heading').textContent =
+      remixLabel('将复制的快捷开场', 'Quick starts included in the copy');
     const description = document.getElementById('catalog-remix-description');
-    description.textContent = '';
-    remixStatus.textContent = '正在读取发布内容…';
-    syncRemixWorkspaces();
-    if (!remixDialog.open) remixDialog.showModal();
-    try {
-      const result = await request('GET', '/v1/discover/agents/' + entry.slug + '/remix');
-      if (remix !== entry || !remixDialog.open || currentUser !== entry.viewer) return;
-      if (result.status !== 200) throw new Error(messageFor(result.body.error, '无法读取发布内容。'));
-      const template = result.body.template;
-      entry.template = template;
-      remixName.value = template.name;
-      document.getElementById('catalog-remix-summary').textContent = template.summary;
-      document.getElementById('catalog-remix-prompt').textContent = template.instructions;
-      instructions.hidden = !template.instructions;
-      description.textContent = template.instructions
-        ? '副本包含发布的指令，可在自己的工作区修改。'
-        : '此发布只包含名称、简介和分类。创建后可补充自己的指令。';
-      remixStatus.textContent = '';
-      syncRemixWorkspaces();
-    } catch (error) {
-      if (remix === entry && remixDialog.open) remixStatus.textContent = error.message;
+    if (!template) { description.textContent = ''; return; }
+    const instructionsNote = prompt ? (remix?.shareId ? remixLabel('副本包含分享者选择的指令。', 'The copy includes the instructions selected by the sender.')
+      : remixLabel('副本包含发布的指令，可在自己的工作区修改。', 'The copy includes the published instructions. You can edit them in your workspace.'))
+      : remixLabel('创建后可补充自己的指令。', 'You can add your own instructions after creating the copy.');
+    description.textContent = instructionsNote + remixLabel('工具可在新副本中另行配置。', ' Configure tools separately in the new copy.');
+  }
+
+  async function readAgentRemix(entry) {
+    entry.template = null;
+    entry.read?.abort();
+    const controller = new AbortController();
+    entry.read = controller;
+    renderAgentRemixContent();
+    shareSender.textContent = '';
+    shareSender.hidden = true;
+    remixRefresh.hidden = true;
+    remixStatus.textContent = entry.shareId ? remixLabel('正在读取分享…','Loading share…') : '正在读取发布内容…';
+    updateRemixControls();
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(12000)]);
+    const result = await request('GET', entry.path, undefined, {}, signal).catch(() => ({status: 0}));
+    if (!currentRemix(entry) || entry.read !== controller) return;
+    const template = result.body?.template;
+    const grant = result.body?.grant;
+    if (result.status !== 200 || !template?.revision || typeof template.name !== 'string' ||
+        (entry.shareId && (grant?.id !== entry.shareId || grant?.state !== 'active'))) {
+      remixStatus.textContent = entry.shareId && [404,410].includes(result.status)
+        ? remixLabel('此分享已不可用。','This share is no longer available.')
+        : messageFor(result.body?.error, entry.shareId ? remixLabel('无法读取分享，请重试。','Could not load the share. Try again.') : '无法读取发布内容，请重试。');
+      remixRefresh.textContent = '重新读取';
+      remixRefresh.hidden = [404,410].includes(result.status);
+      return;
     }
+    if (remixName.value === entry.suggestion) remixName.value = template.name;
+    entry.suggestion = template.name;
+    entry.template = template;
+    document.getElementById('catalog-remix-summary').textContent = template.summary;
+    if (entry.shareId) {
+      const name = grant.sender?.display_name || grant.sender?.handle || '';
+      shareSender.textContent = remixLabel('来自 ' + name, 'Shared by ' + name);
+      shareSender.hidden = false;
+    }
+    renderAgentRemixContent(template);
+    remixStatus.textContent = '';
+    syncRemixWorkspaces();
+  }
+
+  function openRemix(item) {
+    if (!canUseCatalogItem(item) || remixDialog.open) return;
+    const entry = {path: '/v1/discover/agents/' + item.slug + '/remix', viewer: currentUser,
+      suggestion: item.name, keys: new Map()};
+    return showRemix(entry, item.summary);
+  }
+
+  function showRemix(entry, summary = '') {
+    remix = entry;
+    remixName.value = entry.suggestion;
+    document.getElementById('catalog-remix-summary').textContent = summary || '';
+    document.getElementById('catalog-remix-title').textContent = entry.shareId
+      ? remixLabel('复制私下分享的智能体','Copy privately shared agent') : remixLabel('复制智能体','Copy agent');
+    document.getElementById('catalog-remix-workspace-field').hidden = Boolean(entry.shareId);
+    remixWorkspace.required = !entry.shareId;
+    const destination = document.getElementById('catalog-remix-personal-destination');
+    destination.hidden = !entry.shareId;
+    destination.textContent = remixLabel('副本会保存到你的个人工作区。','The copy will be saved in your personal workspace.');
+    syncRemixWorkspaces();
+    remixDialog.showModal();
+    return readAgentRemix(entry);
   }
 
   async function submitRemix(event) {
     event.preventDefault();
     const entry = remix;
-    if (remixLoading || !entry?.template || entry.viewer !== currentUser || !remixWorkspace.value) return;
-    remixLoading = true;
-    remixSubmit.disabled = true;
+    const name = remixName.value.trim();
+    if (!entry?.template || !currentRemix(entry) || entry.pending || (!entry.shareId && !remixWorkspace.value) || !name) return;
+    const payload = {revision:entry.template.revision, ...(entry.shareId ? {} : {workspace_id:remixWorkspace.value}), name};
+    const stamp = JSON.stringify(payload);
+    const key = entry.keys.get(stamp) || reuseKey();
+    entry.keys.set(stamp, key);
+    entry.pending = true;
+    updateRemixControls();
     remixStatus.textContent = '正在创建副本…';
-    try {
-      const result = await request('POST', '/v1/discover/agents/' + entry.slug + '/remix', {
-        revision: entry.template.revision, workspace_id: remixWorkspace.value, name: remixName.value.trim(),
-      }, {'Idempotency-Key': entry.key});
-      if (remix !== entry || currentUser !== entry.viewer) return;
-      if (![200, 201].includes(result.status)) {
-        if (result.body.error?.code === 'listing_changed') {
-          entry.template = null;
-          throw new Error('发布内容已更新。关闭后重新预览。');
-        }
-        throw new Error(messageFor(result.body.error, '无法创建副本，请重试。'));
-      }
-      const agent = result.body.agent;
+    const result = await request('POST', entry.path, payload, {'Idempotency-Key': key}, AbortSignal.timeout(12000))
+      .catch(() => ({status: 0}));
+    if (!currentRemix(entry)) return;
+    entry.pending = false;
+    const agent = result.body?.agent;
+    if ([200,201].includes(result.status) && agent?.id && (entry.shareId ? /^[a-f0-9]{32}$/.test(agent.workspace_id) : agent.workspace_id === payload.workspace_id)) {
+      entry.template = null;
+      updateRemixControls();
+      remixStatus.textContent = '已创建副本，正在打开对话…';
       const hash = new URLSearchParams({workspace: agent.workspace_id, agent: agent.id});
       location.assign('/chat#' + hash.toString());
-    } catch (error) {
-      if (remix === entry) remixStatus.textContent = error.message;
-    } finally {
-      if (remix === entry && currentUser === entry.viewer) {
-        remixLoading = false;
-        syncRemixWorkspaces();
+      return;
+    }
+    const error = result.body?.error;
+    if (error?.code === 'listing_changed' || (entry.shareId && error?.code === 'agent_copy_changed')) {
+      entry.template = null;
+      renderAgentRemixContent();
+      remixRefresh.textContent = '查看新版本';
+      remixRefresh.hidden = false;
+      remixStatus.textContent = '发布内容已更新，请先查看新版本。';
+      remixRefresh.focus();
+    } else {
+      if ([404,410].includes(result.status)) {
+        entry.template = null;
+        renderAgentRemixContent();
+        shareSender.textContent = '';
+        shareSender.hidden = true;
+        document.getElementById('catalog-remix-summary').textContent = '';
       }
+      const fallback = '暂时无法确认是否已创建副本，可以重试。';
+      remixStatus.textContent = entry.shareId && [404,410].includes(result.status)
+        ? remixLabel('此分享已不可用。','This share is no longer available.')
+        : result.status >= 500 ? fallback : messageFor(error, fallback);
+    }
+    updateRemixControls();
+    if (error?.code === 'name_conflict') {
+      remixName.focus();
+      remixName.select();
     }
   }
 
@@ -1837,6 +2324,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     document.getElementById('discover-empty').hidden = items.length > 0;
     for (const item of items.slice(start)) {
       const li = document.createElement('li');
+      if (validSlug(item.slug)) li.dataset.catalogSlug = item.slug;
       const card = document.createElement('article');
       const avatar = document.createElement('span');
       avatar.className = 'catalog-avatar';
@@ -1867,16 +2355,15 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         tag.textContent = categoryLabel(item.category);
         if (tag.textContent) meta.append(tag);
       }
-      if (item.creator?.handle) {
-        const creator = document.createElement('button');
-        creator.type = 'button';
+      const handle = creatorHandle(item);
+      if (handle) {
+        const creator = document.createElement('a');
         creator.className = 'catalog-author';
-        creator.textContent = item.creator.name || item.creator.handle;
-        creator.title = '查看此创建者的智能体';
-        creator.addEventListener('click', () => {
-          activeCreator = item.creator;
-          loadCatalog();
-        });
+        const filters = new URLSearchParams(location?.search);
+        filters.set('creator', handle);
+        creator.href = '/discover?' + filters.toString();
+        creator.textContent = item.creator.name || handle;
+        creator.setAttribute('aria-label', '查看 ' + creator.textContent + ' 的公开智能体');
         meta.append(creator);
       }
       if (meta.childElementCount) copy.append(meta);
@@ -1900,6 +2387,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       activeQuery = document.getElementById('catalog-query').value.trim();
       catalog = [];
       cursor = '';
+      catalogPages = 0;
+      catalogDeparture = null;
       renderCatalog([]);
       document.getElementById('discover-empty').hidden = true;
     }
@@ -1930,6 +2419,14 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         catalog.push(item);
       }
       cursor = listed.body.cursor || '';
+      catalogPages += 1;
+      if (activeCreator) {
+        const author = catalog.find(item => creatorHandle(item) === activeCreator.handle);
+        if (author) {
+          activeCreator.name = author.creator.name || activeCreator.name;
+          applyCatalogFilters();
+        }
+      }
       renderCatalog(catalog, start);
       more.hidden = !cursor;
       document.getElementById('discover-empty').textContent = activeQuery || activeCategory !== 'all' || activeCreator
@@ -1938,6 +2435,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       if (nativeCatalog && catalog.length > start) {
         void confirmCatalogViewer({path, viewer, scope, session: checkingSession, catalog, items: catalog.slice(start)});
       }
+      return seq;
     } catch (failure) {
       if (seq !== catalogRequest) return;
       error.hidden = false;
@@ -1950,6 +2448,53 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         more.disabled = false;
         document.getElementById('catalog-panel').setAttribute('aria-busy', 'false');
       }
+    }
+  }
+
+  const returnLinks = teamsView ? ['team-open'] : CATALOG_RETURN_LINKS;
+  const validCatalogReturn = slug => teamsView ? TEAM_DIRECTORY_ID.test(slug || '') : validSlug(slug);
+
+  function catalogPositionKey() {
+    const viewer = currentUser?.id;
+    if (sessionState !== 'guest' && typeof viewer !== 'string') return '';
+    const path = teamsView ? teamDirectoryQuery(activeTeamQuery) : catalogQuery(activeQuery, '', activeCategory, activeCreator?.handle);
+    return JSON.stringify([sessionState, viewer || null, path]);
+  }
+
+  function rememberCatalogPosition(trigger) {
+    const key = catalogPositionKey();
+    if (!key || !catalogPages || !history?.replaceState) return;
+    const slug = teamsView ? trigger?.closest?.('[data-team-directory-ref]')?.dataset.teamDirectoryRef
+      : trigger?.closest?.('[data-catalog-slug]')?.dataset.catalogSlug;
+    const link = returnLinks.find(name => trigger?.classList?.contains(name));
+    const offset = link && trigger.getBoundingClientRect().top - initialView.getBoundingClientRect().top;
+    const saved = history.state?.discoverAgentDirectory;
+    const pages = saved?.key === key && Number.isInteger(saved.pages) ? Math.max(catalogPages, saved.pages) : catalogPages;
+    try {
+      history.replaceState({...history.state, discoverAgentDirectory:{
+        key, pages:Math.min(pages, BROWSE_RESTORE_PAGES), scroll:initialView.scrollTop || 0,
+        ...(link && validCatalogReturn(slug) ? {slug, link, offset} : {}),
+      }}, '');
+    } catch { /* The browser may disable history changes while leaving. */ }
+  }
+
+  async function restoreCatalogPosition(directoryLoad) {
+    const request = await directoryLoad;
+    const saved = history?.state?.discoverAgentDirectory;
+    if (!request || request !== catalogRequest || !saved || saved.key !== catalogPositionKey() ||
+        !Number.isInteger(saved.pages) || saved.pages < 1 || saved.pages > BROWSE_RESTORE_PAGES ||
+        !Number.isFinite(saved.scroll) || saved.scroll < 0) return;
+    while (catalogPages < saved.pages && cursor) {
+      const loadPage = teamsView ? loadTeams : loadCatalog;
+      if (await loadPage(true) !== catalogRequest || saved.key !== catalogPositionKey()) return;
+    }
+    const attribute = teamsView ? 'data-team-directory-ref' : 'data-catalog-slug';
+    const target = validCatalogReturn(saved.slug) && returnLinks.includes(saved.link)
+      ? document.querySelector(`#discover-list [${attribute}="${saved.slug}"] .${saved.link}`) : null;
+    target?.focus({preventScroll: true});
+    initialView.scrollTop = saved.scroll;
+    if (target && Number.isFinite(saved.offset)) {
+      initialView.scrollTop += target.getBoundingClientRect().top - initialView.getBoundingClientRect().top - saved.offset;
     }
   }
 
@@ -2115,9 +2660,11 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     workComments.setActor('');
     closeWorkRemix();
     syncCatalogActions();
-    if (remixDialog.open) remixDialog.close();
-    remix = null;
-    remixLoading = false;
+    closeAgentRemix();
+    receivedView = null;
+    receivedShares.hidden = true;
+    receivedShares.open = false;
+    receivedList.replaceChildren();
     manageRequest++;
     document.getElementById('catalog-manage').hidden = true;
     if (agentsView) {
@@ -2146,27 +2693,39 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const feedLoad = catalogView ? null : loadFeed();
     const initialFeedRequest = feedRequest;
     const directoryLoad = agentsView ? loadCatalog() : null;
+    const directoryReturn = directoryLoad && sessionLoad.then(() => {
+      if (attempt === sessionRequest) return restoreCatalogPosition(directoryLoad);
+    });
     await sessionLoad;
     if (attempt !== sessionRequest) return;
     loginPanel.hidden = Boolean(currentUser);
     mainPanel.hidden = false;
     show('', '');
     if (!catalogView) {
-      if (feedState.tab !== 'activity') return Promise.all([loadFeed(), detailLoad]);
-      if (currentUser && !nativeCatalog) return Promise.all([loadFeed({retainItems: true}), detailLoad]);
-      if (nativeCatalog && feedViewer !== undefined) {
-        if (mismatchedNativeFeed(feedViewer)) return Promise.all([loadFeed({retainItems: true, retryViewer: false}), detailLoad]);
-        for (const [item, actions] of feedActions) addFeedEngagement(item, actions);
+      let loadedFeed = feedRequest === initialFeedRequest ? feedLoad : null;
+      if (feedState.tab !== 'activity') {
+        applyFeedChrome();
+        loadedFeed = loadFeed();
+      } else if (currentUser && !nativeCatalog) loadedFeed = loadFeed({retainItems: true});
+      else if (nativeCatalog && feedViewer !== undefined) {
+        if (mismatchedNativeFeed(feedViewer)) loadedFeed = loadFeed({retainItems: true, retryViewer: false});
+        else for (const [item, actions] of feedActions) addFeedEngagement(item, actions);
       }
       updateFeedStatus();
-      return Promise.all([feedRequest === initialFeedRequest ? feedLoad : null, detailLoad]);
+      const feedReturnLoad = Promise.resolve(loadedFeed).then(() => {
+        if (attempt === sessionRequest) return restoreRecordedFeedPosition();
+      });
+      return Promise.all([feedReturnLoad, detailLoad]);
     }
     if (!currentUser) {
       if (teamsView) await loadTeams();
-      await directoryLoad;
+      await directoryReturn;
       return;
     }
     document.getElementById('catalog-manage').hidden = !agentsView;
+    receivedShares.hidden = !agentsView || !nativeCatalog;
+    const sharedPreview = agentShare ? showRemix({path:`/v1/agent-copy-grants/${agentShare}/remix`, viewer:currentUser,
+      suggestion:'', shareId:agentShare, keys:new Map()}) : null;
     if (agentsView) {
       const listed = await request('GET', '/v1/workspaces?limit=100').catch(() => ({status: 0}));
       if (attempt !== sessionRequest) return;
@@ -2185,13 +2744,24 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       if (manage.open) void loadManage();
       else if (location?.hash === '#catalog-manage') manage.open = true;
     }
-    if (teamsView) await loadTeams();
-    await directoryLoad;
+    if (teamsView) await restoreCatalogPosition(loadTeams());
+    await Promise.all([directoryReturn, sharedPreview]);
   }
 
   workspaceSelect.addEventListener('change', loadManage);
   const manage = document.getElementById('catalog-manage');
   manage.addEventListener('toggle', () => { if (manage.open) void loadManage(); });
+  if (catalogView) {
+    document.getElementById('discover-list').addEventListener('click', event => {
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const link = event.target.closest?.('a');
+      if (!link || !returnLinks.some(name => link.classList.contains(name))) return;
+      catalogDeparture = link;
+      rememberCatalogPosition(link);
+    });
+    window?.addEventListener?.('pagehide', () => rememberCatalogPosition(catalogDeparture || document.activeElement));
+    window?.addEventListener?.('pageshow', () => { catalogDeparture = null; });
+  }
   if (agentsView) {
     for (const chip of document.querySelectorAll('[data-catalog-category]')) {
       chip.addEventListener('click', () => setCategory(chip.dataset.catalogCategory));
@@ -2206,14 +2776,27 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     document.getElementById('catalog-category-close').addEventListener('click', () => categoryDialog.close());
     document.getElementById('catalog-clear-creator').addEventListener('click', () => {
       activeCreator = null;
+      const params = new URLSearchParams(location?.search);
+      params.delete('creator');
+      history?.replaceState?.(null, '', '/discover?' + params.toString());
+      syncLoginLink();
       loadCatalog();
     });
     document.getElementById('catalog-remix-form').addEventListener('submit', submitRemix);
-    document.getElementById('catalog-remix-cancel').addEventListener('click', () => {
-      if (!remixLoading) remixDialog.close();
+    remixName.addEventListener('input', updateRemixControls);
+    remixWorkspace.addEventListener('change', updateRemixControls);
+    remixRefresh.addEventListener('click', () => remix && readAgentRemix(remix));
+    remixCancel.addEventListener('click', closeAgentRemix);
+    document.getElementById('received-agent-shares-label').textContent = remixLabel('收到的智能体分享','Received agent shares');
+    receivedShares.addEventListener('toggle', () => {
+      if (receivedShares.open) void loadReceived({reset:true});
+      else receivedView = null;
     });
-    remixDialog.addEventListener('cancel', event => { if (remixLoading) event.preventDefault(); });
-    remixDialog.addEventListener('close', () => { remix = null; });
+    receivedMore.addEventListener('click', () => void loadReceived());
+    remixDialog.addEventListener('cancel', event => {
+      event.preventDefault();
+      if (!remix?.pending) closeAgentRemix();
+    });
   }
   document.getElementById('catalog-search').addEventListener('submit', event => {
     event.preventDefault();
@@ -2227,20 +2810,19 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (agentsView) return loadCatalog();
     if (teamsView) return loadTeams();
   });
-  document.getElementById('teams-retry').addEventListener('click', () => loadTeams(activeTeamQuery));
+  document.getElementById('teams-retry').addEventListener('click', () => cursor ? loadMoreTeams() : loadTeams());
   document.getElementById('catalog-more').addEventListener('click', () => {
     if (agentsView) return loadCatalog(true);
+    if (teamsView) return loadMoreTeams();
   });
   for (const kind of FEED_KINDS) {
     const button = document.getElementById('feed-kind-' + (kind || 'all'));
     if (!button) continue;
-    button.addEventListener('click', () => applyFeedFilters({kind, sort: 'latest', query: searchText()}));
+    button.addEventListener('click', () => applyFeedFilters({kind, sort: 'latest', query: searchText()}, {refresh: true}));
   }
   document.getElementById('feed-sort-popular')?.addEventListener('click', () => {
     if (feedState.tab !== 'activity') return;
-    const query = searchText();
-    if (feedState.sort === 'popular' && query === feedState.query && !feedState.loading && !feedRestore) return loadFeed();
-    return applyFeedFilters({kind: '', sort: 'popular', query});
+    return applyFeedFilters({kind: '', sort: 'popular', query: searchText()}, {refresh: true});
   });
   document.getElementById('feed-creator-filter')?.addEventListener('click', () => {
     const loaded = applyFeedFilters({creator: '', query: searchText()});

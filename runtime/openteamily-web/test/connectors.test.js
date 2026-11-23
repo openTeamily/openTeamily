@@ -101,6 +101,33 @@ test('connect refuses without a configured public origin (no guessed callback)',
   assert.equal((await v1('POST', '/v1/composio/connections', { toolkit: 'github' })).status, 503)
 })
 
+test('Composio connection failures preserve the gateway status and never expose vendor details', async () => {
+  let upstreamStatus = 409
+  const vendorDetail = 'vendor-only diagnostic ' + KEY
+  const { api, v1 } = make({transport: async (_method, url, headers) => {
+    assert.equal(headers['x-api-key'], KEY)
+    if (new URL(url).pathname.endsWith('/session')) return [201, Buffer.from('{"session_id":"fixture"}')]
+    return [upstreamStatus, Buffer.from(JSON.stringify({error: {message: vendorDetail}}))]
+  }})
+  await v1('POST', '/v1/composio/key', {api_key: KEY})
+  for (const [status, code] of [
+    [400, 'composio_failed'],
+    [401, 'composio_key_rejected'],
+    [409, 'composio_conflict'],
+    [429, 'composio_rate_limited'],
+    [500, 'composio_upstream'],
+    [503, 'composio_upstream'],
+  ]) {
+    upstreamStatus = status
+    const result = await v1('POST', '/v1/composio/connections', {toolkit: 'github'})
+    assert.equal(result.status, 502)
+    assert.equal(result.body.error.code, code)
+    assert.ok(!JSON.stringify(result).includes(vendorDetail))
+    assert.ok(!JSON.stringify(result).includes(KEY))
+    assert.deepEqual(api.store.read().connections, [])
+  }
+})
+
 test('custom MCP servers: public HTTPS only, bearer sealed, endpoint change needs token, quota', async () => {
   const { api, v1 } = make()
   for (const url of ['http://mcp.example/x', 'https://127.0.0.1/mcp', 'https://10.1.2.3/mcp', 'https://mcp.local/x', 'https://mcp.example:8443/x', 'https://u:p@mcp.example/x', 'https://mcp.example/x?q=1', 'https://[::1]/mcp']) {
@@ -159,7 +186,9 @@ test('every tool call waits for the owner: pending → approve → runs once, sc
   await v1('POST', `/v1/composio/approvals/${next.id}`, { decision: 'approve' })
   const ran = await api.callTool(mcpName, { q: 'x' }, { waitMs: 0 })
   assert.equal(ran.content[0].text, 'found search_docs')
-  assert.equal(ran.token, '[redacted]')
+  assert.equal(mcp.seen.find(s => s.method === 'tools/call').auth, 'Bearer tok_secret_123')
+  assert.equal(ran.token, 'Bearer [redacted]')
+  assert.ok(!JSON.stringify(ran).includes('tok_secret_123'))
 })
 
 test('approvals expire, and a key change blocks an approved call', async () => {

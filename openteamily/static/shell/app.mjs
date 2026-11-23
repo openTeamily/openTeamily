@@ -13,7 +13,7 @@ function currentPath() {
 function markNavigation() {
   const here = currentPath();
   for (const link of document.querySelectorAll('nav a[href]')) {
-    if (link.closest('.catalog-tabs')) continue;
+    if (link.closest('.catalog-tabs, .memory-views')) continue;
     const href = link.getAttribute('href') || '';
     if (!href.startsWith('/')) continue;
     const target = href.split('?')[0].split('#')[0].replace(/\/+$/, '') || '/';
@@ -174,22 +174,11 @@ async function loadSettings() {
   }
 }
 
-async function loadAppearance() {
-  const loaded = await loadSettings();
-  return loaded ? loaded.values : null;
-}
-
 export function accountNameFromLabel(text, dataset) {
   if (dataset && dataset.username) return String(dataset.username).trim();
   const raw = String(text || '').trim();
   return raw.replace(/^(已登录为|已登录)\s*[:：]?\s*/, '');
 }
-
-export function accountInitials(name) {
-  const letters = String(name || '').replace(/[^0-9A-Za-z\u4e00-\u9fff]+/g, '');
-  return letters ? letters.slice(0, 2).toUpperCase() : '账户';
-}
-
 
 function signedInPanel(doc) {
   return doc.getElementById('settings-panel') || doc.getElementById('main-panel');
@@ -220,8 +209,6 @@ function syncAccountSlot(doc) {
   }
   const identity = doc.getElementById('account-identity');
   if (identity) identity.textContent = name;
-  const button = doc.getElementById('account-menu-button');
-  if (button) button.textContent = accountInitials(name);
   for (const node of doc.querySelectorAll('.rail-signed-in')) {
     if (visible) node.removeAttribute('hidden');
     else node.setAttribute('hidden', '');
@@ -466,16 +453,35 @@ function valuesFromDom(doc) {
   return values;
 }
 
+export function shellValuesFromDocument(doc) {
+  const {shellAppearance, shellLanguage, shellStart, shellEnd} = doc.documentElement.dataset;
+  if (!['light', 'dark', 'auto', 'system'].includes(shellAppearance)) return null;
+  const values = {appearance: shellAppearance, language: shellLanguage};
+  if (shellAppearance === 'auto' && shellStart && shellEnd) {
+    values.appearance_schedule = 'custom';
+    values.appearance_start = shellStart;
+    values.appearance_end = shellEnd;
+  }
+  return values;
+}
+
 export function startShell(doc = document, options = {}) {
   const target = doc.defaultView || (typeof window !== 'undefined' ? window : null);
   const run = async () => {
     enhanceChrome();
     const guest = signedInPanel(doc)?.hasAttribute('data-guest-access') && !csrfCookie(doc.cookie);
-    const loaded = options.values !== undefined ? { values: options.values } : guest ? null : await loadSettings();
-    const values = (loaded && loaded.values) || { appearance: 'system' };
-    if (values.language === 'en' || values.language === 'zh-CN') updateMobileNavigationLanguage(doc, values.language);
-    applyResolvedTheme(doc, values, options.now, options.media);
-    syncAppearanceButton(doc, values, options.now, options.media);
+    const apply = values => {
+      const language = values.language || doc.documentElement.lang;
+      updateMobileNavigationLanguage(doc, language);
+      const account = doc.getElementById('account-menu-button');
+      const accountLabel = language === 'en' ? 'Account menu' : '账户菜单';
+      account?.setAttribute('aria-label', accountLabel);
+      account?.setAttribute('title', accountLabel);
+      applyResolvedTheme(doc, values, options.now, options.media);
+      syncAppearanceButton(doc, values, options.now, options.media);
+    };
+    const initial = options.values ?? shellValuesFromDocument(doc);
+    apply(initial ?? valuesFromDom(doc));
     if (doc.body && typeof MutationObserver === 'function') {
       new MutationObserver(() => {
         if (doc.body && (doc.body.dataset.theme || doc.body.dataset.schedule)) {
@@ -490,6 +496,10 @@ export function startShell(doc = document, options = {}) {
       new MutationObserver(() => decorateStatus(status)).observe(status, {
         childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['data-kind'],
       });
+    }
+    if (!initial && !guest) {
+      const loaded = await loadSettings();
+      if (loaded) apply(loaded.values);
     }
   };
   if (doc.readyState === 'loading' && target) target.addEventListener('DOMContentLoaded', run);

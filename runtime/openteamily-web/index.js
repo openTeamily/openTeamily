@@ -39,10 +39,10 @@ export function apply(ctx, config = {}) {
   void features.then(({table}) => pageSettings.resolve(table['settings/get']), () => pageSettings.resolve(undefined))
   const page = createPageHandler({
     pagesDir, identity,
-    async getSystemLanguage() {
+    async getShellSettings() {
       const read = await pageSettings.promise
       const result = await read?.()
-      return result?.settings?.values?.language
+      return result?.settings?.values
     },
   })
   const dispatch = createDispatch({ endpoints: async () => (await features).table })

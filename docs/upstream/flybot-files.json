@@ -245,12 +245,6 @@
     "mode": "100644",
     "bytes": 23433
   },
-  "plugins/social/src/social.js": {
-    "sha256": "eac6d6f0c4b74600724624027ecd235258aef694eb947c3c023358fd23018683",
-    "git_blob_sha": "f4a65ee61c8aeca7eb850033939f32812a81cf69",
-    "mode": "100644",
-    "bytes": 283028
-  },
   "plugins/social/src/presence.js": {
     "sha256": "57e9bcf4e446147fb7fb92463cdc36c58f17904bb7897a50b27a1b6722a2ff08",
     "git_blob_sha": "d1813d0f2fcd0962ac1292c72fb6af0f6a4fefeb",

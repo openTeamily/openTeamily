@@ -12,6 +12,17 @@ const validNotes = (v) => validLongText(v, LIMITS.NOTES_MAX)
 const validStatus = (v) => v === 'open' || v === 'done'
 const validDue = (v) => v === null || (Number.isInteger(v) && v >= 0 && v <= 2 ** 31)
 const validRef = (v) => v === null || (typeof v === 'string' && HEX.test(v))
+const ACTION_CURSOR = /^([012]):(-?\d{1,11}):([0-9a-f]{32})$/
+
+function dueOrder(row) {
+  if (row.status === 'done') return [2, -row.updated, row.id]
+  if (row.due_at === null) return [1, -row.updated, row.id]
+  return [0, row.due_at, row.id]
+}
+
+function compareDue(left, right) {
+  return left[0] - right[0] || left[1] - right[1] || left[2].localeCompare(right[2])
+}
 
 // ---- actions ----
 export function actionView(store, row, includeNotes = true, user = usernames(store)) {
@@ -19,10 +30,37 @@ export function actionView(store, row, includeNotes = true, user = usernames(sto
   const data = { id: row.id, workspace_id: row.workspace_id, title: row.title, status: row.status, due_at: row.due_at,
     memory_page_id: row.memory_page_id, memory_page_title: page?.title ?? null, revision: row.revision,
     created: row.created, updated: row.updated, created_by: user(row.created_by), updated_by: user(row.updated_by) }
-  if (includeNotes) data.notes = row.notes
+  if (includeNotes) {
+    data.notes = row.notes
+    const source = store.get(`SELECT workspace_id, share_id, revision, action_index
+      FROM memory_shared_meeting_action_sources WHERE action_id=?`, row.id)
+    if (source) data.source = {kind:'shared_meeting', ...source}
+    else {
+      const meeting = store.get(`SELECT workspace_id, meeting_id, revision, action_index
+        FROM memory_owned_meeting_action_sources WHERE action_id=?`, row.id)
+      if (meeting) data.source = {kind:'meeting', ...meeting}
+    }
+    const chat = store.get(`SELECT kind,workspace_id,conversation_id,message_id,agent_id,revision
+      FROM memory_chat_action_sources WHERE action_id=?`, row.id)
+    if (chat) {
+      const {agent_id,revision,...reference} = chat
+      data.source_chat = {...reference, ...(agent_id ? {agent_id} : {}), ...(revision ? {revision} : {})}
+    }
+  }
   return data
 }
 const loadAction = (store, ws, id) => store.get('SELECT * FROM memory_actions WHERE id=? AND workspace_id=?', id, ws)
+
+async function actionWithFollowups(req, action) {
+  try {
+    const {items} = await req.host.call('automations/memoryFollowupsForAction', {
+      workspace_id: action.workspace_id, action_id: action.id,
+    })
+    return {...action, automation_followups: items}
+  } catch { /* The action stays accessible while the optional automation integration is unavailable. */ }
+  return action
+}
+
 function resolvePage(store, ws, pageId) {
   if (pageId === null || pageId === undefined) return null
   if (!validRef(pageId)) refuse(400, 'invalid', 'Provide a valid linked memory page')
@@ -37,13 +75,13 @@ export function createAction(req, ws, body, keyHash) {
   const ref = 'memory_page_id' in body ? body.memory_page_id : null
   if (!validTitle(body.title) || !validNotes(notes) || !validDue(due) || !validRef(ref)) refuse(400, 'invalid', 'Provide a memory action title')
   const title = body.title.trim()
-  const pageId = resolvePage(store, ws, ref)
-  const requestHash = digest(stableJson({ title, notes, due_at: due, memory_page_id: pageId }))
+  const requestHash = digest(stableJson({ title, notes, due_at: due, memory_page_id: ref }))
   const prior = store.get('SELECT * FROM memory_actions WHERE workspace_id=? AND key_hash=?', ws, keyHash)
   if (prior) {
     if (prior.request_hash !== requestHash) refuse(409, 'conflict', 'Idempotency key was used for a different request')
     return { status: 200, action: actionView(store, prior) }
   }
+  const pageId = resolvePage(store, ws, ref)
   if (store.get('SELECT COUNT(*) AS n FROM memory_actions WHERE workspace_id=?', ws).n >= LIMITS.actions) refuse(429, 'quota', 'Memory action capacity reached')
   const id = newId()
   const user = actor(req)
@@ -54,17 +92,31 @@ export function createAction(req, ws, body, keyHash) {
 async function actions(req, ws, targetId, removing) {
   const store = req.store
   if (!targetId && req.method === 'GET') {
-    const { limit, cursor } = pagination(req.query, ['q', 'status'])
+    const { limit, cursor } = pagination(req.query, ['q', 'status', 'order', 'after'])
     const needle = casefold((req.query.get('q') ?? '').trim())
     const status = req.query.get('status') ?? ''
-    if (needle.length > 80 || (status && !validStatus(status))) refuse(400, 'invalid', 'Invalid memory action request')
+    const order = req.query.get('order') ?? ''
+    const after = req.query.get('after')
+    const marker = after === null ? null : ACTION_CURSOR.exec(after)
+    if (needle.length > 80 || (status && !validStatus(status)) || (order && order !== 'due') ||
+      (order === 'due' && cursor) || (after !== null && (!marker || order !== 'due'))) {
+      refuse(400, 'invalid', 'Invalid memory action request')
+    }
     let rows = store.all('SELECT * FROM memory_actions WHERE workspace_id=? ORDER BY id', ws)
     if (status) rows = rows.filter((row) => row.status === status)
     if (needle) rows = rows.filter((row) => casefold(row.title).includes(needle))
-    if (cursor) rows = rows.filter((row) => row.id > cursor)
+    if (order === 'due') {
+      if (marker) {
+        const boundary = [Number(marker[1]), Number(marker[2]), marker[3]]
+        rows = rows.filter(row => compareDue(dueOrder(row), boundary) > 0)
+      }
+      rows.sort((a,b) => compareDue(dueOrder(a), dueOrder(b)))
+    } else if (cursor) rows = rows.filter((row) => row.id > cursor)
     rows = rows.slice(0, limit + 1)
     const user = usernames(store)
-    return { body: { items: rows.slice(0, limit).map((row) => actionView(store, row, false, user)), cursor: rows.length > limit ? rows[limit - 1].id : null } }
+    const last = rows.length > limit ? rows[limit - 1] : null
+    return { body: { items: rows.slice(0, limit).map((row) => actionView(store, row, false, user)),
+      cursor: last ? (order === 'due' ? dueOrder(last).join(':') : last.id) : null } }
   }
   if (!targetId && req.method === 'POST' && !req.queryString) {
     const body = requireBodyKeys(await req.json(), ['title', 'notes', 'due_at', 'memory_page_id'])
@@ -83,7 +135,7 @@ async function actions(req, ws, targetId, removing) {
     store.run('DELETE FROM memory_actions WHERE id=?', row.id)
     return { body: { removed: actionView(store, row, false) } }
   }
-  if (req.method === 'GET' && !req.queryString) return { body: { action: actionView(store, row) } }
+  if (req.method === 'GET' && !req.queryString) return { body: { action: await actionWithFollowups(req, actionView(store, row)) } }
   if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid memory action request')
   const body = requireBodyKeys(await req.json(), ['revision', 'changes'])
   const { revision, changes } = body
@@ -91,7 +143,7 @@ async function actions(req, ws, targetId, removing) {
     refuse(400, 'invalid', 'Provide the current revision and a non-empty changes object')
   }
   if (Object.keys(changes).some((k) => !['title', 'notes', 'status', 'due_at', 'memory_page_id'].includes(k))) refuse(400, 'invalid', 'Unknown memory action field')
-  return store.transaction(() => {
+  const action = store.transaction(() => {
     const current = loadAction(store, ws, targetId)
     if (!current) refuse(404, 'not_found', 'Memory action not found')
     if (revision !== current.revision) refuse(409, 'conflict', 'Memory action changed elsewhere; reload and retry', actionView(store, current))
@@ -102,11 +154,12 @@ async function actions(req, ws, targetId, removing) {
     if ('due_at' in changes) { if (!validDue(changes.due_at)) refuse(400, 'invalid', 'Provide a valid due date'); due = changes.due_at }
     if ('memory_page_id' in changes) { if (!validRef(changes.memory_page_id)) refuse(400, 'invalid', 'Provide a valid linked memory page'); pageId = resolvePage(store, ws, changes.memory_page_id) }
     if (title === current.title && notes === current.notes && status === current.status && due === current.due_at &&
-        pageId === current.memory_page_id) return { body: { action: actionView(store, current) } }
+        pageId === current.memory_page_id) return actionView(store, current)
     store.run('UPDATE memory_actions SET title=?, notes=?, status=?, due_at=?, memory_page_id=?, revision=?, updated=?, updated_by=? WHERE id=?',
       title, notes, status, due, pageId, current.revision + 1, req.now, actor(req), current.id)
-    return { body: { action: actionView(store, loadAction(store, ws, current.id)) } }
+    return actionView(store, loadAction(store, ws, current.id))
   })
+  return { body: { action: await actionWithFollowups(req, action) } }
 }
 
 // ---- links and graph ----

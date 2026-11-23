@@ -65,7 +65,10 @@ test('browser shares bind to the requested team workspace and only expose the pe
   const personal = 'd'.repeat(32)
   const share = 'otsr_' + 'A'.repeat(26)
   const view = {id: share, run_ref: RUN.id, title: RUN.title, goal: RUN.goal, status: RUN.status,
-    owner: {owner_id: 'issuer', display_name: 'Writer'}, snapshot: {steps: []}}
+    owner: {owner_id: 'issuer', display_name: 'Writer'}, snapshot: {steps: [
+      {position: 0, status: 'succeeded', agent_name: 'Writer', output: 'draft ok'},
+      {position: 1, status: 'succeeded', agent_name: 'Reviewer', output: 's'.repeat(399) + '🚀' + ' remaining text'},
+    ]}}
   const calls = []
   const host = setup([], undefined, {...RUN, workspace_id: workspace})
   const runtime = host.call
@@ -95,7 +98,8 @@ test('browser shares bind to the requested team workspace and only expose the pe
       return Response.json(view)
     },
   }))
-  const endpoint = shares(host).endpoints.v1
+  const endpoints = shares(host).endpoints
+  const endpoint = endpoints.v1
   const root = '/v1/workspaces/' + workspace
   const denied = await endpoint({method: 'GET', path: '/v1/workspaces/' + personal + '/shared-runs'})
   assert.equal(denied.status, 404)
@@ -113,9 +117,18 @@ test('browser shares bind to the requested team workspace and only expose the pe
   assert.equal(summary.run_id, undefined)
   assert.equal(summary.snapshot, undefined)
   assert.equal(summary.goal, undefined)
+  assert.equal(summary.source_version, undefined)
   const clicked = await endpoint({method: 'GET', path: root + '/shared-runs/' + share})
   assert.equal(clicked.body.share.goal, RUN.goal)
   assert.deepEqual(clicked.body.share.snapshot, view.snapshot)
+  const source = {id: share, version: clicked.body.share.source_version, positions: [1]}
+  const payload = {workspace_id: workspace, source}
+  await assert.rejects(endpoints.teamRunContext(payload), {status: 404})
+  const context = await endpoints.teamRunContext(payload, {internal: true})
+  assert.deepEqual(context, {title: RUN.title, outputs: [{position: 2, text: 's'.repeat(399) + '🚀…'}]})
+  await assert.rejects(endpoints.teamRunContext({...payload, workspace_id: personal}, {internal: true}), {status: 404})
+  view.snapshot.steps[1].output = 'updated by sender'
+  await assert.rejects(endpoints.teamRunContext(payload, {internal: true}), {status: 409, code: 'source_changed'})
   viewer = 'issuer'
   const revoked = await endpoint({method: 'POST', path: root + '/shared-runs/' + share + '/revoke'})
   assert.deepEqual(revoked, {status: 200, body: {unshared: true}})

@@ -1,5 +1,5 @@
 // DSH plugin entry for the OpenTeamily FlyBot runtime image.
-// Boots the unmodified upstream ds-bot runtime, then attaches the FlyBot social
+// Boots the pinned DS-Bot runtime with the image's OpenTeamily integration and attaches the FlyBot social
 // façade. This file must keep living at runtime/flybot-image/plugin/ so the
 // relative imports into the vendored trees resolve. Do not copy it out of this
 // layout; the image profile uses a link: dependency to this directory.
@@ -7,11 +7,12 @@ import { createRuntime } from '../../ds-bot-upstream/ds-bot/index.js'
 import { applyOnRuntime } from '../../flybot-social-host/index.js'
 import { registerFlybotRoute } from '../../flybot-web-slots/index.js'
 import { loadBotSocialConfig } from '../bot-social-config.js'
-import { startBridge, runTurn } from '../ds-bot-bridge.mjs'
+import { startBridge, runTurn, prepareNativeChat, textOnlyCompletion } from '../ds-bot-bridge.mjs'
 import { normalizeImportedSession } from '../../openteamily-web/features/agents/history.js'
 import { attachRuntime } from '../../openteamily-web/src/host.js'
 import { boundName } from '../../openteamily-web/features/skills/index.js'
 import { nativeSkillFilter, reconcileStartupSkills } from '../../openteamily-web/features/skills/library.js'
+import { assertNativeConsentOverlay } from '../native-ds-bot-overlay.mjs'
 
 // Same inject list as runtime/ds-bot-upstream/ds-bot/index.js — this plugin
 // stands in for ds-bot in the web profile so createRuntime runs once.
@@ -19,6 +20,7 @@ export const name = 'openteamily-flybot'
 export const inject = ['llm', 'tools', 'systemPrompt', 'sessionController', 'sessions', 'sessionTitle', 'workspaceRegistry', 'connection']
 
 export function apply(ctx, config = {}) {
+  assertNativeConsentOverlay()
   // Prepare is detached/read-only: no Session is entered, persisted or announced.
   // Install before core agent restoration, whose projections read old imports.
   normalizeImportedSession(ctx.sessions.prepare('openteamily-import-schema-' + globalThis.crypto.randomUUID()))
@@ -47,26 +49,31 @@ export function apply(ctx, config = {}) {
   if (config.openteamilyBridge !== false && process.env.OPENTEAMILY_DS_BOT_BRIDGE !== '0') {
     const { bridge } = startBridge(rt, ctx)
     // Services for @openteamily/web features (chat, skills): native DS-Bot turns in
-    // this user's own runtime, serialized by bridge.exclusive.
-    const chatTurn = (key, text, requestId) => bridge.exclusive(async () => {
-      await bridge.prepareModel()
-      await bridge.selectConversation(key)
-      bridge.requireModel(bridge.botId)
-      return runTurn(rt, ctx, bridge.botId, text, requestId)
-    })
+    // this user's own runtime, serialized per Bot while its part is active.
+    const chatTurn = async (key, text, requestId) => {
+      const botId = await bridge.setup()
+      return bridge.exclusive(async () => {
+        await bridge.prepareModel()
+        await bridge.selectConversation(key)
+        bridge.requireModel(botId)
+        return runTurn(rt, ctx, botId, text, requestId)
+      }, botId)
+    }
     const mainBot = async () => { await bridge.setup(); return bridge.botId }
+    const prepareMappedChat = async (botId, sessionId) => {
+      await bridge.prepareModel()
+      await prepareNativeChat(rt, botId, sessionId)
+    }
     const attachmentStore = () => ctx.get?.('attachments')
     const nativeTurn = (botId, sessionId, text, requestId, options = {}) => bridge.exclusive(async () => {
-      await bridge.prepareModel()
-      if (!rt.botOf(botId)) throw new Error('Mapped native Bot no longer exists')
-      await rt.switchPart(botId, sessionId)
-      await rt.applyModel(rt.botOf(botId), { force: true })
+      options.signal?.throwIfAborted()
+      await prepareMappedChat(botId, sessionId)
       const parts = [], stored = []
       const uploads = ctx.get?.('fileUploads')
       for (const file of options.files || []) {
         if (!uploads) throw Object.assign(new Error('Native attachment service unavailable'), {code:'agents/attachment-unavailable'})
         const bytes = async function* () { yield file.data }
-        const scope = {sessionId:rt.chatOf(botId), name:file.title, data:bytes()}
+        const scope = {sessionId, name:file.title, data:bytes()}
         const image = file.mime.startsWith('image/')
         const result = image ? await uploads.uploadImageStream({...scope, mediaType:file.mime}) : await uploads.uploadStream(scope)
         // Prompt images may be normalized by DSH. A shared work's download
@@ -79,8 +86,11 @@ export function apply(ctx, config = {}) {
       }
       if (stored.length) options.onStaged?.(stored)
       bridge.requireModel(botId)
-      return runTurn(rt, ctx, botId, text, requestId, undefined, parts, { onProgress: options.onProgress, onPhase: options.onPhase })
-    })
+      return runTurn(rt, ctx, botId, text, requestId, undefined, parts, {
+        sessionId, onProgress: options.onProgress, onPhase: options.onPhase, signal: options.signal,
+        managedGroup: options.managedGroup,
+      })
+    }, botId)
     const readNativeAttachment = async file => {
       const store = attachmentStore()
       if (!store) throw new Error('Native attachment service unavailable')
@@ -95,20 +105,9 @@ export function apply(ctx, config = {}) {
       if (bytes !== file.bytes) throw new Error('Native attachment size mismatch')
       return Buffer.concat(chunks)
     }
-    const privateText = async prompt => {
-      await bridge.setup()
-      const response = await fetch(bridge.baseURL + '/chat/completions', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bridge.state.token },
-        body: JSON.stringify({ model: 'openteamily-model', messages: [{ role: 'user', content: prompt }], stream: false }),
-        signal: AbortSignal.timeout(170000), redirect: 'error',
-      })
-      if (!response.ok) throw new Error('Text-only model inference failed')
-      const data = await response.json(), text = data.choices?.[0]?.message?.content
-      if (typeof text !== 'string' || !text.trim()) throw new Error('Text-only model returned no text')
-      return text.slice(0, 20000)
-    }
-    const textOnly = prompt => bridge.exclusive(() => privateText(prompt))
-    attachRuntime({ rt, ctx, chatTurn, mainBot, nativeTurn, readNativeAttachment, textOnly, backgroundTextOnly: privateText, exclusive: bridge.exclusive, legacySession: bridge.legacySession })
+    const privateText = (prompt, options) => textOnlyCompletion(bridge, prompt, options)
+    attachRuntime({ rt, ctx, chatTurn, mainBot, prepareMappedChat, nativeTurn, readNativeAttachment,
+      textOnly: privateText, backgroundTextOnly: privateText, exclusive: bridge.exclusive, legacySession: bridge.legacySession })
   } else attachRuntime({ rt, ctx })
   return attached
 }

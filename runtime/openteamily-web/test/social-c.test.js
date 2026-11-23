@@ -7,11 +7,13 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createSettingsFeature } from '../features/settings/settings.js'
 import { createBotSocial, setSharedBotSocial, seg } from '../lib/c/bot-social.js'
 import social from '../features/social/index.js'
 import teams from '../features/teams/index.js'
 import members from '../features/members/index.js'
 import invites from '../features/invites/index.js'
+import studio from '../features/studio/index.js'
 
 const TOKEN = 'ot-fake-connector-token-for-tests'
 const SERVER = 'https://social.example.test'
@@ -114,6 +116,44 @@ test('the automation snapshot reads the personal list for the authenticated gate
   assert.equal(fallback.status, 200)
   assert.equal(fallback.body.items[0].id, workspace)
   assert.equal(fallback.body.automations, undefined)
+})
+
+test('the personal agent snapshot serves the latest native look for the bound workspace', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'ot-native-look-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const workspace = 'a'.repeat(32)
+  const agent = 'b'.repeat(32)
+  const saved = {color: '葡萄紫', expression: '好奇', headwear: '贝雷帽', glasses: '圆框眼镜', hand: '魔法棒'}
+  const settings = createSettingsFeature({dir}).endpoints
+  const lookReads = []
+  const endpoint = teams({call: async (name, payload) => {
+    if (name === 'agents/personal-binding') return {workspace_id: workspace, agent_id: agent}
+    assert.equal(name, 'settings/look')
+    lookReads.push(payload)
+    return settings.look()
+  }}).endpoints.v1
+  const request = {headers: new Headers({'x-ot-owner-username': 'account-test'})}
+  const get = (suffix = '') => endpoint({method: 'GET',
+    path: '/v1/workspaces?scope=personal&include=personal-agent' + suffix}, {request})
+
+  const before = await get()
+  assert.equal(before.status, 200)
+  assert.equal(before.body.items[0].id, workspace)
+  assert.equal(before.body.viewer_username, 'account-test')
+  assert.equal(before.body.personal_agent_id, agent)
+  assert.equal(before.body.personal_look, null)
+
+  await settings.onboardingLook({look: saved})
+  const updated = await get('&workspace=' + workspace)
+  assert.equal(updated.body.personal_agent_id, agent)
+  assert.deepEqual(updated.body.personal_look, saved)
+  for (const suffix of ['&workspace=' + 'c'.repeat(32), '&workspace=' + workspace + '&workspace=' + workspace,
+    '&include=personal-agent']) {
+    const scoped = await get(suffix)
+    assert.equal(scoped.body.personal_agent_id, undefined)
+    assert.equal(scoped.body.personal_look, undefined)
+  }
+  assert.deepEqual(lookReads, [{}, {}])
 })
 
 test('the Chat snapshot reads only the local owner’s workspace and directory', async t => {
@@ -220,10 +260,14 @@ test('the same-site Bot Social sends authenticated requests over its private soc
   const bs = createBotSocial({
     server: SERVER, credentialsPath: creds(), fetch: f.fetch, localSocket: socket, localServer: SERVER,
   })
-  assert.deepEqual(await bs.post('/v1/ot/teams', { name: 'Studio' }), { ok: true })
+  assert.deepEqual(await bs.post('/v1/ot/teams', { name: '团队文档' }), { ok: true })
   assert.deepEqual([requests[0].method, requests[0].path, requests[0].headers.host, requests[0].headers.authorization],
     ['POST', '/v1/ot/teams', new URL(SERVER).host, `Bearer ${TOKEN}`])
-  assert.deepEqual(JSON.parse(requests[0].body), { name: 'Studio' })
+  assert.deepEqual(JSON.parse(requests[0].body), { name: '团队文档' })
+  const documentPath = '/v1/ot/teams/' + 'a'.repeat(32) + '/studio/documents/' + 'b'.repeat(32)
+  assert.deepEqual(await bs.request('DELETE', documentPath, { revision: 2 }), { ok: true })
+  assert.deepEqual([requests[1].method, requests[1].path], ['DELETE', documentPath])
+  assert.deepEqual(JSON.parse(requests[1].body), { revision: 2 })
   await assert.rejects(bs.get('/v1/ot/redirect'), { code: 'social/unreachable' })
   assert.equal(f.calls.length, 0)
 
@@ -233,7 +277,7 @@ test('the same-site Bot Social sends authenticated requests over its private soc
   })
   assert.deepEqual(await other.get('/v1/ot/teams'), { ok: true })
   assert.equal(f.calls[0].url, remote + '/v1/ot/teams')
-  assert.equal(requests.length, 2)
+  assert.equal(requests.length, 3)
   const unavailable = createBotSocial({
     server: SERVER, credentialsPath: creds(), fetch: f.fetch, localSocket: join(dir, 'missing.sock'), localServer: SERVER,
   })
@@ -373,6 +417,9 @@ test('the native inbox requests recent scoped notices and constructs safe meetin
   setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:creds(),fetch:f.fetch}))
   t.after(() => setSharedBotSocial(undefined))
   const endpoint = social({async call(name) {
+    if (name === 'automations/notifications' || name === 'settings/notificationPrefs') {
+      throw Object.assign(new Error('Unknown OpenTeamily endpoint'), {code:'openteamily/not-found'})
+    }
     assert.equal(name,'agents/personal-binding')
     return {workspace_id:personal}
   }}).endpoints.v1
@@ -424,4 +471,38 @@ test('Space work notices map account messages to the recipient workspace and sco
   assert.equal((await endpoint({method:'GET',path:base+'?kind=work&kind=work'})).status,400)
   assert.equal((await endpoint({method:'POST',path:base+'/read',body:{all:true,kind:'unknown'}})).status,400)
   assert.equal(f.calls.length,2)
+})
+
+test('Studio live requests forward only the authenticated watch and presence contracts', async () => {
+  const wid = 'a'.repeat(32), id = 'b'.repeat(32)
+  const path = '/v1/workspaces/' + wid + '/studio/documents/' + id + '/live'
+  const upstream = SERVER + '/v1/ot/teams/' + wid + '/studio/documents/' + id + '/live'
+  const editors = [{name: 'Member', editing: true}]
+  const stub = fakeFetch((url, {method}) => method === 'GET'
+    ? {unchanged:true, revision:2, editors} : {ok:true})
+  setSharedBotSocial(createBotSocial({server:SERVER, credentialsPath:creds(), fetch:stub.fetch}))
+  const {v1} = studio({}).endpoints
+  const update = {session_id:'studio-fixture-session', active:true, editing:true}
+  assert.deepEqual(await v1({method:'GET',path:path+'?revision=2'}),
+    {status:200,body:{unchanged:true,revision:2,editors}})
+  assert.deepEqual(await v1({method:'POST',path,body:update}), {status:200,body:{ok:true}})
+  assert.deepEqual(stub.calls, [
+    {url:upstream+'?revision=2', method:'GET', auth:'Bearer '+TOKEN, body:undefined},
+    {url:upstream, method:'POST', auth:'Bearer '+TOKEN, body:update},
+  ])
+  for (const query of ['', '?revision=2&revision=3', '?revision=9999999999999999']) {
+    assert.equal((await v1({method:'GET',path:path+query})).status,400)
+  }
+  for (const body of [undefined, {...update, body:'local draft'}, {...update, active:false}]) {
+    assert.equal((await v1({method:'POST',path,body})).status,400)
+  }
+  const signed = new AbortController()
+  signed.abort()
+  let sawAbort
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:creds(),fetch:async (url, {signal})=>{
+    sawAbort = url === upstream+'?revision=2' && signal.aborted
+    signal.throwIfAborted()
+  }}))
+  assert.equal((await v1({method:'GET',path:path+'?revision=2'},{request:{signal:signed.signal}})).status,503)
+  assert.equal(sawAbort,true)
 })

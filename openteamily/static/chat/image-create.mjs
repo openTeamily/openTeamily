@@ -14,12 +14,31 @@ export function mountImageCreator(document,{request,context,key,attach,onOpen,no
   const preview = element('preview');
   const attachButton = element('attach');
   const settings = element('settings');
+  const attempts = new Map();
   let session;
   let timer;
   let previewUrl;
 
   const current = draft => dialog.open && session === draft && context()?.scope === draft.scope;
   const send = (method,path,body,headers) => request(method,path,body,headers).catch(() => ({status:0,body:{}}));
+
+  function setForm(draft,busy) {
+    submit.disabled = busy || !draft.configured;
+    form.elements.prompt.disabled = form.elements.shape.disabled = busy;
+  }
+
+  function showSubmitError(draft,response) {
+    if (response.body.error?.code === 'image_unconfigured') {
+      draft.configured = false;
+      settings.hidden = false;
+    }
+    setForm(draft,false);
+    status.textContent = response.body.error?.message || '暂未确认提交，请重试。';
+  }
+
+  function clearAttempt(draft,attempt) {
+    if (attempts.get(draft.scope) === attempt) attempts.delete(draft.scope);
+  }
 
   function clearPreview() {
     if (previewUrl) view.URL.revokeObjectURL(previewUrl);
@@ -44,7 +63,7 @@ export function mountImageCreator(document,{request,context,key,attach,onOpen,no
       result.hidden = false;
       attachButton.disabled = false;
     } catch {
-      if (current(draft)) {
+      if (current(draft) && draft.job?.artifact_id === artifact) {
         status.textContent = '图片已保存，暂时无法读取预览。';
         result.hidden = false;
       }
@@ -55,8 +74,7 @@ export function mountImageCreator(document,{request,context,key,attach,onOpen,no
     clearTimeout(timer);
     draft.job = job;
     const working = activeJob(job);
-    submit.disabled = !draft.configured || working;
-    form.elements.prompt.disabled = form.elements.shape.disabled = working;
+    setForm(draft,working);
     settings.hidden = draft.configured && job?.state !== 'failed';
     if (!job) {
       status.textContent = draft.configured ? '' : '请先配置支持文生图的模型。';
@@ -93,28 +111,40 @@ export function mountImageCreator(document,{request,context,key,attach,onOpen,no
     const where = context();
     if (!where || dialog.open) return;
     const draft = session = {...where,path:`/v1/workspaces/${where.workspace}/images`};
+    const attempt = attempts.get(draft.scope);
     onOpen();
     clearPreview();
-    submit.disabled = true;
+    setForm(draft,true);
     settings.hidden = true;
-    form.elements.prompt.value = text;
-    form.elements.shape.value = 'square';
-    form.elements.prompt.disabled = form.elements.shape.disabled = false;
+    form.elements.prompt.value = attempt?.values.prompt ?? text;
+    form.elements.shape.value = attempt?.values.shape ?? 'square';
     attachButton.textContent = draft.attachLabel;
-    status.textContent = '正在读取图片任务…';
+    status.textContent = attempt?.pending ? '正在提交…' : '正在读取图片任务…';
     dialog.showModal();
-    const response = await send('GET',draft.path);
+    if (attempt?.pending) {
+      const response = await attempt.pending;
+      if (!current(draft)) return;
+      if (response.status === 202 && response.body.job) {
+        draft.configured = true;
+        render(draft,response.body.job);
+        return;
+      }
+    }
+    const response = await send('GET',draft.path,undefined,attempt && {'Idempotency-Key':attempt.key});
     if (!current(draft)) return;
     if (response.status !== 200) {
       status.textContent = response.body.error?.message || '无法读取图片任务，请重新打开。';
       return;
     }
     draft.configured = response.body.configured === true;
-    if (activeJob(response.body.job) || !form.elements.prompt.value) {
-      form.elements.prompt.value = response.body.job?.prompt || '';
-      form.elements.shape.value = response.body.job?.shape || 'square';
+    const job = response.body.job;
+    if (job && attempt) clearAttempt(draft,attempt);
+    if (activeJob(job) || !form.elements.prompt.value) {
+      form.elements.prompt.value = job?.prompt || '';
+      form.elements.shape.value = job?.shape || 'square';
     }
-    render(draft,response.body.job);
+    render(draft,job);
+    if (!job && attempt?.failure) showSubmitError(draft,attempt.failure);
   }
 
   form.addEventListener('submit',async event => {
@@ -123,24 +153,23 @@ export function mountImageCreator(document,{request,context,key,attach,onOpen,no
     if (!draft || !current(draft) || submit.disabled) return;
     const values = {prompt:form.elements.prompt.value.trim(),shape:form.elements.shape.value};
     if (!values.prompt) return;
-    const fingerprint = JSON.stringify(values);
-    if (draft.attempt?.fingerprint !== fingerprint) draft.attempt = {fingerprint,key:key()};
-    submit.disabled = true;
-    form.elements.prompt.disabled = form.elements.shape.disabled = true;
+    const prior = attempts.get(draft.scope);
+    const attempt = prior?.values.prompt === values.prompt && prior.values.shape === values.shape
+      ? prior : {values,key:key()};
+    attempts.set(draft.scope,attempt);
+    setForm(draft,true);
     status.textContent = '正在提交…';
     clearPreview();
     draft.job = draft.blob = null;
-    const response = await send('POST',draft.path,values,{'Idempotency-Key':draft.attempt.key});
+    attempt.pending = send('POST',draft.path,values,{'Idempotency-Key':attempt.key});
+    const response = await attempt.pending;
+    delete attempt.pending;
+    const accepted = response.status === 202 && response.body.job;
+    if (accepted) clearAttempt(draft,attempt);
+    else attempt.failure = response;
     if (!current(draft)) return;
-    if (response.status !== 202 || !response.body.job) {
-      status.textContent = response.body.error?.message || '暂未确认提交，请重试。';
-      submit.disabled = false;
-      form.elements.prompt.disabled = form.elements.shape.disabled = false;
-      if (response.body.error?.code === 'image_unconfigured') settings.hidden = false;
-      return;
-    }
-    draft.attempt = null;
-    render(draft,response.body.job);
+    if (accepted) render(draft,response.body.job);
+    else showSubmitError(draft,response);
   });
 
   attachButton.addEventListener('click',() => {

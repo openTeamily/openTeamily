@@ -39,13 +39,13 @@ test('features register namespaced endpoints; a broken feature is skipped, other
   assert.equal(value.dir, join(data, 'openteamily', 'features', 'alpha'))
 })
 
-test('localized Chat HTML is ready while another native feature is still initializing', async () => {
+test('native documents include saved appearance without waiting for another feature to initialize', async () => {
   const coordination = mkdtempSync(join(tmpdir(), 'ot-startup-'))
   const gate = join(coordination, 'gate.mjs')
   writeFileSync(gate, 'export const block = Promise.withResolvers(); export const entered = Promise.withResolvers()')
   const latch = await import(pathToFileURL(gate).href)
   const dir = featuresDir({
-    settings: "export default () => ({ endpoints: { get: async () => ({settings: {values: {language: 'en'}}}) } })",
+    settings: "export default () => ({ endpoints: { get: async () => ({settings: {values: {language: 'en',appearance:'dark'}}}) } })",
     deferred: "export default async () => { const g = await import(" + JSON.stringify(pathToFileURL(gate).href) + "); g.entered.resolve(); await g.block.promise; return {endpoints:{}} }",
   })
   const routes = new Map()
@@ -63,7 +63,10 @@ test('localized Chat HTML is ready while another native feature is still initial
     ])
     assert.equal(response.status, 200)
     assert.equal(response.headers.get('content-language'), 'en')
-    assert.match(await response.text(), /<html lang="en">/)
+    assert.match(await response.text(), /<html data-shell-appearance="dark" data-theme-resolved="dark" data-shell-language="en" lang="en">/)
+    const memory = await routes.get(PAGE_PATH).fetch(new Request('http://host' + PAGE_PATH + '?path=%2Fmemory'))
+    assert.equal(memory.headers.get('cache-control'), 'no-store')
+    assert.match(await memory.text(), /<html data-shell-appearance="dark" data-theme-resolved="dark" data-shell-language="en"/)
   } finally {
     latch.block.resolve()
     assert.deepEqual((await features).loaded, ['settings','deferred'])

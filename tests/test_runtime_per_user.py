@@ -5,7 +5,9 @@ import tempfile
 import unittest
 
 from openteamily.app import App, Config
-from openteamily.lifecycle import Lifecycle, RuntimePolicy
+from openteamily.dsbot_gateway import ensure_schema, record_upstream
+from openteamily.lifecycle import Lifecycle, ManagerAuth, ManagerIdentity, RuntimePolicy
+from openteamily.runtime_autoprovision import AutoProvisionPolicy
 from openteamily.security import digest, opaque
 from openteamily.store import Store
 from tests.test_management import Client, ORIGIN
@@ -61,3 +63,70 @@ class RuntimePerUserTests(unittest.TestCase):
                 rows = alice.call('GET', f'/v1/workspaces/{wid}/instances')
                 self.assertEqual(rows['status'], 200)
                 self.assertEqual([row['id'] for row in rows['body']['items']], [iid])
+
+    def test_resume_is_explicit_idempotent_and_only_targets_the_callers_stopped_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / 'state')
+            policy = RuntimePolicy(backend_mode='compose', image_ref='example/runtime@sha256:' + 'a' * 64)
+            runtime = Lifecycle(store, policy)
+            manager = ManagerIdentity('owner-manager', digest(opaque()), frozenset(), 'compose', True)
+            app = App(store, Config(ORIGIN), lifecycle=runtime, manager_auth=ManagerAuth([manager]),
+                      auto_provision=AutoProvisionPolicy(True, manager.id, 5))
+            alice, bob = Client(app), Client(app, peer='127.0.0.2')
+            own_ids = []
+            with store.transaction() as db:
+                ensure_schema(db)
+                for client, name, owner in [(alice, 'alice', 'a' * 32), (bob, 'bob', 'b' * 32)]:
+                    db.execute('INSERT INTO users VALUES (?,?,?,?)', (owner, name, 'unused', 1))
+                    token, csrf = opaque(), opaque()
+                    db.execute('INSERT INTO sessions VALUES (?,?,?,?,?)',
+                               (digest(token), digest(csrf), owner, 2100000000, 1))
+                    client.cookies.update(zip(app.config.cookie_names, (token, csrf)))
+                    binding = app.queue_new_account_runtime(db, owner, name, 1)
+                    iid = db.execute('SELECT instance_id FROM runtime_auto_provisions WHERE user_id=?',
+                                     (owner,)).fetchone()[0]
+                    own_ids.append((owner, iid, binding['workspace_id']))
+
+            def observe(owner, iid, state):
+                claim = runtime.claim(manager, iid)
+                job = claim['job']
+                runtime.observe(manager, iid, job['id'], job['revision'], claim['lease'], state,
+                                process_ref=owner if state == 'running' else None)
+
+            for owner, iid, _ in own_ids:
+                observe(owner, iid, 'running')
+                runtime.stop(owner, iid)
+                observe(owner, iid, 'stopped')
+
+            start, status = '/v1/auth/runtime-start', '/v1/auth/runtime-readiness'
+            self.assertEqual(Client(app).call('POST', start, {})['status'], 401)
+            self.assertEqual(alice.call('POST', start, {}, csrf=False)['status'], 403)
+            self.assertEqual(alice.call('POST', start, {'instance_id': own_ids[1][1]})['status'], 400)
+            self.assertEqual(alice.call('GET', status)['body']['state'], 'stopped')
+            self.assertEqual(bob.call('GET', status)['body']['state'], 'stopped')
+            self.assertNotIn('personal_chat', alice.call('GET', status)['body'])
+            with store.connect() as db:
+                for client, (owner, _iid, workspace) in zip((alice, bob), own_ids):
+                    agent = db.execute('SELECT agent_id FROM personal_agents WHERE user_id=?', (owner,)).fetchone()[0]
+                    self.assertEqual(client.call('GET', status + '?include=personal-chat')['body'], {
+                        'state': 'stopped', 'user_id': owner,
+                        'personal_chat': {'workspace_id': workspace, 'agent_id': agent},
+                    })
+            self.assertEqual(Client(app).call('GET', status + '?include=personal-chat')['status'], 401)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                responses = list(pool.map(lambda _: alice.call('POST', start, {}), range(2)))
+            self.assertEqual(sorted(response['status'] for response in responses), [200, 202])
+            self.assertTrue(all(response['body'] == {'state': 'starting'} for response in responses))
+            self.assertEqual(bob.call('GET', status)['body']['state'], 'stopped')
+
+            owner, iid, wid = own_ids[0]
+            observe(owner, iid, 'running')
+            with store.transaction() as db:
+                record_upstream(db, iid, '172.30.0.11:8080', 'dsh-auth-test=' + 'S' * 24, 1800000000)
+                self.assertEqual(db.execute('SELECT COUNT(*) FROM instances WHERE owner_id=?', (owner,)).fetchone()[0], 1)
+                self.assertEqual(db.execute('SELECT COUNT(*) FROM runtime_jobs WHERE instance_id=?', (iid,)).fetchone()[0], 3)
+                db.execute('UPDATE instances SET blocked=1 WHERE id=?', (own_ids[1][1],))
+            self.assertEqual(alice.call('GET', status)['body']['state'], 'ready')
+            self.assertEqual(alice.call('GET', f'/v1/workspaces/{wid}/instances')['body']['items'][0]['id'], iid)
+            self.assertEqual(bob.call('GET', status)['body']['state'], 'unavailable')
+            self.assertEqual(bob.call('POST', start, {})['status'], 409)

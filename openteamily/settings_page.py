@@ -51,6 +51,7 @@ class SettingsPage:
         '/settings/app.css': ('settings', 'app.css', 'text/css; charset=utf-8'),
         '/automations': ('automations', 'index.html', 'text/html; charset=utf-8'),
         '/automations/app.mjs': ('automations', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/automations/studio-share.mjs': ('automations', 'studio-share.mjs', 'text/javascript; charset=utf-8'),
         '/automations/app.css': ('automations', 'app.css', 'text/css; charset=utf-8'),
         '/team': ('team', 'index.html', 'text/html; charset=utf-8'),
         '/new/team': ('team', 'index.html', 'text/html; charset=utf-8'),
@@ -61,10 +62,20 @@ class SettingsPage:
         '/contacts/app.css': ('contacts', 'app.css', 'text/css; charset=utf-8'),
         '/members': ('members', 'index.html', 'text/html; charset=utf-8'),
         '/members/app.mjs': ('members', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/members/group-invite.mjs': ('members', 'group-invite.mjs', 'text/javascript; charset=utf-8'),
         '/members/app.css': ('members', 'app.css', 'text/css; charset=utf-8'),
         '/artifacts': ('artifacts', 'index.html', 'text/html; charset=utf-8'),
         '/artifacts/app.mjs': ('artifacts', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/entry.mjs': ('artifacts', 'entry.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/notifications.mjs': ('artifacts', 'notifications.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/shared-studio.mjs': ('artifacts', 'shared-studio.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/studio-copy.mjs': ('artifacts', 'studio-copy.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/studio-personal-copy.mjs': ('artifacts', 'studio-personal-copy.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/shared-work-copy.mjs': ('artifacts', 'shared-work-copy.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/version-preview.mjs': ('artifacts', 'version-preview.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/studio-discussion.mjs': ('artifacts', 'studio-discussion.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/studio-history.mjs': ('artifacts', 'studio-history.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/studio-merge.mjs': ('artifacts', 'studio-merge.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/app.css': ('artifacts', 'app.css', 'text/css; charset=utf-8'),
         '/space': ('artifacts', 'index.html', 'text/html; charset=utf-8'),
         '/agents': ('agents', 'index.html', 'text/html; charset=utf-8'),
@@ -72,6 +83,7 @@ class SettingsPage:
         '/agents/app.css': ('agents', 'app.css', 'text/css; charset=utf-8'),
         '/memory': ('memory', 'index.html', 'text/html; charset=utf-8'),
         '/memory/candidates.mjs': ('memory', 'candidates.mjs', 'text/javascript; charset=utf-8'),
+        '/memory/action-review.mjs': ('memory', 'action-review.mjs', 'text/javascript; charset=utf-8'),
         '/memory/app.mjs': ('memory', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/memory/rich.mjs': ('memory', 'rich.mjs', 'text/javascript; charset=utf-8'),
         '/memory/app.css': ('memory', 'app.css', 'text/css; charset=utf-8'),
@@ -80,15 +92,20 @@ class SettingsPage:
         '/shell/system-locale.mjs': ('shell', 'system-locale.mjs', 'text/javascript; charset=utf-8'),
         '/shell/system-locale-catalog.mjs': ('shell', 'system-locale-catalog.mjs', 'text/javascript; charset=utf-8'),
         '/shell/system-locale-chat.mjs': ('shell', 'system-locale-chat.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/markdown.mjs': ('shell', 'markdown.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/markdown-table.mjs': ('shell', 'markdown-table.mjs', 'text/javascript; charset=utf-8'),
         '/shell/rich-editor.mjs': ('shell', 'rich-editor.mjs', 'text/javascript; charset=utf-8'),
         '/shell/model3d-preview.mjs': ('shell', 'model3d-preview.mjs', 'text/javascript; charset=utf-8'),
         '/shell/model3d-viewer.mjs': ('shell', 'model3d-viewer.mjs', 'text/javascript; charset=utf-8'),
         '/shell/model3d-engine-0.187.0.mjs': ('shell', 'model3d-engine-0.187.0.mjs', 'text/javascript; charset=utf-8'),
         '/shell/thumb.mjs': ('shell', 'thumb.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/studio-link.mjs': ('shell', 'studio-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/chat-utils.mjs': ('shell', 'chat-utils.mjs', 'text/javascript; charset=utf-8'),
         '/shell/agent-categories.mjs': ('shell', 'agent-categories.mjs', 'text/javascript; charset=utf-8'),
         '/shell/action-menu.mjs': ('shell', 'action-menu.mjs', 'text/javascript; charset=utf-8'),
         '/shell/meeting-link.mjs': ('shell', 'meeting-link.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/call-audio-handoff.mjs': ('shell', 'call-audio-handoff.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/action-followup-events.mjs': ('shell', 'action-followup-events.mjs', 'text/javascript; charset=utf-8'),
         '/shell/work-notification.mjs': ('shell', 'work-notification.mjs', 'text/javascript; charset=utf-8'),
         '/shell/public-agent-composer.mjs': ('shell', 'public-agent-composer.mjs', 'text/javascript; charset=utf-8'),
         '/shell/public-agent-link.mjs': ('shell', 'public-agent-link.mjs', 'text/javascript; charset=utf-8'),
@@ -96,10 +113,13 @@ class SettingsPage:
         '/shell/public-work-link.mjs': ('shell', 'public-work-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/discover-link.mjs': ('shell', 'discover-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/team-invite-link.mjs': ('shell', 'team-invite-link.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/group-invite-link.mjs': ('shell', 'group-invite-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/dsbot-api.mjs': ('shell', 'dsbot-api.mjs', 'text/javascript; charset=utf-8'),
         '/chat': ('chat', 'index.html', 'text/html; charset=utf-8'),
+        '/chat/prompt-templates.mjs': ('chat', 'prompt-templates.mjs', 'text/javascript; charset=utf-8'),
         '/chat/utilities.mjs': ('chat', 'utilities.mjs', 'text/javascript; charset=utf-8'),
         '/chat/group-management.mjs': ('chat', 'group-management.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/group-invite-link.mjs': ('chat', 'group-invite-link.mjs', 'text/javascript; charset=utf-8'),
         '/chat/stickers.mjs': ('chat', 'stickers.mjs', 'text/javascript; charset=utf-8'),
         '/chat/activity.mjs': ('chat', 'activity.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.mjs': ('chat', 'app.mjs', 'text/javascript; charset=utf-8'),
@@ -112,11 +132,13 @@ class SettingsPage:
         '/chat/app.css': ('chat', 'app.css', 'text/css; charset=utf-8'),
         '/discover': ('discover', 'index.html', 'text/html; charset=utf-8'),
         '/discover/app.mjs': ('discover', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/discover/document-reader.mjs': ('discover', 'document-reader.mjs', 'text/javascript; charset=utf-8'),
         '/discover/comments.mjs': ('discover', 'comments.mjs', 'text/javascript; charset=utf-8'),
         '/discover/app.css': ('discover', 'app.css', 'text/css; charset=utf-8'),
         '/meetings': ('meetings', 'index.html', 'text/html; charset=utf-8'),
         '/meetings/app.mjs': ('meetings', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/meetings/audio.mjs': ('meetings', 'audio.mjs', 'text/javascript; charset=utf-8'),
+        '/meetings/discussion.mjs': ('meetings', 'discussion.mjs', 'text/javascript; charset=utf-8'),
         '/meetings/app.css': ('meetings', 'app.css', 'text/css; charset=utf-8'),
         '/profile': ('profile', 'index.html', 'text/html; charset=utf-8'),
         '/profile/edit': ('profile', 'index.html', 'text/html; charset=utf-8'),
@@ -135,6 +157,9 @@ class SettingsPage:
         '/about/app.css': ('about', 'app.css', 'text/css; charset=utf-8'),
         '/look/app.mjs': ('look', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/look/app.css': ('look', 'app.css', 'text/css; charset=utf-8'),
+        '/look/assistant-portraits.webp': ('look', 'assistant-portraits.webp', 'image/webp'),
+        '/look/assistant-notebook.webp': ('look', 'assistant-notebook.webp', 'image/webp'),
+        '/look/assistant-accessories.webp': ('look', 'assistant-accessories.webp', 'image/webp'),
         '/skills': ('skills', 'index.html', 'text/html; charset=utf-8'),
         '/skills/imports.mjs': ('skills', 'imports.mjs', 'text/javascript; charset=utf-8'),
         '/skills/execution.mjs': ('skills', 'execution.mjs', 'text/javascript; charset=utf-8'),
@@ -148,6 +173,7 @@ class SettingsPage:
         '/home': ('home', 'index.html', 'text/html; charset=utf-8'),
         '/home/app.mjs': ('home', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/home/app.css': ('home', 'app.css', 'text/css; charset=utf-8'),
+        '/home/auth.css': ('home', 'auth.css', 'text/css; charset=utf-8'),
     }
     PREFIXES = ('/register', '/settings', '/automations', '/team', '/new', '/contacts', '/members', '/artifacts', '/space', '/agents', '/memory', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/meetings', '/download', '/guide', '/about', '/skills', '/home', '/help', '/terms', '/privacy', '/docs')
     CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
@@ -205,6 +231,10 @@ class SettingsPage:
             identifier = r'[0-9a-f]{32}'
             if re.fullmatch(rf'workspace={identifier}&artifact={identifier}|artifact={identifier}&workspace={identifier}', query):
                 return True
+            if re.fullmatch(rf'workspace={identifier}&studio={identifier}|studio={identifier}&workspace={identifier}', query):
+                return True
+            if re.fullmatch(rf'workspace={identifier}&studio={identifier}&studio_revision=[1-9][0-9]{{0,15}}', query):
+                return True
             # new=<kind> opens that 新建 editor (chat composer 创建 grid).
             return query in ('view=created', 'view=starred', 'view=memory', 'view=meetings',
                              'new=document', 'new=website', 'new=slides', 'new=dashboard',
@@ -228,7 +258,8 @@ class SettingsPage:
                 if 'section' in filters:
                     return (filters['section'] == 'groups' and filters.keys() <= {'tab', 'section', 'q'}
                             and len(text) <= 60 and not any(ord(ch) < 32 for ch in text))
-                return (filters.keys() <= {'tab', 'category', 'q'}
+                return (filters.keys() <= {'tab', 'category', 'q', 'creator'}
+                        and ('creator' not in filters or re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{1,79}', filters['creator']))
                         and ('category' not in filters or filters['category'] in discover.AGENT_CATEGORY_SLUGS)
                         and len(text) <= 80 and not any(ord(ch) < 32 for ch in text))
             # Feed filters and work detail links use the same management page.
@@ -261,6 +292,8 @@ class SettingsPage:
                     and len(panels) <= 1
                     and (not panels or 'work' in seen))
         if path == '/agents':
+            if query in ('tab=teams', 'tab=teams&new=1'):
+                return True
             slug = query[len('category='):] if query.startswith('category=') else ''
             return slug in discover.AGENT_CATEGORY_SLUGS
         if path == '/memory':

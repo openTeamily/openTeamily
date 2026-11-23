@@ -1,4 +1,6 @@
 import { meetingCodeFromHash, meetingDraftFromCallHref, meetingHref, parseMeetingCode } from '../shell/meeting-link.mjs';
+import { stageCallAudio } from '../shell/call-audio-handoff.mjs';
+import { mountCallRecording } from './call-recording.mjs';
 
 const POLL_MS = 900;
 const typeLabel = kind => kind === 'video' ? '视频通话' : '语音通话';
@@ -36,6 +38,7 @@ export function mountChatCalls(document, {request, context, account = () => null
   const notes = element('chat-meeting-notes');
   const notesHint = element('chat-meeting-notes-hint');
   const notesCopy = element('chat-meeting-notes-copy');
+  const notesWithoutAudio = element('chat-meeting-notes-without-audio');
   const view = document.defaultView ?? globalThis;
   const setTimer = view.setTimeout?.bind(view) ?? globalThis.setTimeout;
   const clearTimer = view.clearTimeout?.bind(view) ?? globalThis.clearTimeout;
@@ -49,6 +52,8 @@ export function mountChatCalls(document, {request, context, account = () => null
   let watching = true;
   let handoffSequence = 0;
   let handoffScope = null;
+  let handoffAudio = null;
+  let handoffWriting = false;
   let viewer = account();
 
   const currentKey = value => value ? value.wid + '/' + value.cid : '';
@@ -56,25 +61,34 @@ export function mountChatCalls(document, {request, context, account = () => null
     `/v1/workspaces/${scope.wid}/social/conversations/${scope.cid}/call${action && '/' + action}`;
   const payload = own => ({call_id: own.call.id, peer_id: own.id});
   const note = text => { status.textContent = text; };
+  const recording = mountCallRecording(document, {view, send:(own, action, id) => request('POST',
+    path(own.scope, 'recording'), {...payload(own), action, ...(id ? {recording_id:id} : {})}, undefined, AbortSignal.timeout(5000))});
 
   function clearHandoff() {
     handoffSequence += 1;
     handoffScope = null;
+    handoffAudio = null;
+    handoffWriting = false;
     notes.hidden = true;
     notesCopy.hidden = true;
     notes.removeAttribute('href');
+    notes.removeAttribute('aria-disabled');
+    notesWithoutAudio.hidden = true;
     notesHint.hidden = true;
   }
 
-  function showHandoff(own, ended) {
+  function showHandoff(own, ended, audio) {
     if (!dialog.open || active || own.viewer !== account()) return;
     const href = meetingDraftFromCallHref(own.call.id, own.scope.wid);
     if (!href) return;
     handoffScope = own.scope;
+    handoffAudio = audio ? {owner:own.viewer, workspace:own.scope.wid || '', call:own.call.id, blob:audio} : null;
     notes.href = href;
     notes.hidden = false;
     notesCopy.hidden = false;
-    notesHint.textContent = ended ? '打开会议页，补充正文后可生成纪要。' : '会议结束后，可打开会议页整理纪要。';
+    notesHint.textContent = handoffAudio ? (ended ? '本机录音可带入会议页。你可先试听，再决定是否转写。'
+      : '本机录音已保留。现在打开纪要，通话结束后刷新即可带入录音。')
+      : ended ? '打开会议页，补充正文后可生成纪要。' : '会议结束后，可打开会议页整理纪要。';
     notesHint.hidden = false;
   }
 
@@ -109,6 +123,7 @@ export function mountChatCalls(document, {request, context, account = () => null
 
   function stopLocal(own) {
     if (!own) return;
+    const audio = recording.release(own);
     clearTimer(own.timer);
     for (const peer of own.peers.values()) peer.connection.close();
     own.peers.clear();
@@ -127,6 +142,7 @@ export function mountChatCalls(document, {request, context, account = () => null
     end.hidden = true;
     hangup.hidden = true;
     renderLauncher();
+    return audio;
   }
 
   async function leave({dismiss = true, offerNotes = false} = {}) {
@@ -139,15 +155,15 @@ export function mountChatCalls(document, {request, context, account = () => null
       prejoin = null;
       if (dialog.open) dialog.close();
     }
-    stopLocal(own);
+    const audio = stopLocal(own);
     if (own) {
       if (keepOpen) {
         note(own.scope.meeting ? '你已离开会议。' : '你已离开通话。');
-        showHandoff(own, false);
+        showHandoff(own, false, audio);
         close.focus();
       }
       const result = await request('POST', path(own.scope, 'leave'), payload(own)).catch(() => null);
-      if (keepOpen && sequence === handoffSequence && result?.body?.handoff?.id === own.call.id) showHandoff(own, true);
+      if (keepOpen && sequence === handoffSequence && result?.body?.handoff?.id === own.call.id) showHandoff(own, true, audio);
       if (currentKey(own.scope) === currentKey(current)) void refresh();
     }
   }
@@ -162,6 +178,8 @@ export function mountChatCalls(document, {request, context, account = () => null
     }
     if (!accountChanged && currentKey(current) === currentKey(next)) return;
     readSequence++;
+    if (active?.scope.meeting) recording.abandon(active);
+    if (handoffScope?.meeting) clearHandoff();
     if ((dialog.open || active) && !prejoin?.scope.meeting && !active?.scope.meeting && !handoffScope?.meeting) void leave();
     current = next;
     available = null;
@@ -315,7 +333,10 @@ export function mountChatCalls(document, {request, context, account = () => null
       peer.playbackBlocked = false;
       syncPlayback(own);
     });
-    connection.onconnectionstatechange = () => peerStatus(own);
+    connection.onconnectionstatechange = () => {
+      if (['failed', 'disconnected'].includes(connection.connectionState)) recording.interrupt(own);
+      peerStatus(own);
+    };
     connection.ontrack = event => {
       if (active !== own) return;
       const track = event.track;
@@ -385,21 +406,24 @@ export function mountChatCalls(document, {request, context, account = () => null
   }
 
   async function poll(own) {
+    const recordingFence = recording.fence(own);
     try {
-      const result = await request('POST', path(own.scope, 'poll'), {...payload(own), after: own.cursor});
+      const result = await request('POST', path(own.scope, 'poll'), {...payload(own), after: own.cursor},
+        undefined, AbortSignal.timeout(6000));
       if (active !== own) return;
       if ([401, 403, 404].includes(result.status) || (result.status === 200 && result.body?.ended === true)) {
-        stopLocal(own);
+        const audio = stopLocal(own);
         available = null;
         renderLauncher();
         note(own.scope.meeting ? '会议已结束。' : '通话已结束。');
         const code = result.body?.error?.code;
-        if (result.body?.handoff?.id === own.call.id || code === 'call_ended' || code === 'meeting_ended') showHandoff(own, true);
+        if (result.body?.handoff?.id === own.call.id || code === 'call_ended' || code === 'meeting_ended') showHandoff(own, true, audio);
         return;
       }
       if (result.status !== 200) throw new Error('Call poll failed');
       own.failures = 0;
       syncPeers(own, result.body.call);
+      recording.sync(own, result.body.call, recordingFence);
       for (const signal of result.body.signals) {
         if (active !== own) return;
         try { await receive(own, signal); }
@@ -408,6 +432,7 @@ export function mountChatCalls(document, {request, context, account = () => null
       }
     } catch {
       if (active !== own) return;
+      recording.interrupt(own);
       note('连接中断，正在重连…');
       if (++own.failures >= 4) {
         void leave({dismiss: false});
@@ -506,6 +531,7 @@ export function mountChatCalls(document, {request, context, account = () => null
       if (meeting?.host) link.value = new URL(meetingHref(meeting.code), view.location.origin).href;
       (meeting?.host ? element('chat-meeting-copy') : mute).focus();
       syncPeers(own, own.call);
+      recording.sync(own, own.call);
       void poll(own);
     } catch (error) {
       if (joining !== ticket) return;
@@ -603,10 +629,43 @@ export function mountChatCalls(document, {request, context, account = () => null
     const sequence = handoffSequence;
     try {
       await view.navigator.clipboard.writeText(new URL(notes.href, view.location.origin).href);
-      if (sequence === handoffSequence) notesHint.textContent = '已复制纪要入口。';
+      if (sequence === handoffSequence) notesHint.textContent = handoffAudio ? '已复制纪要入口。录音仍留在此设备。' : '已复制纪要入口。';
     } catch {
       if (sequence === handoffSequence) notesHint.textContent = '可以从链接菜单复制纪要入口。';
     }
+  });
+  notes.addEventListener('click', async event => {
+    if (!handoffAudio || notes.hidden || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    if (handoffWriting) return;
+    const current = handoffAudio;
+    const href = notes.href;
+    const sequence = handoffSequence;
+    const isCurrent = () => sequence === handoffSequence && current.owner === account() && dialog.open;
+    handoffWriting = true;
+    notes.setAttribute('aria-disabled', 'true');
+    notesWithoutAudio.hidden = true;
+    notesHint.textContent = '正在暂存本机录音…';
+    try {
+      if (!await stageCallAudio({...current, isCurrent}, view) || !isCurrent()) return;
+      clearHandoff();
+      view.location.assign(href);
+    } catch {
+      if (!isCurrent()) return;
+      notesHint.textContent = '未能暂存录音。可以重试或仅打开纪要。';
+      notesWithoutAudio.hidden = false;
+    } finally {
+      if (sequence === handoffSequence) {
+        handoffWriting = false;
+        notes.removeAttribute('aria-disabled');
+      }
+    }
+  });
+  notesWithoutAudio.addEventListener('click', () => {
+    const href = notes.href;
+    if (!href || handoffWriting) return;
+    clearHandoff();
+    view.location.assign(href);
   });
   end.addEventListener('click', async () => {
     const own = active;
@@ -621,9 +680,9 @@ export function mountChatCalls(document, {request, context, account = () => null
     if (active !== own) return;
     end.disabled = false;
     if (result?.status === 200 || result?.status === 404) {
-      stopLocal(own);
+      const audio = stopLocal(own);
       note('会议已结束。');
-      if (result.status === 200 || result.body?.error?.code === 'call_ended' || result.body?.handoff?.id === own.call.id) showHandoff(own, true);
+      if (result.status === 200 || result.body?.error?.code === 'call_ended' || result.body?.handoff?.id === own.call.id) showHandoff(own, true, audio);
       close.focus();
     } else shareStatus.textContent = '无法结束会议，请重试。';
   });
@@ -632,6 +691,7 @@ export function mountChatCalls(document, {request, context, account = () => null
     if (!own) return;
     await Promise.all([...own.peers.values()].filter(peer => peer.playbackBlocked).map(peer => playRemote(own, peer)));
   });
+  view.addEventListener?.('offline', () => recording.interrupt(active));
   view.addEventListener?.('pagehide', () => {
     const own = active;
     watching = false;

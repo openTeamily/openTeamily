@@ -1,6 +1,7 @@
 name: UI screenshots
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -19,14 +20,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
-      - name: Start a throwaway loopback management app
-        run: |
-          set -eu
-          python scripts/ci_ui_screenshots.py \
-            --data-dir "$RUNNER_TEMP/ot-ui-data" \
-            --out "$RUNNER_TEMP/ot-ui-meta" \
-            --serve > "$RUNNER_TEMP/ot-ui-serve.log" 2>&1 &
-          echo $! > "$RUNNER_TEMP/ot-ui-serve.pid"
+      - name: Install Bot Social dependencies
+        run: npm ci --prefix services/bot-social
       - name: Install Playwright on the runner only
         working-directory: ${{ runner.temp }}
         run: |
@@ -36,41 +31,13 @@ jobs:
           npm init -y >/dev/null
           npm install playwright@1.56.1
           npx playwright install chromium --with-deps
-      - name: Wait until the fixture app is ready
+      - name: Exercise the native OpenTeamily pages in Chromium
         run: |
           set -eu
-          pid="$(cat "$RUNNER_TEMP/ot-ui-serve.pid")"
-          for _ in $(seq 1 90); do
-            if [ -f "$RUNNER_TEMP/ot-ui-meta/ready.json" ]; then
-              python -c 'import json,pathlib,sys; data=json.loads(pathlib.Path(sys.argv[1]).read_text()); print("origin=%s run=%s connection=%s chat=%s" % (data["origin"], data["run_status"], data["connection_status"], data.get("chat_status")))' "$RUNNER_TEMP/ot-ui-meta/ready.json"
-              exit 0
-            fi
-            if ! kill -0 "$pid" 2>/dev/null; then
-              echo "fixture process exited before ready.json was written" >&2
-              if [ -f "$RUNNER_TEMP/ot-ui-serve.log" ]; then cat "$RUNNER_TEMP/ot-ui-serve.log" >&2; fi
-              exit 1
-            fi
-            sleep 1
-          done
-          echo "timed out waiting for ready.json" >&2
-          if [ -f "$RUNNER_TEMP/ot-ui-serve.log" ]; then cat "$RUNNER_TEMP/ot-ui-serve.log" >&2; fi
-          exit 1
-      - name: Capture real management pages
-        run: |
-          set -eu
-          # ESM walks from the script path, not NODE_PATH, so expose the runner install here.
+          # Playwright is resolved next to the browser runner script.
           ln -sfn "$RUNNER_TEMP/ot-playwright/node_modules" "$GITHUB_WORKSPACE/node_modules"
-          mkdir -p "$GITHUB_WORKSPACE/ui-screenshots"
-          node scripts/ci_ui_screenshots.mjs --meta "$RUNNER_TEMP/ot-ui-meta" --out "$GITHUB_WORKSPACE/ui-screenshots"
-      - name: Stop the throwaway app
-        if: always()
-        run: |
-          set -eu
-          if [ -f "$RUNNER_TEMP/ot-ui-serve.pid" ]; then
-            pid="$(cat "$RUNNER_TEMP/ot-ui-serve.pid")"
-            kill "$pid" 2>/dev/null || true
-            wait "$pid" 2>/dev/null || true
-          fi
+          node --import ./services/bot-social/node_modules/tsx/dist/loader.mjs \
+            scripts/ci-native-ui-screenshots.mjs "$GITHUB_WORKSPACE/ui-screenshots"
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

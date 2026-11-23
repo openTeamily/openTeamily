@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { conversationTitle, formatWhen, kindLabel, meetingMeta, mount } from '../openteamily/static/home/app.mjs';
-import { confirmSignupSession, pendingSignupSession, readChatDrafts, rememberSignupSession, signupDraftScope, takeSignupSession, waitForRuntime, writeChatDrafts } from '../openteamily/static/home/runtime-readiness.mjs';
+import { confirmSignupSession, pendingSignupSession, personalDraftScope, readChatDrafts, rememberColdDraftHandoff, rememberSignupSession, signupDraftScope, takeColdDraftHandoff, takeSignupSession, waitForRuntime, workspaceLoginHash, workspaceLoginTarget, writeChatDrafts } from '../openteamily/static/home/runtime-readiness.mjs';
 import { mountRuntimeStarting } from '../openteamily/static/home/runtime-starting.mjs';
 import { discoverIntentFromHash, discoverLoginHref } from '../openteamily/static/shell/discover-link.mjs';
 import { spaceHref } from '../openteamily/static/shell/thumb.mjs';
@@ -67,8 +67,9 @@ function homeFixture(pathname = '/', hash = '') {
     sessionStorage: {setItem: (key, value) => values.set(key, value), getItem: key => values.get(key), removeItem: key => values.delete(key)},
   };
   const document = {
-    defaultView: view, cookie: '', getElementById: read,
+    defaultView: view, cookie: '', getElementById: read, createElement:fixtureNode,
     querySelector: selector => selector === '.home-personal' ? read('home-personal') : null,
+    querySelectorAll: () => [],
   };
   return {document, view, read, register};
 }
@@ -87,6 +88,69 @@ test('a first draft shares only the registered owner and exact personal chat sco
   const peerScope = JSON.stringify([bob, alice, 'agent', bob, null]);
   assert.equal(writeChatDrafts(view, alice, new Map([[scope,'第一条'], [peerScope,'different account']])), true);
   assert.deepEqual([...readChatDrafts(view, alice)], [[scope,'第一条']]);
+  assert.equal(readChatDrafts(view, bob).size, 0);
+});
+
+test('workspace login resumes the exact page, query and fragment', async () => {
+  const target = '/space?workspace=' + alice + '&artifact=' + bob + '#versions';
+  const {document, view} = homeFixture('/login', workspaceLoginHash(target));
+  const paths = [];
+  view.location.replace = path => paths.push(path);
+  mount(document, {fetcher: async url => {
+    assert.equal(url, '/v1/auth/session');
+    return {status: 200, json: async () => ({user: {id: alice, username: 'alice'}})};
+  }});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(paths, [target]);
+  for (const invalid of ['/', '/register', '/v1/auth/logout', '/chat/app.mjs', 'https://workspace.invalid/chat']) {
+    assert.equal(workspaceLoginTarget(workspaceLoginHash(invalid)), '');
+  }
+  assert.equal(workspaceLoginTarget(workspaceLoginHash(target) + '&resume=/team'), '');
+});
+
+test('a new tab can draft only for the exact authenticated personal chat', () => {
+  const hash = '#workspace=' + alice + '&agent=' + bob;
+  const {view} = homeFixture('/chat', hash);
+  const personal = {workspace_id: alice, agent_id: bob};
+  assert.equal(pendingSignupSession(view), null);
+  const scope = personalDraftScope(view, alice, personal);
+  assert.deepEqual(JSON.parse(scope), [alice, alice, 'agent', bob, null]);
+  assert.equal(rememberColdDraftHandoff(view, scope), true);
+  assert.equal(takeColdDraftHandoff(view, personalDraftScope(view, bob, personal)), null);
+  assert.equal(takeColdDraftHandoff(view, scope), scope);
+  assert.equal(takeColdDraftHandoff(view, scope), null);
+  assert.equal(personalDraftScope(view, 'bad-owner', personal), null);
+  assert.equal(personalDraftScope(view, alice, {workspace_id: alice, agent_id: alice}), null);
+  view.location.search = '?q=also-a-search';
+  assert.equal(personalDraftScope(view, alice, personal), null);
+  view.location.search = '';
+  view.location.hash = hash + '&conversation=' + bob;
+  assert.equal(personalDraftScope(view, alice, personal), null);
+});
+
+test('the startup composer drops its visible draft when another account signs in', async () => {
+  const hash = '#workspace=' + alice + '&agent=' + bob;
+  const {document, read, view} = homeFixture('/chat', hash);
+  const requests = [];
+  const paths = [];
+  const draftScope = JSON.stringify([alice, alice, 'agent', bob, null]);
+  assert.equal(writeChatDrafts(view, alice, new Map([[draftScope, '只在 Alice 的草稿']])), true);
+  view.location.replace = target => paths.push(target);
+  await mountRuntimeStarting(document, {fetcher: async path => {
+    requests.push(path);
+    if (requests.length === 1) {
+      return {status: 200, json: async () => ({state: 'starting', user_id: alice, personal_chat: {workspace_id: alice, agent_id: bob}})};
+    }
+    assert.equal(read('runtime-first-message').value, '只在 Alice 的草稿');
+    assert.equal(read('runtime-draft').hidden, false);
+    assert.match(read('runtime-title').textContent, /正在启动/);
+    return {status: 200, json: async () => ({state: 'ready', user_id: bob})};
+  }});
+  assert.deepEqual(requests, ['/v1/auth/runtime-readiness?include=personal-chat', '/v1/auth/runtime-readiness']);
+  assert.deepEqual(paths, ['/login' + workspaceLoginHash('/chat' + hash)]);
+  assert.equal(read('runtime-first-message').value, '');
+  assert.equal(read('runtime-draft').hidden, true);
+  assert.deepEqual([...readChatDrafts(view, alice)], [[draftScope, '只在 Alice 的草稿']]);
   assert.equal(readChatDrafts(view, bob).size, 0);
 });
 
@@ -134,9 +198,8 @@ test('a ready personal chat becomes clickable while the workspace list and onboa
   const pending = [];
   const reply = (body, status = 200) => ({status, json: async () => body});
   mount(document, {fetcher: async url => {
-    if (url === '/v1/auth/session') return reply({user: {id: alice, username: 'alice'}});
-    if (url === '/v1/personal-agent') return reply({personal_agent: {
-      workspace: {id: alice}, agent: {id: bob, name: 'Personal Agent'}, runtime_provisioning: {readiness: 'ready'},
+    if (url === '/v1/auth/session?include=home') return reply({user: {id: alice, username: 'alice'}, home: {
+      runtime_state: 'ready', personal_agent: {workspace: {id: alice}, agent: {id: bob, name: 'Personal Agent'}},
     }});
     return new Promise(resolve => pending.push({url, resolve}));
   }});
@@ -146,10 +209,32 @@ test('a ready personal chat becomes clickable while the workspace list and onboa
   assert.equal(read('home-personal-chat').href, `/chat#workspace=${alice}&agent=${bob}`);
   assert.equal(read('home-workspace').disabled, true);
   assert.equal(takeSignupSession(view), null);
-  assert.deepEqual(pending.map(({url}) => url), ['/v1/onboarding', '/v1/workspaces?limit=100']);
-  for (const {url, resolve} of pending) resolve(url.endsWith('onboarding') ? reply({onboarding: {industry: '测试'}}) : reply({items: []}));
+  assert.deepEqual(pending.map(({url}) => url), [
+    '/v1/workspaces/'+alice+'/overview?limit=5', '/v1/onboarding', '/v1/workspaces?limit=100',
+  ]);
+  for (const {url, resolve} of pending) {
+    resolve(url.endsWith('onboarding') ? reply({onboarding: {industry: '测试'}})
+      : url.includes('/overview') ? reply({counts:{agents:1}}) : reply({items: [{id:alice,name:'个人空间'}]}));
+  }
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(read('home-context').textContent, '工作背景：测试');
+});
+
+test('a stopped home runtime still uses the explicit startup page', async () => {
+  const {document, read, view} = homeFixture();
+  const calls = [], destinations = [];
+  view.location.replace = target => destinations.push(target);
+  mount(document, {fetcher: async (url, {method}) => {
+    calls.push([method, url]);
+    const body = url.endsWith('include=home')
+      ? {user:{id:alice, username:'alice'}, home:{runtime_state:'stopped', personal_agent:null}}
+      : {personal_agent:{runtime_provisioning:{readiness:'stopped'}}};
+    return {status:200, json:async()=>body};
+  }});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls, [['GET', '/v1/auth/session?include=home'], ['POST', '/v1/personal-agent']]);
+  assert.deepEqual(destinations, ['/runtime-starting#home=1']);
+  assert.equal(read('main-panel').hidden, true);
 });
 
 test('a blocked or different signup session cannot resume an invitation as another account', async () => {
@@ -253,4 +338,29 @@ test('confirmed sign-in opens the same Discover view without a dashboard detour'
   assert.deepEqual(calls, [
     ['GET', '/v1/auth/session'], ['POST', '/v1/personal-agent'], ['GET', '/v1/workspaces?scope=personal'],
   ]);
+});
+
+test('a stopped runtime waits for explicit start before reloading the original workspace link', async () => {
+  const {document, read, view} = homeFixture('/space', '#workspace=' + alice);
+  const calls = [];
+  document.cookie = 'ot_dev_csrf=expected-csrf';
+  let click, reloaded = false;
+  read('runtime-retry').addEventListener = (_event, handler) => { click = handler; };
+  view.location.reload = () => { reloaded = true; };
+  await mountRuntimeStarting(document, {fetcher: async (path, options) => {
+    calls.push(path);
+    if (path === '/v1/auth/runtime-start') {
+      assert.equal(options.method, 'POST');
+      assert.equal(options.headers['X-CSRF-Token'], 'expected-csrf');
+      assert.equal(options.body, '{}');
+      return {status: 202, json: async () => ({state: 'starting'})};
+    }
+    return {status: 200, json: async () => ({state: calls.length === 1 ? 'stopped' : 'ready'})};
+  }});
+  assert.deepEqual(calls, ['/v1/auth/runtime-readiness']);
+  assert.equal(read('runtime-retry').textContent, '启动我的智能体');
+  assert.equal(reloaded, false);
+  await click();
+  assert.deepEqual(calls, ['/v1/auth/runtime-readiness', '/v1/auth/runtime-start', '/v1/auth/runtime-readiness']);
+  assert.equal(reloaded, true);
 });

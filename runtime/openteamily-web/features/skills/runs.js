@@ -6,13 +6,51 @@ import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { compatHandler } from '../../lib/b4/compat.js'
 import { Fault } from '../../lib/b4/http.js'
+import { openJsonStore } from '../../lib/b4/json-store.js'
+import { importJsonBundles } from '../../lib/b4/importer.js'
 
 const IDEM = /^[A-Za-z0-9_-]{16,64}$/
 const SKILL = /^[a-z][a-z0-9-]{0,63}$/
 const TASK = /^[0-9a-f]{32}$/
 const MAX_RUNS = 50
+const scopeOk = scope => scope === 'account' || /^(?:automation:)?[0-9a-f]{32}:[0-9a-f]{32}$/.test(scope || '')
+
+function archivedHistory(host) {
+  const store = openJsonStore(host.featureDir(), 'archived-skill-runs', () => ({ runs: {} }))
+  const { instanceId, routingInstanceId } = host.identity ?? {}
+  return () => {
+    const target = routingInstanceId ?? instanceId
+    if (!TASK.test(target ?? '')) return {}
+    importJsonBundles({
+      host, feature: { name: 'skill-run-history', importTables: { skill_run_history: [] } }, store,
+      apply(draft, { skill_run_history }) {
+        if (!Array.isArray(skill_run_history)) throw new Error('missing skill history')
+        for (const row of skill_run_history) {
+          if (!TASK.test(row.id) || !scopeOk(row.scope)
+            || !SKILL.test(row.skill_id) || !['succeeded', 'failed'].includes(row.status)
+            || !Number.isSafeInteger(row.created) || !Number.isSafeInteger(row.updated)
+            || typeof row.prompt !== 'string' || (row.result_text !== null && typeof row.result_text !== 'string')) {
+            throw new Error('invalid historical skill record')
+          }
+          draft.runs[row.id] ??= {
+            task: {
+              id: row.id, kind: 'infer', status: row.status, prompt: row.prompt,
+              created: row.created, updated: row.updated,
+              result: row.result_text === null ? null : { text: row.result_text },
+            },
+            loaded: row.loaded === 1, scope: row.scope, skill_id: row.skill_id,
+            skills: [{ id: row.skill_id }], historical: true,
+          }
+        }
+      },
+      log: () => host.log('skill history import rejected; bundle retained'),
+    })
+    return store.read().runs ?? {}
+  }
+}
 
 export function skillRunsV1(host, { userSkillName }) {
+  const archived = archivedHistory(host)
   const file = () => join(host.featureDir(), 'skill-runs.json')
   const load = () => { try { return JSON.parse(readFileSync(file(), 'utf8')).runs ?? [] } catch { return [] } }
   const save = (runs) => {
@@ -21,6 +59,7 @@ export function skillRunsV1(host, { userSkillName }) {
     renameSync(tmp, file())
   }
   const update = (id, patch) => save(load().map((r) => (r.task.id === id ? { ...r, task: { ...r.task, ...patch } } : r)))
+  const find = id => load().find(run => run.task.id === id) ?? archived()[id]
   const services = () => host.currentRuntime?.() ?? null
   const attached = async (skillId) => {
     const s = services()
@@ -38,7 +77,6 @@ export function skillRunsV1(host, { userSkillName }) {
     return { ...base, ready: true, code: 'ready', model_source: settings.effective.source || 'ds-bot' }
   }
   const view = (r) => ({ ...r, verified: r.loaded && r.task.status === 'succeeded' && !!String(r.task.result?.text ?? '').trim() })
-  const scopeOk = scope => scope === 'account' || /^(?:automation:)?[0-9a-f]{32}:[0-9a-f]{32}$/.test(scope || '')
 
   return compatHandler([
     { method: 'GET', path: /^\/v1\/skills\/scopes$/, handle: async () => [200, { items: [{ scope: 'account', kind: 'account', label: '我的账户', workspace_id: null }] }] },
@@ -50,7 +88,16 @@ export function skillRunsV1(host, { userSkillName }) {
         return [200, await readiness(scope)]
       },
     },
-    { method: 'GET', path: /^\/v1\/skills\/runs$/, handle: async () => [200, { items: load().map(view) }] },
+    {
+      method: 'GET', path: /^\/v1\/skills\/runs$/,
+      async handle() {
+        const native = load()
+        const ids = new Set(native.map(run => run.task.id))
+        const runs = [...native, ...Object.values(archived()).filter(run => !ids.has(run.task.id))]
+        runs.sort((a, b) => b.task.created - a.task.created)
+        return [200, { items: runs.slice(0, MAX_RUNS).map(view) }]
+      },
+    },
     {
       method: 'POST', path: /^\/v1\/skills\/runs$/,
       async handle({ body, idempotency_key: key }) {
@@ -93,27 +140,19 @@ export function skillRunsV1(host, { userSkillName }) {
         return [201, view(record)]
       },
     },
-    // The legacy remote-runtime task API (flybot.pyz connections) is gone: this DS-Bot is
-    // the only runtime. Its skill runs are the visible task history.
-    { method: 'GET', path: /^\/v1\/runtime\/tasks$/, handle: async () => [200, { items: load().map((r) => ({ ...r.task, skill_id: r.skill_id })) }] },
-    { method: 'POST', path: /^\/v1\/runtime\/tasks$/, handle: async () => { throw new Fault(410, 'gone', 'Remote runtime tasks were removed; chat with your DS-Bot instead') } },
     {
-      method: 'GET', path: /^\/v1\/runtime\/connections$/,
-      handle: async () => [200, { items: [{ id: 'ds-bot', hostname: 'ds-bot', personal: true, status: services() ? 'online' : 'offline' }] }],
-    },
-    {
-      method: 'POST', path: /^\/v1\/runtime\/tasks\/([0-9a-f]{32})\/cancel$/,
+      method: 'POST', path: /^\/v1\/skills\/runs\/([0-9a-f]{32})\/cancel$/,
       async handle({ match }) {
-        const run = load().find((r) => r.task.id === match[1])
+        const run = find(match[1])
         if (!run) throw new Fault(404, 'not_found', 'Task not found')
         if (['queued', 'claimed'].includes(run.task.status)) update(run.task.id, { status: 'cancelled' })
-        return [200, { task: load().find((r) => r.task.id === match[1]).task }]
+        return [200, { task: find(match[1]).task }]
       },
     },
     {
-      method: 'POST', path: /^\/v1\/runtime\/tasks\/([0-9a-f]{32})\/artifact$/,
+      method: 'POST', path: /^\/v1\/skills\/runs\/([0-9a-f]{32})\/artifact$/,
       async handle({ match, body }) {
-        const run = load().find((r) => r.task.id === match[1])
+        const run = find(match[1])
         if (!run || !TASK.test(match[1])) throw new Fault(404, 'not_found', 'Task not found')
         if (!view(run).verified) throw new Fault(409, 'not_ready', 'Only a verified skill result can be saved')
         const out = await host.call('artifacts/create', {

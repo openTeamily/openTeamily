@@ -53,11 +53,15 @@ test('private sends resolve consented current native skills locally and discard 
   t.after(() => rmSync(bot.vol.root, {recursive: true}))
   const personal = 'a'.repeat(32)
   const shared = 'b'.repeat(32)
+  const checkingScope = Promise.withResolvers()
+  const releaseScope = Promise.withResolvers()
   let scopeChecks = 0
   setSharedBotSocial({ async request(method, path) {
     assert.equal(method, 'GET')
     assert.equal(path, '/v1/ot/teams/by-workspace/' + shared)
     scopeChecks++
+    checkingScope.resolve()
+    await releaseScope.promise
     return {role: 'member'}
   } })
   t.after(() => setSharedBotSocial(undefined))
@@ -167,7 +171,23 @@ test('private sends resolve consented current native skills locally and discard 
   assert.deepEqual((await neighbor.send()).effective, [builtin.content.trim()])
   assert.equal(scopeChecks,0,'sending did not contact the shared workspace')
   assert.equal(writes, writesAfterInstall, 'unchanged material is not resaved on every send')
-  assert.equal((await binding(builtin,neighbor.scope)).status,403)
+  const pendingBinding = binding(builtin,neighbor.scope)
+  await checkingScope.promise
+  const pendingTurn = owner.send()
+  let timer
+  let earlyTurn
+  try {
+    earlyTurn = await Promise.race([
+      pendingTurn,
+      new Promise(resolve => { timer = setTimeout(() => resolve(null), 750) }),
+    ])
+  } finally {
+    clearTimeout(timer)
+    releaseScope.resolve()
+    assert.equal((await pendingBinding).status,403)
+    await pendingTurn
+  }
+  assert.deepEqual(earlyTurn?.effective, [builtin.content.trim()], 'unchanged personal skills do not wait for unresolved team authorization')
   assert.equal(scopeChecks,1,'authorizing a new binding still checks the shared workspace')
 
   const slug = 'import-' + '0123456789abcdef'.repeat(2)

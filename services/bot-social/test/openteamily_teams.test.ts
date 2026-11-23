@@ -81,17 +81,78 @@ test("team lifecycle: create, invite, accept, roles, suspend, leave", async () =
   assert.deepEqual(await C.ok("POST", "/v1/ot/invites/accept", { code: inv.code }), direct);
   const D = await home(S.base, "dee");
   assert.equal((await D.call("POST", "/v1/ot/invites/accept", { code: inv.code })).status, 410, "used up");
+  const receipt = await C.ok("POST", "/v1/ot/invites/preview", { code: inv.code });
+  assert.equal(receipt.usable, false);
+  assert.equal(receipt.membership, "member");
+  assert.equal(receipt.workspace_id, undefined, "an unbound team has no workspace to expose");
+  const stranger = await D.ok("POST", "/v1/ot/invites/preview", { code: inv.code });
+  assert.equal(stranger.membership, undefined);
+  assert.equal(stranger.workspace_id, undefined);
+  await A.ok("PATCH", `/v1/ot/teams/${team.id}/members/${C.handle}`, { suspended: true });
+  const suspended = await C.ok("POST", "/v1/ot/invites/preview", { code: inv.code });
+  assert.equal(suspended.membership, "suspended");
+  assert.equal(suspended.workspace_id, undefined);
   assert.equal((await D.call("POST", "/v1/ot/invites/accept", { code: "x".repeat(32) })).status, 404);
+});
+
+test("team ownership transfers atomically to an active member, then the former owner can leave", async () => {
+  const [owner, successor, other] = await Promise.all([
+    home(S.base, "transfer-owner"), home(S.base, "transfer-successor"), home(S.base, "transfer-other"),
+  ]);
+  const team = await owner.ok("POST", "/v1/ot/workspaces", {name: "Ownership handoff", idempotency_key: "test-ownership-handoff"});
+  const path = `/v1/ot/teams/${team.id}`;
+  const member = (person: typeof owner) => path + "/members/" + person.handle;
+  const transfer = (person: typeof owner) => member(person) + "/transfer-ownership";
+  await owner.ok("POST", path + "/members", {handle: successor.handle, role: "admin"});
+  assert.equal((await successor.call("POST", transfer(owner), {})).status, 403);
+  assert.equal((await other.call("POST", transfer(successor), {})).status, 404);
+  assert.equal((await owner.call("POST", transfer(other), {})).status, 404);
+  await owner.ok("PATCH", member(successor), {suspended: true});
+  assert.equal((await owner.call("POST", transfer(successor), {})).data.error.code, "member_suspended");
+  await owner.ok("PATCH", member(successor), {suspended: false});
+  const adminInvite = await owner.ok("POST", path + "/invites", {role: "admin"});
+  const memberInvite = await owner.ok("POST", path + "/invites", {role: "member"});
+
+  S.platform.db.exec(`CREATE TRIGGER fixture_reject_ownership_transfer
+    BEFORE INSERT ON ot_notifications WHEN NEW.kind='team.owner_transferred'
+    BEGIN SELECT RAISE(ABORT, 'fixture disabled notification'); END`);
+  try {
+    assert.equal((await owner.call("POST", transfer(successor), {})).status, 500);
+    assert.equal((await owner.ok("GET", path)).role, "owner");
+    assert.equal((await successor.ok("GET", path)).role, "admin");
+    assert.equal((await other.ok("POST", "/v1/ot/invites/preview", {code: adminInvite.code})).usable, true);
+  } finally {
+    S.platform.db.exec("DROP TRIGGER fixture_reject_ownership_transfer");
+  }
+
+  assert.deepEqual(await owner.ok("POST", transfer(successor), {}), {transferred: true});
+  assert.equal((await owner.call("POST", transfer(successor), {})).status, 403);
+  assert.equal((await owner.ok("GET", path)).role, "member");
+  assert.equal((await successor.ok("GET", path)).owner.handle, successor.handle);
+  const roster = (await successor.ok("GET", path + "/members")).members;
+  assert.deepEqual(roster.map((row: any) => [row.handle, row.role]), [[successor.handle, "owner"], [owner.handle, "member"]]);
+  assert.equal((await other.call("POST", "/v1/ot/invites/accept", {code: adminInvite.code})).status, 410);
+  assert.equal((await other.ok("POST", "/v1/ot/invites/accept", {code: memberInvite.code})).status, "member");
+  assert.equal((await successor.call("DELETE", member(successor))).status, 409);
+  await owner.ok("DELETE", member(owner));
+  assert.equal((await owner.call("GET", path)).status, 404);
+  assert.equal((await successor.ok("GET", "/v1/ot/teams/by-workspace/" + team.workspace_id)).role, "owner");
 });
 
 test("approval invites and the team directory queue join requests for owners and admins", async () => {
   const A = await home(S.base, "lead");
   const B = await home(S.base, "joiner");
-  const team = await A.ok("POST", "/v1/ot/teams", { name: "Open Research Guild" });
+  const team = await A.ok("POST", "/v1/ot/workspaces", {
+    name: "Open Research Guild", slug: "open-research-guild", idempotency_key: "team-directory-approval-test",
+  });
   const inv = await A.ok("POST", `/v1/ot/teams/${team.id}/invites`, { requires_approval: true, max_uses: 1 });
   const pending = await B.ok("POST", "/v1/ot/invites/accept", { code: inv.code });
   assert.equal(pending.status, "pending");
   assert.deepEqual(await B.ok("POST", "/v1/ot/invites/accept", { code: inv.code }), pending);
+  const preview = await B.ok("POST", "/v1/ot/invites/preview", { code: inv.code });
+  assert.equal(preview.usable, false);
+  assert.equal(preview.membership, "pending");
+  assert.equal(preview.workspace_id, undefined);
   const notes = await A.ok("GET", "/v1/ot/notifications");
   assert.ok(notes.notifications.some((x: any) => x.kind === "team.join_request" && x.data.member.handle === B.handle));
   const queue = await A.ok("GET", `/v1/ot/teams/${team.id}/join-requests`);
@@ -107,13 +168,18 @@ test("approval invites and the team directory queue join requests for owners and
   const found = await C.ok("GET", "/v1/ot/directory?q=reading");
   assert.equal(found.teams.length, 1);
   assert.equal(found.teams[0].membership, null);
+  assert.equal(found.teams[0].workspace_id, undefined);
   assert.equal((await C.ok("POST", `/v1/ot/directory/${team.id}/join`)).status, "pending");
   assert.equal((await C.ok("GET", "/v1/ot/directory?q=guild")).teams[0].membership, "pending");
   const q2 = await A.ok("GET", `/v1/ot/teams/${team.id}/join-requests`);
   await A.ok("POST", `/v1/ot/teams/${team.id}/join-requests/${q2.requests[0].id}`, { decision: "approve" });
-  assert.equal((await C.ok("GET", "/v1/ot/directory?q=guild")).teams[0].membership, "member");
+  const joined = (await C.ok("GET", "/v1/ot/directory?q=guild")).teams[0];
+  assert.equal(joined.membership, "member");
+  assert.equal(joined.workspace_id, team.workspace_id);
   await A.ok("PATCH", `/v1/ot/teams/${team.id}/members/${C.handle}`, { suspended: true });
-  assert.equal((await C.ok("GET", "/v1/ot/directory?q=guild")).teams[0].membership, "suspended");
+  const suspended = (await C.ok("GET", "/v1/ot/directory?q=guild")).teams[0];
+  assert.equal(suspended.membership, "suspended");
+  assert.equal(suspended.workspace_id, undefined);
   await A.ok("PATCH", `/v1/ot/teams/${team.id}/members/${C.handle}`, { suspended: false });
   const cn = await C.ok("GET", "/v1/ot/notifications");
   assert.ok(cn.notifications.some((x: any) => x.kind === "team.join_decided" && x.data.decision === "approve"));
@@ -214,4 +280,38 @@ test("a platform workspace binds to one team; members can be added by handle", a
   const after = await A.ok("GET", `/v1/ot/teams/${first.id}/members`);
   assert.equal(after.members.find((m: any) => m.handle === B.handle).role, "admin");
   assert.equal((await A.call("POST", "/v1/ot/teams", { name: "Other", workspace_id: workspace })).status, 409);
+});
+test("the listed team directory pages stable ties without exposing private workspace IDs", async () => {
+  const owner = await home(S.base, "directory-paging-owner");
+  const viewer = await home(S.base, "directory-paging-viewer");
+  const created = [];
+  for (const suffix of ["a", "b", "c", "d"]) {
+    const team = await owner.ok("POST", "/v1/ot/workspaces", {
+      name: `Catalog cohort ${suffix}`, slug: `catalog-cohort-${suffix}`, idempotency_key: `directory-paging-${suffix}`,
+    });
+    created.push(team);
+    if (suffix !== "d") {
+      await owner.ok("PUT", `/v1/ot/teams/${team.id}/listing`, {listed:true, summary:"Searchable cohort"});
+    }
+  }
+  S.platform.db.prepare("UPDATE ot_teams SET updated_at=1 WHERE owner_id=?").run((await owner.ok("GET", "/v1/ot/me")).owner_id);
+  const read = "/v1/ot/directory?limit=2&q=Searchable+cohort";
+  const expected = created.slice(0, 3).map(team => team.id).sort().reverse();
+  const first = await viewer.ok("GET", read);
+  assert.deepEqual(first.teams.map((team: {id: string}) => team.id), expected.slice(0, 2));
+  assert.ok(first.cursor);
+  const page2 = await viewer.ok("GET", `${read}&cursor=${first.cursor}`);
+  assert.deepEqual(page2.teams.map((team: {id: string}) => team.id), expected.slice(2));
+  assert.equal(page2.cursor, null);
+  for (const team of [...first.teams, ...page2.teams]) {
+    assert.equal(team.workspace_id, undefined);
+    assert.equal(team.membership, null);
+  }
+  assert.equal((await viewer.call("GET", `/v1/ot/directory?q=different&cursor=${first.cursor}`)).status, 400);
+  assert.equal((await viewer.call("GET", `${read}&cursor=invalid`)).status, 400);
+  assert.equal((await fetch(S.base + read)).status, 401);
+
+  const joined = await owner.ok("GET", read);
+  assert.ok(joined.teams.every((team: {workspace_id: string; membership: string}) =>
+    team.membership === "member" && /^[a-f0-9]{32}$/.test(team.workspace_id)));
 });

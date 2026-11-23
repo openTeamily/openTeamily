@@ -5,12 +5,127 @@ import { join } from 'node:path'
 import { boot, bootMemory, deliverBundle, key, legacyBundles, volume, WS } from './helpers.js'
 import { attachRuntime, detachRuntime } from '../src/host.js'
 import { setSharedBotSocial } from '../lib/c/bot-social.js'
+import { digest } from '../featurekit/http.js'
+import { openStore } from '../featurekit/store.js'
 import {waveBase64} from '../../../openteamily/static/meetings/audio.mjs'
 
 const base = (id = '', ws = WS) => `/v1/workspaces/${ws}/meetings${id ? '/' + id : ''}`
 const body = { title: '周会', attendees: ['alice', 'bob'], summary: '同步进度。', transcript: '讨论排期。', action_items: [{ text: '订会议室', owner: 'bob' }] }
 
-test('action inbox pages saved open items and completes only an exact workspace revision', async () => {
+test('reviewed local meeting actions copy once to personal Memory with a saved reference', async () => {
+  const team = 'b'.repeat(32)
+  const bot = await bootMemory(volume(), {teams:[team]})
+  const target = `/v1/workspaces/${WS}/memory/actions`
+  const create = await bot.call('meetings','POST',base('',team), {...body,
+    action_items:[{...body.action_items[0],due_date:'2030-01-17'}, {text:'已完成',done:true}]}, key())
+  assert.equal(create.status,201)
+  const {id,revision} = create.body.meeting
+  const reference = {workspace_id:team,meeting_id:id,action_index:0,revision}
+  const reviewed = {title:'个人复核会议室',notes:'先确认时间',due_at:Date.parse('2030-01-18')/1000,source:reference}
+  const copy = (payload = reviewed, path = target) => bot.call('memory','POST',path+'/from-meeting',payload,key())
+  assert.equal((await copy({...reviewed,source:{...reference,action_index:1}})).status,409)
+  assert.equal((await copy(reviewed, `/v1/workspaces/${team}/memory/actions`)).status,404)
+  assert.equal((await copy({...reviewed,due_at:'2030-01-18'})).status,400)
+  const stored = await copy()
+  assert.equal(stored.status,201)
+  const action = stored.body.action
+  const resolveSource = () => bot.call('memory','GET',target+'/'+action.id+'/meeting-source')
+  assert.deepEqual(action.source,{kind:'meeting',...reference})
+  assert.deepEqual((await resolveSource()).body, {source:reference})
+  assert.equal(action.title,reviewed.title)
+  assert.equal(action.due_at,reviewed.due_at)
+  assert.doesNotMatch(JSON.stringify(action),/讨论排期|同步进度|订会议室/)
+  const extra = await copy({...reviewed,notes:'不应覆盖第一次保存'})
+  assert.equal(extra.status,200)
+  assert.deepEqual(extra.body.action,action)
+  const edit = await bot.call('meetings','POST',base(id,team),{revision,changes:{summary:'更改摘要'}})
+  assert.equal(edit.status,200)
+  assert.equal((await copy()).body.error.code,'source_changed')
+  const current = {...reviewed,source:{...reference,revision:edit.body.meeting.revision}}
+  assert.equal((await copy(current)).body.action.id,action.id)
+  assert.equal((await bot.call('memory','GET', target)).body.items.length,1)
+  assert.deepEqual((await bot.call('memory','GET', target+'/'+action.id)).body.action.source, action.source)
+
+  const [original, other] = edit.body.meeting.action_items
+  const reordered = await bot.call('meetings','POST',base(id,team),{
+    revision:edit.body.meeting.revision, changes:{action_items:[other, {...original, done:true}]},
+  })
+  assert.equal(reordered.status,200)
+  assert.deepEqual((await resolveSource()).body, {source:{
+    workspace_id:team, meeting_id:id, revision:reordered.body.meeting.revision, action_index:1,
+  }})
+  const ambiguous = await bot.call('meetings','POST',base(id,team),{
+    revision:reordered.body.meeting.revision, changes:{action_items:[original, other, original]},
+  })
+  assert.equal(ambiguous.status,200)
+  assert.deepEqual((await resolveSource()).body, {source:{
+    workspace_id:team, meeting_id:id, revision:ambiguous.body.meeting.revision,
+  }})
+  bot.features.table['teams/activeWorkspaces'] = async () => []
+  assert.equal((await copy(current)).status,404)
+  assert.equal((await resolveSource()).status,404)
+  assert.equal((await bot.call('memory','POST', target+'/'+action.id+'/remove',{})).status,200)
+  assert.equal((await bot.call('memory','GET', target+'/'+action.id)).status,404)
+})
+
+test('meeting catalogue searches saved transcript passages with bounded private excerpts and normal paging', async () => {
+  const bot = await boot()
+  const term = 'Build [4.2]'
+  const transcript = 'unrelated preface ' + '背景。'.repeat(40) + term + '，这周发布。' + '尾部。'.repeat(40)
+  const create = (title, started_at, workspace = WS) => bot.call('meetings', 'POST', base('', workspace),
+    {...body, title, started_at, transcript}, key())
+  const latest = (await create('发布讨论', 200)).body.meeting
+  const older = (await create('之前的讨论', 100)).body.meeting
+  const otherWorkspace = 'b'.repeat(32)
+  await create('另一工作区', 300, otherWorkspace)
+  const query = new URLSearchParams({q:'build [4.2]', order:'recent', limit:'1'})
+  const first = (await bot.call('meetings', 'GET', base() + '?' + query)).body
+  assert.equal(first.items.length, 1)
+  assert.equal(first.items[0].id, latest.id)
+  const {before, match, after} = first.items[0].transcript_match
+  assert.equal(match, term)
+  assert.ok(before.startsWith('…') && before.length <= 43)
+  assert.ok(after.startsWith('，这周发布。') && after.length <= 43)
+  assert.equal(first.items[0].transcript, undefined)
+  assert.equal(first.items[0].summary, undefined)
+  assert.equal(first.cursor, latest.id)
+  query.set('cursor', first.cursor)
+  const second = (await bot.call('meetings', 'GET', base() + '?' + query)).body
+  assert.deepEqual(second.items.map(row => row.id), [older.id])
+  assert.equal(second.cursor, null)
+  const ordinary = (await bot.call('meetings', 'GET', base())).body
+  assert.ok(ordinary.items.every(row => row.transcript_match === undefined && row.transcript === undefined))
+  const summarySearch = (await bot.call('meetings', 'GET', base() + '?q=' + encodeURIComponent(body.summary))).body
+  assert.equal(summarySearch.items.length, 2)
+  assert.ok(summarySearch.items.every(row => row.transcript_match === undefined))
+})
+
+test('calendar deadlines survive the saved action, list search, completion and Markdown export', async () => {
+  const bot = await boot()
+  const due_date = '2032-02-29'
+  const action = {text:'核对日程', owner:'bob', due_date}
+  const create = due_date => bot.call('meetings','POST',base(), {...body, action_items:[{...action,due_date}]},key())
+  for (const invalid of ['2031-02-29', '2032-2-29', '2032-02-29T12:00', '0000-01-01', 1961625600]) {
+    assert.equal((await create(invalid)).status, 400)
+  }
+  const saved = await create(due_date)
+  assert.equal(saved.status, 201)
+  const {meeting} = saved.body
+  const path = base(meeting.id)
+  const inbox = await bot.call('meetings','GET',base() + '?view=actions')
+  assert.equal(inbox.body.items[0].due_date,due_date)
+  const search = await bot.call('meetings','GET',base() + '?q=' + due_date)
+  assert.deepEqual(search.body.items.map(item=>item.id),[meeting.id])
+  const receipt = await bot.call('meetings','GET',path + '/action?index=0&revision=1')
+  assert.deepEqual(receipt.body.action,{...action,done:false})
+  assert.equal((await bot.call('meetings','POST',path + '/action',{index:0,revision:1})).status,200)
+  const completed = await bot.call('meetings','GET',path)
+  assert.deepEqual(completed.body.meeting.action_items,[{...action,done:true}])
+  const exported = await bot.call('meetings','GET',path + '/export')
+  assert.match(exported.text, /\[x\] 核对日程（bob · 截止日期 2032-02-29）/)
+})
+
+test('action inbox pages each status and toggles only an exact workspace revision', async () => {
   const bot = await boot()
   const own = 'Alice'
   const {meeting} = (await bot.call('meetings','POST',base(),{...body,started_at:100,
@@ -41,11 +156,36 @@ test('action inbox pages saved open items and completes only an exact workspace 
   const remaining = (await bot.call('meetings','GET',list)).body
   assert.equal(remaining.items[0].text,'open other')
   assert.notEqual(remaining.activity_version,first.body.activity_version)
+
+  const done = list + '&status=completed'
+  const completed = await bot.call('meetings','GET',done)
+  assert.equal(completed.status,200)
+  assert.equal(completed.body.items[0].text,'open own')
+  const otherCompleted = await bot.call('meetings','GET',done + '&cursor=' + completed.body.cursor)
+  assert.equal(otherCompleted.body.items[0].text,'closed item')
+  assert.equal(otherCompleted.body.cursor,null)
+  assert.equal((await bot.call('meetings','GET',done + '&status=open')).status,400)
+  assert.equal((await bot.call('meetings','GET',list + '&status=all')).status,400)
+  assert.equal((await bot.call('meetings','POST',exact,{index:0,revision:2,done:'false'})).status,400)
+  assert.equal((await bot.call('meetings','POST',exact,{index:0,revision:1,done:false})).status,409)
+  assert.equal((await bot.call('meetings','POST',base(meeting.id,other)+'/action',{index:0,revision:2,done:false})).status,404)
+  const reopen = await bot.call('meetings','POST',exact,{index:0,revision:2,done:false})
+  assert.equal(reopen.status,200)
+  assert.equal(reopen.body.meeting.revision,3)
+  assert.deepEqual(reopen.body.action,{index:0,done:false})
+  assert.equal((await bot.call('meetings','POST',exact,{index:0,revision:3,done:false})).status,409)
+  assert.equal((await bot.call('meetings','GET',list)).body.items[0].text,'open own')
+  assert.equal((await bot.call('meetings','GET',done)).body.items[0].text,'closed item')
+  const reopened = await bot.call('meetings','GET',exact + '?index=0&revision=3')
+  assert.equal(reopened.status,200)
+  assert.deepEqual(reopened.body.action,{text:'open own',owner:own,done:false})
 })
 
 test('one scoped meeting memory keeps provenance and preserves separate edits across repeated copies', async () => {
   const bot = await bootMemory()
-  const {meeting} = (await bot.call('meetings', 'POST', base(), body, key())).body
+  const {meeting} = (await bot.call('meetings', 'POST', base(), {
+    ...body, action_items:[{...body.action_items[0], due_date:'2032-02-29'}],
+  }, key())).body
   const route = base(meeting.id) + '/memory'
   const copy = revision => bot.call('meetings', 'POST', route, {revision})
   const revise = (revision, changes) => bot.call('meetings', 'POST', base(meeting.id), {revision, changes})
@@ -56,7 +196,7 @@ test('one scoped meeting memory keeps provenance and preserves separate edits ac
   const target = '/v1/workspaces/' + WS + '/memory/' + id
   const read = async () => (await bot.call('memory', 'GET', target)).body.page
   const initial = await read()
-  assert.match(initial.body, /同步进度。[\s\S]+订会议室（bob）/)
+  assert.match(initial.body, /同步进度。[\s\S]+订会议室（bob · 截止日期 2032-02-29）/)
   assert.ok(!initial.body.includes(body.transcript))
   assert.deepEqual(initial.source, {kind:'meeting', meeting_id:meeting.id, meeting_revision:1})
   assert.equal((await bot.call('meetings', 'POST', base(meeting.id, 'b'.repeat(32)) + '/memory', {revision:1})).status, 404)
@@ -197,8 +337,13 @@ test('only an authorized finished call can prefill and associate a personal meet
   const source = {id, title:'Discussion', kind:'video', started_at:1795212000123, ended_at:1795212200123,
     attendees:['Alex','  Morgan  ','alex']}
   const reads = []
+  const shares = []
   let relay = 'social/meeting_call_active'
-  setSharedBotSocial({async request(method, path) {
+  setSharedBotSocial({async request(method, path, payload) {
+    if (method === 'POST' && path === '/v1/ot/meeting-shares') {
+      shares.push(payload)
+      return {meeting: {id:'c'.repeat(32)}}
+    }
     assert.equal(method,'GET')
     reads.push(path)
     assert.equal(path,'/v1/ot/call-records/' + id)
@@ -242,6 +387,16 @@ test('only an authorized finished call can prefill and associate a personal meet
   assert.equal((await call('POST', base(meeting.id), {revision:1,changes:{source_call_id:null}})).status,400)
   const edited = await call('POST', base(meeting.id), {revision:1,changes:{title:'Edited notes'}})
   assert.equal(edited.body.meeting.source_call_id,id)
+  const sharePath = base(meeting.id + '/shares')
+  const selected = {call_id:id,revision:2,recipient_ids:['fixture-attendee']}
+  assert.equal((await call('POST',sharePath,{...selected,call_id:'otcav_'+'B'.repeat(26)},key())).status,404)
+  assert.equal((await call('POST',sharePath,{...selected,conversation_id:'wrong-recipient-mode'},key())).status,400)
+  assert.equal((await call('POST',sharePath,{...selected,revision:1},key())).status,409)
+  assert.deepEqual(shares,[])
+  const shareKey = key()
+  assert.equal((await call('POST',sharePath,selected,shareKey)).status,201)
+  assert.deepEqual(shares,[{title:edited.body.meeting.title, started_at:meeting.started_at, summary:meeting.summary,
+    action_items:[], source_id:meeting.id, client_key:shareKey, ...selected}])
   const restarted = await boot(bot.vol)
   installBinding(restarted)
   assert.deepEqual((await restarted.call('meetings','GET',sourcePath)).body.meeting,edited.body.meeting)
@@ -249,6 +404,65 @@ test('only an authorized finished call can prefill and associate a personal meet
   const second = await boot()
   installBinding(second)
   assert.equal((await second.call('meetings','GET',sourcePath)).body.meeting,undefined)
+})
+
+test('different calls can keep their shared title without duplicating a saved call', async t => {
+  const vol = volume()
+  const firstRuntime = await bootMemory(vol)
+  const title = 'Weekly review'
+  const firstCall = 'otcav_' + 'A'.repeat(26)
+  const secondCall = 'otcav_' + 'B'.repeat(26)
+  const records = new Map([
+    [firstCall, 1700000000],
+    [secondCall, 1700604800],
+  ])
+  setSharedBotSocial({async request(method,path) {
+    assert.equal(method,'GET')
+    const id = path.replace('/v1/ot/call-records/','')
+    assert.ok(records.has(id))
+    const started = records.get(id)
+    return {record:{id, kind:'video', title, started_at:started*1000, ended_at:(started+1000)*1000, attendees:['Alex']}}
+  }})
+  t.after(() => setSharedBotSocial(undefined))
+
+  const firstDraft = {source_call_id:firstCall, summary:'First call notes'}
+  const firstKey = key()
+  const first = await firstRuntime.call('meetings','POST',base(),firstDraft,firstKey)
+  assert.equal(first.status,201)
+  // Simulate a call note already written by the old runtime before this migration.
+  const store = openStore(join(vol.data,'openteamily','features','meetings','meetings.sqlite3'))
+  store.transaction(db => {
+    db.run("DELETE FROM ot_feature_migrations WHERE feature='meetings' AND version=5")
+    db.run('UPDATE meetings SET title_hash=? WHERE id=?',digest(title.toLowerCase()),first.body.meeting.id)
+  })
+  store.close()
+
+  const runtime = await bootMemory(vol)
+  const call = (method,path,payload,requestKey) => runtime.call('meetings',method,path,payload,requestKey)
+  const secondDraft = {source_call_id:secondCall, summary:'Second call notes'}
+  const secondKey = key()
+  const second = await call('POST',base(),secondDraft,secondKey)
+  assert.equal(second.status,201,JSON.stringify(second.body))
+  assert.notEqual(first.body.meeting.id,second.body.meeting.id)
+  assert.equal(second.body.meeting.title,title)
+  assert.equal(second.body.meeting.started_at,records.get(secondCall))
+  assert.deepEqual((await call('POST',base(),firstDraft,firstKey)).body.meeting,first.body.meeting)
+  assert.deepEqual((await call('POST',base(),secondDraft,secondKey)).body.meeting,second.body.meeting)
+  const duplicate = await call('POST',base(),{...secondDraft,title:'Another title'},key())
+  assert.equal(duplicate.status,409)
+  assert.equal(duplicate.body.error.code,'meeting_exists')
+  assert.equal(duplicate.body.error.current.id,second.body.meeting.id)
+  assert.deepEqual((await call('GET',base('from-call/'+firstCall))).body.meeting,first.body.meeting)
+  assert.deepEqual((await call('GET',base('from-call/'+secondCall))).body.meeting,second.body.meeting)
+
+  const manual = {title, summary:'Manual meeting notes'}
+  assert.equal((await call('POST',base(),manual,key())).status,201)
+  assert.equal((await call('POST',base(),manual,key())).status,409)
+  const renamed = await call('POST',base(first.body.meeting.id),{revision:1,changes:{title:'Planning'}})
+  assert.equal(renamed.status,200)
+  const sameTitleAgain = await call('POST',base(first.body.meeting.id), {revision:2,changes:{title}})
+  assert.equal(sameTitleAgain.status,200)
+  assert.equal(sameTitleAgain.body.meeting.source_call_id,firstCall)
 })
 
 test('meeting list filters all saved metadata before paging in start-time order', async () => {
@@ -279,7 +493,8 @@ test('meeting list filters all saved metadata before paging in start-time order'
   assert.deepEqual(ids(await list('order=recent&open=1')), [old])
   assert.deepEqual(ids(await list('order=recent&open=1&q=' + encodeURIComponent('äpfel %'))), [old])
   assert.deepEqual(ids(await list('q=ravi')), [old])
-  assert.deepEqual(ids(await list('q=' + encodeURIComponent('仅正文出现的词'))), [])
+  assert.deepEqual(ids(await list('order=recent&open=1&q=' + encodeURIComponent('仅正文出现的词'))), [old])
+  assert.deepEqual(ids(await list('q=' + encodeURIComponent('未出现的词'))), [])
   assert.deepEqual(ids(await list('order=recent&cursor=' + other)), [])
   for (const query of ['order=wrong','open=0','open=1&open=1','q=' + 'a'.repeat(81)]) {
     assert.equal((await list(query)).status, 400)
@@ -404,6 +619,54 @@ test('meeting shares publish only the saved summary and action items through the
   assert.equal(calls.at(-1).path,`/v1/ot/workspaces/${WS}/meeting-shares?limit=20&sent=1`)
   assert.deepEqual((await call('POST',`shared/${receiptId}/revoke`,{})).body,{revoked:true})
   assert.equal((await call('GET','shared?source_id='+meeting.id)).status,400)
+})
+
+test('received meeting actions are copied once into personal memory and every retry rechecks access', async t => {
+  const team = 'b'.repeat(32), shareId = 'c'.repeat(32)
+  const bot = await bootMemory(volume(), {teams:[team]})
+  const text = '📋'.repeat(45) + ' 在周五前确认议程'
+  const meeting = {id:shareId, title:'周会', revision:3, shared:true, action_items:[
+    {text,owner:'Alice',due_date:'2032-02-29',done:false}, {text:'已确认的事项',done:true},
+  ]}
+  let received = true, revoked = false
+  setSharedBotSocial({async request(method, path) {
+    assert.equal(method, 'GET')
+    assert.equal(path, `/v1/ot/workspaces/${team}/meeting-shares/${shareId}`)
+    if (revoked) throw Object.assign(new Error('Meeting share not found'), {status:404,code:'social/not_found'})
+    return {meeting, received}
+  }})
+  t.after(() => setSharedBotSocial(undefined))
+  const receipt = base('shared/' + shareId, team)
+  const copy = (input) => bot.call('meetings', 'POST', receipt + '/action', input)
+  const actions = '/v1/workspaces/' + WS + '/memory/actions'
+  const item = {revision:3,index:0}
+  assert.equal((await bot.endpoint('memory/saveSharedMeetingAction', {})).ok,false)
+  assert.equal((await copy({...item,workspace_id:team})).status,400)
+  assert.equal((await copy({...item,revision:2})).status,409)
+  assert.equal((await copy({...item,index:1})).status,409)
+  assert.equal((await copy({...item,index:2})).status,404)
+  received = false
+  assert.equal((await copy(item)).status,404)
+  received = true
+  const copied = await Promise.all([copy(item),copy(item)])
+  assert.deepEqual(copied.map(result=>result.status).sort(),[200,201])
+  const action = copied[0].body.action
+  assert.deepEqual(copied[1].body.action,action)
+  assert.equal(action.workspace_id,WS)
+  const privatePath = actions + '/' + action.id
+  const saved = (await bot.call('memory','GET',privatePath)).body.action
+  assert.match(saved.notes,/在周五前确认议程/)
+  assert.equal(saved.due_at,Date.parse('2032-02-29') / 1000)
+  assert.deepEqual(saved.source,{kind:'shared_meeting',workspace_id:team,share_id:shareId,revision:3,action_index:0})
+  await bot.call('memory','POST',privatePath,{revision:1,changes:{status:'done',notes:'已自行处理'}})
+  assert.deepEqual((await bot.call('meetings','GET',receipt)).body.saved_actions,[{index:0,...action}])
+  assert.equal((await copy(item)).status,200)
+  assert.equal((await bot.call('memory','GET',privatePath)).body.action.notes,'已自行处理')
+  assert.equal((await bot.call('memory','GET',actions.replace(WS,team))).body.items.length,0)
+  assert.deepEqual((await bot.call('meetings','GET',receipt)).body.meeting,meeting)
+  revoked = true
+  assert.equal((await copy(item)).status,404)
+  assert.equal((await bot.call('memory','GET',actions)).body.items.length,1)
 })
 
 test('meeting speech prepares and uses the local provider in the signed-in runtime', async (t) => {
@@ -598,5 +861,19 @@ test('legacy meetings of one test account import into that account\'s DS-Bot, id
   const evil = volume()
   deliverBundle(evil, 'x.bundle', JSON.stringify(tampered))
   const rejected = await boot(evil)
-  assert.equal((await rejected.endpoint('meetings/routes')).value.imported[0].status, 'rejected')
+  const badDigest = (await rejected.endpoint('meetings/routes')).value.imported[0]
+  assert.equal(badDigest.status, 'rejected')
+  assert.match(badDigest.reason, /digest mismatch/)
+
+  const foreign = volume()
+  deliverBundle(foreign, 'foreign.bundle', JSON.stringify({
+    ...JSON.parse(bundles.meetings),
+    instance_id: bot.identity.routingInstanceId ?? bot.identity.instanceId,
+  }))
+  const other = await boot(foreign)
+  assert.deepEqual((await other.endpoint('meetings/routes')).value.imported, [
+    { name: 'foreign.bundle', status: 'rejected', reason: 'import target mismatch' },
+  ])
+  assert.equal((await other.call('meetings', 'GET', base(expect.meetings.meeting_id, wid))).status, 404)
+  assert.equal(existsSync(join(foreign.data, 'openteamily', 'import', 'foreign.bundle')), true)
 })

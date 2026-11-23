@@ -1,8 +1,73 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { bootMemory as boot, deliverBundle, key, legacyBundles, volume, WS } from './helpers.js'
+import { setSharedBotSocial } from '../lib/c/bot-social.js'
 
 const base = (rest = '', ws = WS) => `/v1/workspaces/${ws}/memory${rest}`
+
+test('a reviewed team message produces one private action with scoped provenance and current revision', async t => {
+  const team = 'b'.repeat(32)
+  const room = 'otc_' + 'C'.repeat(26)
+  const message = 'otm_' + 'D'.repeat(26)
+  const other = 'otm_' + 'E'.repeat(26)
+  const route = `/v1/ot/workspaces/${team}/conversations/${room}/messages/`
+  const reads = []
+  let accessible = true
+  setSharedBotSocial({
+    async request(method,path) {
+      assert.equal(method,'GET')
+      reads.push(path)
+      if (accessible && (path === route + message || path === route + other)) {
+        return {revision:2,body:'已保存的群聊原话'}
+      }
+      throw Object.assign(new Error('Fixture cannot view source'),{status:404})
+    },
+  })
+  t.after(()=>setSharedBotSocial(undefined))
+  const bot = await boot(volume(),{teams:[team]})
+  const call = (...args)=>bot.call('memory',...args)
+  const path = base('/actions/from-chat')
+  const source = {kind:'social',workspace_id:team,conversation_id:room,message_id:message,revision:2}
+  const write = (changes={})=>call('POST',path,{source,title:'复查蓝图',notes:'我审阅过的私人备注',...changes},key())
+
+  assert.equal((await call('POST',base('/actions/from-chat',team),{source,title:'团队公开行动'},key())).status,404)
+  assert.equal((await write({source:{...source,revision:1}})).status,409)
+  assert.equal((await write({source:{...source,workspace_id:'f'.repeat(32)}})).status,404)
+  assert.deepEqual((await call('GET',base('/actions'))).body.items,[])
+  const [created,replayed] = (await Promise.all([write(),write()])).sort((a,b)=>b.status-a.status)
+  assert.deepEqual([created.status,replayed.status],[201,200])
+  const action = created.body.action
+  assert.equal(replayed.body.action.id,action.id)
+  assert.deepEqual(action.source_chat,source)
+  assert.equal(action.workspace_id,WS)
+  assert.equal(action.notes,'我审阅过的私人备注')
+  const exact = base('/actions/'+action.id)
+  assert.deepEqual((await call('GET',exact)).body.action,{...action, automation_followups:[]})
+  assert.equal((await call('GET',base('/actions/'+action.id,team))).status,404)
+  assert.equal((await call('GET',base('/actions'))).body.items[0].source_chat,undefined)
+  accessible = false
+  assert.equal((await write({source:{...source,message_id:other}})).status,404)
+  const verifiedReads = reads.length
+  assert.equal((await write()).body.action.id,action.id)
+  assert.equal(reads.length,verifiedReads)
+})
+
+test('the native message reference keeps its agent and rejects a source outside the active workspace', async () => {
+  const team = 'b'.repeat(32)
+  const bot = await boot(volume(),{teams:[team]})
+  const source = {kind:'agent',workspace_id:team,agent_id:'c'.repeat(32),
+    conversation_id:'d'.repeat(32),message_id:'e'.repeat(32)}
+  bot.features.table['agents/actionSource'] = async (payload,call) => {
+    assert.equal(call.internal,true)
+    assert.deepEqual(payload,source)
+    return true
+  }
+  const head = (ref)=>bot.call('memory','POST',base('/actions/from-chat'),{source:ref,title:'跟进回复'},key())
+  assert.equal((await head({...source,workspace_id:'f'.repeat(32)})).status,404)
+  const saved = await head(source)
+  assert.equal(saved.status,201)
+  assert.deepEqual(saved.body.action.source_chat,source)
+})
 
 test('memory pages run inside this DS-Bot: create, list, edit, conflict, versions, restore, export, remove', async () => {
   const bot = await boot()

@@ -20,6 +20,7 @@ class MeetingsPageTests(unittest.TestCase):
         self.assertIn('href="/meetings/app.css"', html)
         self.assertEqual(self.raw.call('GET', '/meetings/app.mjs')['status'], 200)
         self.assertEqual(self.raw.call('GET', '/meetings/audio.mjs')['status'], 200)
+        self.assertEqual(self.raw.call('GET', '/shell/call-audio-handoff.mjs')['status'], 200)
         self.assertIn('microphone=(self)', page['headers']['Permissions-Policy'])
         self.assertIn("media-src 'self' blob:", page['headers']['Content-Security-Policy'])
         self.assertIn('microphone=()', self.raw.call('GET', '/settings')['headers']['Permissions-Policy'])

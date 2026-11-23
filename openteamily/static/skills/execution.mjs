@@ -38,14 +38,14 @@ export function mountSkillExecution(document,{request,scope,keyFactory=()=>globa
       const identity=document.createElement('small');identity.textContent='任务 '+task.id+' · '+new Date(task.created*1000).toLocaleString()+' · '+(record.skills||[]).map(i=>i.id+'@'+i.version).join(', ');li.append(identity);
       if(['queued','claimed'].includes(task.status)){
         const cancel=document.createElement('button');cancel.type='button';cancel.textContent='取消此任务';
-        cancel.addEventListener('click',async()=>{cancel.disabled=true;try{await request('POST','/v1/runtime/tasks/'+task.id+'/cancel',{});await refresh()}catch(e){showError(e)}finally{cancel.disabled=false}});li.append(cancel);
+        cancel.addEventListener('click',async()=>{cancel.disabled=true;try{await request('POST','/v1/skills/runs/'+task.id+'/cancel',{});await refresh()}catch(e){showError(e)}finally{cancel.disabled=false}});li.append(cancel);
       }
       if(record.verified){
         const save=document.createElement('button');save.type='button';save.textContent='保存结果为工作区文档';
         save.addEventListener('click',async()=>{save.disabled=true;try{
           const workspace=get('skill-result-workspace').value;
           if(!workspace)throw new Error('请先选择可访问的工作区；保存后成员可见。');
-          const data=await request('POST','/v1/runtime/tasks/'+task.id+'/artifact',{workspace_id:workspace});
+          const data=await request('POST','/v1/skills/runs/'+task.id+'/artifact',{workspace_id:workspace});
           const link=document.createElement('a');link.href='/space?workspace='+workspace+'&artifact='+data.artifact.id;link.textContent='打开已保存文档';li.append(link);
         }catch(e){showError(e)}finally{save.disabled=false}});li.append(save);
       }

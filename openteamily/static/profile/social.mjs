@@ -12,8 +12,10 @@ export function followWorkSwitchLabel(name) {
 
 const FEEDS = {
   published: {id: 'tab-posts', empty: '还没有公开作品。', href: '/space', label: '前往资料空间'},
-  collected: {id: 'tab-saved', empty: '还没有收藏，遇到喜欢的作品可以先收录。', href: '/discover', label: '探索作品'},
-  liked: {id: 'tab-liked', empty: '还没有点赞，给喜欢的作品点个赞吧。', href: '/discover', label: '探索作品'},
+  collected: {id: 'tab-saved', empty: '还没有收藏，遇到喜欢的作品可以先收录。', href: '/discover', label: '探索作品',
+    action: 'collect', remove: '取消收藏'},
+  liked: {id: 'tab-liked', empty: '还没有点赞，给喜欢的作品点个赞吧。', href: '/discover', label: '探索作品',
+    action: 'like', remove: '取消点赞'},
 };
 const CONNECTIONS = {
   following: {id: 'dialog-tab-following', label: '关注', empty: '你还没有关注任何人。'},
@@ -25,6 +27,7 @@ const WORK_KINDS = {
 };
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 const CREATOR = /^[a-z0-9][a-z0-9._-]{1,79}$/i;
+const LISTING_ID = /^otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
 const SEARCH_DELAY = 200;
 
 function workHref(item) {
@@ -88,6 +91,15 @@ function listPager({document, list, status, more, retry, discover, endpoint = SO
     if (discover) discover.hidden = true;
   }
 
+  function showEmpty() {
+    status.textContent = empty(view, query);
+    if (discover) {
+      discover.href = FEEDS[view].href;
+      discover.textContent = FEEDS[view].label;
+      discover.hidden = false;
+    }
+  }
+
   async function load(append = false) {
     if (append && (!cursor || controller)) return;
     if (!append) reset();
@@ -110,12 +122,8 @@ function listPager({document, list, status, more, retry, discover, endpoint = SO
       const rows = result.body.items.map(render).filter(Boolean);
       list.append(...rows);
       list.hidden = list.childElementCount === 0;
-      status.textContent = list.hidden ? empty(view, query) : '';
-      if (discover && list.hidden) {
-        discover.href = FEEDS[view].href;
-        discover.textContent = FEEDS[view].label;
-        discover.hidden = false;
-      }
+      if (list.hidden) showEmpty();
+      else status.textContent = '';
       const next = result.body.next_cursor;
       cursor = typeof next === 'string' && next !== cursor ? next : '';
       more.hidden = !cursor;
@@ -152,7 +160,7 @@ function listPager({document, list, status, more, retry, discover, endpoint = SO
       row.remove();
       if (!list.childElementCount && !cursor && !controller) {
         list.hidden = true;
-        status.textContent = empty(view, query);
+        showEmpty();
       }
     },
   };
@@ -161,9 +169,12 @@ function listPager({document, list, status, more, retry, discover, endpoint = SO
 export function mountProfileSocial({document, request, avatarTone, monogram}) {
   const byId = id => document.getElementById(id);
   const feedPanel = byId('profile-feed');
+  const feedList = byId('profile-feed-list');
+  const feedActionStatus = byId('profile-feed-action-status');
   const dialog = byId('followers-dialog');
   const noticesDialog = byId('follow-work-dialog');
   const noticesStatus = byId('follow-work-status');
+  const noticesSearch = byId('follow-work-search');
   const connectionPanel = byId('followers-dialog-panel');
   const search = byId('followers-search');
   const actionStatus = byId('followers-action-status');
@@ -176,9 +187,12 @@ export function mountProfileSocial({document, request, avatarTone, monogram}) {
   let activeConnection = 'followers';
   let owner = '';
   let countRequest;
-  let searchTimer;
   let initiatingControl;
   const changing = new Map();
+  const removing = new Map();
+  const removed = new Set();
+  const changingNotices = new Map();
+  const noticeReads = new Set();
 
   function element(tag, css, text) {
     const node = document.createElement(tag);
@@ -189,6 +203,10 @@ export function mountProfileSocial({document, request, avatarTone, monogram}) {
 
   function renderWork(item) {
     if (!item?.title) return null;
+    const view = activeFeed;
+    const settings = FEEDS[view];
+    const key = view + '/' + item.id;
+    if (removed.has(key)) return null;
     const row = element('li', 'profile-work-item');
     const href = workHref(item);
     const card = element(href ? 'a' : 'div', 'profile-work-card');
@@ -202,7 +220,62 @@ export function mountProfileSocial({document, request, avatarTone, monogram}) {
     const author = item.creator?.display_name || item.creator?.handle;
     if (author) card.append(element('span', 'profile-work-author', author));
     row.append(card);
+    if (settings.action && typeof item.id === 'string' && LISTING_ID.test(item.id) && item[view] === true) {
+      row.dataset.listingId = item.id;
+      const button = element('button', 'profile-work-action', settings.remove);
+      button.type = 'button';
+      button.setAttribute('aria-label', settings.remove + ' ' + item.title);
+      button.disabled = removing.get(key) === owner;
+      button.addEventListener('click', () => removeReaction(view, item, key));
+      row.append(button);
+    }
     return row;
+  }
+
+  async function removeReaction(view, item, key) {
+    const account = owner;
+    if (!account || view !== activeFeed || removing.get(key) === account) return;
+    const {action, remove} = FEEDS[view];
+    const row = () => Array.from(feedList.children).find(entry => entry.dataset.listingId === item.id);
+    const button = () => row()?.querySelector('button');
+    const control = button();
+    if (!control) return;
+    const hadFocus = document.activeElement === control;
+    removing.set(key, account);
+    control.disabled = true;
+    feedActionStatus.textContent = '';
+    try {
+      const result = await request('POST', SOCIAL, {listing_id: item.id, action});
+      if (owner !== account) return;
+      if (result.status !== 200 || result.body[view] !== false) throw new Error();
+      removed.add(key);
+      if (activeFeed === view) {
+        const itemRow = row();
+        if (itemRow) {
+          const focus = document.activeElement;
+          const focused = focus && itemRow.contains(focus) || hadFocus && focus === document.body;
+          const next = itemRow.nextElementSibling || itemRow.previousElementSibling;
+          feed.remove(itemRow);
+          if (focused) {
+            const more = byId('profile-feed-more');
+            (next?.querySelector('a,button') || (more.hidden ? feedPanel : more)).focus();
+          }
+        }
+        feedActionStatus.textContent = '已' + remove + '。';
+      }
+      void refreshCounts();
+    } catch {
+      if (owner === account && activeFeed === view) feedActionStatus.textContent = '无法' + remove + '，请重试。';
+    } finally {
+      if (removing.get(key) === account) removing.delete(key);
+      if (owner === account && activeFeed === view) {
+        const current = button();
+        if (current) {
+          current.disabled = false;
+          if (hadFocus && document.activeElement === document.body) current.focus();
+        }
+      }
+    }
   }
 
   async function refreshCounts() {
@@ -299,27 +372,43 @@ export function mountProfileSocial({document, request, avatarTone, monogram}) {
     copy.append(element('strong', '', name), element('span', 'follow-work-handle', '@' + item.handle));
     const input = element('input');
     input.type = 'checkbox';
-    input.checked = item.enabled === true;
+    const pending = changingNotices.get(item.handle);
+    input.checked = pending?.account === owner ? pending.enabled : item.enabled === true;
+    input.disabled = pending?.account === owner;
     input.setAttribute('aria-label', followWorkSwitchLabel(name));
     input.addEventListener('change', async () => {
-      if (input.disabled) return;
-      input.disabled = true;
-      const next = input.checked;
+      if (input.disabled || !owner) return;
       const account = owner;
+      const next = input.checked;
+      const change = {account, enabled: next};
+      changingNotices.set(item.handle, change);
+      input.disabled = true;
       noticesStatus.textContent = '';
+      let verified = !next;
+      let feedback = '无法更新作品通知，请重试。';
       try {
         const result = await request('POST', FOLLOW_WORK, {handle: item.handle, enabled: next});
-        if (result.status !== 200 || typeof result.body.enabled !== 'boolean') throw new Error();
-        input.checked = result.body.enabled;
-        if (owner === account && noticesDialog.open) noticesStatus.textContent = followWorkNotice(input.checked);
-      } catch {
-        input.checked = !next;
-        if (owner === account && noticesDialog.open) noticesStatus.textContent = '无法更新作品通知，请重试。';
-      } finally {
-        input.disabled = false;
+        if (result.status === 200 && typeof result.body.enabled === 'boolean') {
+          verified = result.body.enabled;
+          feedback = followWorkNotice(verified);
+          for (const read of noticeReads) {
+            if (read.account === account) read.changes.set(item.handle, verified);
+          }
+        }
+      } catch { /* Roll back an unconfirmed preference. */ }
+      finally {
+        if (changingNotices.get(item.handle) === change) changingNotices.delete(item.handle);
+        if (owner === account && noticesDialog.open) {
+          const row = Array.from(byId('follow-work-list').children).find(entry => entry.dataset.handle === item.handle);
+          const current = row?.querySelector('input') || input;
+          current.checked = verified;
+          current.disabled = false;
+          noticesStatus.textContent = feedback;
+        }
       }
     });
     label.append(copy, input);
+    row.dataset.handle = item.handle;
     row.append(label);
     return row;
   }
@@ -336,21 +425,38 @@ export function mountProfileSocial({document, request, avatarTone, monogram}) {
     request, render: renderConnection,
     empty: (view, query) => query ? '没有匹配的人。' : CONNECTIONS[view].empty,
   });
+  async function readNotices(method, path, body, options) {
+    const read = {account: owner, changes: new Map()};
+    noticeReads.add(read);
+    try {
+      const result = await request(method, path, body, options);
+      if (!read.changes.size || !Array.isArray(result.body.items)) return result;
+      const items = result.body.items.map(item => read.changes.has(item.handle)
+        ? {...item, enabled: read.changes.get(item.handle)} : item);
+      return {...result, body: {...result.body, items}};
+    } finally {
+      noticeReads.delete(read);
+    }
+  }
+
   const notices = listPager({
     document, list: byId('follow-work-list'), status: byId('follow-work-empty'),
     more: byId('follow-work-more'), retry: byId('follow-work-retry'),
-    endpoint: FOLLOW_WORK, request, render: renderNotice, empty: () => FOLLOW_WORK_EMPTY,
+    endpoint: FOLLOW_WORK, request: readNotices, render: renderNotice,
+    empty: (_view, query) => query ? '没有匹配的作者。' : FOLLOW_WORK_EMPTY,
   });
 
   function setFeed(view) {
     activeFeed = view;
+    removed.clear();
+    feedActionStatus.textContent = '';
     selectTab(byId, FEEDS, activeFeed, feedPanel);
     if (owner) return feed.select(view);
   }
 
   function setConnection(view) {
     activeConnection = view;
-    clearTimeout(searchTimer);
+    cancelConnectionSearch();
     selectTab(byId, CONNECTIONS, view, connectionPanel);
     actionStatus.textContent = '';
     search.value = '';
@@ -378,20 +484,28 @@ export function mountProfileSocial({document, request, avatarTone, monogram}) {
   dialog.addEventListener('close', () => {
     if (dialog.open) return;
     connections.reset();
-    clearTimeout(searchTimer);
+    cancelConnectionSearch();
     initiatingControl?.focus?.();
     initiatingControl = null;
   });
-  search.addEventListener('input', () => {
-    clearTimeout(searchTimer);
-    connections.reset();
-    const query = search.value.trim().replace(/^@/, '');
-    if (!query) void connections.select(activeConnection);
-    else searchTimer = setTimeout(() => connections.select(activeConnection, query), SEARCH_DELAY);
-  });
+  function bindSearch(input, pager, selectedView) {
+    let timer;
+    input.addEventListener('input', () => {
+      clearTimeout(timer);
+      pager.reset();
+      const query = input.value.trim().replace(/^@/, '');
+      if (!query) void pager.select(selectedView());
+      else timer = setTimeout(() => pager.select(selectedView(), query), SEARCH_DELAY);
+    });
+    return () => clearTimeout(timer);
+  }
+
+  const cancelConnectionSearch = bindSearch(search, connections, () => activeConnection);
+  const cancelNoticesSearch = bindSearch(noticesSearch, notices, () => '');
   byId('profile-notify-open').addEventListener('click', () => {
     if (!owner || noticesDialog.open) return;
     noticesStatus.textContent = '';
+    noticesSearch.value = '';
     noticesDialog.showModal();
     void notices.select('');
   });
@@ -400,7 +514,9 @@ export function mountProfileSocial({document, request, avatarTone, monogram}) {
     if (event.target === noticesDialog) noticesDialog.close();
   });
   noticesDialog.addEventListener('close', () => {
-    if (!noticesDialog.open) notices.reset();
+    if (noticesDialog.open) return;
+    cancelNoticesSearch();
+    notices.reset();
   });
 
   return {
@@ -419,7 +535,12 @@ export function mountProfileSocial({document, request, avatarTone, monogram}) {
       notices.reset();
       for (const field of Object.values(countFields)) field.textContent = '—';
       for (const [view, {id}] of Object.entries(CONNECTIONS)) byId(id).textContent = formattedConnection(view, null);
-      clearTimeout(searchTimer);
+      cancelConnectionSearch();
+      cancelNoticesSearch();
+      removing.clear();
+      removed.clear();
+      changingNotices.clear();
+      feedActionStatus.textContent = '';
       activeFeed = 'published';
     },
   };

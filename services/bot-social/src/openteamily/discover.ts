@@ -4,7 +4,7 @@
 // category, kind and an optional explicitly released snapshot).
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import { assert } from "../errors.js";
+import { ApiError, assert } from "../errors.js";
 import { newId } from "../ids.js";
 import { CHAT_FILE_BODY_LIMIT, CHAT_FILE_MAX_BYTES, decodeChatFile } from "./chat-files.js";
 import { body, handleKey, hashCode, intParam, one, OtContext, optText, params, query, text } from "./core.js";
@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS ot_listings (
   slug TEXT NOT NULL UNIQUE, title TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', category TEXT, work_kind TEXT,
   snapshot TEXT, listed INTEGER NOT NULL DEFAULT 1, chat_enabled INTEGER NOT NULL DEFAULT 0,
   chat_from INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
-  publication_revision INTEGER NOT NULL DEFAULT 1,
+  publication_revision INTEGER NOT NULL DEFAULT 1, source_revision INTEGER,
   UNIQUE (owner_id, kind, ref)
 );
 CREATE INDEX IF NOT EXISTS ot_listings_feed ON ot_listings(listed, updated_at);
@@ -54,6 +54,7 @@ ${WORK_COMMENTS_SCHEMA}
 
 export const CATEGORIES = ["content-creation", "customer-support", "data-analysis", "design", "education", "engineering", "finance", "it-security", "investment", "legal", "life", "marketing", "operations", "product", "recruiting", "research", "sales"];
 export const WORK_KINDS = ["document", "website", "whiteboard", "media", "image", "audio", "video", "slides", "dashboard", "model3d", "spreadsheet"];
+const CREATOR_HANDLE = /^[a-z0-9][a-z0-9._-]{1,79}$/i;
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 const LISTING_ID = /^otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
 const LATEST_WORK_CURSOR = /^l\.(0|[1-9][0-9]{0,15})\.(otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26})\.([a-f0-9]{24})$/;
@@ -124,6 +125,10 @@ function publicListingView(ot: OtContext, listing: any) {
   return {...view, creator: {handle, display_name, bio}};
 }
 
+function ownerWorkRevision(row: {kind: string; source_revision?: number | null}) {
+  return row.kind === "work" && Number.isSafeInteger(row.source_revision) ? {source_revision:row.source_revision} : {};
+}
+
 function workExcerpt(listing: {snapshot: string | null; summary: string}, hasSite: boolean) {
   const excerpt = String(listing.snapshot || "").slice(0, WORK_PREVIEW_MAX);
   return hasSite || excerpt.startsWith("{") ? listing.summary || "" : excerpt;
@@ -149,6 +154,10 @@ function publishedQuickStarts(listing: {id: string; kind: string; snapshot: stri
 
 function publicPage(ot: OtContext, l: any, view: any) {
   const creator = view.creator?.display_name || view.creator?.handle || "";
+  const creatorHandle = view.creator?.handle;
+  const author = CREATOR_HANDLE.test(creatorHandle || "")
+    ? `<a href="/discover?creator=${encodeURIComponent(creatorHandle)}">${escapeHtml(creator)}</a>`
+    : escapeHtml(creator);
   const title = String(view.title || view.slug);
   const site = l.kind === "work" && view.site_available === true;
   const media = view.file_available ? view.file_mime.split("/")[0] : null;
@@ -204,7 +213,7 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f6f6;padding:1rem;
 .comments{margin:2rem 0}.comments ul{padding:0;list-style:none}.comments pre{font:inherit;margin:.3rem 0 .8rem}
 </style>
 </head><body${site ? ' class="interactive-work"' : ""}>
-<p class="meta">作品${creator ? " · " + escapeHtml(creator) : ""}</p>
+<p class="meta">作品${creator ? " · " + author : ""}</p>
 <h1>${escapeHtml(title)}</h1>
 <nav class="work-nav" aria-label="浏览公开作品">
 ${adjacent(previous, "prev", "上一件")}
@@ -323,7 +332,7 @@ h2,h3,p{margin:0}
 <section class="profile" aria-labelledby="profile-title">
 <div class="avatar" aria-hidden="true">${escapeHtml(Array.from(title.trim())[0]?.toUpperCase() || "O")}</div>
 <h1 id="profile-title">${escapeHtml(title)}</h1>
-${creator ? `<p class="creator">发布者 · ${escapeHtml(creator)}</p>` : ""}
+${creator ? `<p class="creator">发布者 · ${author}</p>` : ""}
 <div id="public-agent-share" class="profile-share" data-profile-path="${profilePath}">
   <button type="button" data-copy-profile disabled hidden>复制主页链接</button>
   <details data-copy-profile-fallback>
@@ -391,7 +400,7 @@ type WorkAnchor = { id: string; updated_at: number };
 type WorkNeighbor = { slug: string; title: string };
 const PUBLIC_WORK_SCOPE: FeedScope = {where: "l.listed = 1 AND l.kind = 'work'", args: []};
 
-function publicWorkPreview(ot: OtContext, slug: string) {
+function publicWorkPreview(ot: OtContext, slug: string, input: Record<string, unknown>) {
   assert(SLUG.test(slug), 404, "listing_not_found", "no such work");
   const work = ot.get<any>(`SELECT ${LISTING_CARD_COLUMNS}, substr(l.snapshot, 1, ?) AS snapshot
     FROM ot_listings l WHERE l.slug = ? AND ${PUBLIC_WORK_SCOPE.where}`, WORK_PREVIEW_MAX, slug);
@@ -400,11 +409,12 @@ function publicWorkPreview(ot: OtContext, slug: string) {
     listingView(ot, work, null);
   const author = creator.handle?.replace(/^@/, "").replace(/\.home$/, "") || creator.display_name;
   return {
-    slug, title, kind: work_kind || "document", author,
+    slug, title, kind: work_kind || "document", author, creator: {handle: creator.handle, name: creator.display_name || author},
     updated: Math.floor(updated_at > 1e12 ? updated_at / 1000 : updated_at),
     path, likes, collections, comment_count, site_available,
     ...(file_available ? {file_available, file_mime, file_bytes} : {}),
     preview: workExcerpt(work, site_available === true),
+    ...(input.nav === "latest" ? publicPreviewNeighbors(ot, work, input) : {}),
   };
 }
 
@@ -482,6 +492,7 @@ function guestDiscoverCard(card: ReturnType<typeof discoverCard>) {
       chat_enabled:card.chat_enabled, creator:{handle:creator.handle, name:creator.display_name || author}};
   }
   return {slug, title, kind:card.work_kind || "document", author, updated, path:card.path,
+    creator:{handle:creator.handle, name:creator.display_name || author},
     likes:card.likes, collections:card.collections, comment_count:card.comment_count,
     ...(card.site_available ? {site_available:true} : {}),
     ...(card.file_available ? {file_available:true, file_mime:card.file_mime, file_bytes:card.file_bytes} : {}),
@@ -499,6 +510,24 @@ function chronologicalWorkNeighbors(ot: OtContext, work: WorkAnchor, scope: Feed
     ...scope.args, work.updated_at, work.id) ?? null;
   };
   return {previous: neighbor(true), next: neighbor(false)};
+}
+
+function scopedWorkNeighbors(ot: OtContext, work: WorkAnchor, scope: FeedScope) {
+  const matches = ot.get(`SELECT 1 FROM ot_listings l LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
+    WHERE l.id = ? AND ${scope.where}`, work.id, ...scope.args);
+  return matches ? chronologicalWorkNeighbors(ot, work, scope) : {previous:null, next:null};
+}
+
+function publicPreviewNeighbors(ot: OtContext, work: WorkAnchor, input: Record<string, unknown>) {
+  try {
+    // Public links can carry chronological filters, never a viewer's private feed.
+    const scope = discoverScope(ot, {kind:"work", work_kind:input.kind, q:input.q, creator:input.creator}, null);
+    return scopedWorkNeighbors(ot, work, scope);
+  } catch (error) {
+    // An obsolete creator filter or invalid optional query cannot hide the work itself.
+    if (error instanceof ApiError && (error.status === 400 || error.code === "member_not_found")) return {previous:null, next:null};
+    throw error;
+  }
 }
 
 const RANKING_WINDOW = 500;
@@ -648,6 +677,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   if (!columns.has("chat_enabled")) ot.run("ALTER TABLE ot_listings ADD COLUMN chat_enabled INTEGER NOT NULL DEFAULT 0");
   if (!columns.has("chat_from")) ot.run("ALTER TABLE ot_listings ADD COLUMN chat_from INTEGER NOT NULL DEFAULT 0");
   if (!columns.has("publication_revision")) ot.run("ALTER TABLE ot_listings ADD COLUMN publication_revision INTEGER NOT NULL DEFAULT 1");
+  if (!columns.has("source_revision")) ot.run("ALTER TABLE ot_listings ADD COLUMN source_revision INTEGER");
   const followColumns = ot.all<{name: string}>("PRAGMA table_info(ot_follows)");
   if (!followColumns.some(column => column.name === "work_notices")) {
     ot.run("ALTER TABLE ot_follows ADD COLUMN work_notices INTEGER NOT NULL DEFAULT 1 CHECK (work_notices IN (0, 1))");
@@ -661,6 +691,9 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const me = ot.me(req);
     const b = body(req);
     assert(b.kind === "agent" || b.kind === "work", 400, "invalid_request", "kind must be agent or work");
+    const sourceRevision = b.source_revision;
+    assert(sourceRevision === undefined || (b.kind === "work" && typeof sourceRevision === "number" &&
+      Number.isSafeInteger(sourceRevision) && sourceRevision > 0), 400, "invalid_request", "Invalid work source revision");
     assert(typeof b.ref === "string" && REF.test(b.ref), 400, "invalid_request", "ref is invalid");
     const title = text(b.title, "title", { min: 1, max: 80 });
     const suppliedSummary = optText(b.summary, "summary", { max: 500, multiline: true });
@@ -685,6 +718,8 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const summary = suppliedSummary
       ?? (site === undefined ? "" : (searchableBody ?? "").slice(0, 300).replace(/[\uD800-\uDBFF]$/u, ""));
     const existing = ot.get<any>("SELECT * FROM ot_listings WHERE owner_id = ? AND kind = ? AND ref = ?", me.ownerId, b.kind, b.ref);
+    assert(sourceRevision === undefined || existing?.source_revision == null || existing.source_revision <= sourceRevision,
+      409, "artifact_changed", "已经公开了更新的保存版本。");
     assert(b.chat_enabled === undefined || (b.kind === "agent" && typeof b.chat_enabled === "boolean"),
       400, "invalid_request", "chat_enabled must be a boolean on an agent listing");
     const chatEnabled = b.kind === "agent" && (b.chat_enabled ?? !!(existing?.listed && existing.chat_enabled));
@@ -699,11 +734,11 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     ot.tx(() => {
       if (existing) {
         ot.run(`UPDATE ot_listings SET slug=?, title=?, summary=?, category=?, work_kind=?, snapshot=?, listed=1,
-          chat_enabled=?, chat_from=?, updated_at=?, publication_revision=publication_revision+1 WHERE id=?`,
-        slug, title, summary, category, workKind, snapshot, Number(chatEnabled), chatFrom, now, id);
+          chat_enabled=?, chat_from=?, updated_at=?, publication_revision=publication_revision+1, source_revision=? WHERE id=?`,
+        slug, title, summary, category, workKind, snapshot, Number(chatEnabled), chatFrom, now, sourceRevision ?? null, id);
       } else {
         assert(ot.get<any>("SELECT COUNT(*) AS n FROM ot_listings WHERE owner_id = ?", me.ownerId).n < 500, 429, "too_many_listings", "listing limit reached");
-        ot.run("INSERT INTO ot_listings(id, owner_id, kind, ref, slug, title, summary, category, work_kind, snapshot, chat_enabled, chat_from, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", id, me.ownerId, b.kind, b.ref, slug, title, summary, category, workKind, snapshot, Number(chatEnabled), chatFrom, now, now);
+        ot.run("INSERT INTO ot_listings(id, owner_id, kind, ref, slug, title, summary, category, work_kind, snapshot, chat_enabled, chat_from, created_at, updated_at, source_revision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", id, me.ownerId, b.kind, b.ref, slug, title, summary, category, workKind, snapshot, Number(chatEnabled), chatFrom, now, now, sourceRevision ?? null);
       }
       const fileSize = model?.length ?? media?.data.length;
       if (fileSize !== undefined) {
@@ -744,7 +779,8 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
         }
       }
     });
-    return {...listingView(ot, ot.get("SELECT * FROM ot_listings WHERE id = ?", id), me.ownerId, true),
+    const listing = ot.get<any>("SELECT * FROM ot_listings WHERE id = ?", id);
+    return {...listingView(ot, listing, me.ownerId, true), ...ownerWorkRevision(listing),
       ...(editable ? {editable_remix:true} : {})};
   });
   app.delete("/v1/ot/listings/:id", async (req) => {
@@ -766,7 +802,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const rows = ot.all<any>(`SELECT l.*,e.listing_id IS NOT NULL AS editable
       FROM ot_listings l LEFT JOIN ot_listing_editable e ON e.listing_id=l.id AND e.kind=l.work_kind
       WHERE l.owner_id=? ORDER BY l.updated_at DESC`, me.ownerId);
-    return {listings:rows.map(l => ({...listingView(ot,l,me.ownerId), ref:l.ref,
+    return {listings:rows.map(l => ({...listingView(ot,l,me.ownerId), ref:l.ref, ...ownerWorkRevision(l),
       ...(l.listed && l.editable ? {editable_remix:true} : {})}))};
   });
   const readFeed = (q: Record<string, unknown>, viewer: string | null) => {
@@ -847,9 +883,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
         : null;
       return {...detail, previous: neighbor(ids[position - 1]), next: neighbor(ids[position + 1])};
     }
-    const matches = ot.get(`SELECT 1 FROM ot_listings l LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
-      WHERE l.id = ? AND ${scope.where}`, work.id, ...scope.args);
-    return matches ? {...detail, ...chronologicalWorkNeighbors(ot, work, scope)} : detail;
+    return {...detail, ...scopedWorkNeighbors(ot, work, scope)};
   });
   app.get("/v1/ot/discover/:slug/remix", async (req, reply) => {
     ot.me(req);
@@ -992,7 +1026,8 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const slug = params(req).slug;
     const accept = String(req.headers.accept || "");
     const json = accept.includes("application/json") && !accept.includes("text/html");
-    if (json && kind === "work" && query(req).view === "preview") return publicWorkPreview(ot, slug);
+    const input = query(req);
+    if (json && kind === "work" && input.view === "preview") return publicWorkPreview(ot, slug, input);
     const l = listedBySlug(ot, slug);
     assert(l.kind === kind, 404, "listing_not_found", "no such listing");
     const view = publicListingView(ot, l);

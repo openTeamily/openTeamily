@@ -141,8 +141,19 @@ async function composeAttachments(request, agent) {
   for (const file of files) {
     attachments.push({title:file.name, mime:file.type, data:Buffer.from(await file.arrayBuffer()).toString('base64')})
   }
-  return agent ? {body:form.get('body'), chat_language:form.get('chat_language'),
-    reply_language:form.get('reply_language'), attachments} : {attachment:attachments[0], reply_to:form.get('reply_to') ?? undefined}
+  if (agent) return {body:form.get('body'), chat_language:form.get('chat_language'),
+    reply_language:form.get('reply_language'), attachments}
+  const fields = form.getAll('agent_mentions')
+  const raw = fields[0]
+  if (fields.length > 1 || (raw !== undefined && (typeof raw !== 'string' || raw.length > 8192))) {
+    throw new Error('Invalid group agent mentions')
+  }
+  const mentions = raw === undefined ? undefined : JSON.parse(raw)
+  if (raw !== undefined && (!Array.isArray(mentions) || !mentions.length || mentions.length > 20)) {
+    throw new Error('Invalid group agent mentions')
+  }
+  return {attachment:attachments[0], body:form.get('body') ?? undefined, reply_to:form.get('reply_to') ?? undefined,
+    ...(mentions ? {agent_mentions:mentions} : {})}
 }
 
 function fileResponse(request, {data, content_type, filename, inline}) {

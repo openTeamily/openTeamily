@@ -1,11 +1,12 @@
 name: Upstream DS Bot runtime
 # Verifies the tracked upstream DS Bot (runtime/ds-bot-upstream, pinned in
 # runtime/ds-bot-upstream.pin.json) is unmodified, runs its suite with the documented
-# test-clock-only overlay (all assertions retained), on the DSH
+# test-only lifecycle hook (all assertions retained), on the DSH
 # version it pins, and starts as a container whose Bot API answers. No secrets: upstream's
 # suite uses its own fake model, and the startup test runs with --network none.
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -28,7 +29,6 @@ jobs:
       - run: node scripts/ds-bot-upstream.mjs check
       - run: node --test scripts/ds-bot-upstream.test.mjs
       - run: node --test --test-timeout=5000 scripts/upstream-test-clock.test.mjs scripts/upstream-test-cleanup-overlay.test.mjs
-      - run: node --test runtime/ds-bot-patches/apply.test.mjs
 
   upstream-suite:
     name: Upstream suite · Node ${{ matrix.node }} · DSH from pin
@@ -76,11 +76,10 @@ jobs:
             exit 1
           fi
           npm run harness -- --no-save "@deepseek-ai/dsh@${DSH_VERSION}" "@deepseek-ai/dsh-agent-loop-testkit@${DSH_VERSION}"
-      # The VM component awaits a host mock promise: neither5ms nor a host-only
-      # microtask barrier proves dismissal. Await actual dismiss/reportError instead.
-      # Only test-bench completion/wait wiring is overlaid; every assertion and
-      # vendor byte remains unchanged. Unexpected source hashes fail closed.
-      - name: Full pinned upstream suite with owned annotation completion overlay
+      # Upstream's annotation test owns its mock clock. The restart fixture's
+      # cleanup waits for pending writes before removing its temporary directory.
+      # Every assertion and vendor byte stays intact; source hashes fail closed.
+      - name: Full pinned upstream suite with checked fixture lifecycle
         run: NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--import=$(realpath ../../../scripts/upstream-test-clock.mjs)" npm test -- --test-concurrency=1
       - run: node scripts/build-client.mjs --check
       - run: npm run lint

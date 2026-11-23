@@ -29,7 +29,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from openteamily.app import App, Config
-from openteamily.dsbot_gateway import exchange_launch_url
+from openteamily.dsbot_gateway import GatewayApp, exchange_launch_url, mount, validate_address
 from openteamily.lifecycle import Lifecycle, ManagerAuth, ManagerIdentity, RuntimePolicy
 from openteamily.manager.client import ManagerClient
 from openteamily.manager.engine import IMAGE, ComposeEngine, Registry, Runner
@@ -163,6 +163,7 @@ def pin_local_image(tag, secrets):
 def native_binding(cid, network, secrets):
     address = docker(['inspect', '-f', '{{(index .NetworkSettings.Networks "%s").IPAddress}}' % network, cid],
                      secrets=secrets).stdout.strip() + ':8080'
+    address = validate_address(address)
 
     def launch_url():
         logs = docker(['logs', cid], allow_failure=True, secrets=secrets)
@@ -182,7 +183,7 @@ def native_binding(cid, network, secrets):
         response = conn.getresponse()
         result = json.loads(response.read())
         require(response.status == 200 and result.get('ok'), 'native personal binding lookup failed')
-        return result['value']
+        return result['value'], address, cookie
     finally:
         conn.close()
 
@@ -289,7 +290,8 @@ def main(argv):
             ]),
             auto_provision=AutoProvisionPolicy(enabled=True, manager_id='manager-a', max_instances=1),
         )
-        httpd.set_app(app)
+        httpd.set_app(mount(app, GatewayApp(store, loopback_origin, app.config.cookie_names[0], opaque(),
+                                         manager_auth=app.manager_auth)))
         threading.Thread(target=httpd.serve_forever, kwargs={'poll_interval': 0.01}, daemon=True).start()
 
         class ApiClient(Client):
@@ -307,15 +309,21 @@ def main(argv):
 
         user = ApiClient(app, loopback_origin)
         require(user.register('alice')['status'] == 201, 'register failed')
+        readiness_path = '/v1/auth/runtime-readiness?include=personal-chat'
+        initial = user.call('GET', readiness_path)
+        require(initial['status'] == 200 and initial['body']['state'] == 'starting',
+                'signup did not queue the personal runtime')
         enrolled = user.call('POST', '/v1/personal-agent')
-        require(enrolled['status'] == 201, 'personal agent failed: %r' % enrolled)
+        require(enrolled['status'] == 200, 'personal agent already seeded by signup')
         personal = enrolled['body']['personal_agent']
         provision = personal['runtime_provisioning']
-        require(provision['state'] == 'provisioned', 'personal runtime was not provisioned')
+        require(provision['state'] == 'existing' and provision['readiness'] == 'starting',
+                'personal agent did not reuse signup provisioning')
         iid = provision['instance_id']
         volume = 'ot-' + iid
         network = volume + '_default'
         binding = {'workspace_id': personal['workspace']['id'], 'agent_id': personal['agent']['id']}
+        require(initial['body']['personal_chat'] == binding, 'readiness did not return the signup binding')
         instance = user.call('GET', f'/v1/instances/{iid}')
         require(instance['status'] == 200, 'provisioned instance not found')
         require(instance['body']['instance']['image_ref'] == image_ref, 'instance did not pin the digest')
@@ -337,17 +345,14 @@ def main(argv):
         client = ManagerClient(loopback_origin, 'manager-a', manager_token, enabled=True, timeout=5)
         worker = ManagerWorker(client, registry, engine)
 
-        created = worker.run_once(iid)
-        if created.get('status') != 'observed' or created.get('observed') != 'stopped':
-            try:
-                diagnose_container(compose_container_id(iid, secrets), iid, image_ref, secrets)
-            except Exception as error:
-                print(redact('compose inspect diagnosis unavailable: %s' % error, secrets), file=sys.stderr)
-            raise RuntimeError(redact('compose create failed: %r' % created, secrets))
         running = worker.run_once(iid)
         if running.get('status') != 'observed' or running.get('observed') != 'running':
-            logs = docker(['logs', compose_container_id(iid, secrets)], allow_failure=True, secrets=secrets)
-            print(redact((logs.stdout or '') + '\n' + (logs.stderr or ''), secrets), file=sys.stderr)
+            try:
+                diagnose_container(compose_container_id(iid, secrets), iid, image_ref, secrets)
+                logs = docker(['logs', compose_container_id(iid, secrets)], allow_failure=True, secrets=secrets)
+                print(redact(logs.stdout + '\n' + logs.stderr, secrets), file=sys.stderr)
+            except Exception as error:
+                print(redact('compose inspect diagnosis unavailable: %s' % error, secrets), file=sys.stderr)
             raise RuntimeError(redact('compose start failed: %r' % running, secrets))
 
         def assert_bootstrap_file():
@@ -360,7 +365,18 @@ def main(argv):
 
         assert_bootstrap_file()
         cid = compose_container_id(iid, secrets)
-        require(native_binding(cid, network, secrets) == binding, 'personal agent was not imported on first start')
+
+        def check_ready(cid, job):
+            require(user.call('GET', readiness_path)['body']['state'] == 'starting',
+                    'unpublished runtime must remain starting')
+            actual, address, cookie = native_binding(cid, network, secrets)
+            require(actual == binding, 'native personal binding did not match signup')
+            client.dsbot_upstream(iid, address, cookie, job['process_ref'])
+            ready = user.call('GET', readiness_path)
+            require(ready['status'] == 200 and ready['body']['state'] == 'ready'
+                    and ready['body']['personal_chat'] == binding, 'published runtime did not become ready')
+
+        check_ready(cid, running)
         docker(['exec', '-u', '1000:1000', cid, 'sh', '-c', 'echo persistent-test-content > /data/volume-sentinel'], secrets=secrets)
         stopped = user.call('POST', f'/v1/instances/{iid}/stop', {})
         require(stopped['status'] == 202, 'stop failed: %r' % stopped)
@@ -368,8 +384,10 @@ def main(argv):
         require(stopped_job.get('status') == 'observed' and stopped_job.get('observed') == 'stopped',
                 'compose stop failed: %r' % stopped_job)
         docker(['rm', '--force', compose_container_id(iid, secrets)], secrets=secrets)
-        restarted = user.call('POST', f'/v1/instances/{iid}/start', {})
-        require(restarted['status'] == 202, 'second start failed: %r' % restarted)
+        require(user.call('GET', readiness_path)['body']['state'] == 'stopped', 'stopped runtime was not resumable')
+        restarted = user.call('POST', '/v1/auth/runtime-start', {})
+        require(restarted['status'] == 202 and restarted['body']['state'] == 'starting',
+                'resuming the personal runtime failed: %r' % restarted)
         again = worker.run_once(iid)
         require(again.get('status') == 'observed' and again.get('observed') == 'running',
                 'start after no-delete container delete failed: %r' % again)
@@ -381,7 +399,7 @@ def main(argv):
         with store.connect() as db:
             require(db.execute('SELECT COUNT(*) FROM instance_runtime_keys').fetchone()[0] == 0,
                     'container lifecycle created a retired instance credential')
-        require(native_binding(cid, network, secrets) == binding, 'recreated DS-Bot lost its personal agent')
+        check_ready(cid, again)
         print('PASS: Compose manager started a digest-pinned DS-Bot, provisioned its personal agent, '
               'and preserved the binding and data volume across recreate.')
         return 0

@@ -20,7 +20,7 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from .lifecycle import RuntimeFault
-from .runtime_autoprovision import owned_instance
+from .runtime_autoprovision import owned_instance, resumable_instance
 from .security import digest
 
 ROUTES_FILE = Path(__file__).with_name('dsbot_routes.json')
@@ -52,52 +52,58 @@ PAGE_SEGMENT = re.compile(r'[a-z0-9][a-z0-9-]{0,40}')
 
 # Browser and non-browser /v1 routes that the signed-in owner's DS-Bot now serves.
 # Kept in sync with openteamily/static/shell/dsbot-api.mjs `MOVED`. A path not listed
-# here stays on the platform (auth, the
-# Composio callback bounce page, workspace lists, C pages, automations/agents until B2).
+# here stays on the platform, including authentication and the Composio callback.
 MOVED_APIS = (
     (re.compile(r'^/v1/skills/(?:catalog|bindings|installed|packages(?:/import-[a-z0-9][a-z0-9-]{1,39}(?:/(?:revoke|versions(?:/[0-9.]+)?))?)?)$'), 'skills'),
     (re.compile(r'^/v1/skill-secrets$'), 'skill-secrets'),
     (re.compile(r'^/v1/stickers(?:/[0-9a-f]{32}(?:/file)?)?$'), 'stickers'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/overview$'), 'overview'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/export$'), 'export'),
     (re.compile(r'^/v1/team-templates$'), 'team-templates'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/team-templates/[a-z0-9-]{3,40}$'), 'team-templates'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/team-runs(?:/[0-9a-f]{32}(?:/(?:cancel|remove|steps/[0-7]/(?:retry|artifact)))?)?$'), 'team-runs'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/team-runs(?:/[0-9a-f]{32}(?:/(?:cancel|remove|export|steps/[0-7]/(?:retry|artifact)))?)?$'), 'team-runs'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/team-runs/automation-results/[0-9a-f]{32}/[0-9a-f]{32}$'), 'team-runs'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/(?:team-runs/[0-9a-f]{32}/share|shared-runs(?:/otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}(?:/revoke)?)?)$'), 'shares'),
     (re.compile(r'^/v1/contacts(?:/(?:lookup|otcpt_[A-Za-z0-9_-]{1,80}))?$'), 'social'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/notifications(?:/read)?$'), 'social'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/members(?:/[A-Za-z0-9._-]{1,80}(?:/(?:remove|suspend|unsuspend))?)?$'), 'members'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/members(?:/[A-Za-z0-9._-]{1,80}(?:/(?:remove|suspend|unsuspend|transfer-ownership))?)?$'), 'members'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/invites(?:/[A-Za-z0-9._-]{1,80}/(?:revoke|freeze|unfreeze))?$'), 'invites'),
-    (re.compile(r'^/v1/invites/(?:accept|preview)$'), 'invites'),
+    (re.compile(r'^/v1/invites/(?:group/)?(?:accept|preview)$'), 'invites'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/join-requests(?:/[A-Za-z0-9._-]{1,80}/(?:approve|reject))?$'), 'invites'),
     (re.compile(r'^/v1/join-requests$'), 'invites'),
     (re.compile(r'^/v1/skills/(?:scopes|readiness|runs)$'), 'skills'),
-    (re.compile(r'^/v1/runtime/(?:connections|tasks(?:/[0-9a-f]{32}/(?:cancel|artifact))?)$'), 'skills'),
+    (re.compile(r'^/v1/skills/runs/[0-9a-f]{32}/(?:cancel|artifact)$'), 'skills'),
     (re.compile(r'^/v1/workspaces$'), 'teams'),
     (re.compile(r'^/v1/teams$'), 'teams'),
     (re.compile(r'^/v1/team-directory$'), 'teams'),
     (re.compile(r'^/v1/team-directory/[A-Za-z0-9._-]{1,80}/join$'), 'teams'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/directory$'), 'teams'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/social/conversations(?:/[A-Za-z0-9._-]{1,80}(?:/[A-Za-z0-9._/-]{1,120})?)?$'), 'messenger'),
-    (re.compile(r'^/v1/meeting-calls/(?:create|preview|join|poll|signal|leave|end)$'), 'messenger'),
+    (re.compile(r'^/v1/meeting-calls/(?:create|preview|join|poll|signal|leave|end|recording)$'), 'messenger'),
     (re.compile(r'^/v1/profile/(?:social|follow-work)$'), 'discover'),
     (re.compile(r'^/v1/discover/(?:agents|works|me/works)$'), 'discover'),
-    (re.compile(r'^/v1/discover/agents/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]/start$'), 'discover'),
+    (re.compile(r'^/v1/discover/agents/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]/(?:start|remix)$'), 'discover'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts/[0-9a-f]{32}/discover(?:/revoke)?$'), 'discover'),
     (re.compile(r'^/v1/discover/works/[a-z0-9][a-z0-9-]{1,28}[a-z0-9](?:/(?:engagement|remix|comments(?:/otwc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}/(?:like|remove))?))?$'), 'discover'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/discover(?:/revoke)?$'), 'discover'),
     (re.compile(r'^/v1/(?:automation-templates|onboarding/automations)$'), 'automations'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/automations(?:/(?:tick|[0-9a-f]{32}))?$'), 'automations'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/automations/[0-9a-f]{32}/(?:run|remove|runs(?:/[0-9a-f]{32}(?:/(?:cancel|retry|artifact))?)?)$'), 'automations'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/automations/[0-9a-f]{32}/(?:run|remove|runs(?:/[0-9a-f]{32}(?:/(?:cancel|retry|artifact|studio))?)?)$'), 'automations'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/api-keys(?:/[0-9a-f]{32}/revoke)?$'), 'agent-api'),
+    (re.compile(r'^/v1/agent-copy-grants(?:/(?:recipients|otag_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}/remix))?$'), 'agents'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/shares(?:/otag_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}/revoke)?$'), 'agents'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/access(?:/otc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}/revoke)?$'), 'agents'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/conversations/[0-9a-f]{32}/memory/capture$'), 'agents'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents(?:/[0-9a-f]{32}(?:/(?:archive|conversations(?:/[0-9a-f]{32}(?:/(?:attachments|reply-progress|messages(?:/[0-9a-f]{32}/(?:artifact|retry|files/[0-3]))?))?)?))?)?$'), 'agents'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/meetings(?:/(?:from-call/otcav_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}|draft|speech|transcribe|share-recipients|shared(?:/[0-9a-f]{32}(?:/revoke)?)?|[0-9a-f]{32}(?:/(?:remove|export|shares|action|artifact|memory))?))?$'), 'meetings'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory(?:/[0-9a-f]{32}(?:/(?:remove|export|share-group|dream(?:/[0-9a-f]{32})?|versions(?:/\d{1,8}(?:/restore)?)?))?)?$'), 'memory'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents(?:/[0-9a-f]{32}(?:/(?:archive|conversations(?:/[0-9a-f]{32}(?:/(?:attachments|reply-progress|reply-stop|messages(?:/[0-9a-f]{32}/(?:artifact|retry|files/[0-3]))?))?)?))?)?$'), 'agents'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/meetings(?:/(?:from-call/otcav_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}|draft|speech|transcribe|share-recipients|shared(?:/[0-9a-f]{32}(?:/(?:revoke|action|discussion))?)?|[0-9a-f]{32}(?:/(?:remove|export|shares|action|artifact|memory))?))?$'), 'meetings'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory(?:/[0-9a-f]{32}(?:/(?:remove|export|share-group|dream(?:/[0-9a-f]{32})?|versions(?:/[0-9]{1,8}(?:/restore)?)?))?)?$'), 'memory'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory/actions/draft(?:/save)?$'), 'memory'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory/actions/from-(?:chat|meeting)$'), 'memory'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory/(?:candidates(?:/[0-9a-f]{32})?|profile(?:/dream)?|graph|(?:actions|links|preferences)(?:/[0-9a-f]{32}(?:/remove)?)?)$'), 'memory'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/search/(?:messages|resources)$'), 'search'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:activity|(?:spreadsheet|slides)/draft)$'), 'artifacts'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$'), 'artifacts'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/studio/documents(?:/[0-9a-f]{32}(?:/(?:remove|restore|live|versions(?:/[1-9][0-9]{0,15})?))?)?$'), 'studio'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:activity|shared-copy|studio-personal-copy|(?:spreadsheet|slides)/draft)$'), 'artifacts'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|studio-copy|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/(?:revoke|link))?)?))?)?$'), 'artifacts'),
     (re.compile(r'^/v1/settings$'), 'settings'),
     (re.compile(r'^/v1/notification-prefs$'), 'settings'),
     (re.compile(r'^/v1/onboarding(?:/(?:recommendations|picks|look|progress))?$'), 'settings'),
@@ -115,59 +121,12 @@ MOVED_APIS = (
     (re.compile(r'^/v1/mcp/servers(?:/[0-9a-f]{32})?$'), 'connectors'),
 )
 
-# Nginx locations that send a moved /v1 API to the owner's DS-Bot. More-specific
-# platform exceptions (automations, composio callback) are emitted first.
-MOVED_API_LOCATIONS = (
-    'location ^~ /v1/skills/ { return 418; }',
-    'location = /v1/skill-secrets { return 418; }',
-    'location ~ ^/v1/stickers(?:/[0-9a-f]{32}(?:/file)?)?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/overview$ { return 418; }',
-    'location = /v1/team-templates { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/(?:team-templates|notifications)(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/team-runs(?:/[0-9a-f]{32}(?:/(?:cancel|remove|share|steps/[0-7]/(?:retry|artifact)))?)?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/shared-runs(?:/otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}(?:/revoke)?)?$ { return 418; }',
-    'location = /v1/invites/accept { return 418; }',
-    'location = /v1/invites/preview { return 418; }',
-    'location = /v1/join-requests { return 418; }',
-    'location ~ ^/v1/skills/(?:scopes|readiness|runs)$ { return 418; }',
-    'location ^~ /v1/runtime/ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts/[0-9a-f]{32}/discover(?:/revoke)?$ { return 418; }',
-    'location = /v1/workspaces { return 418; }',
+# These paths are handled at the edge or on the platform. The moved API
+# locations below are rendered from the same table as the gateway authorization.
+PLATFORM_API_LOCATIONS = (
     'location = /v1/agent-homepages/start { return 410; }',
-    'location = /v1/teams { return 418; }',
-    'location = /v1/team-directory { return 418; }',
-    'location ^~ /v1/team-directory/ { return 418; }',
-    'location ~ ^/v1/meeting-calls/(?:create|preview|join|poll|signal|leave|end)$ { return 418; }',
-    'location = /v1/profile/social { return 418; }',
-    'location = /v1/profile/follow-work { return 418; }',
-    'location ^~ /v1/discover/ { return 418; }',
-    'location ~ ^/v1/contacts(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/(?:members|invites|join-requests|directory|social)(?:/|$) { return 418; }',
     'location = /v1/composio/callback { proxy_pass http://__PLATFORM__; proxy_set_header Host $host; proxy_set_header X-OT-Gateway-Key ""; }',
-    'location = /v1/settings { return 418; }',
-    'location = /v1/notification-prefs { return 418; }',
-    'location = /v1/onboarding { return 418; }',
-    'location ^~ /v1/onboarding/ { return 418; }',
-    'location ~ ^/v1/model-api(?:/(?:image|video|music|model3d))?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/images(?:/[0-9a-f]{32})?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/videos(?:/[0-9a-f]{32})?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/music(?:/[0-9a-f]{32})?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/websites(?:/[0-9a-f]{32})?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/models-3d(?:/[0-9a-f]{32})?$ { return 418; }',
-    'location = /v1/composio { return 418; }',
-    'location ^~ /v1/composio/ { return 418; }',
-    'location ^~ /v1/mcp/servers { return 418; }',
-    'location = /v1/automation-templates { return 418; }',
-    'location = /v1/onboarding/automations { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/automations(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/agents(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/meetings(?:/(?:from-call/otcav_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}|draft|speech|transcribe|share-recipients|shared(?:/[0-9a-f]{32}(?:/revoke)?)?|[0-9a-f]{32}(?:/(?:remove|export|shares|action|artifact|memory))?))?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/memory(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/search/(?:messages|resources)$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:activity|(?:spreadsheet|slides)/draft)$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$ { return 418; }',
 )
-
 
 
 def moved_api(path):
@@ -297,7 +256,7 @@ def _upstream_row(db, instance_id):
     return row
 
 
-def owner_runtime_readiness(db, user_id):
+def owner_runtime_readiness(db, user_id, manager_id=None):
     """The browser receives a state only, never the address or runtime cookie."""
     if not db.execute("SELECT 1 FROM sqlite_master WHERE name='dsbot_upstreams' AND type='table'").fetchone():
         return 'unmanaged'
@@ -320,7 +279,9 @@ def owner_runtime_readiness(db, user_id):
         """, (iid,)).fetchone()
         if state is None or state[1] or state[2]:
             return 'unavailable'
-        return 'starting' if state[0] == 'running' or state[3] else 'unavailable'
+        if state[0] == 'running' or state[3]:
+            return 'starting'
+        return 'stopped' if resumable_instance(db, user_id, manager_id) is not None else 'unavailable'
     return 'ready'
 
 
@@ -669,6 +630,10 @@ __KEY_SETTING__
   location = /v1/admin { return 404; }
   location ^~ /v1/admin/ { return 404; }
   location = /v1/platform/route { return 404; }
+  location ^~ /v1/runtime/ {
+    default_type application/json;
+    return 410 '{"error":{"code":"retired"}}';
+  }
 __SOCIAL_LOCATION__
   location = /_ot_authz {
     internal;
@@ -748,11 +713,20 @@ __DSBOT_LOCATIONS__
   error_page 401 = @ot_login;
   location @ot_login {
     if ($uri = /discover/) { rewrite ^ /_ot_discover_guest/discover last; }
-    if ($uri ~ "^/discover(?:/app[.](?:css|mjs)|/comments[.]mjs)?$") {
+    if ($uri ~ "^/discover(?:/app[.](?:css|mjs)|/(?:comments|document-reader)[.]mjs)?$") {
       rewrite ^ /_ot_discover_guest$uri last;
     }
 __GUEST_DISCOVER_FEEDS__
+__WORKSPACE_LOGIN_REWRITE__
     return 302 /login;
+  }
+  location = /_ot_workspace_login {
+    internal;
+    limit_except GET HEAD { deny all; }
+    proxy_pass http://__PLATFORM__/login;
+    proxy_set_header Host $host;
+    proxy_set_header Sec-Fetch-Site "";
+    proxy_set_header X-OT-Gateway-Key "";
   }
   location ^~ /_ot_discover_guest/ {
     internal;
@@ -851,8 +825,9 @@ def nginx_config(routes, platform, listen, key_include=None, key=None, bot_socia
                  f'  location ^~ {routes["mount"]}/ {{ return 418; }}']
     for prefix in routes['passthrough']:
         locations.append(f'  location ^~ {prefix} {{ return 418; }}')
-    for line in MOVED_API_LOCATIONS:
-        locations.append('  ' + line.replace('__PLATFORM__', platform))
+    locations.extend('  ' + line.replace('__PLATFORM__', platform) for line in PLATFORM_API_LOCATIONS)
+    # nginx treats unquoted PCRE quantifiers as configuration block delimiters.
+    locations.extend(f'  location ~ "{pattern.pattern}" {{ return 418; }}' for pattern, _ in MOVED_APIS)
     if 'artifacts' in routes['moved_pages']:
         locations.append('  location = /space { return 418; }')
     for page in sorted(routes['moved_pages']):
@@ -863,9 +838,21 @@ def nginx_config(routes, platform, listen, key_include=None, key=None, bot_socia
     social = social_location(bot_social) if bot_social else ''
     guest_feeds = ('    rewrite ^/v1/discover/(works|agents)$ /_ot_public_feed/$1 last;'
                    if bot_social else '')
+    private_pages = sorted(routes['moved_pages'] - {'home', 'discover'})
+    private_paths = [f"(?:{'|'.join(private_pages)})/?"] if private_pages else []
+    for page, path in (('artifacts', 'space'), ('profile', 'profile/edit/?'),
+                       ('settings', 'settings/[a-z0-9][a-z0-9-]{0,40}/?')):
+        if page in private_pages:
+            private_paths.append(path)
+    # Render the login form at the original address. The browser retains both
+    # the query string and the fragment, which the gateway never sees.
+    workspace_login = ('    if ($http_sec_fetch_mode = navigate) {\n'
+                       f'      rewrite "^/(?:{"|".join(private_paths)})$" /_ot_workspace_login? last;\n'
+                       '    }' if private_paths else '')
     configuration = (NGINX_TEMPLATE.replace('__LISTEN__', str(listen)).replace('__PLATFORM__', platform)
             .replace('__KEY_SETTING__', setting).replace('__DSBOT_LOCATIONS__', '\n'.join(locations))
-            .replace('__SOCIAL_LOCATION__', social).replace('__GUEST_DISCOVER_FEEDS__', guest_feeds))
+            .replace('__SOCIAL_LOCATION__', social).replace('__GUEST_DISCOVER_FEEDS__', guest_feeds)
+            .replace('__WORKSPACE_LOGIN_REWRITE__', workspace_login))
     if not bot_social_socket:
         return configuration
     if not bot_social:

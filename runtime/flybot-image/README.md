@@ -1,7 +1,7 @@
 # OpenTeamily FlyBot runtime image (first slice)
 
 OpenTeamily-authored recipe (root MIT). The image it builds **also contains**
-the unmodified Apache-2.0 `runtime/ds-bot-upstream/` tree and the Apache-2.0
+the pinned Apache-2.0 DS-Bot runtime and the Apache-2.0
 `@flybot/social` plugin; those licenses and NOTICE files are copied into
 `/opt/licenses/`. This directory is not part of the vendor snapshot.
 
@@ -19,8 +19,10 @@ service:
   startup and every ten seconds once healthy.
 - Loads `@openteamily/flybot-runtime`, which calls upstream `createRuntime()`
   and then `applyOnRuntime()` from `runtime/flybot-social-host/` so
-  `@flybot/social` injects a `flybot` service. The vendor tree in git is not edited;
-  image-build patches in `runtime/ds-bot-patches/` are applied to the image copy only.
+  `@flybot/social` injects a `flybot` service. The build verifies and applies
+  [the native integration patch](native-ds-bot.patch) to the image copy for
+  group membership editing and skill consent. The Git tree remains byte-identical
+  to its upstream pin.
 
 The web UI is official `dsh web`. `@openteamily/flybot-web-slots` installs
 `globalThis.__flybot__` so `@flybot/social`'s client can register, posts

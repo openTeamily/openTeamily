@@ -6,6 +6,7 @@ import { newId } from "../ids.js";
 import { body, hashCode, OtContext, params, query, text } from "./core.js";
 import { requireMember } from "./teams.js";
 import { requireDirectReach } from "./messenger.js";
+import { CALL_RECORDING_SCHEMA, callRecording, changeCallRecording, recordingCommand } from "./call-recording.js";
 
 export const CALLS_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_live_calls (
@@ -17,6 +18,7 @@ CREATE TABLE IF NOT EXISTS ot_call_peers (
   owner_id TEXT NOT NULL, expires INTEGER NOT NULL, UNIQUE(call_id,owner_id)
 );
 CREATE INDEX IF NOT EXISTS ot_call_peer_expiry ON ot_call_peers(expires);
+${CALL_RECORDING_SCHEMA}
 CREATE TABLE IF NOT EXISTS ot_call_signals (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, call_id TEXT NOT NULL REFERENCES ot_live_calls(id) ON DELETE CASCADE,
   sender TEXT NOT NULL REFERENCES ot_call_peers(id) ON DELETE CASCADE,
@@ -117,12 +119,13 @@ function attendedCall(ot: OtContext, id: string, ownerId: string) {
     WHERE r.id=? AND a.owner_id=?`, id, ownerId);
 }
 
-function describe(ot: OtContext, call: Call) {
+function describe(ot: OtContext, call: Call, joined = false) {
   const named = ot.get<{title: string}>("SELECT title FROM ot_call_titles WHERE call_id=?", call.id);
   const peers = ot.all<Peer>("SELECT id,owner_id FROM ot_call_peers WHERE call_id=? ORDER BY id", call.id);
   return {
     id: call.id, kind: call.kind, created_at: call.created_at,
     ...(named ? {title: named.title} : {}),
+    ...(joined ? {recording: callRecording(ot, call.id)} : {}),
     peers: peers.map(peer => {
       const profile = ot.profileView(peer.owner_id);
       return { id: peer.id, name: profile.display_name || profile.handle || "成员" };
@@ -248,7 +251,7 @@ export function registerCalls(app: FastifyInstance, ot: OtContext) {
         }
       }
       const peerId = joinPeer(ot, call, me.ownerId, input.peer_id, now);
-      const view = describe(ot, call);
+      const view = describe(ot, call, true);
       if (starting) {
         const by = ot.profileView(me.ownerId);
         for (const member of ot.all<{owner_id: string}>(
@@ -307,7 +310,7 @@ export function registerCalls(app: FastifyInstance, ot: OtContext) {
         meeting = {id, conversation_id: conversationId, created_at: now, kind: "video", title, host_owner: ownerId};
       }
       const peerId = joinPeer(ot, meeting, ownerId, input.peer_id, now);
-      return {meeting: meetingView(meeting, ownerId), call: describe(ot, meeting), peer_id: peerId, ice_servers: iceServers(peerId, now)};
+      return {meeting: meetingView(meeting, ownerId), call: describe(ot, meeting, true), peer_id: peerId, ice_servers: iceServers(peerId, now)};
     });
   });
 
@@ -325,7 +328,7 @@ export function registerCalls(app: FastifyInstance, ot: OtContext) {
       prune(ot);
       const meeting = findMeeting(input.code);
       const peerId = joinPeer(ot, meeting, ownerId, input.peer_id, now);
-      return {meeting: meetingView(meeting, ownerId), call: describe(ot, meeting), peer_id: peerId, ice_servers: iceServers(peerId, now)};
+      return {meeting: meetingView(meeting, ownerId), call: describe(ot, meeting, true), peer_id: peerId, ice_servers: iceServers(peerId, now)};
     });
   });
 
@@ -362,7 +365,18 @@ function registerCallActions(app: FastifyInstance, ot: OtContext, root: string, 
     ot.run("UPDATE ot_call_peers SET expires=? WHERE id=?", ot.now() + PEER_TTL, peer.id);
     const signals = ot.all<{seq: number; sender: string; payload: string}>(
       "SELECT seq,sender,payload FROM ot_call_signals WHERE call_id=? AND recipient=? AND seq>? ORDER BY seq LIMIT 64", call.id, peer.id, after);
-    return {call: describe(ot, call), signals: signals.map(row => ({seq: row.seq, from: row.sender, ...JSON.parse(row.payload)}))};
+    return {call: describe(ot, call, true), signals: signals.map(row => ({seq: row.seq, from: row.sender, ...JSON.parse(row.payload)}))};
+  });
+
+  app.post(root + "/recording", {bodyLimit: 1024}, async (req, reply) => {
+    reply.header("cache-control", "private, no-store");
+    const input = body(req);
+    const {ownerId, conversationId} = access(req, input);
+    const command = recordingCommand(input);
+    return ot.tx(() => {
+      const {call, peer} = lease(ot, conversationId, ownerId, input);
+      return {recording: changeCallRecording(ot, call.id, peer.id, command)};
+    });
   });
 
   app.post(root + "/signal", async req => {

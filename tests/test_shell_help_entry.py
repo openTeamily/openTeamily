@@ -8,7 +8,7 @@ These tests read the static pages as markup, not through a browser: every shell 
 exactly one 帮助中心 link to `/help`, one 功能指引 link to `/guide`, one 服务条款 link to `/terms`
 and one 隐私政策 link to `/privacy`, all as `role="menuitem"` anchors in that order, and no
 `未实现` placeholder may survive. A later shell page must carry the same entries or the count
-check fails. `/about` is a standalone article without the account menu, so it is left out.
+check fails. The standalone about and registration pages use their own navigation.
 """
 from html.parser import HTMLParser
 from pathlib import Path
@@ -18,7 +18,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 PAGES = sorted(
     path for path in (ROOT / 'openteamily' / 'static').glob('*/index.html')
-    if path.parent.name != 'about'
+    if path.parent.name not in {'about', 'register'}
 )
 MENU = (
     ('帮助中心', '/help'),
@@ -73,8 +73,7 @@ def help_entries(page):
 
 class ShellHelpEntryTests(unittest.TestCase):
     def test_every_shell_page_links_the_guide_under_its_own_name(self):
-        self.assertTrue(any(p.parent.name=='register' for p in PAGES),'registration must carry the real help/terms menu too')
-        self.assertEqual(len(PAGES), 22, f'expected the 22 pages with the account menu, found {[str(p) for p in PAGES]}')
+        self.assertEqual(len(PAGES), 21, f'expected the 21 pages with the account menu, found {[str(p) for p in PAGES]}')
         for page in PAGES:
             with self.subTest(page=page):
                 entries = help_entries(page)
@@ -90,6 +89,15 @@ class ShellHelpEntryTests(unittest.TestCase):
                 tag, attrs, text = guides[0]
                 self.assertEqual(text, '功能指引', f'{page}: the guide link is misnamed: {text!r}')
                 self.assertEqual(attrs.get('role'), 'menuitem', f'{page}: the guide link is not a menu item: {attrs}')
+
+    def test_registration_footer_keeps_the_public_help_and_legal_links(self):
+        page = ROOT / 'openteamily/static/register/index.html'
+        html = page.read_text(encoding='utf-8')
+        _, footer = html.split('<footer class="auth-legal">', 1)
+        footer = footer.split('</footer>', 1)[0]
+        for name, href in MENU:
+            if href != '/guide':
+                self.assertIn(f'<a href="{href}">{name}</a>', footer)
 
     def test_the_served_pages_are_real_menu_links_in_the_target_order(self):
         menu_hrefs = {href for _, href in MENU}

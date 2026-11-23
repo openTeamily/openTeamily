@@ -38,6 +38,7 @@
 
 .team-run-page h2 { font-size: 1.15rem; margin: 0 0 .65rem; }
 .team-run-list, .team-run-results { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
+.result-step[data-linked-step] { border-color: var(--ot-accent); }
 .team-run-row {
   width: 100%;
   display: grid;

@@ -44,14 +44,20 @@ class ProfileDownloadPageTests(unittest.TestCase):
         self.assertIn('编辑资料', edit_html)
         self.assertIn('id="profile-home"', edit_html)
         self.assertIn('id="followers-dialog"', edit_html)
-        self.assertIn('还没有帖子，发布你的第一篇吧。', edit_html)
+        self.assertRegex(edit_html, r'<button[^>]+id="tab-posts"[^>]*>公开作品</button>')
+        self.assertIn('id="profile-feed-list"', edit_html)
+        self.assertRegex(edit_html, r'<p[^>]+id="profile-feed-empty"[^>]+role="status"')
         self.assertEqual(self.raw.call('GET', '/profile/edit', query='x=1')['status'], 400)
 
-    def test_download_lists_existing_runtime_and_disables_missing_clients(self):
+    def test_download_explains_managed_dsbot_and_disables_missing_clients(self):
         page = self.raw.call('GET', '/download')
         self.assertEqual(page['status'], 200)
         html = page['body'].decode()
-        self.assertIn('href="/install/flybot.pyz"', html)
+        self.assertIn('id="download-runtime"', html)
+        self.assertIn('<h2>你的 DS-Bot</h2>', html)
+        self.assertIn('注册后平台会为你单独开一个 DS-Bot', html)
+        self.assertNotIn('href="/install/flybot.pyz"', html)
+        self.assertEqual(self.client.call('GET', '/install/flybot.pyz')['status'], 404)
         self.assertIn('id="download-unavailable"', html)
         self.assertIn('未实现：没有 OpenTeamily iOS 客户端', html)
         self.assertIn('未实现：没有 OpenTeamily Android 客户端', html)

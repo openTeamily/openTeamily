@@ -1,3 +1,5 @@
+export const PRIVATE_TEXT_LIMIT = 20000
+
 import { digest } from '../../featurekit/http.js'
 
 const SEND_KEY = /^[A-Za-z0-9_-]{16,64}$/

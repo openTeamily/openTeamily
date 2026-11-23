@@ -8,11 +8,12 @@ import {SHELL_MESSAGES} from '../openteamily/static/shell/system-locale-catalog.
 
 const staticUrl = new URL('../openteamily/static/', import.meta.url);
 const chatHtml = await readFile(new URL('chat/index.html', staticUrl), 'utf8');
+const chatApp = await readFile(new URL('chat/app.mjs', staticUrl), 'utf8');
 const markup = /<[a-z][\w-]*(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi;
 const markers = /\bdata-ui-(text|title|label|placeholder|alt)="([^"]+)"/g;
 const fields = {title: 'title', label: 'aria-label', placeholder: 'placeholder', alt: 'alt'};
 
-test('Chat locale keys are backed by Chinese source and English phrases', () => {
+test('Chat locale keys are used by markup or runtime controls and have Chinese and English phrases', () => {
   const referenced = new Set();
   for (const match of chatHtml.matchAll(markup)) {
     const [tag] = match;
@@ -32,6 +33,11 @@ test('Chat locale keys are backed by Chinese source and English phrases', () => 
       }
     }
   }
+  // Chat swaps this label when the user switches to attachment results.
+  const resultsReturnKey = 'chat.search.back_to_messages';
+  assert.ok(chatApp.includes(`'${resultsReturnKey}'`));
+  assert.deepEqual(CHAT_MESSAGES[resultsReturnKey], ['返回消息结果', 'Back to message results']);
+  referenced.add(resultsReturnKey);
   assert.deepEqual(referenced, new Set(Object.keys(CHAT_MESSAGES)));
 });
 

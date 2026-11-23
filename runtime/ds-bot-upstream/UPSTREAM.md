@@ -3,7 +3,7 @@
 This directory holds a **byte-identical copy** of selected paths from
 [Fei2411/DS-Bot](https://github.com/Fei2411/DS-Bot), pinned in
 [`../ds-bot-upstream.pin.json`](../ds-bot-upstream.pin.json). The current pin is the release
-**v0.3.8**, commit `5e9b7da8882da3b68d8a0624342708c2150a9156`, ds-bot package `0.3.8`. Its tests
+**v0.3.9**, commit `881b57b54046fb355095e9c11f7918bd62b8bf1e`, ds-bot package `0.3.9`. Its tests
 expect DeepSeek Harness (DSH) `0.2.2-rc.1`.
 
 This file is the only OpenTeamily-authored file in this directory. Every other file is upstream's,
@@ -26,11 +26,13 @@ object ids the pin records, or if an unpinned file appears here.
 | --- | --- |
 | `ds-bot/` (whole) | The DSH plugin that is the Bot runtime: host (`src/host`), web client bundle (`client.js`), its unit tests, the DSH test-harness pin (`dev/harness`), and the mock LLM used by its smoke test. The whole directory is taken so its single tree id proves the copy. |
 | `link/` (whole) | ds-bot's tests import `link/server`, and `ds-bot/link.js` is built from `link/src`. It is needed to run upstream's suite unchanged. The phone app itself is not an OpenTeamily target; see below. |
+| `app/ui/src/`, `app/package.json` | Desktop UI source for the DS-Bot frontend assertions and its upstream module boundary. |
+| `mobile/src/team/gated.ts`, `start.ps1` | Source read by upstream mobile access-control and Windows launcher tests. |
 | `docker/Dockerfile`, `docker/entrypoint.sh`, `docker/docker.patch.yml` | Upstream's image: DSH `0.2.2-rc.1` plus the packed plugin, served by `dsh web` on port 3080. |
 | `docker/test.mjs` | Upstream's container startup test. It builds no network (`--network none`), migrates data ownership, starts `dsh web`, logs in with the printed token, and asserts that the DS Bot `/api/bot` `state` endpoint answers. CI uses it as the runtime smoke test. |
 | `LICENSE`, `NOTICE` | Binding license and attribution. |
 
-**Not taken:** `app/` (Electron desktop), `mobile/` (Android app), `browser-plugins/`, `docs/`,
+**Not taken:** the rest of the Electron desktop and Android apps, `browser-plugins/`, `docs/`,
 upstream `scripts/`, `docker/Dockerfile.dev`, the dev compose files, `.github/`, and the upstream
 git history (`sync` fetches one commit at depth 1 and copies trees; no upstream commits enter
 this repository's history).
@@ -39,7 +41,7 @@ this repository's history).
 
 ```sh
 node scripts/ds-bot-upstream.mjs latest            # newest upstream vX.Y.Z tag
-node scripts/ds-bot-upstream.mjs sync v0.3.7       # replace the tree + pin, staged
+node scripts/ds-bot-upstream.mjs sync v0.3.9       # replace the tree + pin, staged
 node scripts/ds-bot-upstream.mjs check
 ```
 
@@ -59,10 +61,9 @@ again. The plan is:
 2. **OpenTeamily features as separate DSH plugins** next to ds-bot in the same profile, as FlyBot's
    `plugins/social` already is. A plugin reaches ds-bot only through its exported runtime and
    HTTP API.
-3. **Small, ordered patches** in [`runtime/ds-bot-patches/`](../ds-bot-patches/), applied at FlyBot
-   image build, each with a test. Use these only where a plugin cannot reach a seam. Every patch is
-   a candidate for an upstream pull request, so the series shrinks over time. The vendor tree in git
-   must stay pin-identical; never edit files under this directory except this document.
+3. **Small, ordered patches** (a later `runtime/ds-bot-patches/`, applied at image build, each with
+   a test and an upstream-issue link) only where a plugin cannot reach a seam. Every patch is a
+   candidate for an upstream pull request, so the series shrinks over time.
 4. **Group chat:** upstream 0.3.5 moved group rounds onto a write-ahead ledger (`src/host/ledger.js`).
    OpenTeamily adopts upstream's ledger model. FlyBot's room and social model (Bot Social remote
    rooms, membership and seats) is to be re-implemented as an adapter on that ledger. Anything

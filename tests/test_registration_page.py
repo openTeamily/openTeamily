@@ -32,7 +32,7 @@ class RegistrationPageTests(unittest.TestCase):
         self.assertEqual(response['headers']['Cache-Control'], 'no-store')
         self.assertIn("form-action 'self'", response['headers']['Content-Security-Policy'])
         self.assertEqual(self.raw.call('HEAD', '/register')['body'], b'')
-        for path in ('/register/app.mjs', '/register/app.css'):
+        for path in ('/register/app.mjs', '/register/app.css', '/home/auth.css'):
             self.assertEqual(self.raw.call('GET', path)['status'], 200)
         self.assertEqual(self.raw.call('GET', '/register/missing')['status'], 404)
 

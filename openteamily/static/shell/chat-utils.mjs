@@ -3,6 +3,47 @@ export function csrfCookie(source) {
   return match ? decodeURIComponent(match[1]) : '';
 }
 
+export const chatPathId = value => /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,79}$/.test(value || '');
+
+export function socialMessageHref({workspace = '', conversation, message}) {
+  if ((workspace && !/^[0-9a-f]{32}$/.test(workspace)) || !chatPathId(conversation) || !chatPathId(message)) return '';
+  const params = new URLSearchParams();
+  if (workspace) params.set('workspace', workspace);
+  params.set('social', conversation);
+  params.set('message', message);
+  return '/chat#' + params;
+}
+
+export function socialMessageFromHash(hash) {
+  const params = new URLSearchParams((hash || '').replace(/^#/, ''));
+  const workspace = params.get('workspace');
+  if ((params.has('workspace') && !workspace) || params.size !== (workspace ? 3 : 2)) return '';
+  return socialMessageHref({workspace: workspace || '', conversation: params.get('social'), message: params.get('message')});
+}
+
+const directId = /^otc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
+const nativeId = /^[0-9a-f]{32}$/;
+const socialOwnerId = /^[A-Za-z0-9._-]{1,80}$/;
+
+export function agentDirectoryHref(workspace, agent) {
+  if (!nativeId.test(workspace || '')) return '/agents';
+  const target = new URLSearchParams({workspace});
+  if (nativeId.test(agent || '')) target.set('agent', agent);
+  return '/agents#' + target;
+}
+
+export function directAgentAccessHref({conversation, ownerId, agentId: id}) {
+  if (!directId.test(conversation || '') || !socialOwnerId.test(ownerId || '') || !nativeId.test(id || '')) return '';
+  return '/chat#' + new URLSearchParams({social:conversation, access_owner:ownerId, access_agent:id});
+}
+
+export function directAgentAccessFromHash(hash) {
+  const params = new URLSearchParams((hash || '').replace(/^#/, ''));
+  if (params.size !== 3) return null;
+  const target = {conversation:params.get('social'), ownerId:params.get('access_owner'), agentId:params.get('access_agent')};
+  return directAgentAccessHref(target) ? target : null;
+}
+
 export function canManage(actor) {
   return actor === 'owner' || actor === 'admin';
 }

@@ -2,6 +2,22 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { dsbotServed } from '../openteamily/static/chat/dsbot.mjs';
 import { envelope, movedTarget } from '../openteamily/static/shell/dsbot-api.mjs';
+import { socialMessageFromHash, socialMessageHref } from '../openteamily/static/shell/chat-utils.mjs';
+
+test('social message links are exact, same-origin and can omit a sender-owned personal workspace', () => {
+  const team = 'a'.repeat(32);
+  const personal = socialMessageHref({conversation:'otc_group', message:'otm_first'});
+  const shared = socialMessageHref({workspace:team, conversation:'otc_group', message:'otm_first'});
+  assert.equal(personal, '/chat#social=otc_group&message=otm_first');
+  assert.equal(shared, '/chat#workspace=' + team + '&social=otc_group&message=otm_first');
+  assert.equal(socialMessageFromHash(personal.slice(5)), personal);
+  assert.equal(socialMessageFromHash(shared.slice(5)), shared);
+  for (const hash of [
+    '#workspace=&social=otc_group&message=otm_first', '#social=x&social=y&message=z',
+    '#social=x&message=%2F%2Fthird-party.example', '#social=x&message=y&next=https://third-party.example',
+    '#social=x', '#workspace=invalid&social=x&message=y', '#social=x&message=' + 'z'.repeat(81),
+  ]) assert.equal(socialMessageFromHash(hash), '', hash);
+});
 
 test('private chat identifies the account DS-Bot and shares the agents transport', () => {
   assert.equal(dsbotServed({querySelector: () => null}), false);

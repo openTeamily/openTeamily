@@ -122,9 +122,17 @@ body.app-workspace #main-panel {
   gap: 0.15rem;
 }
 
+#automation-list .automation-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  padding-inline-end: 0.65rem;
+  border-radius: 0.75rem;
+}
+
 #automation-list .automation-row {
   display: grid;
-  grid-template-columns: 2.5rem minmax(0, 1fr) auto;
+  grid-template-columns: 2.5rem minmax(0, 1fr);
   gap: 0.75rem;
   align-items: center;
   width: 100%;
@@ -140,7 +148,8 @@ body.app-workspace #main-panel {
   white-space: normal;
 }
 
-#automation-list .automation-row:is(:hover, :focus-visible) {
+#automation-list .automation-entry:hover,
+#automation-list .automation-entry:focus-within {
   background: var(--ot-surface-2);
 }
 
@@ -198,6 +207,26 @@ body.app-workspace #main-panel {
 .status-pill.is-on {
   background: var(--ot-accent-soft);
   color: var(--ot-accent);
+}
+
+#automation-list .automation-switch {
+  min-height: 2.75rem;
+  justify-content: center;
+  gap: 0.35rem;
+  border: 1px solid var(--ot-line);
+  box-shadow: none;
+}
+
+#automation-list .automation-switch::before {
+  content: '';
+  width: 0.5rem;
+  height: 0.5rem;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+
+#automation-list .automation-switch.is-on::before {
+  background: currentColor;
 }
 
 #automation-list.template-catalog {
@@ -283,7 +312,7 @@ body.app-workspace #main-panel {
   display: none;
 }
 
-#meeting-action-source {
+:is(#meeting-action-source, #memory-action-source) {
   padding: .8rem 1rem;
   margin-bottom: .8rem;
   border: 1px solid var(--ot-line);
@@ -292,20 +321,24 @@ body.app-workspace #main-panel {
   overflow-wrap: anywhere;
 }
 
-#meeting-action-source h2,
-#meeting-action-source p {
+:is(#meeting-action-source, #memory-action-source) :is(h2, p) {
   margin: 0 0 .35rem;
 }
 
-#meeting-action-source h2 {
+:is(#meeting-action-source, #memory-action-source) h2 {
   font-size: .85rem;
 }
 
-#meeting-action-source-title {
+#meeting-action-source-title,
+#memory-action-source-title {
   font-weight: 650;
 }
 
-#meeting-action-source a {
+#memory-action-source-notes {
+  white-space: pre-wrap;
+}
+
+:is(#meeting-action-source, #memory-action-source) a {
   display: inline-flex;
   align-items: center;
   min-height: 2.75rem;
@@ -394,6 +427,25 @@ body.app-workspace #main-panel {
   flex-wrap: wrap;
   gap: 0.5rem;
   align-items: center;
+}
+
+.run-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  margin-block: .75rem;
+}
+
+.run-related {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .25rem .75rem;
+}
+
+.run-related a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
 }
 
 #manual-run-note { margin: 0 0 .75rem; }
@@ -630,8 +682,29 @@ body.app-workspace #main-panel {
   min-height: 2.75rem;
 }
 
-.editor-head .manual-run-feedback {
+#editor-head-confirm,
+.editor-head .manual-run-feedback,
+.editor-draft-notice {
   grid-column: 1 / -1;
+}
+
+.editor-draft-notice:not([hidden]) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .25rem .5rem;
+}
+
+.editor-draft-notice p {
+  margin: 0;
+}
+
+#editor-head-confirm:empty {
+  display: none;
+}
+
+#editor-head-confirm .row-confirm button {
+  min-height: 2.75rem;
 }
 
 .editor-head .manual-run-feedback:has(#manual-run-status:empty):has(#view-watched-run[hidden]) {
@@ -724,6 +797,10 @@ body.app-workspace #main-panel {
   margin: 0;
 }
 
+#editor-form #automation-notification-settings { display: grid; gap: .35rem; min-width: 0; margin: .65rem 0 0; }
+#automation-notification-policy { width: min(100%, 18rem); min-height: 2.75rem; box-sizing: border-box; }
+#automation-notification-help { margin: 0; overflow-wrap: anywhere; }
+
 .editor-options summary {
   cursor: pointer;
   font-size: 0.875rem;
@@ -781,3 +858,34 @@ body.app-workspace #main-panel {
     grid-column: 1 / -1;
   }
 }
+#automation-studio-dialog {
+  width: min(38rem, calc(100% - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow: auto;
+  box-sizing: border-box;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  border: 1px solid var(--ot-line);
+  border-radius: 1rem;
+  padding: 1rem;
+}
+#automation-studio-dialog::backdrop { background: rgb(12 19 16 / 44%); }
+.automation-studio-header, .automation-studio-actions {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  flex-wrap: wrap;
+}
+.automation-studio-header { justify-content: space-between; }
+.automation-studio-header h2 { margin: 0; font-size: 1.1rem; }
+#automation-studio-body {
+  max-height: 40vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  padding: .75rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .65rem;
+}
+.run-share-team { margin-inline-start: .55rem; }

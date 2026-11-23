@@ -7,13 +7,13 @@ const CALL = 'otcav_' + 'M'.repeat(26);
 const INVITE = 'Z'.repeat(24);
 const PEER = 'a'.repeat(32);
 
-function callFixture({host = true} = {}) {
+function callFixture({host = true, recordable = false} = {}) {
   const nodes = new Map();
   const timers = new Map();
   const calls = [];
-  let serial = 0, stopped = 0, viewer = 'alice', remoteEnded = false, copied = '';
+  let serial = 0, stopped = 0, viewer = 'alice', remoteEnded = false, copied = '', navigated = '';
   let finishLeave;
-  const track = {stop() { stopped += 1; }};
+  const track = {kind:'audio', readyState:'live', stop() { stopped += 1; }};
   const stream = {getTracks: () => [track], getAudioTracks: () => [track], getVideoTracks: () => [track]};
   function node(id) {
     if (!nodes.has(id)) nodes.set(id, {
@@ -33,8 +33,35 @@ function callFixture({host = true} = {}) {
     setTimeout(fn) { timers.set(++serial, fn); return serial; },
     clearTimeout(id) { timers.delete(id); },
   };
+  view.location.assign = href => { navigated = href; };
   const document = {getElementById: node, defaultView: view};
   const call = {id: CALL, kind: 'video', peers: [{id: PEER, name: '参会者'}]};
+  if (recordable) {
+    call.recording = null;
+    const mime = 'audio/webm;codecs=opus';
+    view.AudioContext = class {
+      state = 'running';
+      async resume() {}
+      async close() { this.state = 'closed'; }
+      createMediaStreamDestination() { return {stream:{getTracks:() => [{stop() {}}]}}; }
+      createMediaStreamSource() { return {connect() {}, disconnect() {}}; }
+    };
+    view.MediaStream = class {};
+    view.Blob = Blob;
+    view.MediaRecorder = class {
+      static isTypeSupported(type) { return type === mime; }
+      state = 'inactive';
+      mimeType = mime;
+      start() { this.state = 'recording'; }
+      stop() {
+        this.state = 'inactive';
+        queueMicrotask(() => {
+          this.ondataavailable({data:new Blob(['private recording'], {type:mime})});
+          this.onstop();
+        });
+      }
+    };
+  }
   const request = async (method, path, body) => {
     calls.push({method, path, body});
     const action = path.split('/').at(-1);
@@ -42,6 +69,11 @@ function callFixture({host = true} = {}) {
       return {status: 200, body: {call, peer_id: PEER, ice_servers: [], meeting: {title: '本次会议', host, ...(host ? {code: INVITE} : {})}}};
     }
     if (action === 'preview') return {status: 200, body: {title: '本次会议'}};
+    if (action === 'recording') {
+      call.recording = {id:'test-recording', initiator_peer_id:PEER, state:body.action === 'stop' ? 'stopped' : 'recording',
+        participants:[{peer_id:PEER,allowed:true}]};
+      return {status:200, body:{recording:call.recording}};
+    }
     if (action === 'end') return {status: 200, body: {ended: true, handoff: {id: CALL}}};
     if (action === 'poll') return remoteEnded ? {status: 404, body: {error: {code: 'call_ended'}}}
       : {status: 200, body: {call, signals: []}};
@@ -53,12 +85,13 @@ function callFixture({host = true} = {}) {
     node, calls, controller,
     stopped: () => stopped,
     copied: () => copied,
+    navigated: () => navigated,
     async start() {
       controller.openMeeting(host ? 'create' : 'join', INVITE);
       node('chat-meeting-form').handlers.submit({preventDefault() {}});
       await new Promise(resolve => setImmediate(resolve));
     },
-    finishLeave() { finishLeave({status: 200, body: {handoff: {id: CALL}}}); },
+    finishLeave(ended = true) { finishLeave({status: 200, body: ended ? {handoff: {id: CALL}} : {}}); },
     switchAccount() { viewer = 'bob'; controller.sync(); },
     async remoteEnd() {
       remoteEnded = true;
@@ -109,6 +142,30 @@ test('host end and remote end keep only an attendee-scoped call link and release
     assert.equal(node('chat-meeting-notes').hidden, true);
     assert.equal(node('chat-meeting-notes').href, undefined);
   }
+});
+
+test('leaving first keeps an acknowledged local clip available for the notes handoff and preserves metadata fallback', async () => {
+  const fixture = callFixture({host:false, recordable:true});
+  const {node} = fixture;
+  await fixture.start();
+  await node('chat-call-record-request').handlers.click();
+  await node('chat-call-record-stop').handlers.click();
+  assert.match(node('chat-call-record-status').textContent, /在此设备保留/);
+  const leaving = node('chat-meeting-hangup').handlers.click();
+  fixture.finishLeave(false);
+  await leaving;
+  assert.match(node('chat-meeting-notes-hint').textContent, /通话结束后刷新/);
+  const href = node('chat-meeting-notes').href;
+  await node('chat-meeting-notes-copy').handlers.click();
+  assert.equal(fixture.copied(), 'https://example.test' + href);
+  assert.equal(fixture.navigated(), '');
+  let intercepted = false;
+  await node('chat-meeting-notes').handlers.click({preventDefault() { intercepted = true; }});
+  assert.equal(intercepted, true, 'the acknowledged local clip is still available after non-final leave');
+  assert.equal(node('chat-meeting-notes-without-audio').hidden, false);
+  assert.equal(fixture.navigated(), '');
+  node('chat-meeting-notes-without-audio').handlers.click();
+  assert.equal(fixture.navigated(), href);
 });
 
 test('only an exact same-origin call source URL gives a saved message a notes action', () => {

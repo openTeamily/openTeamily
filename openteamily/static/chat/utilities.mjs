@@ -1,5 +1,7 @@
 // Persisted private model operations. Provider output is text, never executable markup.
-export function mountMessageUtilities(document, {request, context, composerContext = context, notify,
+import { studioDocumentHref } from '../shell/studio-link.mjs';
+
+export function mountMessageUtilities(document, {request, context, composerContext = context, notify, formatAnnouncementTime = () => '',
   stickersAvailable, activateStickers, closeStickers}) {
   const dialog = document.getElementById('message-assist-dialog');
   const announcement = document.getElementById('announcement-dialog');
@@ -53,73 +55,143 @@ export function mountMessageUtilities(document, {request, context, composerConte
     finally { busy = false; button.disabled = false; }
   });
   let announcementTarget = null;
+  let announcementLoad = 0, announcementRefresh = 0;
   const announcementText = document.getElementById('announcement-body');
   const announcementStatus = document.getElementById('announcement-status');
+  const announcementPreview = document.getElementById('group-announcement-preview');
+  const announcementMeta = document.getElementById('group-announcement-meta');
+  const save = document.getElementById('announcement-save');
+  const clear = document.getElementById('announcement-clear');
+
+  function renderAnnouncement(entry, placeholder) {
+    if (announcementPreview) announcementPreview.textContent = entry?.body || placeholder;
+    if (!announcementMeta) return;
+    const by = typeof entry?.author_name === 'string' ? entry.author_name.trim() : '';
+    const when = Number.isFinite(entry?.updated_at) ? formatAnnouncementTime(entry.updated_at) : '';
+    announcementMeta.textContent = entry?.body ? [by, when].filter(Boolean).join(' · ') : '';
+    announcementMeta.hidden = !announcementMeta.textContent;
+  }
+
   async function readAnnouncement(captured) {
     const result = await request('GET', base(captured) + '/announcement');
     if (result.status !== 200) throw new Error('无法读取群公告。');
     return result.body;
   }
+
   async function refreshAnnouncement() {
     const c = context();
-    const preview = document.getElementById('group-announcement-preview');
-    if (preview) preview.textContent = c && c.kind === 'group' ? '正在读取公告…' : '';
-    if (!c || c.kind !== 'group') return;
-    try { const result = await readAnnouncement(c); if (same(c) && preview) preview.textContent = result.announcement.body || '还没有群公告。'; }
-    catch { if (same(c) && preview) preview.textContent = '群公告读取失败，请打开公告后重试。'; }
-  }
-  const publish = document.getElementById('group-announcement-open');
-  if (publish) publish.addEventListener('click', async () => {
-    const c = context(); if (!c || c.kind !== 'group') return;
-    announcementStatus.textContent = '正在读取…'; announcementText.value = '';
-    const save = document.getElementById('announcement-save'); save.disabled = true;
-    announcementTarget = null; announcement.showModal();
+    const sequence = ++announcementRefresh;
+    const group = c?.kind === 'group';
+    renderAnnouncement(null, group ? '正在读取公告…' : '');
+    if (!group) return;
     try {
-      const result = await readAnnouncement(c); if (!same(c)) throw new Error('会话已切换，请重新打开。');
-      announcementTarget = {...c, revision: result.announcement.revision};
-      announcementText.value = result.announcement.body; announcementText.disabled = !result.can_edit; save.disabled = !result.can_edit;
-      announcementStatus.textContent = result.can_edit ? '工作区管理员可以编辑；提交后所有群成员可见。清空并保存可撤下公告。' : '只有工作区管理员群成员可以编辑。';
-    } catch (e) { announcementStatus.textContent = e.message; }
+      const {announcement: entry} = await readAnnouncement(c);
+      if (same(c) && sequence === announcementRefresh) renderAnnouncement(entry, '还没有群公告。');
+    } catch {
+      if (same(c) && sequence === announcementRefresh) renderAnnouncement(null, '群公告读取失败，请打开公告后重试。');
+    }
+  }
+
+  document.getElementById('group-announcement-open')?.addEventListener('click', async () => {
+    const c = context();
+    if (c?.kind !== 'group') return;
+    const sequence = ++announcementLoad;
+    const current = () => sequence === announcementLoad && same(c) && announcement.open;
+    announcementTarget = null;
+    announcementStatus.textContent = '正在读取…';
+    announcementText.value = '';
+    announcementText.disabled = true;
+    save.disabled = true;
+    if (clear) clear.hidden = true;
+    announcement.showModal();
+    try {
+      const result = await readAnnouncement(c);
+      if (!current()) return;
+      const entry = result.announcement;
+      announcementRefresh += 1;
+      renderAnnouncement(entry, '还没有群公告。');
+      announcementTarget = {...c, revision: entry.revision, editable: result.can_edit === true};
+      announcementText.value = entry.body;
+      announcementText.disabled = save.disabled = !announcementTarget.editable;
+      if (clear) {
+        clear.hidden = !announcementTarget.editable || !entry.body;
+        clear.disabled = false;
+      }
+      announcementStatus.textContent = announcementTarget.editable
+        ? '保存后所有群成员可见。' : '群公告仅允许有管理权限的成员编辑。';
+    } catch (error) {
+      if (current()) announcementStatus.textContent = error.message;
+    }
+  });
+  announcement.addEventListener('close', () => {
+    announcementLoad += 1;
+    announcementTarget = null;
   });
   document.getElementById('announcement-close').addEventListener('click', () => announcement.close());
-  document.getElementById('announcement-form').addEventListener('submit', async event => {
-    event.preventDefault(); const c = announcementTarget; if (!c || !same(c)) return;
-    const save = document.getElementById('announcement-save'); if (save.disabled) return; save.disabled = true;
+
+  async function saveAnnouncement(body) {
+    const c = announcementTarget;
+    if (!c?.editable || !same(c) || save.disabled) return;
+    const current = () => announcementTarget === c && same(c) && announcement.open;
+    save.disabled = true;
+    if (clear) clear.disabled = true;
     try {
-      const result = await request('POST', base(c) + '/announcement', {body: announcementText.value, revision: c.revision});
-      if (result.status !== 200) { announcementStatus.textContent = result.body.error?.message || '保存失败；请关闭并重开以读取最新修订。'; return; }
-      announcement.close(); await refreshAnnouncement(); notify('ok', '群公告已保存。');
-    } catch { announcementStatus.textContent = '网络错误，结果未知；请关闭并重新打开检查。'; }
-    finally { save.disabled = false; }
+      const result = await request('POST', base(c) + '/announcement', {body, revision: c.revision});
+      if (!current()) return;
+      if (result.status !== 200) {
+        announcementStatus.textContent = result.body.error?.message || '保存失败；请关闭并重开以读取最新修订。';
+        return;
+      }
+      announcementRefresh += 1;
+      renderAnnouncement(result.body.announcement, '还没有群公告。');
+      announcement.close();
+      notify('ok', body ? '群公告已保存。' : '群公告已清空。');
+    } catch {
+      if (current()) announcementStatus.textContent = '网络错误，结果未知；请关闭并重新打开检查。';
+    } finally {
+      if (current()) {
+        save.disabled = false;
+        if (clear) clear.disabled = false;
+      }
+    }
+  }
+  clear?.addEventListener('click', () => saveAnnouncement(''));
+  document.getElementById('announcement-form').addEventListener('submit', event => {
+    event.preventDefault();
+    return saveAnnouncement(announcementText.value);
   });
   const picker = document.getElementById('resource-picker');
   const choices = document.getElementById('resource-picker-list');
   const pickerKind = document.getElementById('resource-picker-kind');
+  const studioOption = document.getElementById('resource-picker-studio');
   const pickerStatus = document.getElementById('resource-picker-status');
   const more = document.getElementById('resource-picker-more');
   let pickerContext = null, cursor = '', pickerGeneration = 0;
   const pickerSame = c => { const now = composerContext(); return now && c && now.wid === c.wid && now.cid === c.cid && now.source === c.source && now.scope === c.scope; };
   async function listResources(append = false) {
     const c = pickerContext, token = ++pickerGeneration, kind = pickerKind.value;
+    const studio = kind === 'studio/documents';
     if (!pickerSame(c)) { pickerStatus.textContent = '会话已切换，请重新打开。'; return; }
     if (!append) { cursor = ''; choices.replaceChildren(); }
     pickerStatus.textContent = '正在读取…'; more.hidden = true;
     try {
-      const query = '?limit=50' + (append && cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+      const query = studio ? '' : '?limit=50' + (append && cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
       const result = await request('GET', `/v1/workspaces/${c.wid}/${kind}${query}`);
       if (token !== pickerGeneration || !pickerSame(c)) return;
       if (result.status !== 200) throw new Error('资料读取失败。');
-      const rows = (result.body.items || []).filter(r => kind === 'memory' || r.kind === 'document');
+      const rows = (result.body.items || []).filter(r => studio || kind === 'memory' || r.kind === 'document');
       for (const row of rows) {
         const li = document.createElement('li'), button = document.createElement('button'); button.type = 'button'; button.textContent = row.title;
         button.addEventListener('click', async () => {
           button.disabled = true;
           try {
-            const seen = await request('GET', `/v1/workspaces/${c.wid}/${kind}/${row.id}`);
+            const seen = studio ? null : await request('GET', `/v1/workspaces/${c.wid}/${kind}/${row.id}`);
             if (token !== pickerGeneration || pickerContext !== c || !picker.open || !pickerSame(c) || pickerKind.value !== kind) return;
-            if (seen.status !== 200) throw new Error('这份资料已不可用。');
-            const item = seen.body.page || seen.body.artifact;
-            const fragment = `\n\n参考资料：${item.title}（修订 ${item.revision}）\n` + JSON.stringify(item.body || '');
+            const link = studio ? studioDocumentHref(c.wid, row.id) : '';
+            if (studio ? !link : seen.status !== 200) throw new Error('这份资料已不可用。');
+            const item = seen?.body.page || seen?.body.artifact;
+            const fragment = studio ? '\n\n' + new URL(link, document.defaultView.location.origin).href
+              : `\n\n参考资料：${item.title}（修订 ${item.revision}）\n` + JSON.stringify(item.body || '');
             const composer = document.getElementById('chat-body');
             if (composer.value.length + fragment.length > 4000) throw new Error('内容超过消息上限；未截断或插入。请打开原文选择较短片段。');
             composer.value += fragment; composer.dispatchEvent(new Event('input', {bubbles:true}));
@@ -130,11 +202,14 @@ export function mountMessageUtilities(document, {request, context, composerConte
         li.append(button); choices.append(li);
       }
       cursor = result.body.cursor || ''; more.hidden = !cursor;
-      pickerStatus.textContent = choices.children.length ? '选择一份资料，正文将放入输入框供你检查。' : '本页没有文档或记忆。';
+      pickerStatus.textContent = studio
+        ? (choices.children.length ? '选择一份团队文档，将链接放入输入框。只有团队成员能打开。' : '当前团队还没有协作文档。')
+        : (choices.children.length ? '选择一份资料，正文将放入输入框供你检查。' : '本页没有文档或记忆。');
     } catch(e) { if (token === pickerGeneration) pickerStatus.textContent = e.message || '网络错误。'; }
   }
   function openPicker(kind) {
     pickerContext = composerContext(); if (!pickerContext) { notify('error', '请先打开一个会话。'); return; }
+    if (studioOption) studioOption.hidden = studioOption.disabled = !pickerContext.studio;
     pickerKind.value = kind; picker.showModal(); listResources();
   }
   document.getElementById('composer-resource-open')?.addEventListener('click', () => openPicker('artifacts'));
@@ -230,15 +305,33 @@ export function mountMessageUtilities(document, {request, context, composerConte
 }
 
 // Account settings alter rendering, not stored message bytes or copy/forward payloads.
-export function renderMessageText(document, root, text, folding = 'standard', linkPreviews = false) {
+export function renderMessageText(document, root, text, folding = 'standard', linkPreviews = false, renderBody) {
   root.replaceChildren();
   const limit = folding === 'compact' ? 240 : folding === 'none' ? Infinity : 800;
-  if (String(text || '').length <= limit) root.textContent = text || '';
-  else {
+  if (String(text || '').length <= limit) {
+    if (renderBody) renderBody(root, text);
+    else root.textContent = text || '';
+  } else {
     const details = document.createElement('details');
-    const summary = document.createElement('summary'); summary.textContent = String(text).slice(0, limit) + '… 展开全文';
-    const content = document.createElement('span'); content.setAttribute('style','white-space:pre-wrap'); content.textContent = text;
-    details.append(summary, content); root.append(details);
+    const summary = document.createElement('summary');
+    details.append(summary);
+    const updatePreview = () => {
+      const body = renderBody && details.children[1];
+      const preview = body?.children.length ? Array.from(body.children, block => {
+        if (block.dataset?.summary) return block.dataset.summary;
+        if (['OL', 'UL'].includes(block.tagName)) return Array.from(block.children, item => item.textContent).join(' · ');
+        const headings = block.querySelectorAll?.('thead th');
+        return headings?.length ? Array.from(headings, cell => cell.textContent).join(' · ') : block.textContent;
+      }).join(' ').trim() : '';
+      summary.textContent = (preview || String(text)).slice(0, limit) + '… 展开全文';
+    };
+    if (renderBody) renderBody(details, text, updatePreview);
+    else {
+      const content = document.createElement('span'); content.setAttribute('style','white-space:pre-wrap'); content.textContent = text;
+      details.append(content);
+    }
+    updatePreview();
+    root.append(details);
   }
   if (!linkPreviews) return;
   const seen = new Set();

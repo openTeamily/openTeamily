@@ -31,6 +31,7 @@ async function privateHits(host, workspace, options) {
     return (await host.call('agents/searchMessages', {workspace_id: workspace, ...options})).items
   } catch (error) {
     if (error?.status === 400) refuse(400, 'invalid', 'Invalid search parameters')
+    if (error?.code === 'openteamily/not-found') refuse(503, 'unavailable', '智能体消息搜索暂不可用。')
     throw error
   }
 }
@@ -76,11 +77,13 @@ function searchSnippet(body, query) {
 
 function privateHit(row, text) {
   return {kind: 'agent', agent_id: row.agent_id, conversation_id: row.conversation_id, message_id: row.id,
-    title: row.title || '对话', snippet: searchSnippet(row.body, text), created: row.created}
+    title: row.title || '对话', snippet: searchSnippet(row.body, text), created: row.created,
+    ...(row.role === 'user' || row.role === 'assistant' ? {role: row.role} : {}),
+    ...(row.role === 'assistant' && row.agent_name ? {agent_name: row.agent_name} : {})}
 }
 
 async function sharedHits(host, workspace, {text, limit, conversationId}, before) {
-  const binding = await host.call?.('agents/personal-binding', {})
+  const binding = await optional(host, 'agents/personal-binding', {})
   const path = binding?.workspace_id === workspace
     ? '/v1/ot/messages/personal-search' : `/v1/ot/workspaces/${workspace}/messages/search`
   const page = await sharedBotSocial(host).get(path + qs({

@@ -288,8 +288,7 @@ class Runner:
     def __init__(self, registry, *, enabled=False):
         self.registry, self.enabled = registry, enabled
         self.home = registry.root / 'docker-home'
-        if not self.home.exists():
-            self.home.mkdir(mode=0o700)
+        self.home.mkdir(mode=0o700, exist_ok=True)
         trusted_path(str(self.home), directory=True, private=True)
 
     def run(self, args, *, heartbeat=lambda: None, timeout=10, stdin=subprocess.DEVNULL):

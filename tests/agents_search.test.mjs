@@ -269,6 +269,118 @@ test('the saved Personal Agent look replaces the monogram in the directory', asy
 });
 
 
+test('native directory renders the updated look only for the signed account and its personal workspace', async () => {
+  const requests = [];
+  const {doc, el} = fakeDocument();
+  doc.querySelector = (selector) => selector === 'meta[name="openteamily-served-by"][content="ds-bot"]' ? {} : null;
+  const owner = {id: 'e'.repeat(32), username: 'alice'};
+  const workspace = {id: 'a'.repeat(32), name: 'Desk', kind: 'personal', owner_id: owner.id};
+  const agent = {id: 'b'.repeat(32), name: "alice's Personal Agent", summary: ''};
+  const look = {color: '葡萄紫', expression: '好奇', headwear: '贝雷帽', glasses: '圆框眼镜', hand: '魔法棒'};
+  let returnLook;
+  let snapshot = {items: [workspace], personal_agent_id: agent.id, personal_look: look, viewer_username: 'alice'};
+  const load = () => mount(doc, {fetcher: async (path) => {
+    requests.push(path);
+    if (path === '/v1/auth/session') return json(200, {user: owner});
+    if (path === '/v1/workspaces?scope=personal&include=personal-agent') return returnLook.then(() => json(200, snapshot));
+    if (path === '/v1/workspaces?limit=100') return json(200, {items: [workspace]});
+    if (path === '/v1/workspaces/' + workspace.id) return json(200, {workspace});
+    if (path.endsWith('/members')) return json(200, {items: [{user_id: owner.id, role: 'owner'}]});
+    if (path.endsWith('/agents?limit=100')) return json(200, {items: [agent]});
+    return json(404, {});
+  }});
+  const avatar = () => el('agent-list').children[0].children[0];
+  const pending = Promise.withResolvers();
+  returnLook = pending.promise;
+  await load();
+  assert.equal(avatar().className, 'avatar', 'the directory must render before the look read finishes');
+  pending.resolve();
+  await tick();
+  assert.equal(avatar().className, 'look-avatar');
+  assert.equal(avatar().dataset.color, look.color);
+  assert.equal(requests.includes('/v1/personal-agent'), false);
+
+  snapshot = {...snapshot, viewer_username: 'another-user'};
+  await load();
+  await tick();
+  assert.equal(avatar().className, 'avatar', 'a different signed-in viewer must never apply the look');
+
+  snapshot = {...snapshot, viewer_username: 'alice', items: [{...workspace, id: 'c'.repeat(32)}]};
+  await load();
+  await tick();
+  assert.equal(avatar().className, 'avatar', 'the personal look must only decorate the bound workspace');
+});
+
+
+test('only a workspace manager can open the archived list or restore its agents', async () => {
+  const owner = {id: 'e'.repeat(32), username: 'alice'};
+  const wid = 'a'.repeat(32);
+  const archivedAgent = {id: 'b'.repeat(32), name: 'Archived assistant', archived: 1, revision: 3};
+  const active = {id: 'c'.repeat(32), name: 'Active assistant', archived: 0, revision: 1};
+  const previous = {location: globalThis.location, history: globalThis.history};
+  const base = '/v1/workspaces/' + wid;
+  try {
+    for (const role of ['member', 'admin']) {
+      const {doc, el} = fakeDocument();
+      doc.querySelector = (selector) => selector === 'meta[name="openteamily-served-by"][content="ds-bot"]' ? {} : null;
+      globalThis.location = {pathname: '/agents', search: '', hash: '#workspace=' + wid + '&status=archived'};
+      globalThis.history = {replaceState(_state, _unused, url) {
+        globalThis.location.hash = new URL(url, 'https://fixture.invalid').hash;
+      }};
+      const workspace = {id: wid, name: 'Team', role};
+      const requests = [];
+      const membership = Promise.withResolvers();
+      let restored = false;
+      const mounted = mount(doc, {fetcher: async (path, options) => {
+        requests.push([path, options.body && JSON.parse(options.body)]);
+        if (path === '/v1/auth/session') return json(200, {user: owner});
+        if (path === '/v1/workspaces?limit=100') return json(200, {items: [workspace]});
+        if (path === base + '/members') {
+          await membership.promise;
+          return json(200, {items: [{user_id: owner.id, role}]});
+        }
+        if (path === base + '/agents?limit=100&archived=1') return json(200, {items: restored ? [] : [archivedAgent]});
+        if (path === base + '/agents?limit=100') return json(200, {items: restored ? [active, {...archivedAgent, archived: 0}] : [active]});
+        if (path === base + '/agents/' + archivedAgent.id + '/archive') {
+          restored = true;
+          return json(200, {agent: {...archivedAgent, archived: 0, revision: 4}});
+        }
+        return json(404, {});
+      }});
+      await tick();
+      assert.equal(el('agent-status-control').hidden, true);
+      assert.equal(requests.some(([path]) => path.includes('archived=1')), false);
+      membership.resolve();
+      await mounted;
+      const status = el('agent-status');
+      if (role === 'member') {
+        assert.equal(status.disabled, true);
+        assert.equal(el('agent-status-control').hidden, true);
+        assert.equal(globalThis.location.hash, '#workspace=' + wid);
+        status.value = 'archived';
+        await status.handlers.change();
+        assert.equal(requests.some(([path]) => path.includes('archived=1')), false);
+        assert.equal(el('agent-list').children[0].children[1].children[0].textContent, active.name);
+      } else {
+        assert.equal(status.disabled, false);
+        assert.equal(el('agent-status-control').hidden, false);
+        assert.equal(status.value, 'archived');
+        const row = el('agent-list').children[0];
+        assert.equal(row.children[1].children.find(node => node.className === 'archive-label')?.textContent, '已归档');
+        const button = row.children.find(node => node.textContent === '恢复');
+        await button.handlers.click();
+        assert.deepEqual(requests.find(([path]) => path.endsWith('/archive'))?.[1], {revision: 3, archived: false});
+        assert.equal(el('agent-list').children.length, 0);
+        status.value = 'active';
+        await status.handlers.change();
+        assert.equal(el('agent-list').children.length, 2);
+      }
+    }
+  } finally {
+    Object.assign(globalThis, previous);
+  }
+});
+
 test('create form retains its element after DOM dispatch clears currentTarget during await', async () => {
   const {doc,el}=fakeDocument();const requests=[],agents=[];let release,reset=0;
   const ordinary=directoryFetcher(requests,{agents,conversations:[]});

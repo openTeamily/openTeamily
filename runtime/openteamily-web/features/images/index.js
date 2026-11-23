@@ -26,7 +26,7 @@ async function canAccess(host, workspace) {
   const binding = await host.call('agents/personal-binding',{}).catch(() => null)
   if (binding?.workspace_id === workspace) return true
   const items = await host.call('teams/activeWorkspaces',{}).catch(() => [])
-  return items.some(item => item.id === workspace)
+  return Array.isArray(items) && items.some(item => item?.id === workspace)
 }
 
 function view(row) {
@@ -36,15 +36,18 @@ function view(row) {
 
 async function imageRoute(req, workspace, id) {
   if (req.queryString) refuse(400,'invalid','无效的图片请求。')
-  if (req.method === 'GET' && id) {
-    const row = req.store.get('SELECT * FROM image_jobs WHERE workspace_id=? AND id=?',workspace,id)
-    if (!row) refuse(404,'not_found','找不到图片任务。')
-    return {body:{job:view(row)}}
-  }
   if (req.method === 'GET') {
     if (!await canAccess(req.host,workspace)) refuse(404,'not_found','无法访问当前工作区。')
+    if (id) {
+      const row = req.store.get('SELECT * FROM image_jobs WHERE workspace_id=? AND id=?',workspace,id)
+      if (!row) refuse(404,'not_found','找不到图片任务。')
+      return {body:{job:view(row)}}
+    }
+    const key = req.headers.has('idempotency-key') ? idempotencyKey(req.headers) : null
+    const row = key
+      ? req.store.get('SELECT * FROM image_jobs WHERE workspace_id=? AND key=?',workspace,key)
+      : req.store.get('SELECT * FROM image_jobs WHERE workspace_id=? ORDER BY created DESC,rowid DESC LIMIT 1',workspace)
     const config = await req.host.call('model-api/imageProvider',{}).catch(() => null)
-    const row = req.store.get('SELECT * FROM image_jobs WHERE workspace_id=? ORDER BY created DESC,rowid DESC LIMIT 1',workspace)
     return {body:{configured:Boolean(config),job:row ? view(row) : null}}
   }
   if (req.method !== 'POST' || id) refuse(405,'method','该操作不可用。')

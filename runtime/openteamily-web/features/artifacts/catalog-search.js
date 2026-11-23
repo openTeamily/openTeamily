@@ -1,5 +1,5 @@
 import { casefold, publicKind, unescapeHtml } from './model.js'
-import { decodeBoard, decodeDashboard, decodeSlides } from './structured.js'
+import { decodeBoard, decodeDashboard, decodeSlides, decodeStructured } from './structured.js'
 import { decodeWorkbook, workbookText } from './workbook.js'
 
 const EXCERPT_LENGTH = 160
@@ -109,8 +109,7 @@ export function* structuredArtifactText(artifact) {
   }
 }
 
-function* artifactText(row) {
-  const kind = publicKind(row)
+function* artifactText(row, kind = publicKind(row), saved) {
   switch (kind) {
     case 'document':
       yield row.body
@@ -122,20 +121,35 @@ function* artifactText(row) {
       yield* structuredArtifactText({kind, board: decodeBoard(row.board_json)})
       break
     case 'slides':
-      yield* structuredArtifactText({kind, slides: decodeSlides(row.slides_json)})
+      yield* structuredArtifactText({kind, slides: saved || decodeSlides(row.slides_json)})
       break
     case 'dashboard':
-      yield* structuredArtifactText({kind, dashboard: decodeDashboard(row.dashboard_json)})
+      yield* structuredArtifactText({kind, dashboard: saved || decodeDashboard(row.dashboard_json)})
       break
     case 'spreadsheet':
-      yield* structuredArtifactText({kind, spreadsheet: decodeWorkbook(row.spreadsheet_json)})
+      yield* structuredArtifactText({kind, spreadsheet: saved || decodeWorkbook(row.spreadsheet_json)})
       break
   }
 }
 
+export function artifactContextExcerpt(row, kind, saved) {
+  const limit = 12_000
+  let result = ''
+  for (const text of artifactText(row, kind, saved)) {
+    if (typeof text !== 'string' || !text.trim()) continue
+    const part = (result ? '\n' : '') + text
+    if (result.length + part.length > limit) return (result + part.slice(0, limit - result.length - 1)).toWellFormed() + '…'
+    result += part
+    if (result.length === limit) break
+  }
+  return result
+}
+
 export function catalogContentMatch(row, needle) {
   if (!row) return null
-  for (const text of artifactText(row)) {
+  const kind = publicKind(row)
+  const [legacyKind, structure] = kind === 'document' ? decodeStructured(row.body) : [null, null]
+  for (const text of artifactText(row, legacyKind ?? kind, structure)) {
     const match = catalogMatch('body', text, needle)
     if (match) return match
   }

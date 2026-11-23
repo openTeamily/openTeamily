@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { inflateRawSync } from 'node:zlib'
 import { boot, deliverBundle, key, legacyBundles, volume, WS } from './helpers.js'
+import { setSharedBotSocial } from '../lib/c/bot-social.js'
 
 const base = (rest = '', ws = WS) => `/v1/workspaces/${ws}/artifacts${rest}`
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
@@ -15,6 +16,177 @@ test('artifacts feature loads in this DS-Bot and keeps its data in its own featu
   const bot = await boot()
   assert.ok(bot.features.loaded.includes('artifacts'), JSON.stringify(bot.features.failed))
   assert.ok(existsSync(join(bot.vol.data, 'openteamily', 'features', 'artifacts', 'artifacts.sqlite3')))
+})
+
+test('restoring a reviewed version preserves history and replays an exact native receipt after restart', async () => {
+  let bot = await boot()
+  const call = (...args) => bot.call('artifacts', ...args)
+  const created = await call('POST', base(), {title:'版本恢复', kind:'document', body:'原稿'}, key())
+  assert.equal(created.status, 201)
+  const path = base('/' + created.body.artifact.id)
+  assert.equal((await call('POST', path, {revision:1, changes:{body:'第二稿'}})).body.artifact.revision, 2)
+  const operationKey = key()
+  const reviewed = {revision:2, to:1}
+  const first = await call('POST', path + '/restore', reviewed, operationKey)
+  assert.equal(first.status, 200)
+  assert.deepEqual(first.body.restore, {base_revision:2, source_revision:1, result_revision:3})
+  assert.equal(first.body.artifact.body, '原稿')
+  assert.equal((await call('POST', path, {revision:3, changes:{body:'新修改'}})).body.artifact.revision, 4)
+
+  bot = await boot(bot.vol)
+  const replay = await call('POST', path + '/restore', reviewed, operationKey)
+  assert.equal(replay.status, 200)
+  assert.deepEqual(replay.body.restore, first.body.restore)
+  assert.equal(replay.body.artifact.revision, 4)
+  assert.equal(replay.body.artifact.body, '新修改')
+  const otherTarget = await call('POST', path + '/restore', {revision:2, to:2}, operationKey)
+  assert.equal(otherTarget.status, 409)
+  assert.equal(otherTarget.body.error.code, 'idempotency_conflict')
+  const staleReview = await call('POST', path + '/restore', reviewed, key())
+  assert.equal(staleReview.status, 409)
+  assert.equal(staleReview.body.error.current.revision, 4)
+  const versions = await call('GET', path + '/versions')
+  assert.deepEqual(versions.body.items.map(item => [item.revision, item.restored_from ?? null]), [[4,null],[3,1],[2,null],[1,null]])
+  assert.equal((await call('GET', path + '/versions/2')).body.version.body, '第二稿')
+  assert.equal((await call('GET', path + '/versions/3')).body.version.restored_from, 1)
+  const outsider = await boot()
+  assert.equal((await outsider.call('artifacts','POST',path + '/restore',reviewed,operationKey)).status, 404)
+})
+
+test('owner recovery survives a native restart and only reveals an active confirmed share', async (t) => {
+  let bot = await boot()
+  const outsider = await boot()
+  const bindings = target => {
+    target.features.table['agents/personal-binding'] = async () => ({workspace_id:WS})
+  }
+  bindings(bot)
+  let publishes = 0
+  let checkState = 200
+  const hashes = new Set()
+  setSharedBotSocial({
+    async request(method,path,payload) {
+      if (method === 'PUT') {
+        publishes += 1
+        hashes.add(payload.token_hash)
+        return {published:true}
+      }
+      if (method === 'DELETE') {
+        hashes.delete(path.split('/').at(-1))
+        return {revoked:true}
+      }
+      const present = hashes.has(path.split('/').at(-1))
+      if (!present || checkState !== 200) throw Object.assign(Error('Unavailable'),{status:present ? checkState : 404})
+      return {active:true}
+    },
+  })
+  t.after(()=>setSharedBotSocial(undefined))
+  const {artifact} = (await bot.call('artifacts','POST',base(),{title:'Recover a shared link',body:'Exact source'},key())).body
+  const path = base('/'+artifact.id+'/shares')
+  const create = () => bot.call('artifacts','POST',path,{revision:1})
+  const {share} = (await create()).body
+  const link = path+'/'+share.id+'/link'
+  assert.equal((await outsider.call('artifacts','POST',link,{})).status,404)
+  const db = new DatabaseSync(join(bot.vol.data,'openteamily','features','artifacts','artifacts.sqlite3'))
+  t.after(()=>db.close())
+  assert.ok(!JSON.stringify(db.prepare('SELECT * FROM artifact_shares').all()).includes(share.token))
+  assert.ok(!JSON.stringify(db.prepare('SELECT * FROM artifact_share_keys').all()).includes(share.token))
+
+  bot = await boot(bot.vol)
+  bindings(bot)
+  const recover = () => bot.call('artifacts','POST',link,{})
+  const listed = (await bot.call('artifacts','GET',path)).body.items
+  assert.equal(listed[0].recoverable,true)
+  assert.equal(listed[0].path,undefined)
+  assert.equal(listed[0].token,undefined)
+  checkState = 503
+  assert.equal((await recover()).status,503)
+  checkState = 404
+  assert.equal((await recover()).status,404)
+  checkState = 200
+  assert.deepEqual((await recover()).body.share,{id:share.id,path:share.path})
+  assert.equal(publishes,1)
+  db.prepare('UPDATE artifact_shares SET recovery_version=0 WHERE id=?').run(share.id)
+  assert.equal((await recover()).status,404)
+  db.prepare('UPDATE artifact_shares SET recovery_version=1,expires=1 WHERE id=?').run(share.id)
+  assert.equal((await recover()).status,404)
+  db.prepare('UPDATE artifact_shares SET expires=NULL WHERE id=?').run(share.id)
+  await bot.call('artifacts','POST',path+'/'+share.id+'/revoke',{})
+  assert.equal((await recover()).status,404)
+  assert.equal(publishes,1)
+})
+
+test('Studio copy verifies the reviewed private revision and keeps a stable per-version receipt', async (t) => {
+  const bot = await boot()
+  const other = await boot()
+  const call = (...args) => bot.call('artifacts', ...args)
+  const privateBody = 'Reviewed body\n\n'
+  const created = await call('POST', base(), {
+    title: 'Team   notes', body: privateBody, kind: 'document',
+    source: {kind:'agent_message', id:'b'.repeat(32), conversation_id:'c'.repeat(32)},
+  }, key())
+  assert.equal(created.status, 201)
+  const original = created.body.artifact
+  const path = base('/' + original.id + '/studio-copy')
+  const input = {revision: original.revision, title:'Team notes', body:privateBody}
+  const outgoing = []
+  const studioId = 'e'.repeat(32)
+  setSharedBotSocial({
+    request: async (method, target, payload) => {
+      assert.equal(method, 'POST')
+      assert.equal(target, '/v1/ot/teams/' + WS + '/studio/documents')
+      outgoing.push(payload)
+      if (outgoing.length === 1) throw Error('Lost acknowledgment')
+      return {document:{id:studioId}}
+    },
+  })
+  t.after(() => setSharedBotSocial(undefined))
+
+  assert.equal((await call('POST', path, {...input, body:'Unreviewed body'})).body.error.code, 'source_changed')
+  assert.equal((await other.call('artifacts', 'POST', path, input)).status, 404)
+  assert.equal(outgoing.length, 0)
+  assert.equal((await call('POST', path, input)).body.error.code, 'studio_copy_unconfirmed')
+  assert.deepEqual((await call('POST', path, input)).body, {id:studioId,workspace_id:WS})
+  assert.deepEqual(outgoing[0], {title:input.title, body:privateBody, client_key:outgoing[1].client_key})
+  assert.match(outgoing[1].client_key, /^[a-f0-9]{64}$/)
+  const originalPath = base('/' + original.id)
+  assert.deepEqual((await call('GET', originalPath)).body.artifact, original)
+
+  assert.equal((await call('POST', originalPath, {revision:original.revision, changes:{body:'Updated later'}})).status, 200)
+  assert.equal((await call('POST', path, input)).body.error.code, 'source_changed')
+  assert.equal(outgoing.length, 2)
+  await call('POST', path, {...input, revision:original.revision + 1, body:'Updated later'})
+  assert.notEqual(outgoing[2].client_key, outgoing[1].client_key)
+})
+
+test('Studio copies from the personal runtime and a verified named source scope use distinct target receipts', async (t) => {
+  const bot = await boot()
+  const personal = bot.identity.instanceId
+  const destinations = ['b'.repeat(32), 'd'.repeat(32)]
+  const contents = {title:'Reviewed document',body:'Text from the saved version'}
+  const create = workspace => bot.call('artifacts','POST',base('',workspace),contents,key())
+  const [{body:{artifact:local}}, {body:{artifact:team}}] = await Promise.all([create(personal),create(WS)])
+  const sent = []
+  setSharedBotSocial({
+    async request(method, path, payload) {
+      sent.push({method,path,payload})
+      return {document:{id:'e'.repeat(32)}}
+    },
+  })
+  t.after(() => setSharedBotSocial(undefined))
+
+  const copy = (artifact,target) => bot.call('artifacts','POST',base('/'+artifact.id+'/studio-copy',artifact.workspace_id),
+    {...contents,revision:artifact.revision,target_workspace_id:target})
+  assert.equal((await copy(local,'invalid')).status,400)
+  assert.equal(sent.length,0)
+  assert.equal((await copy(local,destinations[0])).body.workspace_id,destinations[0])
+  await copy(local,destinations[0])
+  await copy(local,destinations[1])
+  await copy(team,destinations[1])
+  assert.deepEqual(sent.map(entry=>entry.path),[destinations[0],destinations[0],destinations[1],destinations[1]]
+    .map(target=>`/v1/ot/teams/${target}/studio/documents`))
+  assert.equal(sent[0].payload.client_key,sent[1].payload.client_key)
+  assert.notEqual(sent[0].payload.client_key,sent[2].payload.client_key)
+  assert.deepEqual(sent.map(entry=>entry.payload.source_workspace_id),[undefined,undefined,undefined,WS])
 })
 
 test('copying a saved work version creates a separate private artifact and replays after the source is removed', async () => {
@@ -52,6 +224,112 @@ test('copying a saved work version creates a separate private artifact and repla
   assert.equal(replay.status,200)
   assert.equal(replay.body.artifact.id,copy.id)
   assert.equal(replay.body.artifact.body,'Only edited in copy')
+})
+
+test('saving link-shared text copies only the reviewed snapshot to the personal runtime', async (t) => {
+  const bot = await boot()
+  const other = await boot()
+  const call = (...args) => bot.call('artifacts',...args)
+  const workspace = WS
+  assert.notEqual(workspace, bot.identity.instanceId)
+  bot.features.table['agents/personal-binding'] = async () => ({workspace_id:workspace})
+  other.features.table['agents/personal-binding'] = async () => ({workspace_id:other.identity.instanceId})
+  const endpoint = base('/shared-copy', workspace)
+  const token = 'a'.repeat(43)
+  let snapshot = {title:'Shared plan',body:'Reviewed text with <literal markup>.'}
+  let resolves = 0
+  setSharedBotSocial({
+    async request(method, path, payload) {
+      assert.deepEqual([method,path,payload],['POST','/v1/ot/public-shares/resolve',{token}])
+      resolves += 1
+      if (!snapshot) throw Object.assign(new Error('revoked'),{status:404})
+      return snapshot
+    },
+  })
+  t.after(() => setSharedBotSocial(undefined))
+
+  assert.equal((await other.call('artifacts','POST',endpoint,{token})).status,404)
+  assert.equal((await call('POST',base('/shared-copy',bot.identity.instanceId),{token})).status,404)
+  assert.equal((await call('POST',endpoint,{token,body:'Use my different text'})).status,400)
+  assert.equal(resolves,0)
+  const {body:{snapshot:preview}} = await call('POST',endpoint,{token})
+  assert.deepEqual(Object.keys(preview).sort(),['body','fingerprint','title'])
+  assert.equal(preview.body,snapshot.body)
+  assert.deepEqual((await call('GET',base('',workspace))).body.items,[])
+
+  const originalSnapshot = snapshot
+  const confirmation = {token,fingerprint:preview.fingerprint}
+  snapshot = {...snapshot,body:'Unreviewed alternate text'}
+  assert.equal((await call('POST',endpoint,confirmation)).status,409)
+  snapshot = null
+  assert.equal((await call('POST',endpoint,confirmation)).status,404)
+  assert.deepEqual((await call('GET',base('',workspace))).body.items,[])
+
+  snapshot = originalSnapshot
+  const results = await Promise.all([call('POST',endpoint,confirmation),call('POST',endpoint,confirmation)])
+  assert.deepEqual(results.map(result => result.status).sort(),[200,201])
+  const first = results[0].body.artifact
+  assert.equal(results[1].body.artifact.id,first.id)
+  assert.equal(first.body,originalSnapshot.body)
+  assert.equal(first.source,undefined)
+  const previous = resolves
+  snapshot = null
+  const receipt = await call('POST',endpoint,confirmation)
+  assert.equal(receipt.body.artifact.id,first.id)
+  assert.equal(resolves,previous)
+  assert.equal((await call('GET',base('',workspace))).body.items.length,1)
+})
+
+test('a reviewed Studio version saves exactly once to the account’s personal workspace', async (t) => {
+  const bot = await boot()
+  const personal = 'a'.repeat(32)
+  const source = 'b'.repeat(32)
+  const id = 'c'.repeat(32)
+  bot.features.table['agents/personal-binding'] = async () => ({workspace_id:personal})
+  const path = base('/studio-personal-copy',personal)
+  const call = data => bot.call('artifacts','POST',path,data)
+  const review = {source_workspace_id:source,document_id:id,revision:7}
+  let readable = true
+  let reads = 0
+  let body = 'Exact saved text'
+  setSharedBotSocial({
+    async request(method,target) {
+      assert.equal(method,'GET')
+      assert.equal(target,`/v1/ot/teams/${source}/studio/documents/${id}/versions/7`)
+      reads += 1
+      if (!readable) throw Object.assign(new Error('Missing membership'),{status:404})
+      return {version:{revision:7,title:'Team copy',body}}
+    },
+  })
+  t.after(()=>setSharedBotSocial(undefined))
+
+  assert.equal((await bot.call('artifacts','POST',base('/studio-personal-copy','d'.repeat(32)),review)).status,404)
+  assert.equal((await call({...review,body:'Untrusted browser content'})).status,400)
+  assert.equal(reads,0)
+  const {snapshot} = (await call(review)).body
+  assert.equal(snapshot.body,body)
+  assert.equal(snapshot.can_copy,true)
+  assert.deepEqual((await bot.call('artifacts','GET',base('',personal))).body.items,[])
+  const confirm = {...review,fingerprint:snapshot.fingerprint}
+  readable = false
+  assert.equal((await call(confirm)).status,404)
+  readable = true
+  body = 'Another body'
+  assert.equal((await call(confirm)).status,409)
+  body = '长'.repeat(8001)
+  const long = (await call(review)).body.snapshot
+  assert.equal(long.can_copy,false)
+  assert.equal(long.body.length,8001)
+  assert.equal((await call({...review,fingerprint:long.fingerprint})).status,413)
+  body = snapshot.body
+  const [first, second] = await Promise.all([call(confirm),call(confirm)])
+  assert.deepEqual([first.status,second.status].sort(),[200,201])
+  assert.equal(first.body.artifact.id,second.body.artifact.id)
+  assert.equal(first.body.artifact.body,snapshot.body)
+  assert.equal(first.body.artifact.source,undefined)
+  readable = false
+  assert.equal((await call(review)).status,404)
+  assert.equal((await call(confirm)).body.artifact.id,first.body.artifact.id)
 })
 
 test('saved website, structured work and historical media copies keep their native content', async () => {
@@ -93,7 +371,24 @@ test('saved website, structured work and historical media copies keep their nati
   assert.deepEqual(Buffer.from(file.download.data,'base64'),PNG)
 })
 
-test('document, website, slides, dashboard and whiteboard CRUD, favorites, versions, export and restore run in this DS-Bot', async () => {
+test('document, website, slides, dashboard and whiteboard CRUD, favorites, versions, export and restore run in this DS-Bot', async (t) => {
+  const published = new Set()
+  let offline = false
+  let revocations = 0
+  setSharedBotSocial({
+    request: async (method, path, snapshot) => {
+      if (method === 'PUT') {
+        published.add(snapshot.token_hash)
+        return { published: true }
+      }
+      assert.equal(method, 'DELETE')
+      revocations++
+      if (offline) throw Error('controlled Bot Social outage')
+      assert.ok(published.delete(path.split('/').at(-1)))
+      return { revoked: true }
+    },
+  })
+  t.after(() => setSharedBotSocial(undefined))
   const bot = await boot()
   const call = (...args) => bot.call('artifacts', ...args)
   const created = await call('POST', base(), { title: '周报', body: '本周完成迁移。', kind: 'document' }, key())
@@ -145,14 +440,37 @@ test('document, website, slides, dashboard and whiteboard CRUD, favorites, versi
   const dash = await call('POST', base(), { title: '指标', kind: 'dashboard', dashboard: { schema: 'openteamily.dashboard.v1', widgets: [{ type: 'metric', title: '人数', value: '12', note: '' }] } }, key())
   assert.equal(dash.body.artifact.kind, 'dashboard')
 
-  const share = await call('POST', base(`/${doc.id}/shares`), {})
+  const staleShare = await call('POST', base(`/${doc.id}/shares`), {revision:2})
+  assert.equal(staleShare.status,409)
+  assert.equal(staleShare.body.error.code,'artifact_changed')
+  assert.equal(published.size,0)
+  assert.deepEqual((await call('GET',base(`/${doc.id}/shares`))).body.items,[])
+  const share = await call('POST', base(`/${doc.id}/shares`), {revision:3})
   assert.equal(share.status, 201)
   assert.match(share.body.share.path, /^\/share\//)
   assert.equal(share.body.share.token.length, 43)
+  assert.equal(share.body.share.revision,3)
   const listedShares = await call('GET', base(`/${doc.id}/shares`))
   assert.equal(listedShares.body.items.length, 1)
-  const revoked = await call('POST', base(`/${doc.id}/shares/${share.body.share.id}/revoke`), {})
+  assert.equal(listedShares.body.items[0].revision,3)
+  assert.equal(listedShares.body.items[0].path, undefined)
+  assert.equal(listedShares.body.items[0].token, undefined)
+  const revokePath = base(`/${doc.id}/shares/${share.body.share.id}/revoke`)
+  offline = true
+  const pendingRevoke = await call('POST', revokePath, {})
+  assert.equal(pendingRevoke.status, 503)
+  assert.equal(pendingRevoke.body.error.code, 'share_revoke_unconfirmed')
+  assert.equal(published.size, 1)
+  const pending = (await call('GET', base(`/${doc.id}/shares`))).body.items[0]
+  assert.equal(pending.revoked, false)
+  assert.equal(pending.revocation_pending, true)
+  offline = false
+  const revoked = await call('POST', revokePath, {})
   assert.equal(revoked.body.share.revoked, true)
+  assert.equal(revoked.body.share.revocation_pending, false)
+  assert.equal(published.size, 0)
+  assert.equal((await call('POST', revokePath, {})).body.share.revoked, true)
+  assert.equal(revocations, 2)
 
   assert.equal((await call('POST', base(`/${doc.id}/remove`), {})).status, 200)
   assert.equal((await call('GET', base('/' + doc.id))).status, 404)
@@ -407,6 +725,39 @@ test('Space recent pages, scopes and facets include matches beyond the first pag
   assert.notEqual(latest.body.activity_version, first.body.activity_version)
 })
 
+test('Space automation scope filters before pagination and retains the exact saved run', async () => {
+  const bot = await boot()
+  const call = (...args) => bot.call('artifacts', ...args)
+  const automation = 'b'.repeat(32)
+  const firstRun = 'c'.repeat(32)
+  const secondRun = 'd'.repeat(32)
+  const otherSpace = 'f'.repeat(32)
+  async function create(title, workspace = WS, run) {
+    const source = run && {kind:'automation_run', id:run, automation_id:automation, automation_title:'整理日报'}
+    const result = await call('POST', base('', workspace),
+      {title, body:'一份自动化结果', ...(source && {source})}, key())
+    assert.equal(result.status, 201, JSON.stringify(result.body))
+    return result.body.artifact
+  }
+  const first = await create('日结', WS, firstRun)
+  const second = await create('周报', WS, secondRun)
+  await create('手工整理')
+  const foreign = await create('其他工作区', otherSpace, firstRun)
+  const query = 'scope=automation&order=recent&limit=1'
+  const page = await call('GET', base('?' + query))
+  assert.equal(page.status, 200)
+  assert.equal(page.body.cursor, page.body.items[0].id)
+  const rest = await call('GET', base('?' + query + '&cursor=' + page.body.cursor))
+  assert.equal(rest.body.cursor, null)
+  const artifacts = [...page.body.items, ...rest.body.items]
+  assert.deepEqual(new Set(artifacts.map(item => item.id)), new Set([first.id, second.id]))
+  assert.deepEqual(artifacts.find(item => item.id === first.id).source, first.source)
+  const filtered = await call('GET', base('?' + query + '&type=document&q=周报'))
+  assert.deepEqual(filtered.body.items.map(item => item.id), [second.id])
+  const other = await call('GET', base('?' + query, otherSpace))
+  assert.deepEqual(other.body.items.map(item => item.id), [foreign.id])
+})
+
 test('Space activity tracks saved revisions and favorites only in this owner and workspace', async () => {
   const bot = await boot()
   const another = await boot()
@@ -498,9 +849,11 @@ test('chat attachments export the selected saved version and require an internal
   const historical = await bot.call('artifacts','GET',base('/'+artifact.id+'/versions/1/export?format=docx'))
   assert.deepEqual(Buffer.from(snapshot.attachment.data,'base64'),Buffer.from(historical.download.data,'base64'))
   assert.equal(snapshot.body,'发给群聊 · 版本 1')
+  assert.equal(snapshot.context_excerpt,'Saved version one')
   assert.equal(snapshot.attachment.title,'发给群聊-v1.docx')
   assert.deepEqual(snapshot.attachment.resource,{kind:'document',title:'发给群聊',revision:1})
-  const updated = (await resolve({...input,revision:2})).attachment
+  const {attachment:updated,context_excerpt:excerpt} = await resolve({...input,revision:2})
+  assert.equal(excerpt,'Saved version two')
   assert.deepEqual(updated.resource,{kind:'document',title:'新标题',revision:2})
   assert.notEqual(updated.data,snapshot.attachment.data)
   await assert.rejects(resolve({...input,workspace_id:'f'.repeat(32)}),error=>error.status===404)
@@ -515,11 +868,14 @@ test('chat attachments export the selected saved version and require an internal
   for (const [payload, suffix, mime] of examples) {
     const result = await bot.call('artifacts','POST',base(),payload,key())
     assert.equal(result.status,201,JSON.stringify(result.body))
-    const {attachment} = await resolve({...input,artifact_id:result.body.artifact.id})
+    const {attachment,context_excerpt} = await resolve({...input,artifact_id:result.body.artifact.id})
     assert.ok(attachment.title.endsWith('.' + suffix))
     assert.match(attachment.mime,mime)
     assert.deepEqual(attachment.resource,{kind:result.body.artifact.kind,title:result.body.artifact.title,revision:1})
     if (suffix === 'txt') assert.doesNotMatch(Buffer.from(attachment.data,'base64').toString(), /<script>/)
+    if (suffix === 'pptx') assert.equal(context_excerpt,'开场 计划')
+    if (suffix === 'xlsx') assert.equal(context_excerpt?.trim(),'参会人数 3')
+    if (suffix === 'png') assert.equal(context_excerpt,undefined)
   }
 })
 

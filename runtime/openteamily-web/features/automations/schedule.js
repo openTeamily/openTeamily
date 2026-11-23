@@ -27,18 +27,31 @@ export function partsIn(zone, ms) {
   return { year: +out.year, month: +out.month, day: +out.day, hour: +out.hour % 24, minute: +out.minute, second: +out.second, isoWeekday: WEEKDAY[out.weekday] }
 }
 
-// Unix seconds of a wall-clock time in zone (same resolution as zoneinfo for
-// non-ambiguous times).
-export function zonedEpoch(zone, year, month, day, hour, minute) {
-  const target = Date.UTC(year, month - 1, day, hour, minute)
-  let guess = target
-  for (let i = 0; i < 3; i += 1) {
-    const p = partsIn(zone, guess)
-    const diff = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute) - target
-    if (diff === 0) break
-    guess -= diff
+function localOffset(zone, epochMs) {
+  const local = partsIn(zone, epochMs)
+  return Date.UTC(local.year, local.month - 1, local.day, local.hour, local.minute, local.second) - epochMs
+}
+
+function wallClockSlot(zone, year, month, day, hour, minute) {
+  const wall = Date.UTC(year, month - 1, day, hour, minute)
+  const offsetWindow = 36 * 60 * 60 * 1000
+  const before = localOffset(zone, wall - offsetWindow)
+  const after = localOffset(zone, wall + offsetWindow)
+  if (before === after) return {at:(wall - before) / 1000}
+  const early = wall - Math.max(before, after)
+  const late = wall - Math.min(before, after)
+  const earlyMatches = early + localOffset(zone, early) === wall
+  const lateMatches = late + localOffset(zone, late) === wall
+  if (earlyMatches !== lateMatches) return {at:(earlyMatches ? early : late) / 1000}
+  if (earlyMatches) {
+    return {at:early / 1000, alternateAt:late / 1000, clockChange:'first'}
   }
-  return Math.floor(guess / 1000)
+  return {at:late / 1000, alternateAt:early / 1000, clockChange:'forward'}
+}
+
+// Repeated wall times use the first occurrence. Skipped wall times advance by the offset change.
+export function zonedEpoch(zone, year, month, day, hour, minute) {
+  return wallClockSlot(zone, year, month, day, hour, minute).at
 }
 
 const validDate = (text) => {
@@ -84,34 +97,37 @@ function runsOn(schedule, day, weekday) {
   }
 }
 
-// The current slot's unix time if it is due at nowTs, otherwise null.
-export function dueAt(schedule, nowTs) {
+export function dueSlot(schedule, nowTs) {
   if (!schedule || !validZone(schedule.time_zone)) return null
   const zone = schedule.time_zone
   const { kind } = schedule
-  if (kind === 'now') return 0
+  if (kind === 'now') return {at:0}
   if (typeof schedule.time !== 'string' || !TIME.test(schedule.time)) return null
   const [hour, minute] = schedule.time.split(':').map(Number)
   if (kind === 'once') {
     if (!validDate(schedule.date)) return null
     const [y, m, d] = schedule.date.split('-').map(Number)
-    const ts = zonedEpoch(zone, y, m, d, hour, minute)
-    return nowTs >= ts ? ts : null
+    const slot = wallClockSlot(zone, y, m, d, hour, minute)
+    return nowTs >= slot.at ? slot : null
   }
   const now = partsIn(zone, nowTs * 1000)
   if (!runsOn(schedule, now.day, now.isoWeekday)) return null
-  const ts = zonedEpoch(zone, now.year, now.month, now.day, hour, minute)
-  return nowTs >= ts ? ts : null
+  const slot = wallClockSlot(zone, now.year, now.month, now.day, hour, minute)
+  return nowTs >= slot.at ? slot : null
 }
 
-export function nextScheduledSlot(schedule, nowTs) {
+export function dueAt(schedule, nowTs) {
+  return dueSlot(schedule, nowTs)?.at ?? null
+}
+
+export function nextSlot(schedule, nowTs) {
   if (!schedule || schedule.kind === 'now' || !validSchedule(schedule)) return null
   const { time_zone: zone } = schedule
   const [hour, minute] = schedule.time.split(':').map(Number)
   if (schedule.kind === 'once' || schedule.kind === 'later') {
     const [year, month, day] = schedule.date.split('-').map(Number)
-    const slot = zonedEpoch(zone, year, month, day, hour, minute)
-    return slot > nowTs ? slot : null
+    const slot = wallClockSlot(zone, year, month, day, hour, minute)
+    return slot.at > nowTs ? slot : null
   }
 
   const local = partsIn(zone, nowTs * 1000)
@@ -121,8 +137,12 @@ export function nextScheduledSlot(schedule, nowTs) {
     const day = date.getUTCDate()
     const weekday = date.getUTCDay() || 7
     if (!runsOn(schedule, day, weekday)) continue
-    const slot = zonedEpoch(zone, date.getUTCFullYear(), date.getUTCMonth() + 1, day, hour, minute)
-    if (slot > nowTs) return slot
+    const slot = wallClockSlot(zone, date.getUTCFullYear(), date.getUTCMonth() + 1, day, hour, minute)
+    if (slot.at > nowTs) return slot
   }
   return null
+}
+
+export function nextScheduledSlot(schedule, nowTs) {
+  return nextSlot(schedule, nowTs)?.at ?? null
 }

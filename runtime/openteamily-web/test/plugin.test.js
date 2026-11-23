@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { apply, name, inject } from '../index.js'
-import { resolvePagePath, PAGE_PATH, SERVED_BY_HEADER } from '../src/pages.js'
+import { createPageHandler, resolvePagePath, writeChatAssetManifest, PAGE_PATH, SERVED_BY_HEADER } from '../src/pages.js'
 import { API_PATH, GATEWAY_PATH, LEGACY_PATH, REPLY_STREAM_PATH } from '../src/dispatch.js'
 import { loadIdentity } from '../src/identity.js'
 
@@ -161,6 +162,77 @@ test('Chat versions its static dependency graph, keeps HTML private, and never c
   assert.equal(changed.headers.get('cache-control'), 'no-store')
   const current = await get(after, changed.headers.get('location'))
   assert.equal(await current.text(), 'export const item = 2')
+})
+
+test('native pages and their module dependencies are served from one versioned package', async () => {
+  const pagesDir = fileURLToPath(new URL('../../../openteamily/static/', import.meta.url))
+  const route = {fetch: createPageHandler({pagesDir, identity:{instanceId:'page-modules'}})}
+  const modules = new Set()
+  let base
+  for (const path of ['/agents', '/artifacts', '/automations', '/chat', '/contacts', '/discover',
+    '/meetings', '/members', '/memory', '/onboarding', '/profile', '/settings/connectors', '/skills', '/team', '/team-runs']) {
+    const page = await get(route, path)
+    assert.equal(page.status, 200, path)
+    assert.equal(page.headers.get(SERVED_BY_HEADER), 'ds-bot; instance=page-modules')
+    const html = await page.text()
+    const stylesheet = /href="(\/chat\/assets\/[a-f0-9]{32})\/shell\/app\.css"/.exec(html)?.[1]
+    assert.ok(stylesheet, path + ' uses the runtime shell stylesheet')
+    base ??= stylesheet
+    assert.equal(stylesheet, base, path)
+    for (const [, asset] of html.matchAll(/(?:href|src)="(\/[^"]+\.mjs)"/g)) modules.add(asset)
+  }
+  for (const module of ['dsbot.mjs', 'files.mjs', 'translation.mjs']) {
+    assert.ok(modules.has(base + '/chat/' + module), 'Missing Chat preload for ' + module)
+  }
+
+  // Follow shipped imports, including literal paths passed to Chat's deferred loader.
+  const origin = 'https://runtime.test'
+  for (const path of modules) {
+    assert.ok(path.startsWith(base + '/'), 'Native module escaped its package: ' + path)
+    const response = await get(route, path)
+    assert.equal(response.status, 200, path)
+    assert.match(response.headers.get('content-type'), /^text\/javascript/, path)
+    assert.match(response.headers.get('cache-control'), /immutable$/, path)
+    const source = await response.text()
+    for (const [, specifier] of source.matchAll(/(?:\bfrom\s+|\bimport\s*(?:\(\s*)?|\bdeferModule\s*\(\s*)['"](\.{1,2}\/[^'"]+\.m?js)['"]/g)) {
+      modules.add(new URL(specifier, origin + path).pathname)
+    }
+  }
+  const publicPage = await get(route, '/help')
+  assert.match(await publicPage.text(), /href="\/shell\/app\.css"/)
+})
+
+test('built Chat pages can open before an optional dependency is read', async t => {
+  const {root, pages} = fixture()
+  t.after(() => rmSync(root, {recursive: true, force: true}))
+  const file = join(pages, 'shell', 'viewer.mjs')
+  const script = 'export const view = 1'
+  writeFileSync(join(pages, 'chat', 'index.html'), '<head><link rel="stylesheet" href="/shell/app.css"></head>')
+  writeFileSync(file, script)
+  const mount = () => ({fetch: createPageHandler({pagesDir: pages, identity: {instanceId: 'test'}})})
+  const original = await (await get(mount(), '/chat')).text()
+  const base = /href="(\/chat\/assets\/[a-f0-9]{32})\/shell\//.exec(original)[1]
+  await writeChatAssetManifest(pages)
+  rmSync(file)
+
+  const built = mount()
+  const doc = await get(built, '/chat')
+  assert.equal(doc.status, 200)
+  assert.equal(await doc.text(), original)
+  assert.equal(await (await get(built, base + '/shell/app.css')).text(), 'body{}')
+  assert.equal((await get(built, '/.chat-assets-v1.json')).status, 404)
+  assert.equal((await get(built, base + '/shell/viewer.mjs')).status, 404)
+  writeFileSync(file, 'export const view = 2')
+  const changed = await get(built, base + '/shell/viewer.mjs')
+  assert.equal(changed.status, 404)
+  assert.equal(changed.headers.get('cache-control'), 'no-store')
+  writeFileSync(file, script)
+  const restored = await get(built, base + '/shell/viewer.mjs')
+  assert.equal(await restored.text(), script)
+  assert.match(restored.headers.get('cache-control'), /immutable$/)
+
+  writeFileSync(join(pages, '.chat-assets-v1.json'), '[["/../secret.txt","invalid"]]')
+  assert.equal(await (await get(mount(), '/chat')).text(), original)
 })
 
 test('refuses traversal, symlink escape, hidden and unknown files', async () => {

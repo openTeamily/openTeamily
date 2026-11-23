@@ -1,5 +1,4 @@
 """In-process WSGI/SQLite tests. No listening socket, Docker or actual credentials."""
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from dataclasses import replace
 from http.cookies import SimpleCookie
@@ -11,8 +10,10 @@ import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
+from uuid import uuid4
 
 from openteamily.app import App, Config
+from openteamily.security import digest
 from openteamily.store import Store
 
 PASSWORD = 'Synthetic test passphrase #2026'
@@ -55,6 +56,22 @@ class Client:
 
     def workspace(self, name='示例工作区', key='request_example_0001'):
         return self.call('POST', '/v1/workspaces', {'name': name}, {'HTTP_IDEMPOTENCY_KEY': key})
+
+
+def seed_legacy_workspace(client, name='示例工作区'):
+    """Represent a pre-cutover workspace for platform metadata and manager tests."""
+    session = client.call('GET', '/v1/auth/session')
+    assert session['status'] == 200, session
+    app = client.app
+    workspace = {'id': uuid4().hex, 'owner_id': session['body']['user']['id'],
+                 'name': name, 'created': int(app.clock())}
+    with app.store.transaction() as db:
+        db.execute(
+            'INSERT INTO workspaces(id, owner_id, name, created, key_hash, request_hash) VALUES(?,?,?,?,?,?)',
+            (workspace['id'], workspace['owner_id'], name, workspace['created'],
+             digest('fixture-' + workspace['id']), digest(name)),
+        )
+    return workspace
 
 
 class ManagementTests(unittest.TestCase):
@@ -132,10 +149,9 @@ class ManagementTests(unittest.TestCase):
 
     def test_csrf_missing_wrong_cross_session_or_nonascii_cookies_fail(self):
         self.client.register()
-        self.assertEqual(self.client.workspace()['status'], 201)
+        self.assertEqual(self.client.call('GET', '/v1/auth/session')['status'], 200)
         for header in ['', 'x' * 43]:
-            response = self.client.call('POST', '/v1/workspaces', {'name': 'x'},
-                                        {'HTTP_X_CSRF_TOKEN': header, 'HTTP_IDEMPOTENCY_KEY': 'another_request_1'})
+            response = self.client.call('POST', '/v1/auth/logout', {}, {'HTTP_X_CSRF_TOKEN': header})
             self.assertEqual(response['status'], 403)
         other = Client(self.app); other.register('bob')
         response = self.client.call('POST', '/v1/auth/logout', {},
@@ -215,73 +231,33 @@ class ManagementTests(unittest.TestCase):
             self.assertEqual(db.execute('SELECT COUNT(*) FROM users').fetchone()[0], 1)
             self.assertEqual(db.execute('SELECT COUNT(*) FROM sessions').fetchone()[0], 1)
 
-    def test_workspace_create_list_get_are_owner_scoped(self):
+    def test_legacy_workspace_metadata_remains_owner_scoped(self):
         self.client.register(); other = Client(self.app); other.register('bob')
-        workspace = self.client.workspace()['body']['workspace']
-        self.assertEqual(self.client.call('GET', f"/v1/workspaces/{workspace['id']}")['body']['workspace'], workspace)
-        self.assertEqual(len(self.client.call('GET', '/v1/workspaces')['body']['items']), 1)
-        self.assertEqual(other.call('GET', '/v1/workspaces')['body']['items'], [])
+        workspace = seed_legacy_workspace(self.client)
+        own = self.client.call('GET', f"/v1/workspaces/{workspace['id']}")
+        self.assertEqual(own['status'], 200)
+        self.assertEqual({field: own['body']['workspace'][field] for field in workspace}, workspace)
         for method, suffix in [('GET', ''), ('GET', '/instances'), ('POST', '/instances')]:
             response = other.call(method, f"/v1/workspaces/{workspace['id']}{suffix}", {})
             self.assertEqual(response['status'], 404)
-        self.assertEqual(Client(self.app).call('GET', '/v1/workspaces')['status'], 401)
+        self.assertEqual(Client(self.app).call('GET', f"/v1/workspaces/{workspace['id']}")['status'], 401)
 
-    def test_workspace_write_rejects_forged_owner_image_command_and_mount(self):
+    def test_workspace_list_and_create_are_fenced_to_the_owners_dsbot(self):
         self.client.register()
-        for key in ['owner_id', 'workspace_id', 'image', 'command', 'mount', 'token', '__proto__']:
-            response = self.client.call('POST', '/v1/workspaces', {'name': 'x', key: 'injected'},
-                                        {'HTTP_IDEMPOTENCY_KEY': 'request_injected_1'})
-            self.assertEqual(response['status'], 400)
-        self.assertEqual(self.client.call('GET', '/v1/workspaces')['body']['items'], [])
-
-    def test_workspace_idempotency_survives_restart_and_conflicting_replay_is_atomic(self):
-        self.client.register(); first = self.client.workspace()
-        self.assertEqual(first['status'], 201)
-        reopened = App(Store(self.store.path.parent), self.config, clock=lambda: self.now)
-        self.client.app = reopened
-        replay = self.client.workspace()
-        self.assertEqual(replay['status'], 200)
-        self.assertEqual(replay['body'], first['body'])
-        self.assertEqual(self.client.workspace('different')['status'], 409)
-        self.assertEqual(len(self.client.call('GET', '/v1/workspaces')['body']['items']), 1)
-
-    def test_concurrent_same_key_creates_one_workspace_and_scope_is_per_user(self):
-        self.client.register()
-        def create(_):
-            client = Client(self.app); client.cookies = dict(self.client.cookies)
-            return client.workspace()
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            results = list(pool.map(create, range(8)))
-        self.assertEqual(sum(result['status'] == 201 for result in results), 1)
-        self.assertEqual(len({result['body']['workspace']['id'] for result in results}), 1)
-        other = Client(self.app); other.register('bob')
-        second = other.workspace()['body']['workspace']
-        self.assertNotEqual(second['id'], results[0]['body']['workspace']['id'])
-
-    def test_workspace_key_name_validation_and_quota(self):
-        self.client.register()
-        self.assertEqual(self.client.call('POST', '/v1/workspaces', {'name': 'x'})['status'], 400)
-        for name in ['', ' ', 'x\nforged', 'x' * 81, '\ud800', False]:
-            self.assertEqual(self.client.workspace(name)['status'], 400)
-        self.app.config = replace(self.config, max_workspaces_per_user=1)
-        self.assertEqual(self.client.workspace()['status'], 201)
-        self.assertEqual(self.client.workspace('another', 'another_request_1')['status'], 429)
-        self.assertEqual(self.client.workspace()['status'], 200)
-
-    def test_bounded_pagination_has_no_duplicate_or_cross_owner_rows(self):
-        self.client.register()
-        ids = {self.client.workspace(str(i), f'request_number_{i:04}')['body']['workspace']['id'] for i in range(5)}
-        seen, cursor = [], ''
-        while True:
-            page = self.client.call('GET', '/v1/workspaces?limit=2' + ('&cursor=' + cursor if cursor else ''))
-            self.assertEqual(page['status'], 200)
-            seen += [row['id'] for row in page['body']['items']]
-            cursor = page['body']['cursor']
-            if not cursor:
-                break
-        self.assertEqual(set(seen), ids); self.assertEqual(len(seen), len(ids))
-        for query in ['limit=0', 'limit=101', 'limit=1&limit=2', 'owner_id=other', 'cursor=../x', 'limit=1&cursor=x&extra=y']:
-            self.assertEqual(self.client.call('GET', '/v1/workspaces?' + query)['status'], 400)
+        workspace = seed_legacy_workspace(self.client)
+        other = Client(self.app)
+        other.register('bob')
+        with self.store.connect() as db:
+            before = [tuple(row) for row in db.execute('SELECT * FROM workspaces ORDER BY id')]
+        for client in (self.client, other):
+            for response in (client.call('GET', '/v1/workspaces?limit=2'), client.workspace(),
+                             client.call('POST', '/v1/workspaces', {'name': 'x', 'owner_id': workspace['owner_id'],
+                                                                     'command': 'injected', 'mount': 'injected'})):
+                self.assertEqual(response['status'], 410)
+                self.assertEqual(response['body']['error']['code'], 'moved_to_dsbot')
+                self.assertNotIn(workspace['id'], json.dumps(response['body']))
+        with self.store.connect() as db:
+            self.assertEqual([tuple(row) for row in db.execute('SELECT * FROM workspaces ORDER BY id')], before)
 
     def test_request_json_limits_duplicates_and_unknown_fields(self):
         for raw in [b'[]', b'{', b'{"username":"a","username":"b"}', b'{"number":NaN}', b'\xff', b'[' * 2000]:
@@ -296,12 +272,12 @@ class ManagementTests(unittest.TestCase):
         name, _ = self.config.cookie_names
         self.assertEqual(self.client.call('GET', '/v1/auth/session', headers={'HTTP_COOKIE': f'{name}=x; {name}=y'})['status'], 400)
         with patch.object(self.store, 'transaction', side_effect=sqlite3.DatabaseError('/private/path secret-value')):
-            response = self.client.call('GET', '/v1/workspaces')
+            response = self.client.call('POST', '/v1/auth/logout', {})
         self.assertEqual(response['status'], 503)
         self.assertNotIn('private', json.dumps(response)); self.assertNotIn('secret-value', json.dumps(response))
 
     def test_runtime_and_manager_are_explicitly_not_implemented(self):
-        self.client.register(); workspace = self.client.workspace()['body']['workspace']
+        self.client.register(); workspace = seed_legacy_workspace(self.client)
         for method, path in [('POST', f"/v1/workspaces/{workspace['id']}/instances"),
                              ('POST', '/v1/instances/example/start'), ('POST', '/v1/instances/example/purge'),
                              ('GET', '/v1/internal/instances')]:
@@ -309,16 +285,10 @@ class ManagementTests(unittest.TestCase):
             self.assertEqual(response['status'], 501)
             self.assertEqual(response['body']['error']['code'], 'unsupported')
         # A user session has no functioning manager/control authority.
-        self.assertEqual(self.client.call('GET', '/v1/workspaces')['status'], 200)
+        self.assertEqual(self.client.call('GET', '/v1/auth/session')['status'], 200)
 
     def test_retry_after_only_describes_auth_rate_limits_not_persistent_quotas(self):
-        self.app.config = replace(self.config, max_workspaces_per_user=1)
         self.client.register()
-        self.client.workspace()
-        quota = self.client.workspace('Second', 'quota-request-key-0002')
-        self.assertEqual(quota['status'], 429)
-        self.assertEqual(quota['body']['error']['code'], 'quota')
-        self.assertNotIn('Retry-After', dict(quota['headers']))
         self.app.config = replace(self.app.config, max_users=1)
         account_quota = Client(self.app).register('another-user')
         self.assertEqual(account_quota['status'], 429)

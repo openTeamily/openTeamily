@@ -6,7 +6,8 @@ import { randomBytes } from 'node:crypto'
 import { createServer, request as httpRequest } from 'node:http'
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
-import { startOpenPart } from '../ds-bot-upstream/ds-bot/src/host/threads.js'
+import { startOpenPart, threadOf, threadOfPart } from '../ds-bot-upstream/ds-bot/src/host/threads.js'
+import { splitRef } from '../ds-bot-upstream/ds-bot/src/host/text.js'
 import { request as httpsRequest } from 'node:https'
 import { STREAM_LIMIT, streamHttpTask, validateModelEndpoint } from './model-http-policy.mjs'
 import { loadModelApi, redact } from './model-api.js'
@@ -79,20 +80,26 @@ export async function forwardModel(modelApi, raw, res, { httpRequester = httpReq
     stream.on('error', () => { res.destroy(); resolve() })
     stream.on('close', resolve)
   })
-  const signal = AbortSignal.timeout(180000)
-  if (httpTask) {
-    return streamHttpTask(base, modelApi.http_endpoint_grant, { method: 'POST', redirect: 'error', headers, body, signal }, relay, httpRequester)
-  }
-  const url = new URL(base + '/chat/completions')
-  const requester = url.protocol === 'https:' ? httpsRequester : httpRequester
-  return new Promise((resolve, reject) => {
-    const req = requester(url, { method: 'POST', headers, agent: false, signal }, response => {
-      if (response.statusCode >= 300 && response.statusCode < 400) { response.destroy(); reject(new Error('Model redirect rejected')); return }
-      resolve(relay(response.statusCode, response.headers, response))
+  const downstream = new AbortController()
+  const closed = () => { if (!res.writableFinished) downstream.abort() }
+  res.once?.('close', closed)
+  if (res.destroyed) closed()
+  const signal = AbortSignal.any([downstream.signal, AbortSignal.timeout(180000)])
+  try {
+    if (httpTask) {
+      return await streamHttpTask(base, modelApi.http_endpoint_grant, { method: 'POST', redirect: 'error', headers, body, signal }, relay, httpRequester)
+    }
+    const url = new URL(base + '/chat/completions')
+    const requester = url.protocol === 'https:' ? httpsRequester : httpRequester
+    return await new Promise((resolve, reject) => {
+      const req = requester(url, { method: 'POST', headers, agent: false, signal }, response => {
+        if (response.statusCode >= 300 && response.statusCode < 400) { response.destroy(); reject(new Error('Model redirect rejected')); return }
+        resolve(relay(response.statusCode, response.headers, response))
+      })
+      req.on('error', () => reject(new Error('model request failed')))
+      req.end(body)
     })
-    req.on('error', () => reject(new Error('model request failed')))
-    req.end(body)
-  })
+  } finally { res.off?.('close', closed) }
 }
 
 // Loopback model server for the native DS-Bot provider.
@@ -112,6 +119,7 @@ export function createBridgeServer(state, { log = () => {}, forward = forwardMod
         const modelApi = state.startupModel()
         if (!modelApi) return sendJson(res, 503, { error: { message: 'No model is configured for this OpenTeamily runtime yet.' } })
         try { await forward(modelApi, raw, res) } catch (error) {
+          if (res.destroyed) return
           log('ds-bot-bridge: model upstream failed: ' + redact(error?.message || 'error'))
           if (!res.headersSent) sendJson(res, 502, { error: { message: 'upstream model request failed' } })
           else res.destroy()
@@ -127,6 +135,51 @@ export function createBridgeServer(state, { log = () => {}, forward = forwardMod
 
 const PROGRESS_TEXT_LIMIT = 20_000
 const PROGRESS_INTERVAL_MS = 50
+
+async function streamedCompletion(body, onProgress) {
+  if (!body) throw new Error('Text inference did not return a stream')
+  let pending = '', text = ''
+  for await (const chunk of body.pipeThrough(new TextDecoderStream())) {
+    pending += chunk
+    let frame
+    while ((frame = /\r?\n\r?\n/.exec(pending))) {
+      const data = pending.slice(0, frame.index).split(/\r?\n/)
+        .filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n')
+      pending = pending.slice(frame.index + frame[0].length)
+      if (!data) continue
+      if (data === '[DONE]') return text
+      const payload = JSON.parse(data)
+      if (payload.error) throw new Error('Text inference stream failed')
+      const choice = payload.choices?.[0]
+      const next = choice?.delta?.content
+      if (typeof next === 'string' && next) {
+        text += next.slice(0, PROGRESS_TEXT_LIMIT - text.length)
+        onProgress(text.toWellFormed())
+      }
+      if (choice?.finish_reason === 'stop' || choice?.finish_reason === 'length' ||
+          text.length === PROGRESS_TEXT_LIMIT) return text
+    }
+    if (pending.length > 512 * 1024) throw new Error('Text inference event is too large')
+  }
+  throw new Error('Text inference stream ended early')
+}
+
+export async function textOnlyCompletion(bridge, prompt, {system, onProgress} = {}) {
+  await bridge.setup()
+  const stream = typeof onProgress === 'function'
+  const messages = [...(system ? [{role:'system', content:system}] : []), {role:'user', content:prompt}]
+  const response = await fetch(bridge.baseURL + '/chat/completions', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bridge.state.token },
+    body: JSON.stringify({ model: MODEL_ID, messages, stream }),
+    signal: AbortSignal.timeout(170000), redirect: 'error',
+  })
+  if (!response.ok) throw new Error('Text-only model inference failed')
+  const text = stream && response.headers.get('content-type')?.includes('text/event-stream')
+    ? await streamedCompletion(response.body, onProgress)
+    : (await response.json()).choices?.[0]?.message?.content
+  if (typeof text !== 'string' || !text.trim()) throw new Error('Text-only model returned no text')
+  return text.slice(0, PROGRESS_TEXT_LIMIT).toWellFormed()
+}
 
 function turnProgress(onProgress) {
   if (typeof onProgress !== 'function') return
@@ -174,14 +227,40 @@ function turnProgress(onProgress) {
   }
 }
 
+function ownsLiveChat(rt, botId, sessionId) {
+  return threadOf(rt.botOf(botId), sessionId) !== undefined
+    && rt.chatOwners?.get(sessionId) === botId && !rt.pastOwners?.has(sessionId)
+}
+
+export async function prepareNativeChat(rt, botId, sessionId) {
+  const bot = rt.botOf(botId)
+  if (!threadOfPart(bot, sessionId)) throw new Error('Mapped native chat no longer belongs to this Bot')
+  // Live background parts accept messages directly. Reopening them via
+  // switchPart would reselect the model for every part of the Bot.
+  if (!ownsLiveChat(rt, botId, sessionId)) await rt.switchPart(botId, sessionId)
+  if (!ownsLiveChat(rt, botId, sessionId)) throw new Error('Mapped native chat is no longer active')
+  const ref = await rt.applyModel(bot)
+  const route = splitRef(ref)
+  if (route) {
+    // A session's own composer can select a different model independently.
+    // Reapply the Bot's route only to the part receiving this message.
+    const effort = bot.appliedEffort
+    await rt.selectSessionModel(sessionId, {...route, ...(effort === undefined ? {} : {reasoningEffort:effort})})
+  }
+  if (rt.chatOf(botId) !== sessionId) await rt.applyPermission(bot, sessionId, undefined)
+}
+
 // Join progress to the native request echo and durable turn. The settled display
 // items remain the source of truth for the returned reply.
-export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, files = [], { onProgress, onPhase } = {}) {
+export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, files = [], { onProgress, onPhase, sessionId, signal, managedGroup = false } = {}) {
+  if (signal?.aborted) return Promise.reject(signal.reason)
   if (typeof requestId !== 'string' || !requestId) return Promise.reject(new Error('DS-Bot request identifier is required'))
+  if (sessionId !== undefined && !ownsLiveChat(rt, botId, sessionId)) return Promise.reject(new Error('Mapped native chat is no longer active'))
+  sessionId ??= rt.chatOf(botId)
   return new Promise((resolve, reject) => {
-    const sessionId = rt.chatOf(botId)
     const progress = turnProgress(onProgress)
     let observedTurn, observedSession, boundTurn, boundSession, attempt, lastAgent
+    let stopping
     let revision = 0
     let phase = 'preparing'
     function emitPhase(next) {
@@ -197,15 +276,32 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, fil
       settled = true
       clearTimeout(timer)
       progress?.dispose()
+      signal?.removeEventListener('abort', cancelNative)
       for (const listener of listeners) {
         try {
           if (typeof listener === 'function') listener()
           else listener?.dispose?.()
         } catch {}
       }
-      error ? reject(error) : resolve(value)
+      const complete = () => error ? reject(error) : resolve(value)
+      if (stopping) void stopping.then(complete, complete)
+      else complete()
     }
     const timer = setTimeout(() => finish(new Error('DS-Bot turn timed out')), timeoutMs)
+    const emptyReply = () => Object.assign(new Error('DS-Bot turn ended without a reply'), {code:'agents/empty-reply'})
+    function cancelNative() {
+      if (settled || stopping || !boundSession || boundTurn === undefined) return
+      const session = boundSession, turn = boundTurn
+      stopping = Promise.resolve().then(() => rt.resolveAgent(sessionId)).then(agent => {
+        // Do not stop another turn even if it now owns the same Bot or Session.
+        if (settled || boundSession !== session || agent?.session !== session || boundTurn !== turn ||
+            rt.live?.get(sessionId)?.turn !== turn || !ownsLiveChat(rt, botId, sessionId)) return
+        const children = rt.stopSubagents?.(sessionId)
+        agent.cancel({kind:'user'})
+        return children
+      }).catch(() => {})
+    }
+    signal?.addEventListener('abort', cancelNative, {once:true})
     function discardAttempt() {
       attempt = undefined
       progress?.discard()
@@ -233,6 +329,7 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, fil
         if (event.type === 'user/message' && event.data?.source?.rpcId === requestId) {
           boundSession = session
           boundTurn = session === observedSession ? observedTurn : undefined
+          if (signal?.aborted) cancelNative()
           return
         }
         if (!boundSession) {
@@ -255,9 +352,14 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, fil
           progress?.commit(parts.slice(start))
         }
         if (event.type === 'turn/end') {
+          if (signal?.aborted) { finish(signal.reason); return }
+          const reason = event.data?.reason
+          const disposed = reason?.kind === 'aborted' && reason.reason?.kind === 'disposed'
+          if (managedGroup && disposed) { finish(emptyReply()); return }
           const reply = parts.join('\n\n').trim()
           if (reply) finish(null, { text: reply, sessionId, turnId: event.data?.turnId ?? event.turnId ?? null })
-          else finish(new Error(event.data?.error ? 'DS-Bot turn failed' : 'DS-Bot turn ended without a reply'))
+          else if (event.data?.error || (managedGroup && reason && reason.kind !== 'completed')) finish(new Error('DS-Bot turn failed'))
+          else finish(emptyReply())
         }
       }))
       if (progress || typeof onPhase === 'function') {
@@ -286,7 +388,9 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, fil
           }
         }, { global: true }))
         listeners.push(ctx.on('agent/disposed', ({ agent }) => {
-          if (agent === lastAgent && !settled) {
+          if (managedGroup && boundSession && agent?.id === sessionId && agent.session === boundSession && !settled) {
+            finish(signal?.aborted ? signal.reason : emptyReply())
+          } else if (agent === lastAgent && !settled) {
             resetTurn()
             observedTurn = undefined
             observedSession = undefined
@@ -374,10 +478,15 @@ export function createBridge(rt, { env = process.env, port } = {}) {
   }
   const ensureSetup = () => (ready ??= setup().catch(error => { ready = null; throw error }))
 
-  async function prepareModel() {
-    await ensureSetup()
-    const input = effectiveInput()
-    if (input.includes('image') !== hasImageInput) await saveInput(input)
+  let modelUpdates = Promise.resolve()
+  function prepareModel() {
+    const update = modelUpdates.then(async () => {
+      await ensureSetup()
+      const input = effectiveInput()
+      if (input.includes('image') !== hasImageInput) await saveInput(input)
+    })
+    modelUpdates = update.catch(() => {})
+    return update
   }
 
   function requireModel(botId) {
@@ -389,11 +498,22 @@ export function createBridge(rt, { env = process.env, port } = {}) {
     }
   }
 
-  // Native turns share a queue because they switch the active DS-Bot part.
-  let turnQueue = Promise.resolve()
-  function exclusive(fn) {
-    const run = turnQueue.then(() => fn())
-    turnQueue = run.catch(() => {})
+  // Switching parts can only affect turns for the same Bot. Operations that
+  // move a thread between Bots still wait for the whole roster to be idle.
+  const botTurns = new Map()
+  let rosterWork = Promise.resolve()
+  function exclusive(fn, botId) {
+    const pending = botId ? [botTurns.get(botId)] : [...botTurns.values()]
+    const run = Promise.all([rosterWork, ...pending]).then(() => fn())
+    const wait = run.catch(() => {})
+    if (botId) {
+      botTurns.set(botId, wait)
+      void wait.then(() => {
+        if (botTurns.get(botId) === wait) botTurns.delete(botId)
+      })
+    } else {
+      rosterWork = wait
+    }
     return run
   }
   return {

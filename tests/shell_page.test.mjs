@@ -1,4 +1,4 @@
-import {readFileSync} from 'node:fs';
+import {readdirSync, readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {mountActionMenus} from '../openteamily/static/shell/action-menu.mjs';
@@ -248,13 +248,19 @@ test('calling both menu helpers without an existing 新手引导 link keeps the 
 });
 
 
-test('shared icon rails keep accessible link names and leave account-menu text visible', () => {
-  for (const name of ['chat', 'discover', 'settings', 'memory', 'artifacts', 'onboarding', 'agents']) {
-    const html = readFileSync(new URL('../openteamily/static/' + name + '/index.html', import.meta.url), 'utf8');
-    const nav = html.split('<nav class="app-rail"')[1].split('<div class="account-slot"')[0];
+test('workspace pages render one accessible account icon in the rail before shell startup', () => {
+  const staticPages = new URL('../openteamily/static/', import.meta.url);
+  for (const page of readdirSync(staticPages, {recursive: true}).filter(path => path.endsWith('/index.html'))) {
+    const html = readFileSync(new URL(page, staticPages), 'utf8');
+    if (!html.includes('<nav class="app-rail"')) continue;
+    const [nav, menu] = html.split('<nav class="app-rail"')[1].split('</nav>')[0].split('<div class="account-slot"');
+    assert.match(nav, /class="rail-actions"/, page);
+    assert.doesNotMatch(nav, /href="\/profile"|class="rail-spacer"/, page);
     assert.match(nav, /href="\/chat"[^>]*aria-label="聊天">[\s\S]*?<svg/);
     assert.match(nav, /class="rail-label">发现<\/span>/);
-    const menu = html.split('<div class="account-slot"')[1].split('</nav>')[0];
+    const trigger = menu.match(/<button[^>]*id="account-menu-button"[^>]*>[\s\S]*?<\/button>/g);
+    assert.equal(trigger?.length, 1, page);
+    assert.match(trigger[0], /aria-label="账户菜单"[^>]*>\s*<svg[^>]*aria-hidden="true"[^>]*>[^<]*<path[^>]*\/>\s*<\/svg>\s*<\/button>/, page);
     assert.doesNotMatch(menu, /class="rail-label"/);
     assert.match(menu, /所有设置<\/a>/);
   }
@@ -262,25 +268,38 @@ test('shared icon rails keep accessible link names and leave account-menu text v
 
 test('workspace tokens meet text contrast in explicit light and dark themes', () => {
   const css = readFileSync(new URL('../openteamily/static/shell/app.css', import.meta.url), 'utf8');
-  const luminance = hex => {
-    const rgb = hex.match(/../g).map(n => parseInt(n, 16) / 255).map(n => n <= .04045 ? n / 12.92 : ((n + .055) / 1.055) ** 2.4);
+  const rules = css.replace(/\/\*[\s\S]*?\*\//g, '').split('}');
+  const tokens = selector => {
+    const prefix = selector + ' {';
+    return Object.fromEntries(rules.flatMap(rule => {
+      const block = rule.trim();
+      return block.startsWith(prefix) ? [...block.slice(prefix.length).matchAll(/--ot-([\w-]+):\s*([^;]+);/g)]
+        .map(([, name, value]) => [name, value.trim()]) : [];
+    }));
+  };
+  const luminance = (color, name) => {
+    assert.match(color ?? '', /^#[0-9a-f]{6}$/i, name);
+    const rgb = color.slice(1).match(/../g).map(value => parseInt(value, 16) / 255)
+      .map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
     return rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722;
   };
-  const ratio = (a,b) => { const x = luminance(a), y = luminance(b); return (Math.max(x,y)+.05)/(Math.min(x,y)+.05); };
-  for (const theme of ['light','dark']) {
-    const block = css.split('html[data-theme-resolved="' + theme + '"] {')[1].split('}')[0];
-    const values = Object.fromEntries([...block.matchAll(/--ot-([\w-]+): #([0-9a-f]{6});/g)].map(m => [m[1],m[2]]));
-    for (const bg of ['bg','surface','surface-2','accent-soft']) {
-      for (const fg of ['ink','muted']) assert.ok(ratio(values[fg], values[bg]) >= 4.5, theme + ' ' + fg + '/' + bg);
+  const defaults = tokens(':root');
+  for (const theme of ['light', 'dark']) {
+    const values = {...defaults, ...tokens(`html[data-theme-resolved="${theme}"]`)};
+    const checkContrast = (fg, bg) => {
+      const pair = `${theme} ${fg}/${bg}`;
+      const first = luminance(values[fg], `${theme} --ot-${fg}`);
+      const second = luminance(values[bg], `${theme} --ot-${bg}`);
+      assert.ok((Math.max(first, second) + .05) / (Math.min(first, second) + .05) >= 4.5, pair);
+    };
+    for (const bg of ['bg', 'surface', 'surface-2', 'accent-soft']) {
+      for (const fg of ['ink', 'muted']) checkContrast(fg, bg);
     }
-    assert.ok(ratio(values.accent, theme === 'light' ? 'ffffff' : '121c17') >= 4.5);
+    checkContrast('on-accent', 'accent');
+    assert.equal(values.glow, 'none');
   }
   assert.match(css, /prefers-reduced-motion/);
   assert.match(css, /outline: 2px solid var\(--ot-focus\)/);
-  const dark = css.split('html[data-theme-resolved="dark"] {')[1].split('}')[0];
-  assert.doesNotMatch(dark, /#8b7cff|#2ee6e9|--ot-glow: 0 /);
-  assert.match(dark, /--ot-accent: #89d5b5/);
-  assert.match(dark, /--ot-glow: none/);
 });
 
 

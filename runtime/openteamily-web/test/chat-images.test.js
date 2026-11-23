@@ -22,13 +22,14 @@ test('an image task survives the request and stores its own private media withou
   const config = compatHandler(api.legacy)
   const set = (changes, revision = 0) => config({method:'POST',path:'/v1/model-api/image',body:{revision,changes}})
   let calls = 0
+  let activeMember = true
   const original = globalThis.fetch
   const host = {
     dataDir:dir,featureDir:()=>dir,
     async call(name,payload) {
       if (name === 'model-api/imageProvider') return api.resolveImage()
-      if (name === 'agents/personal-binding') return {workspace_id:WS}
-      if (name === 'teams/activeWorkspaces') return []
+      if (name === 'agents/personal-binding') return null
+      if (name === 'teams/activeWorkspaces') return activeMember ? [{id:WS}] : []
       if (name === 'artifacts/generatedImage') return artifacts.endpoints.generatedImage(payload,{internal:true})
       if (name === 'images/wake') return images.endpoints.wake(payload,{internal:true})
       throw Error('Unexpected endpoint')
@@ -68,6 +69,14 @@ test('an image task survives the request and stores its own private media withou
     assert.equal((await image('POST',path,renderSpec,key)).body.job.id,id)
     assert.equal((await image('POST',path,{...renderSpec,shape:'square'},key)).status,409)
     assert.equal((await image('GET',path.replace(WS,OTHER)+'/'+id)).status,404)
+    assert.equal((await image('GET',path,undefined,key)).body.job.id,id)
+    assert.equal((await image('GET',path,undefined,'another-image-request')).body.job,null)
+    assert.equal((await image('GET',path,undefined,'bad')).status,400)
+    activeMember = false
+    assert.equal((await image('GET',path)).status,404)
+    assert.equal((await image('GET',path,undefined,key)).status,404)
+    assert.equal((await image('GET',path+'/'+id)).status,404)
+    activeMember = true
     release()
     let done
     for (let i=0;i<80;i++) {

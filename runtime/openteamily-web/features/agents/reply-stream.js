@@ -70,7 +70,7 @@ export function replyStream({ findReply, request, release }) {
           emit('event: heartbeat\ndata: {}\n\n')
           return
         }
-        const text = progress?.text ?? ''
+        const text = progress?.text ?? reading.text ?? ''
         const old = previous?.text ?? ''
         const change = text.startsWith(old) ? {append:text.slice(old.length)} : {text}
         emit('data: ' + JSON.stringify({state, phase:progress?.phase, revision, ...change}) + '\n\n')

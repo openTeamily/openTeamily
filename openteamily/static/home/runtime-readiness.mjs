@@ -7,10 +7,36 @@ const signupSessionKey = 'ot-expected-signup-session';
 const signupLifetimeMs = 5 * 60 * 1000;
 const platformUserId = /^[0-9a-f]{32}$/;
 const accountDraftPrefix = 'openteamily.chat-drafts:';
+const coldDraftHandoffKey = 'openteamily.cold-chat-draft';
 const signupChatPath = /^\/chat#workspace=([a-f0-9]{32})&agent=([a-f0-9]{32})$/;
 const messageLimit = 4000;
 export const signupSessionError = '账户已创建，但登录会话尚未确认。请使用本实例 HTTPS 地址，允许同源 Cookie，然后尝试登录；不要重复注册。';
 const validSignupUser = id => typeof id === 'string' && platformUserId.test(id);
+
+const workspacePage = /^\/(?:agents|artifacts|automations|chat|contacts|meetings|members|memory|messenger|onboarding|profile|settings|skills|team|team-runs)\/?$/;
+const workspaceSubpage = /^\/(?:profile\/edit|settings\/[a-z0-9][a-z0-9-]{0,40})\/?$/;
+
+export function workspacePageTarget({pathname, search = '', hash = ''} = {}) {
+  if (pathname !== '/space' && !workspacePage.test(pathname) && !workspaceSubpage.test(pathname)) return '';
+  const target = pathname + search + hash;
+  return target.length <= 8192 ? target : '';
+}
+
+export function workspaceLoginHash(target) {
+  return target ? '#resume=' + encodeURIComponent(target) : '';
+}
+
+export function workspaceLoginTarget(hash) {
+  const params = new URLSearchParams(String(hash || '').replace(/^#/, ''));
+  const value = params.get('resume');
+  if (!value || value.length > 8192 || params.size !== 1) return '';
+  try {
+    const url = new URL(value, 'https://workspace.invalid');
+    return workspacePageTarget(url) === value ? value : '';
+  } catch {
+    return '';
+  }
+}
 
 export function rememberSignupSession(view, id, now = Date.now(), chat = '') {
   if (!validSignupUser(id)) return false;
@@ -50,6 +76,31 @@ export function signupDraftScope(view, owner, now = Date.now()) {
   return target ? JSON.stringify([owner, target[1], 'agent', target[2], null]) : null;
 }
 
+export function personalDraftScope(view, owner, personal) {
+  if (!validSignupUser(owner) || view.location.search) return null;
+  const target = signupChatPath.exec('/chat' + view.location.hash);
+  if (!target || target[1] !== personal?.workspace_id || target[2] !== personal.agent_id) return null;
+  return JSON.stringify([owner, target[1], 'agent', target[2], null]);
+}
+
+export function rememberColdDraftHandoff(view, scope) {
+  try {
+    const storage = view?.sessionStorage;
+    if (!storage) return false;
+    storage.setItem(coldDraftHandoffKey, scope);
+    return true;
+  } catch { return false; }
+}
+
+export function takeColdDraftHandoff(view, scope) {
+  try {
+    const storage = view?.sessionStorage;
+    if (!scope || storage?.getItem(coldDraftHandoffKey) !== scope) return null;
+    storage.removeItem(coldDraftHandoffKey);
+    return scope;
+  } catch { return null; }
+}
+
 export function chatDraftOwner(scope) {
   try {
     const [owner, workspace, kind, agent, conversation] = JSON.parse(scope);
@@ -60,18 +111,15 @@ export function chatDraftOwner(scope) {
   return null;
 }
 
-export function readChatDrafts(view, owner) {
-  const drafts = new Map();
+function storedChatDrafts(view, owner) {
   try {
     const stored = JSON.parse(view?.sessionStorage?.getItem(accountDraftPrefix + owner) || '{}');
-    for (const [scope, value] of Object.entries(stored || {})) {
-      if (chatDraftOwner(scope) === owner && typeof value === 'string' && value.length > 0 && value.length <= messageLimit) drafts.set(scope, value);
-    }
+    return new Map(Object.entries(stored || {}).filter(([scope]) => chatDraftOwner(scope) === owner));
   } catch {}
-  return drafts;
+  return new Map();
 }
 
-export function writeChatDrafts(view, owner, drafts) {
+function saveChatDrafts(view, owner, drafts) {
   try {
     const storage = view?.sessionStorage;
     if (!storage) return false;
@@ -80,6 +128,97 @@ export function writeChatDrafts(view, owner, drafts) {
     else storage.removeItem(name);
     return true;
   } catch { return false; }
+}
+
+function chatDraftBody(value) {
+  const body = typeof value === 'string' ? value : value?.body;
+  return typeof body === 'string' && body.length <= messageLimit ? body : '';
+}
+
+function chatDraftMentions(value) {
+  return Array.isArray(value?.agentMentions) ? value.agentMentions.slice(0, 20).filter(target =>
+    typeof target?.owner_id === 'string' && target.owner_id.length > 0 && target.owner_id.length <= 128 &&
+    typeof target?.agent_id === 'string' && target.agent_id.length > 0 && target.agent_id.length <= 128)
+    .map(({owner_id, agent_id}) => ({owner_id, agent_id})) : [];
+}
+
+const privateTextKey = /^[A-Za-z0-9_-]{16,64}$/;
+
+function privateTextOwner(scope) {
+  try {
+    const [owner, workspace, source, agent, conversation] = JSON.parse(scope);
+    return source === 'agent' && [owner, workspace, agent, conversation].every(validSignupUser) ? owner : null;
+  } catch { return null; }
+}
+
+function chatDraftPendingText(value) {
+  if (!Array.isArray(value?.pendingPrivateText)) return [];
+  return value.pendingPrivateText.flatMap(row => {
+    const body = chatDraftBody(row?.message);
+    if (!body.trim() || typeof row.key !== 'string' || !privateTextKey.test(row.key)) return [];
+    const language = row.message.chat_language;
+    return [{key:row.key, message:{body, ...(typeof language === 'string' && language.length <= 64 ? {chat_language:language} : {})}}];
+  });
+}
+
+function chatDraftRecord(body, agentMentions, pendingPrivateText) {
+  if (!agentMentions.length && !pendingPrivateText.length) return body;
+  return {body, ...(agentMentions.length ? {agentMentions} : {}), ...(pendingPrivateText.length ? {pendingPrivateText} : {})};
+}
+
+export function readChatDrafts(view, owner) {
+  const drafts = new Map();
+  for (const [scope, value] of storedChatDrafts(view, owner)) {
+    const body = chatDraftBody(value);
+    if (body) drafts.set(scope, body);
+  }
+  return drafts;
+}
+
+export function writeChatDrafts(view, owner, drafts) {
+  const records = new Map(drafts);
+  for (const [scope, value] of storedChatDrafts(view, owner)) {
+    const agentMentions = chatDraftMentions(value);
+    const pendingPrivateText = chatDraftPendingText(value);
+    if (agentMentions.length || pendingPrivateText.length) {
+      records.set(scope, chatDraftRecord(records.get(scope) || '', agentMentions, pendingPrivateText));
+    }
+  }
+  return saveChatDrafts(view, owner, records);
+}
+
+export function readChatDraftMentions(view, scope) {
+  return chatDraftMentions(storedChatDrafts(view, chatDraftOwner(scope)).get(scope));
+}
+
+export function writeChatDraftMentions(view, scope, agentMentions) {
+  const owner = chatDraftOwner(scope);
+  if (!owner) return;
+  const drafts = storedChatDrafts(view, owner);
+  const previous = drafts.get(scope);
+  const updated = chatDraftRecord(chatDraftBody(previous), agentMentions, chatDraftPendingText(previous));
+  if (updated) drafts.set(scope, updated);
+  else drafts.delete(scope);
+  saveChatDrafts(view, owner, drafts);
+}
+
+export function readPendingPrivateText(view, scope) {
+  const owner = privateTextOwner(scope);
+  return owner ? chatDraftPendingText(storedChatDrafts(view, owner).get(scope)) : [];
+}
+
+export function savePendingPrivateText(view, scope, key, message) {
+  const owner = privateTextOwner(scope);
+  if (!owner || typeof key !== 'string' || !privateTextKey.test(key) || (message && !chatDraftBody(message).trim())) return false;
+  const drafts = storedChatDrafts(view, owner);
+  const previous = drafts.get(scope);
+  const rows = new Map(chatDraftPendingText(previous).map(row => [row.key, row]));
+  if (message) rows.set(key, {key,message});
+  else if (!rows.delete(key)) return true;
+  const updated = chatDraftRecord(chatDraftBody(previous), chatDraftMentions(previous), [...rows.values()]);
+  if (updated) drafts.set(scope, updated);
+  else drafts.delete(scope);
+  return saveChatDrafts(view, owner, drafts);
 }
 
 export function takeSignupSession(view, now = Date.now()) {
@@ -108,7 +247,7 @@ export async function waitForRuntime(read, {
       if (!validSignupUser(user)) continue;
       if (user !== expectedUser) return 'signup-mismatch';
     }
-    if (['ready', 'unmanaged', 'unavailable', 'setup'].includes(state)) return state;
+    if (['ready', 'unmanaged', 'unavailable', 'setup', 'stopped'].includes(state)) return state;
   }
   return 'timeout';
 }

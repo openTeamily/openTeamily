@@ -1,7 +1,9 @@
 name: Upstream migration checks
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:

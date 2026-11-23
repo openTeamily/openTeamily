@@ -19,6 +19,12 @@ class LookAvatarPageTests(unittest.TestCase):
         self.assertIn("default-src 'none'", script['headers']['Content-Security-Policy'])
         self.assertIn(b'createLookAvatar', script['body'])
         self.assertIn(b'.look-avatar', style['body'])
+        for filename in ('assistant-portraits.webp', 'assistant-notebook.webp', 'assistant-accessories.webp'):
+            artwork = self.raw.call('GET', '/look/' + filename)
+            self.assertEqual(artwork['status'], 200)
+            self.assertEqual(artwork['headers']['Content-Type'], 'image/webp')
+            self.assertEqual(artwork['body'][:4], b'RIFF')
+            self.assertEqual(artwork['body'][8:12], b'WEBP')
         self.assertEqual(self.raw.call('GET', '/look/app.mjs', origin='https://evil.test')['status'], 403)
         self.assertEqual(self.raw.call('GET', '/look/app.css', query='v=1')['status'], 400)
         self.assertEqual(self.raw.call('POST', '/look/app.css')['status'], 405)

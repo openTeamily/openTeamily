@@ -218,13 +218,14 @@ export function defaultSaveTitle(body) {
 
 export function conversationChatHref(workspaceId, item) {
   if (!workspaceId || !item) return '/chat';
+  const message = item.message_id ? '&message=' + encodeURIComponent(item.message_id) : '';
   if (item.source === 'agent' && item.agent_id) {
     return '/chat#workspace=' + encodeURIComponent(workspaceId)
       + '&agent=' + encodeURIComponent(item.agent_id)
-      + '&conversation=' + encodeURIComponent(item.id);
+      + '&conversation=' + encodeURIComponent(item.id) + message;
   }
   return '/chat#workspace=' + encodeURIComponent(workspaceId)
-    + '&social=' + encodeURIComponent(item.id);
+    + '&social=' + encodeURIComponent(item.id) + message;
 }
 
 export function describeWebsiteDispatch(result) {

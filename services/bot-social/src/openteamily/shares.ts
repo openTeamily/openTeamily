@@ -109,8 +109,21 @@ export function registerShares(app: FastifyInstance, ot: OtContext) {
 
   // ---- public read-only artifact shares (replaces the platform's /share/<token> page).
   // The owner's DS-Bot keeps the share record and publishes a snapshot keyed by
-  // sha256("share:" + token); the token itself never reaches Bot Social.
+  // sha256("share:" + token); the raw token is never stored by Bot Social.
   const HASH = /^[0-9a-f]{64}$/;
+  const TOKEN = /^[A-Za-z0-9_-]{43}$/;
+  function visibleShare(token: unknown) {
+    if (typeof token !== "string" || !TOKEN.test(token)) return null;
+    const hash = createHash("sha256").update("share:" + token).digest("hex");
+    const row = ot.get<any>("SELECT * FROM ot_public_shares WHERE token_hash = ?", hash);
+    return row && !row.revoked && (row.expires_at == null || row.expires_at > ot.now()) ? row : null;
+  }
+
+  // Only the text exposed by the share page is eligible. Older snapshots may
+  // describe other formats as documents, so the copy is always a text document.
+  const copyable = (row: {kind: string; title: string; body: string}) =>
+    row.kind === "document" && row.title.trim().length <= 80 && row.body.length <= 8000 && Boolean(row.body.trim());
+
   app.put("/v1/ot/public-shares", async (req) => {
     const me = ot.me(req);
     const b = body(req);
@@ -135,13 +148,27 @@ export function registerShares(app: FastifyInstance, ot: OtContext) {
     assert(r.changes === 1, 404, "share_not_found", "no such share of yours");
     return { revoked: true };
   });
+  app.get("/v1/ot/public-shares/:hash", async (req, reply) => {
+    const me = ot.me(req);
+    const hash = String(params(req).hash);
+    assert(HASH.test(hash) && ot.get(`SELECT 1 FROM ot_public_shares
+      WHERE token_hash=? AND owner_id=? AND revoked=0 AND (expires_at IS NULL OR expires_at>?)`,
+      hash, me.ownerId, ot.now()), 404, "share_not_found", "share is unavailable");
+    reply.header("Cache-Control", "private, no-store");
+    return { active: true };
+  });
+  app.post("/v1/ot/public-shares/resolve", async (req, reply) => {
+    ot.me(req);
+    const row = visibleShare(body(req).token);
+    assert(row && copyable(row), 404, "share_not_found", "share is unavailable");
+    reply.header("Cache-Control", "no-store");
+    return {title:row.title, body:row.body};
+  });
   app.get("/share/:token", async (req, reply) => {
     const token = String(params(req).token);
     const notFound = () => reply.status(404).type("text/html; charset=utf-8").header("Cache-Control", "no-store").send("<!DOCTYPE html><meta charset=utf-8><title>链接不可用</title><p>这个分享链接不存在、已过期或已被撤销。</p>");
-    if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return notFound();
-    const hash = createHash("sha256").update("share:" + token).digest("hex");
-    const row = ot.get<any>("SELECT * FROM ot_public_shares WHERE token_hash = ?", hash);
-    if (!row || row.revoked || (row.expires_at && row.expires_at <= ot.now())) return notFound();
+    const row = visibleShare(token);
+    if (!row) return notFound();
     const esc = (v: string) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
     reply.header("Content-Type", "text/html; charset=utf-8");
     reply.header("Cache-Control", "no-store");
@@ -149,7 +176,7 @@ export function registerShares(app: FastifyInstance, ot: OtContext) {
     reply.header("X-Robots-Tag", "noindex");
     reply.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
     return reply.send(`<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(row.title)} · OpenTeamily</title>
-<style>body{font-family:system-ui,sans-serif;max-width:46rem;margin:2rem auto;padding:0 1rem;line-height:1.6;color:#1a1a1a}pre{white-space:pre-wrap;font:inherit}.meta{color:#666;font-size:.9rem}</style></head>
-<body><p class="meta">只读分享 · ${esc(ot.profileView(row.owner_id).display_name || "")}</p><h1>${esc(row.title)}</h1><pre>${esc(row.body)}</pre></body></html>`);
+<style>body{font-family:system-ui,sans-serif;max-width:46rem;margin:2rem auto;padding:0 1rem;line-height:1.6;color:#1a1a1a}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}.meta{color:#666;font-size:.9rem}.copy{display:inline-block;padding:.45rem .9rem;border:1px solid #2b6b49;border-radius:.5rem;color:#21573a}</style></head>
+<body><p class="meta">只读分享 · ${esc(ot.profileView(row.owner_id).display_name || "")}</p><h1>${esc(row.title)}</h1>${copyable(row) ? `<a class="copy" href="/space#shared-work=${token}">保存文字副本</a>` : ""}<pre>${esc(row.body)}</pre></body></html>`);
   });
 }

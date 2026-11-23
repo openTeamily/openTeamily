@@ -31,8 +31,11 @@ function readJson(path) {
 
 function requestOnSocket(socketPath, host, path, { method, headers, body, signal }) {
   return new Promise((resolve, reject) => {
+    // Node's HTTP client does not enable chunked transfer for DELETE by default.
+    // Frame every serialized JSON body so all methods reach Bot Social intact.
+    const length = body === undefined ? {} : { 'content-length': Buffer.byteLength(body) }
     const req = httpRequest({
-      socketPath, path, method, signal, agent: false, headers: { ...headers, host },
+      socketPath, path, method, signal, agent: false, headers: { ...headers, ...length, host },
     }, response => {
       const status = response.statusCode
       if (status >= 300 && status < 400) {

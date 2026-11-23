@@ -3,7 +3,7 @@
 // <plugin>/pages (openteamily/static at build time). The platform gateway maps
 // a browser path such as /chat/ or /shell/app.css onto this route for the
 // signed-in owner's runtime only.
-import { readFile, readdir, realpath, stat } from 'node:fs/promises'
+import { readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { extname, join, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -29,9 +29,15 @@ const TYPES = {
 const SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const MAX_PATH = 256
 const REVALIDATE_ASSETS = new Set(['.css', '.mjs', '.js'])
-const CHAT_PACKAGE_ROOTS = ['chat', 'home', 'look', 'memory', 'shell']
-const CHAT_PACKAGE_PATH = /^\/chat\/assets\/([a-f0-9]{32})(\/[^?#]+)$/
-const CHAT_ENTRY_RESOURCE = /((?:src|href)=")(\/(?:chat|home|look|memory|shell)\/[A-Za-z0-9._-]+\.(?:css|mjs|js))"/g
+// Native pages and their shared dependencies use the existing authenticated
+// asset route. The manifest only indexes static files in these directories.
+const PAGE_PACKAGE_ROOTS = [
+  'agents', 'artifacts', 'automations', 'chat', 'contacts', 'discover', 'home', 'look',
+  'meetings', 'members', 'memory', 'onboarding', 'profile', 'settings', 'shell', 'skills', 'team', 'team-runs',
+]
+const PAGE_MANIFEST = '.chat-assets-v1.json'
+const PAGE_PACKAGE_PATH = /^\/chat\/assets\/([a-f0-9]{32})(\/[^?#]+)$/
+const PAGE_ENTRY_RESOURCE = /((?:src|href)=")(\/[a-z][a-z-]*\/[A-Za-z0-9._-]+\.(?:css|mjs|js))"/g
 
 function matchesValidator(request, etag) {
   return (request.headers.get('if-none-match')?.split(',') ?? []).some(value => {
@@ -40,10 +46,11 @@ function matchesValidator(request, etag) {
   })
 }
 
-async function loadChatPackage(root) {
-  const assets = new Map()
-  const release = createHash('sha256')
-  for (const directory of CHAT_PACKAGE_ROOTS) {
+const digestOf = data => createHash('sha256').update(data).digest('hex')
+
+async function scanPageAssets(root) {
+  const hashes = []
+  for (const directory of PAGE_PACKAGE_ROOTS) {
     const folder = await realpath(join(root, directory)).catch(() => null)
     if (!folder?.startsWith(root + sep)) continue
     const entries = await readdir(folder, {withFileTypes: true})
@@ -54,16 +61,49 @@ async function loadChatPackage(root) {
       if (!Object.hasOwn(TYPES, extension) || extension === '.html') return null
       const file = await realpath(join(folder, name))
       if (!file.startsWith(folder + sep)) return null
-      const data = await readFile(file)
-      const digest = createHash('sha256').update(data).digest('hex')
-      return {path: '/' + directory + '/' + name, data, type: TYPES[extension], digest}
+      return ['/' + directory + '/' + name, digestOf(await readFile(file))]
     }))
-    for (const asset of snapshot) {
-      if (!asset) continue
-      const {path, data, type, digest} = asset
-      release.update(path + '\0' + digest + '\n')
-      assets.set(path, {data, type, etag: `"sha256-${digest}"`})
-    }
+    hashes.push(...snapshot.filter(Boolean))
+  }
+  return hashes
+}
+
+export async function writeChatAssetManifest(pagesDir) {
+  const root = await realpath(pagesDir)
+  const hashes = await scanPageAssets(root)
+  await writeFile(join(root, PAGE_MANIFEST), JSON.stringify(hashes) + '\n')
+}
+
+async function readPageManifest(root) {
+  const file = join(root, PAGE_MANIFEST)
+  if (await realpath(file) !== file) return null
+  const manifest = JSON.parse(await readFile(file, 'utf8'))
+  if (!Array.isArray(manifest)) return null
+  let previous = ''
+  for (const entry of manifest) {
+    if (!Array.isArray(entry) || entry.length !== 2) return null
+    const [path, digest] = entry
+    const parts = resolvePagePath(path)
+    if (!parts) return null
+    const extension = extname(path).toLowerCase()
+    if (parts.length !== 2 || !PAGE_PACKAGE_ROOTS.includes(parts[0])
+      || path !== '/' + parts.join('/') || path <= previous
+      || !Object.hasOwn(TYPES, extension) || extension === '.html'
+      || typeof digest !== 'string' || !/^[a-f0-9]{64}$/.test(digest)) return null
+    previous = path
+  }
+  return manifest
+}
+
+async function loadPagePackage(root) {
+  // The immutable image builds this catalogue once. Source checkouts and
+  // older images can still calculate it from their own bundled pages.
+  const hashes = await readPageManifest(root).catch(() => null) ?? await scanPageAssets(root)
+  const assets = new Map()
+  const release = createHash('sha256')
+  for (const [path, digest] of hashes) {
+    release.update(path + '\0' + digest + '\n')
+    assets.set(path, {digest, type: TYPES[extname(path).toLowerCase()], etag: `"sha256-${digest}"`})
   }
   return {assets, base: '/chat/assets/' + release.digest('hex').slice(0, 32)}
 }
@@ -88,7 +128,8 @@ export function resolvePagePath(raw) {
 
 const notFound = (identity) => new Response('not found', {
   status: 404,
-  headers: { 'content-type': 'text/plain; charset=utf-8', [SERVED_BY_HEADER]: `ds-bot; instance=${identity.instanceId}` },
+  headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store',
+    [SERVED_BY_HEADER]: `ds-bot; instance=${identity.instanceId}` },
 })
 
 export function markHtml(text, identity) {
@@ -97,10 +138,25 @@ export function markHtml(text, identity) {
   return /<head[^>]*>/i.test(text) ? text.replace(/<head[^>]*>/i, (head) => head + meta) : meta + text
 }
 
-export function createPageHandler({ pagesDir, identity, getSystemLanguage }) {
-  let root, localeModule, chatMessages, chatPackage
-  const packageFor = pageRoot => chatPackage ??= loadChatPackage(pageRoot).catch(() => {
-    chatPackage = undefined
+function markShellAppearance(html, values) {
+  const appearance = ['light', 'dark', 'auto', 'system'].includes(values?.appearance) ? values.appearance : null
+  if (!appearance) return html
+  let attrs = ` data-shell-appearance="${appearance}"`
+  if (appearance === 'light' || appearance === 'dark') attrs += ` data-theme-resolved="${appearance}"`
+  if (values.language === 'zh-CN' || values.language === 'en') attrs += ` data-shell-language="${values.language}"`
+  if (appearance === 'auto' && values.appearance_schedule === 'custom') {
+    const time = /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/
+    const start = values.appearance_start
+    const end = values.appearance_end
+    if (time.test(start ?? '') && time.test(end ?? '')) attrs += ` data-shell-start="${start}" data-shell-end="${end}"`
+  }
+  return html.replace(/<html(?=[\s>])/i, match => match + attrs)
+}
+
+export function createPageHandler({ pagesDir, identity, getSystemLanguage, getShellSettings }) {
+  let root, localeModule, chatMessages, pagePackage
+  const packageFor = pageRoot => pagePackage ??= loadPagePackage(pageRoot).catch(() => {
+    pagePackage = undefined
     return null
   })
   return async (request) => {
@@ -115,16 +171,20 @@ export function createPageHandler({ pagesDir, identity, getSystemLanguage }) {
     }
     try {
       const pageRoot = root ??= await realpath(pagesDir)
-      const packagedPath = CHAT_PACKAGE_PATH.exec(path)
+      const packagedPath = PAGE_PACKAGE_PATH.exec(path)
       if (packagedPath) {
         const current = await packageFor(pageRoot)
         const asset = current?.assets.get(packagedPath[2])
         if (!asset) return notFound(identity)
         const resource = current.base + packagedPath[2]
         if (path !== resource) return new Response(null, {status: 302, headers: {location: resource, 'cache-control': 'no-store'}})
+        const file = await realpath(join(pageRoot, packagedPath[2]))
+        if (!file.startsWith(pageRoot + sep)) return notFound(identity)
+        const data = await readFile(file)
+        if (digestOf(data) !== asset.digest) return notFound(identity)
         const headers = {'content-type': asset.type, 'cache-control': 'private, max-age=31536000, immutable',
           etag: asset.etag, 'x-content-type-options': 'nosniff'}
-        return matchesValidator(request, asset.etag) ? new Response(null, {status: 304, headers}) : new Response(asset.data, {headers})
+        return matchesValidator(request, asset.etag) ? new Response(null, {status: 304, headers}) : new Response(data, {headers})
       }
       const file = await realpath(join(pageRoot, ...parts))
       if (!file.startsWith(pageRoot + sep)) return notFound(identity)
@@ -145,16 +205,19 @@ export function createPageHandler({ pagesDir, identity, getSystemLanguage }) {
         const camera = audioPage && parts[0] === 'chat' ? '(self)' : '()'
         headers['permissions-policy'] = `camera=${camera}, microphone=${microphone}, geolocation=()`
         let html = await readFile(file, 'utf8')
-        if (parts.length === 2 && parts[0] === 'chat' && parts[1] === 'index.html') {
+        const indexPage = parts.length === 2 && parts[1] === 'index.html'
+        const shell = getShellSettings && indexPage
+          ? await Promise.resolve().then(getShellSettings).catch(() => null) : null
+        if (indexPage && PAGE_PACKAGE_ROOTS.includes(parts[0])) {
           const current = await packageFor(pageRoot)
-          if (current) html = html.replace(CHAT_ENTRY_RESOURCE, (literal, prefix, asset) =>
+          if (current) html = html.replace(PAGE_ENTRY_RESOURCE, (literal, prefix, asset) =>
             current.assets.has(asset) ? prefix + current.base + asset + '"' : literal)
         }
-        if (getSystemLanguage && parts.length === 2 && parts[1] === 'index.html' && ['chat', 'settings'].includes(parts[0])) {
+        if ((shell || getSystemLanguage) && indexPage && ['chat', 'settings'].includes(parts[0])) {
           localeModule ??= import(pathToFileURL(join(pageRoot, 'shell', 'system-locale.mjs')).href).catch(() => null)
           const renderer = await localeModule
           if (renderer) {
-            const requested = await Promise.resolve().then(getSystemLanguage).catch(() => null)
+            const requested = shell?.language ?? await Promise.resolve().then(getSystemLanguage).catch(() => null)
             let locale = renderer.systemLocale(requested)
             let pageMessages
             if (locale === 'en' && parts[0] === 'chat') {
@@ -167,11 +230,12 @@ export function createPageHandler({ pagesDir, identity, getSystemLanguage }) {
             headers['content-language'] = locale
           }
         }
+        if (shell) html = markShellAppearance(html, shell)
         return new Response(markHtml(html, identity), { status: 200, headers })
       }
       const data = await readFile(file)
       if (REVALIDATE_ASSETS.has(extension)) {
-        const etag = `"sha256-${createHash('sha256').update(data).digest('hex')}"`
+        const etag = `"sha256-${digestOf(data)}"`
         headers.etag = etag
         // Package assets contain no account data. The browser still checks
         // this authenticated runtime for access and release bytes on reuse.

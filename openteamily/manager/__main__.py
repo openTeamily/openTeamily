@@ -1,8 +1,10 @@
 """Operator CLI; no real HTTP/Docker unless config AND --execute explicitly enable it."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import signal
 from pathlib import Path
+from threading import Lock
 from urllib.parse import urlsplit
 
 from ..security import digest, opaque
@@ -43,7 +45,8 @@ def poll_once(args):
     cfg = registry.config
     client = ManagerClient(cfg['base_url'], cfg['manager_id'], cfg['token'], enabled=True, host_header=cfg['server_host'])
     gateway = cfg.get('dsbot_gateway') is not None
-    results = []
+    adoption_lock = Lock()
+
     def priority(item):
         if item['converged'] or item['blocked']:
             return 3
@@ -51,16 +54,15 @@ def poll_once(args):
             return 0 if item.get('provisioning') == 'auto' and item['revision'] == 1 else 1
         return 2
 
-    # A signup start must not wait behind every already-routed account. The
-    # returned order is a hint only; each job still takes a fenced claim.
-    for item in sorted(client.assigned(), key=priority):
+    def poll_instance(item):
         iid = item['id']
+        results = []
         try:
             if iid not in cfg['instances']:
                 if item.get('provisioning') != 'auto' or cfg.get('auto_instances') is None:
-                    results.append({'status': 'skipped', 'instance_id': iid, 'reason': 'instance_not_registered'})
-                    continue
-                registry.adopt(iid, item)
+                    return [{'status': 'skipped', 'instance_id': iid, 'reason': 'instance_not_registered'}]
+                with adoption_lock:
+                    registry.adopt(iid, item)
             engine = None
             if item['converged'] or item['blocked']:
                 # A newer intent arriving during this pass is picked up on the next listing.
@@ -70,30 +72,59 @@ def poll_once(args):
                 engine = ComposeEngine(registry, Runner(registry, enabled=True))
                 result = ManagerWorker(client, registry, engine).run_once(iid)
             results.append(result)
-            if gateway and result.get('status') in ('observed', 'no_claim'):
-                # Route the owner's browser to this DS-Bot (platform gateway). A refusal
-                # here never changes the job receipt above.
-                if (result.get('observed', item['observed']) != 'running'
-                        or (result['status'] == 'no_claim' and not item['converged'])):
-                    results.append({'status': 'not_running', 'instance_id': iid})
-                    continue
-                if result['status'] == 'no_claim' and item.get('gateway_route_fresh') is True and not args.import_legacy:
-                    continue
-                if engine is None:
-                    registry.entry(iid, item)
-                    engine = ComposeEngine(registry, Runner(registry, enabled=True))
+            if not gateway or result.get('status') not in ('observed', 'no_claim'):
+                return results
+
+            # Route the owner's browser to this DS-Bot. A refusal here never changes the job receipt.
+            if (result.get('observed', item['observed']) != 'running'
+                    or (result['status'] == 'no_claim' and not item['converged'])):
+                results.append({'status': 'not_running', 'instance_id': iid})
+                return results
+            if result['status'] == 'no_claim' and item.get('gateway_route_fresh') is True and not args.import_legacy:
+                return results
+            if engine is None:
+                registry.entry(iid, item)
+                engine = ComposeEngine(registry, Runner(registry, enabled=True))
+            try:
+                results.append(dsbot_route.publish(engine, client, iid))
+            except ManagerError as error:
+                results.append({'status': 'route_refused', 'instance_id': iid, 'reason': error.code})
+            if args.import_legacy:
                 try:
-                    results.append(dsbot_route.publish(engine, client, iid))
+                    with instance_lock(registry.root, iid):
+                        results.append(dsbot_import.deliver(engine, client, iid))
                 except ManagerError as error:
-                    results.append({'status': 'route_refused', 'instance_id': iid, 'reason': error.code})
-                if args.import_legacy:
-                    try:
-                        with instance_lock(registry.root, iid):
-                            results.append(dsbot_import.deliver(engine, client, iid))
-                    except ManagerError as error:
-                        results.append({'status': 'import_refused', 'instance_id': iid, 'reason': error.code})
+                    results.append({'status': 'import_refused', 'instance_id': iid, 'reason': error.code})
         except ManagerError as error:
             results.append({'status': 'refused', 'instance_id': iid, 'reason': error.code})
+        return results
+
+    # Keep signup priority and fenced per-instance jobs. Bound concurrent checks
+    # so one slow container does not block another owner's queued start.
+    items = sorted(client.assigned(), key=priority)
+    pending = [item for item in items if not item['converged'] and not item['blocked']]
+    repairs = [item for item in items if gateway and item['converged'] and not item['blocked']
+               and item['observed'] == 'running' and item['health'] == 'healthy'
+               and item.get('gateway_route_present') is False]
+    if pending and repairs and not args.import_legacy:
+        # A cold start can hold its worker for the entire readiness budget.
+        # Keep one worker available to reconnect already running accounts.
+        def poll_group(group):
+            return {item['id']: poll_instance(item) for item in group}
+
+        completed = {}
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            for group in workers.map(poll_group, (pending, repairs)):
+                completed.update(group)
+        results = []
+        for item in items:
+            result = completed.get(item['id'])
+            results.extend(result if result is not None else poll_instance(item))
+    elif len(pending) > 1 and not args.import_legacy:
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            results = [result for group in workers.map(poll_instance, items) for result in group]
+    else:
+        results = [result for item in items for result in poll_instance(item)]
     uncertain = any(r.get('status') == 'uncertain' for r in results)
     return {'status': 'uncertain' if uncertain else 'polled', 'results': results}
 

@@ -11,6 +11,7 @@ const MAX_READY = 40
 const HISTORY_LIMIT = 12
 const GROUP_SCAN_SECONDS = 60
 const SOCIAL_ID = /^[A-Za-z0-9._-]{1,80}$/
+const staleGroupMessage = '群聊原消息已被编辑、撤回或无法再访问，请重新选择消息提炼。'
 const now = () => Math.floor(Date.now() / 1000)
 const enabled = (store, workspace) => store.get('SELECT enabled FROM memory_capture_settings WHERE workspace_id=?', workspace)?.enabled === 1
 
@@ -27,25 +28,36 @@ async function currentGroupBatch(host, row, registration) {
   return expected.every(item => sources.get(item.id)?.revision === item.revision) ? sources : null
 }
 
+const sourceUnavailable = error => error?.status === 403 || error?.status === 404
+
+async function inboxSources(host, items) {
+  const checkedBatches = new Map()
+  return Promise.all(items.map(async row => {
+    if (!row.source_message_id) return {row, state:'available'}
+    const key = JSON.stringify([row.conversation_id,row.source_batch])
+    if (!checkedBatches.has(key)) {
+      const check = currentGroupBatch(host,row)
+        .then(current => current ? 'available' : 'invalidated', error => sourceUnavailable(error) ? 'invalidated' : 'pending')
+      checkedBatches.set(key,check)
+    }
+    return {row, state:await checkedBatches.get(key)}
+  }))
+}
+
 async function inbox(req, workspace, id) {
   const {store} = req
   if (req.queryString) refuse(400, 'invalid', 'Invalid memory inbox request')
   if (req.method === 'GET' && !id) {
     const items = store.all("SELECT * FROM memory_capture_items WHERE workspace_id=? AND state='ready' ORDER BY created DESC,id LIMIT ?", workspace,MAX_READY)
     const queued = store.get("SELECT COUNT(*) AS n FROM memory_capture_items WHERE workspace_id=? AND state='queued'", workspace).n
-    const groups = new Set(items.filter(row => row.source_message_id).map(row => row.conversation_id))
-    const access = new Set()
-    await Promise.all([...groups].map(async conversation_id => {
-      try {
-        await req.host.call('messenger/captureSources',{workspace_id:workspace,conversation_id,message_ids:[]})
-        access.add(conversation_id)
-      } catch { /* Only show group drafts while their source group is accessible. */ }
-    }))
-    const visible = items.filter(row => !row.source_message_id || access.has(row.conversation_id))
+    const sources = await inboxSources(req.host,items)
+    const visible = sources.filter(item => item.state === 'available').map(({row}) => row)
+    const invalidated = sources.filter(item => item.state === 'invalidated').map(({row}) => row.id)
+    const source_check_pending = sources.some(item => item.state === 'pending')
     const group_capture = Boolean(store.get('SELECT 1 FROM memory_capture_groups WHERE workspace_id=? LIMIT 1',workspace))
     return {body:{enabled:enabled(store,workspace), group_capture, queued, items:visible.map(row => ({
       id:row.id, title:row.title, body:row.body, source:captureSourceView(row),
-    }))}}
+    })), ...(invalidated.length ? {invalidated} : {}), ...(source_check_pending ? {source_check_pending} : {})}}
   }
   if (req.method !== 'POST') refuse(405, 'method', 'Only POST is supported')
   if (!id) {
@@ -64,8 +76,11 @@ async function inbox(req, workspace, id) {
     if (row?.source_message_id) {
       let current
       try { current = await currentGroupBatch(req.host,row) }
-      catch { refuse(409,'conflict','暂时无法核对群聊来源，请确认你仍可打开该群聊后重试。') }
-      if (!current) refuse(409,'conflict','群聊原消息已被编辑或撤回，请重新选择消息提炼。')
+      catch (error) {
+        if (sourceUnavailable(error)) refuse(409,'source_changed',staleGroupMessage)
+        refuse(409,'conflict','暂时无法核对群聊来源，请确认你仍可打开该群聊后重试。')
+      }
+      if (!current) refuse(409,'source_changed',staleGroupMessage)
     }
   }
   return store.transaction(() => {

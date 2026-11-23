@@ -10,7 +10,7 @@ export const LEGACY_PATHS = ['/v1/settings', '/v1/notification-prefs', '/v1/onbo
 export default function settings(host) {
   const feature = createSettingsFeature({ dir: host.featureDir() })
   const spec = { name: 'settings', importTables: IMPORT_TABLES }
-  const imported = importJsonBundles({ dataDir: host.dataDir, feature: spec, store: feature.store, apply: applyImport, log: host.log })
+  const imported = importJsonBundles({ host, feature: spec, store: feature.store, apply: applyImport, log: host.log })
   return {
     imported,
     pages: ['settings', 'onboarding', 'look'],

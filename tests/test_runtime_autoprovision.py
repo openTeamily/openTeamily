@@ -17,7 +17,7 @@ from openteamily.operator_config import load_auto_provision, load_manager_auth
 from openteamily.runtime_autoprovision import AutoProvisionPolicy
 from openteamily.security import digest, opaque
 from openteamily.store import Store
-from tests.test_management import Client, ORIGIN
+from tests.test_management import Client, ORIGIN, seed_legacy_workspace
 
 
 class AutoProvisionTests(unittest.TestCase):
@@ -80,19 +80,30 @@ class AutoProvisionTests(unittest.TestCase):
         with self.store.connect() as db:
             return db.execute(sql, args).fetchone()[0]
 
-    def test_disabled_by_default_keeps_existing_behavior(self):
+    def assert_chat_execution_stays_in_dsbot(self, client, personal):
+        wid, aid = personal['workspace']['id'], personal['agent']['id']
+        base = f'/v1/workspaces/{wid}/agents/{aid}/conversations'
+        with self.store.connect() as db:
+            cid = db.execute('SELECT id FROM agent_conversations WHERE agent_id=?', (aid,)).fetchone()[0]
+        before = self.count('SELECT COUNT(*) FROM agent_messages WHERE conversation_id=?', cid)
+        listed = client.call('GET', base)
+        sent = client.call('POST', f'{base}/{cid}/messages', {'body': 'hello'},
+                           {'HTTP_IDEMPOTENCY_KEY': 'autoprov-retired-msg-0001'})
+        for result in (listed, sent):
+            self.assertEqual(result['status'], 410, result)
+            self.assertEqual(result['body']['error']['code'], 'moved_to_dsbot')
+        self.assertEqual(self.count('SELECT COUNT(*) FROM agent_messages WHERE conversation_id=?', cid), before)
+        self.assertEqual(self.count('SELECT COUNT(*) FROM runtime_tasks'), 0)
+
+    def test_disabled_by_default_keeps_the_dsbot_execution_fence(self):
         self.make_app(enabled=False)
         alice = self.user('alice', '127.0.0.1')
         personal = self.ensure(alice)
         self.assertNotIn('runtime_provisioning', personal)
         self.assertEqual(self.count('SELECT COUNT(*) FROM instances'), 0)
         self.assertEqual(self.listed(), [])
-        conv = alice.call('GET', f"/v1/workspaces/{personal['workspace']['id']}/agents/{personal['agent']['id']}/conversations")
-        cid = conv['body']['items'][0]['id']
-        sent = alice.call('POST', f"/v1/workspaces/{personal['workspace']['id']}/agents/{personal['agent']['id']}/conversations/{cid}/messages",
-                          {'body': 'hi'}, {'HTTP_IDEMPOTENCY_KEY': 'autoprov-off-msg-0001'})
-        self.assertEqual(sent['status'], 201, sent)
-        self.assertEqual(sent['body']['reply']['error_code'], 'no_agent')
+        self.assertEqual(alice.call('GET', '/v1/auth/runtime-readiness')['body']['state'], 'unmanaged')
+        self.assert_chat_execution_stays_in_dsbot(alice, personal)
 
     def test_provision_bind_idempotent_and_isolated(self):
         self.make_app()
@@ -106,19 +117,26 @@ class AutoProvisionTests(unittest.TestCase):
         self.assertEqual((again['state'], again['instance_id']), ('existing', iid))
         self.assertEqual(self.count('SELECT COUNT(*) FROM instances WHERE owner_id=(SELECT id FROM users WHERE username=?)', 'alice'), 1)
         wid, aid = first['workspace']['id'], first['agent']['id']
-        binding = alice.call('GET', f'/v1/workspaces/{wid}/agents/{aid}/runtime')['body']['runtime']
-        self.assertEqual(binding['instance_id'], iid)
-        inst = alice.call('GET', f'/v1/instances/{iid}')['body']
-        self.assertEqual(inst['instance']['workspace_id'] if 'instance' in inst else inst['workspace_id'], wid)
-        bob_state = self.ensure(bob)['runtime_provisioning']
-        self.assertNotEqual(bob_state['instance_id'], iid)
-        # Bob can neither see nor bind Alice's instance; the binding is server-derived.
-        self.assertEqual(bob.call('GET', f'/v1/instances/{iid}')['status'], 404)
-        self.assertEqual(bob.call('GET', f'/v1/workspaces/{wid}/agents/{aid}/runtime')['status'], 404)
+        owner = alice.call('GET', '/v1/auth/session')['body']['user']['id']
+        with self.store.connect() as db:
+            binding = db.execute('SELECT workspace_id,agent_id,instance_id,manager_id FROM runtime_auto_provisions '
+                                 'WHERE user_id=?', (owner,)).fetchone()
+        self.assertEqual(tuple(binding), (wid, aid, iid, 'auto-mgr'))
+        inst = alice.call('GET', f'/v1/instances/{iid}')
+        self.assertEqual(inst['status'], 200, inst)
+        self.assertEqual(inst['body']['instance']['workspace_id'], wid)
         bob_personal = self.ensure(bob)
+        bob_state = bob_personal['runtime_provisioning']
+        self.assertNotEqual(bob_state['instance_id'], iid)
+        # Old agent-level bindings expose nothing; only the account owns an instance.
+        self.assertEqual(bob.call('GET', f'/v1/instances/{iid}')['status'], 404)
+        self.assertEqual(alice.call('GET', f'/v1/workspaces/{wid}/agents/{aid}/runtime')['status'], 404)
+        self.assertEqual(bob.call('GET', f'/v1/workspaces/{wid}/agents/{aid}/runtime')['status'], 404)
         rebind = bob.call('POST', f"/v1/workspaces/{bob_personal['workspace']['id']}/agents/{bob_personal['agent']['id']}/runtime",
                           {'instance_id': iid, 'revision': 1})
         self.assertEqual(rebind['status'], 404)
+        self.assertEqual(self.ensure(bob)['runtime_provisioning']['instance_id'], bob_state['instance_id'])
+        self.assertEqual(self.count('SELECT COUNT(*) FROM workspace_agent_bindings'), 0)
         ids = {item['id'] for item in self.listed()}
         self.assertEqual(ids, {iid, bob_state['instance_id']})
         self.assertTrue(all(item['provisioning'] == 'auto' for item in self.listed()))
@@ -129,22 +147,29 @@ class AutoProvisionTests(unittest.TestCase):
             ensure_schema(db)
         alice, bob = self.user('alice', '127.0.0.1'), self.user('bob', '127.0.0.2')
         path = '/v1/auth/runtime-readiness'
+        alice_id = alice.call('GET', '/v1/auth/session')['body']['user']['id']
+        bob_id = bob.call('GET', '/v1/auth/session')['body']['user']['id']
         self.assertEqual(Client(self.app).call('GET', path)['status'], 401)
-        self.assertEqual(alice.call('GET', path)['body'], {'state': 'setup'})
-        provision = self.ensure(alice)['runtime_provisioning']
+        self.assertEqual(alice.call('GET', path)['body'], {'state': 'setup', 'user_id': alice_id})
+        personal = self.ensure(alice)
+        provision = personal['runtime_provisioning']
         iid = provision['instance_id']
         self.assertEqual(provision['readiness'], 'starting')
-        self.assertEqual(alice.call('GET', path)['body'], {'state': 'starting'})
+        self.assertEqual(alice.call('GET', path)['body'], {'state': 'starting', 'user_id': alice_id})
         self.run_job(iid, 'stopped')
         self.run_job(iid, 'running', process_ref='a' * 32)
-        self.assertEqual(alice.call('GET', path)['body'], {'state': 'starting'})
+        self.assertEqual(alice.call('GET', path)['body'], {'state': 'starting', 'user_id': alice_id})
         with self.store.transaction() as db:
             record_upstream(db, iid, '10.0.0.1:8788', 'dsh-auth-test=' + 'x' * 20, self.now)
-        self.assertEqual(alice.call('GET', path)['body'], {'state': 'ready'})
-        self.assertEqual(bob.call('GET', path)['body'], {'state': 'setup'})
+        self.assertEqual(alice.call('GET', path)['body'], {'state': 'ready', 'user_id': alice_id})
+        self.assertEqual(alice.call('GET', path + '?include=personal-chat')['body'],
+                         {'state': 'ready', 'user_id': alice_id, 'personal_chat': {
+                             'workspace_id': personal['workspace']['id'], 'agent_id': personal['agent']['id']}})
+        self.assertEqual(bob.call('GET', path + '?include=personal-chat')['body'],
+                         {'state': 'setup', 'user_id': bob_id})
         with self.store.transaction() as db:
             db.execute("UPDATE instances SET desired='stopped' WHERE id=?", (iid,))
-        self.assertEqual(alice.call('GET', path)['body'], {'state': 'unavailable'})
+        self.assertEqual(alice.call('GET', path)['body'], {'state': 'unavailable', 'user_id': alice_id})
 
     def test_auto_provision_returns_personal_bootstrap_without_minting_key(self):
         self.make_app()
@@ -183,7 +208,30 @@ class AutoProvisionTests(unittest.TestCase):
         self.assertTrue(all(r['status'] in (200, 201) for r in results), results)
         self.assertEqual(self.count('SELECT COUNT(*) FROM instances'), 1)
         self.assertEqual(self.count('SELECT COUNT(*) FROM runtime_auto_provisions'), 1)
-        self.assertEqual(self.count('SELECT COUNT(*) FROM workspace_agent_bindings'), 1)
+        self.assertEqual(self.count('SELECT COUNT(*) FROM workspace_agent_bindings'), 0)
+
+    def test_retired_agent_binding_cannot_block_an_owners_first_runtime(self):
+        self.make_app(enabled=False)
+        alice = self.user('alice', '127.0.0.1')
+        bob = self.user('bob', '127.0.0.2')
+        with self.store.transaction() as db:
+            owner = db.execute("SELECT id FROM users WHERE username='alice'").fetchone()[0]
+            row, _ = self.app.ensure_personal_agent(db, owner, 'alice', self.now)
+            old_binding = (row['agent_id'], row['workspace_id'], 'a' * 32, 1, owner, self.now, self.now)
+            db.execute('INSERT INTO workspace_agent_bindings VALUES(?,?,?,?,?,?,?)', old_binding)
+        self.app.auto_provision = AutoProvisionPolicy(enabled=True, manager_id='auto-mgr', max_instances=5)
+
+        first = self.ensure(alice)['runtime_provisioning']
+        other = self.ensure(bob)['runtime_provisioning']
+        self.assertEqual(first['state'], 'provisioned')
+        self.assertEqual(other['state'], 'provisioned')
+        self.assertNotIn(first['instance_id'], (old_binding[2], other['instance_id']))
+        self.assertEqual(self.ensure(alice)['runtime_provisioning']['instance_id'], first['instance_id'])
+        self.assertEqual(bob.call('GET', f"/v1/instances/{first['instance_id']}")['status'], 404)
+        with self.store.connect() as db:
+            self.assertEqual([tuple(row) for row in db.execute('SELECT * FROM workspace_agent_bindings')], [old_binding])
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM runtime_auto_provisions').fetchone()[0], 2)
+            self.assertEqual(db.execute('PRAGMA foreign_key_check').fetchall(), [])
 
     def test_global_cap_refuses_cleanly_with_actionable_chat_state(self):
         self.make_app(max_instances=1)
@@ -193,12 +241,8 @@ class AutoProvisionTests(unittest.TestCase):
         self.assertEqual(bob_personal['runtime_provisioning']['state'], 'capacity')
         self.assertEqual(bob_personal['runtime_provisioning']['error_code'], 'runtime_capacity')
         self.assertEqual(self.count('SELECT COUNT(*) FROM instances'), 1)
-        wid, aid = bob_personal['workspace']['id'], bob_personal['agent']['id']
-        cid = bob.call('GET', f'/v1/workspaces/{wid}/agents/{aid}/conversations')['body']['items'][0]['id']
-        sent = bob.call('POST', f'/v1/workspaces/{wid}/agents/{aid}/conversations/{cid}/messages',
-                        {'body': 'hello'}, {'HTTP_IDEMPOTENCY_KEY': 'autoprov-cap-msg-00001'})
-        self.assertEqual(sent['status'], 201, sent)
-        self.assertEqual(sent['body']['reply']['error_code'], 'runtime_capacity')
+        self.assertIsNone(bob_personal['runtime_provisioning']['instance_id'])
+        self.assert_chat_execution_stays_in_dsbot(bob, bob_personal)
 
     def test_lifecycle_capacity_maps_to_capacity(self):
         self.make_app()
@@ -207,18 +251,20 @@ class AutoProvisionTests(unittest.TestCase):
         self.ensure(alice)
         self.assertEqual(self.ensure(bob)['runtime_provisioning']['state'], 'capacity')
 
-    def test_explicit_binding_is_respected_not_duplicated(self):
+    def test_operator_enrolled_owner_runtime_is_respected_not_duplicated(self):
         self.make_app(enabled=False)
         alice = self.user('alice', '127.0.0.1')
         personal = self.ensure(alice)
-        wid, aid = personal['workspace']['id'], personal['agent']['id']
+        wid = personal['workspace']['id']
         inst = alice.call('POST', f'/v1/workspaces/{wid}/instances', {}, {'HTTP_IDEMPOTENCY_KEY': 'manual-instance-0001'})
+        self.assertEqual(inst['status'], 201, inst)
         iid = inst['body']['instance']['id']
-        self.assertEqual(alice.call('POST', f'/v1/workspaces/{wid}/agents/{aid}/runtime', {'instance_id': iid})['status'], 201)
         self.app.auto_provision = AutoProvisionPolicy(enabled=True, manager_id='auto-mgr', max_instances=5)
         state = self.ensure(alice)['runtime_provisioning']
         self.assertEqual((state['state'], state['instance_id']), ('bound', iid))
         self.assertEqual(self.count('SELECT COUNT(*) FROM instances'), 1)
+        self.assertEqual(self.count('SELECT COUNT(*) FROM runtime_auto_provisions'), 0)
+        self.assertEqual(self.count('SELECT COUNT(*) FROM workspace_agent_bindings'), 0)
         # Operator-enrolled instance is NOT visible to the auto manager.
         self.assertEqual(self.listed(), [])
 
@@ -228,11 +274,7 @@ class AutoProvisionTests(unittest.TestCase):
         alice = self.user('alice', '127.0.0.1')
         personal = self.ensure(alice)
         iid = personal['runtime_provisioning']['instance_id']
-        wid = 'a' * 32
-        with self.store.transaction() as db:
-            owner_id = db.execute("SELECT id FROM users WHERE username='alice'").fetchone()[0]
-            db.execute('INSERT INTO workspaces VALUES(?,?,?,?,?,?)',
-                       (wid, owner_id, 'another workspace', self.now, 'key', 'request'))
+        wid = seed_legacy_workspace(alice, name='another workspace')['id']
         result = alice.call('POST', f'/v1/workspaces/{wid}/instances', {},
                             {'HTTP_IDEMPOTENCY_KEY': 'another-instance-key'})
         self.assertEqual(result['status'], 200, result)
@@ -259,8 +301,9 @@ class AutoProvisionTests(unittest.TestCase):
         alice, bob = self.user('alice', '127.0.0.1'), self.user('bob', '127.0.0.2')
         a = self.ensure(alice)['runtime_provisioning']['instance_id']
         # An operator-enrolled instance in Bob's own workspace, not granted to anyone.
-        bob_ws = bob.workspace('bobspace', 'request_example_0009')['body']['workspace']['id']
+        bob_ws = seed_legacy_workspace(bob, name='bobspace')['id']
         manual = bob.call('POST', f'/v1/workspaces/{bob_ws}/instances', {}, {'HTTP_IDEMPOTENCY_KEY': 'bob-manual-inst-0001'})
+        self.assertEqual(manual['status'], 201, manual)
         m = manual['body']['instance']['id']
         self.assertEqual({i['id'] for i in self.listed()}, {a})
         for path in (f'/v1/internal/instances/{m}/heartbeat',):

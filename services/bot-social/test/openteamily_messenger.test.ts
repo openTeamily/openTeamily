@@ -2,12 +2,17 @@
 // group agents answered by their owner's DS-Bot (agent inbox + capped auto replies). Fixtures only.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { bulkAuth, startServer } from "./helpers.js";
 import { home } from "./openteamily_helpers.js";
 
 let S: Awaited<ReturnType<typeof startServer>>;
 before(async () => { S = await startServer(bulkAuth); });
 after(async () => { await S.stop(); });
+
+function teammateClaim(revision: number, attempt = 1, claim_id = randomUUID()) {
+  return {action:"start", attempt, claim_id, source_revision:revision, accept_group_text_turn:true};
+}
 
 async function teamOf(...people: Awaited<ReturnType<typeof home>>[]) {
   const [owner, ...rest] = people;
@@ -126,6 +131,56 @@ test("groups: members, mentions notify, creator removes, members leave", async (
   assert.equal((await C.call("GET", `/v1/ot/conversations/${g.id}`)).status, 404);
   await B.ok("DELETE", `/v1/ot/conversations/${g.id}/members/${B.handle}`);
   assert.equal((await A.ok("GET", `/v1/ot/conversations/${g.id}`)).members.length, 1);
+});
+
+test("conversation mute hides scoped inbox rows without consuming read receipts or affecting other members", async () => {
+  const [sender, reader, colleague] = await Promise.all([
+    home(S.base, "muted-sender"), home(S.base, "muted-reader"), home(S.base, "muted-colleague"),
+  ]);
+  const team = await teamOf(sender, reader, colleague);
+  const workspace = (await sender.ok("GET", "/v1/ot/workspaces")).workspaces.find((row: any) => row.id === team.id).workspace_id;
+  const options = {kind:"group", team_id:team.id, members:[reader.handle,colleague.handle]};
+  const muted = await sender.ok("POST", "/v1/ot/conversations", {...options, title:"Muted group"});
+  const active = await sender.ok("POST", "/v1/ot/conversations", {...options, title:"Active group"});
+  const mutedPath = "/v1/ot/conversations/" + muted.id;
+  const notifications = "/v1/ot/notifications";
+  const scoped = notifications + "?workspace_id=" + workspace + "&unread=1";
+  const mark = (account: typeof reader) => account.ok("POST", notifications + "/read", {workspace_id:workspace, all:true});
+  await Promise.all([mark(reader), mark(colleague)]);
+
+  const address = `@${reader.handle} @${colleague.handle}`;
+  await sender.ok("POST", mutedPath + "/messages", {body:address + " first mention"});
+  const before = await reader.ok("GET", scoped);
+  assert.equal(before.unread, 1);
+  const hiddenId = before.notifications[0].id;
+  const readSeq = (await reader.ok("GET", mutedPath)).read_seq;
+  assert.equal((await reader.ok("PATCH", mutedPath, {muted:true})).muted, true);
+  assert.equal((await reader.ok("GET", scoped)).unread, 0);
+  await sender.ok("POST", mutedPath + "/messages", {body:address + " second mention"});
+  await sender.ok("POST", mutedPath + "/messages", {workspace, attachment:{
+    title:"private-work.txt", mime:"text/plain", data:Buffer.from("Shared via chat").toString("base64"),
+    resource:{title:"Private work", kind:"document", revision:1},
+  }});
+  await sender.ok("POST", `/v1/ot/conversations/${active.id}/messages`, {body:address + " visible mention"});
+  await colleague.ok("POST", "/v1/ot/follows", {handle:reader.handle});
+
+  const inbox = await reader.ok("GET", scoped + "&limit=1&latest=1");
+  assert.equal(inbox.unread, 2);
+  assert.deepEqual(inbox.notifications.map((row: any) => row.kind), ["follow.new"]);
+  assert.deepEqual((await reader.ok("GET", scoped)).notifications.map((row: any) => row.kind), ["messenger.mention", "follow.new"]);
+  assert.equal((await reader.ok("GET", scoped + "&kind=work")).unread, 0);
+  assert.equal((await colleague.ok("GET", scoped)).unread, 4);
+  assert.equal((await colleague.ok("GET", scoped + "&kind=work")).unread, 1);
+  assert.equal((await reader.call("POST", notifications + "/read", {workspace_id:workspace, notification_id:hiddenId})).status, 404);
+  assert.deepEqual(await mark(reader), {marked:2, unread:0});
+  assert.equal((await reader.ok("GET", mutedPath)).read_seq, readSeq);
+
+  assert.equal((await reader.ok("PATCH", mutedPath, {muted:false})).muted, false);
+  const restored = await reader.ok("GET", scoped);
+  assert.equal(restored.unread, 3);
+  assert.deepEqual(restored.notifications.map((row: any) => row.kind), ["messenger.mention", "messenger.mention", "artifact.shared"]);
+  assert.ok(restored.notifications.every((row: any) => row.data.conversation_id === muted.id));
+  assert.equal((await reader.ok("GET", mutedPath)).read_seq, readSeq);
 });
 
 test("personal group ownership changes are revisioned and a replay cannot remove a renewed membership", async () => {
@@ -403,10 +458,14 @@ test("shared group memory is scoped, cited by group agents and retired when a so
   assert.deepEqual((await owner.ok("GET", `/v1/ot/conversations/${elsewhere.id}/memories`)).items,[]);
 
   await member.ok("PUT", room + "/agents/launch-helper", {name:"Launch Helper",auto_reply:false});
-  await owner.ok("POST",room + "/messages",{body:"@launch-helper launch date?"});
-  const inbox = await member.ok("GET","/v1/ot/agent-inbox");
-  assert.deepEqual(inbox.items[0].group_memories,[{id:item.id,title:draft.title,body:draft.body}]);
-  const reply = {agent_ref:"launch-helper", body:"Friday", reply_to:inbox.items[0].message.id, mode:"mention"};
+  const source = await owner.ok("POST",room + "/messages",{body:"@launch-helper launch date?"});
+  const inbox = await member.ok("GET","/v1/ot/agent-inbox?managed=1");
+  assert.deepEqual(inbox.jobs[0].group_memories,[{id:item.id,title:draft.title,body:draft.body}]);
+  const claim = teammateClaim(source.revision);
+  const jobId = source.reply_jobs[0].id;
+  await member.ok("POST",`/v1/ot/agent-reply-jobs/${jobId}`,claim);
+  const reply = {agent_ref:"launch-helper", body:"Friday", reply_to:source.id, mode:"mention",
+    job_id:jobId, attempt:claim.attempt, claim_id:claim.claim_id};
   const sent = await member.ok("POST",room + "/agent-messages",{...reply,group_memory_ids:[item.id]});
   assert.deepEqual(sent.group_memory_refs,[{id:item.id,title:draft.title}]);
 
@@ -414,8 +473,11 @@ test("shared group memory is scoped, cited by group agents and retired when a so
   assert.deepEqual((await member.ok("GET", memory)).items,[]);
   assert.equal((await owner.call("POST",memory,draft)).status,409);
   const next = await owner.ok("POST",room + "/messages",{body:"@launch-helper new launch date?"});
+  const nextClaim = teammateClaim(next.revision);
+  const nextId = next.reply_jobs[0].id;
+  await member.ok("POST",`/v1/ot/agent-reply-jobs/${nextId}`,nextClaim);
   assert.equal((await member.call("POST",room + "/agent-messages",{
-    ...reply,reply_to:next.id,group_memory_ids:[item.id],
+    ...reply,reply_to:next.id,job_id:nextId,claim_id:nextClaim.claim_id,group_memory_ids:[item.id],
   })).status,409);
   const after = await owner.ok("GET",room + "/messages");
   assert.deepEqual(after.messages.find((m: any) => m.id === sent.id).group_memory_refs,[]);
@@ -428,14 +490,22 @@ test("group agents: the owner's DS-Bot gets mentions and auto-reply turns; auto 
   const g = await B.ok("POST", "/v1/ot/conversations", { kind: "group", title: "Agents", members: [A.handle] });
   await A.ok("PUT", `/v1/ot/conversations/${g.id}/agents/helper`, { name: "Helper", auto_reply: false });
   assert.equal((await B.call("POST", `/v1/ot/conversations/${g.id}/agent-messages`, { agent_ref: "helper", body: "spoof" })).status, 404, "only the agent's owner posts as it");
-  await B.ok("POST", `/v1/ot/conversations/${g.id}/messages`, { body: "no mention here" });
-  await B.ok("POST", `/v1/ot/conversations/${g.id}/messages`, { body: "@helper summarize please" });
-  let inbox = await A.ok("GET", "/v1/ot/agent-inbox");
-  assert.equal(inbox.items.length, 1);
-  assert.equal(inbox.items[0].mode, "mention");
-  assert.equal(inbox.items[0].context.length, 2);
+  const ordinary = await B.ok("POST", `/v1/ot/conversations/${g.id}/messages`, { body: "no mention here" });
+  const request = await B.ok("POST", `/v1/ot/conversations/${g.id}/messages`, { body: "@helper summarize please" });
+  assert.deepEqual((await A.ok("GET", "/v1/ot/agent-inbox")).items, [], "a teammate mention never runs on a legacy worker");
+  let inbox = await A.ok("GET", "/v1/ot/agent-inbox?managed=1");
+  assert.deepEqual(inbox.jobs.map((item: any) => [item.message.id, item.mode, item.discretionary === true, item.group_text_only]), [
+    [ordinary.id, "mention", true, true], [request.id, "mention", false, true],
+  ]);
+  assert.equal(inbox.jobs.find((item: any) => item.message.id === request.id).context.length, 2);
   assert.equal((await B.ok("GET", "/v1/ot/agent-inbox")).items.length, 0, "B owns no agent");
-  const reply = await A.ok("POST", `/v1/ot/conversations/${g.id}/agent-messages`, { agent_ref: "helper", body: "Summary: …", reply_to: inbox.items[0].message.id, mode: "mention" });
+  const claim = teammateClaim(request.revision);
+  const jobId = request.reply_jobs[0].id;
+  await A.ok("POST", `/v1/ot/agent-reply-jobs/${jobId}`, claim);
+  const reply = await A.ok("POST", `/v1/ot/conversations/${g.id}/agent-messages`, {
+    agent_ref: "helper", body: "Summary: …", reply_to: request.id, mode: "mention",
+    job_id:jobId, attempt:claim.attempt, claim_id:claim.claim_id,
+  });
   assert.equal(reply.author.kind, "agent");
   assert.equal(reply.author.name, "Helper");
   inbox = await A.ok("GET", `/v1/ot/agent-inbox?after=${inbox.cursor}`);
@@ -481,10 +551,10 @@ test("explicit mentions address the selected owner, even when agents share IDs a
   const target = {owner_id:owner, agent_id:"shared"};
   const posted = await A.ok("POST", root + "/messages", {body:"Please check", agent_mentions:[target]});
   assert.equal(posted.body, "@Helper Please check");
-  const forB = await B.ok("GET","/v1/ot/agent-inbox");
-  assert.deepEqual(forB.items.map((entry: any) => [entry.message.id, entry.agent_ref, entry.mode]),
+  const forB = await B.ok("GET","/v1/ot/agent-inbox?managed=1");
+  assert.deepEqual(forB.jobs.map((entry: any) => [entry.message.id, entry.agent_ref, entry.mode]),
     [[posted.id, "shared", "mention"]]);
-  assert.deepEqual((await C.ok("GET", "/v1/ot/agent-inbox")).items, []);
+  assert.deepEqual((await C.ok("GET", "/v1/ot/agent-inbox?managed=1")).jobs, []);
   const removed = await A.call("POST", root + "/messages", {
     body:"Still there?", agent_mentions:[{owner_id:owner, agent_id:"missing"}],
   });
@@ -496,9 +566,119 @@ test("explicit mentions address the selected owner, even when agents share IDs a
     body:"各给一个答案", agent_mentions:[target, {owner_id:owner,agent_id:"second"}],
   });
   assert.equal(both.body,"@Helper @第二位助手 各给一个答案");
-  const page = await B.ok("GET", `/v1/ot/agent-inbox?after=${forB.cursor}&limit=1`);
-  assert.deepEqual(page.items.map((entry: any) => entry.agent_ref).sort(), ["second","shared"]);
-  assert.deepEqual((await B.ok("GET", `/v1/ot/agent-inbox?after=${page.cursor}`)).items, []);
+  const page = await B.ok("GET", `/v1/ot/agent-inbox?managed=1&after=${forB.cursor}`);
+  assert.deepEqual(page.jobs.filter((entry: any) => entry.message.id === both.id).map((entry: any) => entry.agent_ref).sort(), ["second","shared"]);
+  assert.deepEqual(page.items, []);
+});
+
+test("teammate group requests authorize each owner separately and stop on requester or agent access loss", async () => {
+  const [owner, requester, worker, outsider] = await Promise.all([
+    home(S.base,"team-request-owner"), home(S.base,"team-requester"),
+    home(S.base,"team-request-worker"), home(S.base,"team-request-outsider"),
+  ]);
+  const team = await owner.ok("POST","/v1/ot/workspaces",{
+    name:"Teammate review",slug:"teammate-review-jobs",idempotency_key:"teammate-review-workspace",
+  });
+  for (const member of [requester, worker, outsider]) {
+    await owner.ok("POST", `/v1/ot/teams/${team.id}/members`, {handle:member.handle,role:"member"});
+  }
+  const group = await owner.ok("POST","/v1/ot/conversations",{
+    kind:"group",team_id:team.id,title:"Teammate review",members:[requester.handle,worker.handle],
+  });
+  assert.equal(group.group_agent_requests,true);
+  const room = `/v1/ot/conversations/${group.id}`;
+  const progressList = `/v1/ot/workspaces/${team.workspace_id}/conversations/${group.id}/reply-progress`;
+  for (const actor of [requester, worker]) await actor.ok("PUT",room + "/agents/shared",{name:"Same display name"});
+  await owner.ok("PUT",room + "/agents/observer",{name:"Observer",auto_reply:true});
+  const senderId = (await requester.ok("GET","/v1/ot/me")).owner_id;
+  const workerProfile = await worker.ok("GET","/v1/ot/me");
+  const workerId = workerProfile.owner_id;
+  const own = {owner_id:senderId,agent_id:"shared"}, target = {owner_id:workerId,agent_id:"shared"};
+  const input = {workspace:team.workspace_id,group_agent_request:true,client_key:"teammate-review-0001",
+    body:"Compare launch implications",agent_mentions:[own,target]};
+  const send = (overrides = {}) => requester.call("POST",room + "/messages",{...input,...overrides});
+  assert.equal((await outsider.call("POST",room + "/messages",input)).status,404);
+  assert.equal((await send({agent_mentions:[target,target]})).status,400);
+  assert.equal((await send({direct:true})).status,404);
+  const first = (await send()).data;
+  assert.equal(first.reply_jobs.length,2);
+  assert.equal((await send({agent_mentions:[target,own]})).data.id,first.id);
+  assert.equal((await send({agent_mentions:[target]})).data.error.code,"group_agent_request_conflict");
+  assert.equal((await send({group_agent_request:undefined})).data.error.code,"group_agent_request_conflict");
+  const byOwner = (message: any, id: string) => message.reply_jobs.find((item: any) => item.agent_owner_id===id);
+  const selected = byOwner(first,workerId);
+  assert.equal(selected.agent_owner_name,workerProfile.display_name);
+  assert.equal(selected.agent_id,"shared");
+  const inbox = "/v1/ot/agent-inbox?managed=1";
+  const workerJobs = async () => (await worker.ok("GET",inbox)).jobs;
+  assert.deepEqual(await worker.ok("GET","/v1/ot/agent-inbox"),{cursor:0,items:[]});
+  const ownJobs = (await requester.ok("GET",inbox)).jobs;
+  assert.equal(ownJobs[0].job_id,byOwner(first,senderId).id);
+  assert.equal(ownJobs[0].group_text_only,undefined);
+  const observed = await owner.ok("GET",inbox);
+  assert.deepEqual(observed.items,[],"nonselected auto reply never runs for a manual group request");
+  assert.deepEqual(observed.jobs,[]);
+  assert.equal((await workerJobs())[0].job_id,selected.id);
+  assert.equal((await workerJobs())[0].group_text_only,true);
+  const jobPath = (id: string) => "/v1/ot/agent-reply-jobs/"+id;
+  const current = teammateClaim(first.revision);
+  assert.equal((await worker.call("POST",jobPath(selected.id),{...current,accept_group_text_turn:undefined})).status,409);
+  assert.equal((await worker.call("POST",jobPath(selected.id),{...current,source_revision:undefined})).status,409);
+  assert.equal((await outsider.call("POST",jobPath(selected.id),current)).status,404);
+  const reply = (message: any, job: any, claim = current) => ({
+    agent_ref:"shared",job_id:job.id,attempt:claim.attempt,claim_id:claim.claim_id,
+    reply_to:message.id,body:"Launch implications",mode:"mention",
+  });
+  assert.equal((await worker.call("POST",room+"/agent-messages",{
+    reply_to:first.id,agent_ref:"shared",mode:"auto",body:"Unclaimed legacy reply",
+  })).status,409);
+  assert.equal((await owner.call("POST",room+"/agent-messages",{
+    reply_to:first.id,agent_ref:"observer",mode:"auto",body:"Unselected legacy reply",
+  })).status,409);
+  const receipt = await worker.ok("POST",jobPath(selected.id),current);
+  assert.deepEqual(receipt,{ok:true,group_text_only:true});
+  assert.deepEqual(await worker.ok("POST",jobPath(selected.id),current),receipt);
+  const completed = await worker.ok("POST",room+"/agent-messages",reply(first,selected));
+  assert.equal(completed.author.owner.owner_id,workerId);
+  assert.equal(completed.reply_job_id,selected.id);
+
+  const running = (await send({client_key:"teammate-review-0002",agent_mentions:[target]})).data;
+  const runningJob = byOwner(running,workerId);
+  const active = teammateClaim(running.revision);
+  await worker.ok("POST",jobPath(runningJob.id),active);
+  const output = {attempt:1,claim_id:active.claim_id,revision:1,text:"Temporary output"};
+  await worker.ok("POST",jobPath(runningJob.id)+"/progress",output);
+  assert.ok((await owner.ok("GET",progressList)).items.some((row: any)=>row.text===output.text));
+  const pending = (await send({client_key:"teammate-review-0003",agent_mentions:[target]})).data;
+  const pendingJob = byOwner(pending,workerId);
+
+  const membership = `/v1/ot/teams/${team.id}/members/${requester.handle}`;
+  await owner.ok("PATCH",membership,{suspended:true});
+  assert.deepEqual((await owner.ok("GET",progressList)).items,[]);
+  assert.deepEqual(await workerJobs(),[]);
+  assert.equal((await worker.call("POST",jobPath(pendingJob.id),teammateClaim(pending.revision))).status,409);
+  assert.equal((await worker.call("POST",jobPath(runningJob.id)+"/progress",{...output,revision:2})).status,409);
+  assert.equal((await worker.call("POST",room+"/agent-messages",reply(running,runningJob,active))).status,409);
+  assert.equal((await worker.ok("POST",room+"/agent-messages",reply(first,selected))).id,completed.id,
+    "a completed receipt stays replayable by its active agent owner");
+  await owner.ok("PATCH",membership,{suspended:false});
+  assert.deepEqual(await workerJobs(),[]);
+  assert.equal((await worker.call("POST",room+"/agent-messages",reply(running,runningJob,active))).status,409);
+  const retryPath = room+`/messages/${pending.id}/agent-retry`;
+  assert.equal((await owner.call("POST",retryPath,{job_id:pendingJob.id,attempt:1})).status,404);
+  await requester.ok("POST",retryPath,{job_id:pendingJob.id,attempt:1});
+  assert.equal((await workerJobs())[0].attempt,2);
+  const access = teammateClaim(pending.revision,2);
+  await worker.ok("POST",jobPath(pendingJob.id),access);
+  await worker.ok("DELETE",room+"/agents/shared");
+  assert.equal((await send({client_key:"teammate-review-0004",agent_mentions:[target]})).data.error.code,
+    "group_agent_unavailable");
+  assert.equal((await send({client_key:"teammate-review-0003",agent_mentions:[target]})).data.id,pending.id,
+    "a lost send response is recoverable after a selected agent is withdrawn");
+  assert.equal((await requester.call("POST",retryPath,{job_id:pendingJob.id,attempt:2})).status,409);
+  assert.equal((await worker.call("POST",jobPath(pendingJob.id)+"/progress",{
+    ...output,attempt:2,claim_id:access.claim_id,
+  })).status,409);
 });
 
 test("voice messages are idempotent and only current conversation members can play them", async () => {
@@ -796,13 +976,14 @@ test("team reply progress uses both memberships and drops work when access is re
   const createJob = async (body: string) => {
     const source = await sender.ok("POST", room + "/messages", {body});
     const id = source.reply_jobs[0].id;
-    await worker.ok("POST", jobRoute(id), {action: "start", attempt: 1, source_revision: source.revision});
-    await worker.ok("POST", jobRoute(id) + "/progress", {attempt: 1, revision: 1, text: "Shared draft"});
-    return {id, source};
+    const claim = teammateClaim(source.revision);
+    await worker.ok("POST", jobRoute(id), claim);
+    await worker.ok("POST", jobRoute(id) + "/progress", {attempt:1, claim_id:claim.claim_id, revision:1, text:"Shared draft"});
+    return {id, source, claim};
   };
 
   await worker.ok("PUT", helper, {name: "Helper", auto_reply: true});
-  const {id, source} = await createJob("@helper draft a message");
+  const {id, source, claim} = await createJob("@helper draft a message");
   assert.deepEqual(await reader.ok("GET", scoped), {items: [{id, message_id: source.id, attempt: 1, status: "running", text: "Shared draft"}]});
   assert.equal((await reader.call("GET", scoped.replace(workspace, otherWorkspace))).status, 404);
   assert.equal((await outsider.call("GET", scoped)).status, 404);
@@ -823,13 +1004,13 @@ test("team reply progress uses both memberships and drops work when access is re
   assert.equal((await worker.call("POST", room + "/agent-messages", untracked)).status, 404);
   await sender.ok("PATCH", membership, {suspended: false});
   assert.deepEqual((await sender.ok("GET", scoped)).items, []);
-  assert.equal((await worker.call("POST", jobRoute(id) + "/progress", {attempt: 1, revision: 2, text: "Late"})).status, 409);
+  assert.equal((await worker.call("POST", jobRoute(id) + "/progress", {attempt:1, claim_id:claim.claim_id, revision:2, text:"Late"})).status, 409);
 
   const removed = await createJob("@helper replacement test");
   await worker.ok("DELETE", helper);
   await worker.ok("PUT", helper, {name: "Helper"});
   assert.deepEqual((await sender.ok("GET", scoped)).items, []);
-  assert.equal((await worker.call("POST", jobRoute(removed.id) + "/progress", {attempt: 1, revision: 2, text: "Stale"})).status, 409);
+  assert.equal((await worker.call("POST", jobRoute(removed.id) + "/progress", {attempt:1, claim_id:removed.claim.claim_id, revision:2, text:"Stale"})).status, 409);
 });
 
 test("editing or retracting an originating message invalidates managed reply progress", async () => {
@@ -845,22 +1026,24 @@ test("editing or retracting an originating message invalidates managed reply pro
   const jobRoute = `/v1/ot/agent-reply-jobs/${id}`;
   const progress = jobRoute + "/progress";
   const revised = await sender.ok("PATCH", sourceRoute, {body: "@helper revision two"});
-  assert.equal((await worker.call("POST", jobRoute, {action: "start", attempt: 1, source_revision: source.revision})).status, 409);
-  await worker.ok("POST", jobRoute, {action: "start", attempt: 1, source_revision: revised.revision});
-  await worker.ok("POST", progress, {attempt: 1, revision: 1, text: "Based on second revision"});
+  const current = teammateClaim(revised.revision);
+  assert.equal((await worker.call("POST", jobRoute, {...current, source_revision:source.revision})).status, 409);
+  await worker.ok("POST", jobRoute, current);
+  await worker.ok("POST", progress, {attempt:1, claim_id:current.claim_id, revision:1, text:"Based on second revision"});
   const next = await sender.ok("PATCH", sourceRoute, {body: "@helper revision three"});
   assert.deepEqual((await sender.ok("GET", room + "/reply-progress")).items, []);
-  assert.equal((await worker.call("POST", progress, {attempt: 1, revision: 2, text: "Late"})).status, 409);
+  assert.equal((await worker.call("POST", progress, {attempt:1, claim_id:current.claim_id, revision:2, text:"Late"})).status, 409);
   assert.equal((await worker.call("POST", room + "/agent-messages", {
-    agent_ref: "helper", body: "Stale final", reply_to: source.id, job_id: id, attempt: 1,
+    agent_ref: "helper", body: "Stale final", reply_to: source.id, job_id: id, attempt: 1, claim_id:current.claim_id,
   })).status, 409);
 
   await sender.ok("POST", `${room}/messages/${source.id}/agent-retry`, {job_id: id});
-  await worker.ok("POST", jobRoute, {action: "start", attempt: 2, source_revision: next.revision});
-  await worker.ok("POST", progress, {attempt: 2, revision: 1, text: "Current revision"});
+  const retry = teammateClaim(next.revision, 2);
+  await worker.ok("POST", jobRoute, retry);
+  await worker.ok("POST", progress, {attempt:2, claim_id:retry.claim_id, revision:1, text:"Current revision"});
   await sender.ok("DELETE", sourceRoute);
   assert.deepEqual((await sender.ok("GET", room + "/reply-progress")).items, []);
-  assert.equal((await worker.call("POST", progress, {attempt: 2, revision: 2, text: "Late"})).status, 409);
+  assert.equal((await worker.call("POST", progress, {attempt:2, claim_id:retry.claim_id, revision:2, text:"Late"})).status, 409);
 });
 
 test("a group reply claim returns an older exact quote only while its agent owner can read it", async () => {
@@ -868,11 +1051,12 @@ test("a group reply claim returns an older exact quote only while its agent owne
   const contact = await worker.ok("POST", "/v1/ot/contacts", {handle: sender.handle});
   await sender.ok("POST", `/v1/ot/contacts/${contact.id}`, {action: "accept"});
   const group = await worker.ok("POST", "/v1/ot/conversations", {kind: "group", account_group: true,
-    title: "Read the quote", members: [sender.handle], agents: [{agent_ref: "helper", name: "Helper"}]});
+    title: "Read the quote", members: [sender.handle]});
   const room = `/v1/ot/conversations/${group.id}/messages`;
   const oldText = "Earlier exact decision: keep the launch on Friday.";
   const original = await sender.ok("POST", room, {body: oldText});
   for (let i = 0; i < 13; i++) await sender.ok("POST", room, {body: `Later message ${i}`});
+  await worker.ok("PUT", `/v1/ot/conversations/${group.id}/agents/helper`, {name: "Helper"});
   const request = async (id: string) => sender.ok("POST", room, {body: "@helper review", reply_to: id});
   const target = await request(original.id);
   const job = (await worker.ok("GET", "/v1/ot/agent-inbox?managed=1")).jobs.find((row: any) => row.message.id === target.id);
@@ -880,20 +1064,150 @@ test("a group reply claim returns an older exact quote only while its agent owne
   assert.equal(job.context.some((row: any) => row.id === original.id), false);
   assert.equal(job.quoted_message, undefined);
   const claimPath = `/v1/ot/agent-reply-jobs/${job.job_id}`;
-  const claim = {action: "start", attempt: 1, claim_id: "0a4e44a7-9c24-4b66-a637-9bdacb2b85ec"};
+  const claim = teammateClaim(target.revision);
   assert.equal((await sender.call("POST", claimPath, claim)).status, 404);
   assert.deepEqual((await worker.ok("POST", claimPath, claim)).quoted_message,
     {author: (await sender.ok("GET", "/v1/ot/me")).display_name, text: oldText});
   await worker.ok("POST", `/v1/ot/messages/${original.id}/hide`, {conversation_id: group.id});
-  assert.deepEqual(await worker.ok("POST", claimPath, claim), {ok: true});
+  assert.deepEqual(await worker.ok("POST", claimPath, claim), {ok: true, group_text_only:true});
 
   const retractable = await sender.ok("POST", room, {body: "Do not read the retracted sentence"});
   const beforeRetraction = await request(retractable.id);
   await sender.ok("DELETE", `/v1/ot/messages/${retractable.id}`);
-  assert.deepEqual(await worker.ok("POST", `/v1/ot/agent-reply-jobs/${beforeRetraction.reply_jobs[0].id}`, claim), {ok: true});
+  assert.deepEqual(await worker.ok("POST", `/v1/ot/agent-reply-jobs/${beforeRetraction.reply_jobs[0].id}`, claim),
+    {ok: true, group_text_only:true});
   const other = await sender.ok("POST", "/v1/ot/conversations", {kind: "group", account_group: true, title: "Other group", members: [worker.handle]});
   const unrelated = await sender.ok("POST", `/v1/ot/conversations/${other.id}/messages`, {body: "Other group text"});
   assert.equal((await sender.call("POST", room, {body: "@helper review", reply_to: unrelated.id})).status, 409);
+});
+
+test("explicit Studio references keep a reviewed version private to its selected managed job", async () => {
+  const [owner, sender, worker, observer] = await Promise.all([
+    home(S.base, "studio-group-owner"), home(S.base, "studio-group-sender"),
+    home(S.base, "studio-group-worker"), home(S.base, "studio-group-observer"),
+  ]);
+  const team = await owner.ok("POST", "/v1/ot/workspaces", {
+    name: "Studio group", slug: "studio-group-pin", idempotency_key: "studio-group-pin-request",
+  });
+  const other = await sender.ok("POST", "/v1/ot/workspaces", {
+    name: "Other Studio", slug: "other-studio-pin", idempotency_key: "studio-other-pin-request",
+  });
+  for (const member of [sender, worker, observer]) {
+    await owner.ok("POST", `/v1/ot/teams/${team.id}/members`, {handle: member.handle, role: "member"});
+  }
+  const group = await sender.ok("POST", "/v1/ot/conversations", {
+    kind: "group", title: "Studio review", team_id: team.id, members: [worker.handle, observer.handle],
+  });
+  const room = `/v1/ot/conversations/${group.id}`;
+  const progressList = `/v1/ot/workspaces/${team.workspace_id}/conversations/${group.id}/reply-progress`;
+  await worker.ok("PUT", room + "/agents/review", {name: "Review"});
+  await observer.ok("PUT", room + "/agents/auto", {name: "Automatic", auto_reply: true});
+  const workerId = (await worker.ok("GET", "/v1/ot/me")).owner_id;
+  const documents = (workspace: string) => `/v1/ot/teams/${workspace}/studio/documents`;
+  const title = "Studio-only title";
+  const excerpt = "🧪".repeat(2399) + "界";
+  const {document: doc} = await owner.ok("POST", documents(team.workspace_id), {
+    title, body: excerpt + "studio-only tail", client_key: "first-studio-group-doc",
+  });
+  const {document: separate} = await sender.ok("POST", documents(other.workspace_id), {
+    title: "Other workspace title", body: "Unrelated team material", client_key: "other-studio-group-doc",
+  });
+  const docPath = documents(team.workspace_id) + "/" + doc.id;
+  const request = {
+    workspace: team.workspace_id, direct: false, client_key: "studio-group-source-001", body: "Review the decision",
+    agent_mentions: [{owner_id: workerId, agent_id: "review"}],
+    studio_reference: {document_id: doc.id, revision: 1},
+  };
+  const send = (overrides = {}) => sender.call("POST", room + "/messages", {...request, ...overrides});
+  assert.equal((await send({workspace: other.workspace_id})).status, 404);
+  assert.equal((await send({studio_reference: {document_id: separate.id, revision: 1}})).data.error.code,
+    "studio_reference_unavailable");
+  assert.equal((await send({agent_mentions: [], body: "@review Try a plain mention"})).status, 400);
+  assert.equal((await send({voice: {}})).status, 400);
+  const workerMembership = `/v1/ot/teams/${team.id}/members/${worker.handle}`;
+  await owner.ok("PATCH", workerMembership, {suspended: true});
+  assert.equal((await send()).data.error.code, "studio_reference_unavailable");
+  await owner.ok("PATCH", workerMembership, {suspended: false});
+  assert.deepEqual((await sender.ok("GET", room + "/messages")).messages, []);
+
+  const first = (await send()).data;
+  const running = (await send({client_key: "studio-group-source-002"})).data;
+  const queued = (await send({client_key: "studio-group-source-003"})).data;
+  assert.deepEqual(first.studio_reference, request.studio_reference);
+  assert.equal((await send({body: "Different questions are not retries"})).status, 409);
+  const inboxPath = "/v1/ot/agent-inbox?managed=1";
+  const inbox = await worker.ok("GET", inboxPath);
+  const managed = inbox.jobs.find((job: any) => job.message.id === first.id);
+  assert.ok(managed);
+  assert.deepEqual(managed.message.studio_reference, request.studio_reference);
+  for (const view of [first, inbox, await observer.ok("GET", room + "/messages"), await observer.ok("GET", inboxPath)]) {
+    assert.doesNotMatch(JSON.stringify(view), /Studio-only title|studio-only tail|🧪/u);
+  }
+  assert.equal((await worker.ok("GET", "/v1/ot/agent-inbox")).items.some((item: any) => item.message.id === first.id), false);
+  assert.equal((await observer.ok("GET", inboxPath)).items.some((item: any) => item.message.id === first.id), false);
+
+  await owner.ok("PUT", docPath, {revision: 1, title: "A later version", body: "Not the reviewed body"});
+  const replay = await send();
+  assert.equal(replay.data.id, first.id);
+  assert.equal((await send({client_key: "unused-studio-group-key"})).data.error.code, "studio_reference_changed");
+  const start = {action: "start", attempt: 1, claim_id: "c7fe0015-624c-4326-afdc-303943909a26", source_revision: 1};
+  const canRead = {...start, accept_studio_reference: true, accept_group_text_turn:true};
+  const jobPath = (message: any) => `/v1/ot/agent-reply-jobs/${message.reply_jobs[0].id}`;
+  const finish = (message: any) => ({
+    reply_to: message.id, agent_ref: "review", mode: "mention", body: "Reviewed result",
+    job_id: message.reply_jobs[0].id, attempt: 1, claim_id: start.claim_id,
+  });
+  assert.equal((await observer.call("POST", jobPath(first), canRead)).status, 404);
+  assert.equal((await worker.call("POST", jobPath(first), start)).status, 409);
+  assert.equal((await worker.call("POST", room + "/agent-messages", {
+    reply_to: first.id, agent_ref: "review", body: "Unclaimed attempt",
+  })).status, 409);
+  assert.equal((await observer.call("POST", room + "/agent-messages", {
+    reply_to: first.id, agent_ref: "auto", mode: "auto", body: "Unselected attempt",
+  })).status, 409);
+  const claim = await worker.ok("POST", jobPath(first), canRead);
+  assert.deepEqual(claim, {ok: true, group_text_only:true, studio_reference: {...request.studio_reference, title, excerpt, truncated: true}});
+  assert.deepEqual(await worker.ok("POST", jobPath(first), canRead), claim);
+  assert.equal((await worker.call("POST", jobPath(first), {action:"pass", attempt:1, claim_id:start.claim_id})).status, 409);
+  const completed = await worker.ok("POST", room + "/agent-messages", finish(first));
+  await worker.ok("POST", jobPath(running), canRead);
+  const progress = {attempt: 1, claim_id: start.claim_id, revision: 1, text: "Temporary draft"};
+  await worker.ok("POST", jobPath(running) + "/progress", progress);
+  assert.ok((await observer.ok("GET", progressList)).items.some((item: any) => item.text === progress.text));
+
+  await owner.ok("DELETE", docPath, {revision: 2});
+  assert.equal((await send()).data.id, first.id);
+  assert.equal((await worker.ok("POST", room + "/agent-messages", finish(first))).id, completed.id);
+  assert.deepEqual((await observer.ok("GET", progressList)).items, []);
+  for (const message of [running, queued]) {
+    assert.deepEqual(await worker.ok("POST", jobPath(message), canRead), {ok: true, studio_reference_unavailable: true});
+    assert.equal((await worker.call("POST", jobPath(message) + "/progress", {...progress, revision: 2})).status, 409);
+    assert.equal((await worker.call("POST", room + "/agent-messages", finish(message))).status, 409);
+  }
+  assert.equal((await sender.call("POST", room + `/messages/${running.id}/agent-retry`, {
+    job_id: running.reply_jobs[0].id,
+  })).data.error.code, "studio_reference_unavailable");
+  assert.equal((await send({client_key: "deleted-studio-group-key"})).data.error.code, "studio_reference_unavailable");
+
+  const {document: again} = await owner.ok("POST", documents(team.workspace_id), {
+    title: "Still present", body: "Membership check", client_key: "second-studio-group-doc",
+  });
+  const revoked = (await send({client_key: "studio-group-source-004", studio_reference: {document_id: again.id, revision: 1}})).data;
+  await worker.ok("POST", jobPath(revoked), canRead);
+  const authorMembership = `/v1/ot/teams/${team.id}/members/${sender.handle}`;
+  await owner.ok("PATCH", authorMembership, {suspended: true});
+  assert.equal((await sender.call("POST", room + "/messages", request)).status, 404);
+  assert.deepEqual(await worker.ok("POST", jobPath(revoked), canRead), {ok: true, studio_reference_unavailable: true});
+  await owner.ok("PATCH", authorMembership, {suspended: false});
+  assert.equal((await worker.call("POST", room + "/agent-messages", finish(revoked))).status, 409);
+
+  const pruned = (await send({client_key: "studio-group-source-005", studio_reference: {document_id: again.id, revision: 1}})).data;
+  const currentDoc = documents(team.workspace_id) + "/" + again.id;
+  for (let revision = 1; revision <= 30; revision++) {
+    await owner.ok("PUT", currentDoc, {revision, title: again.title, body: `Saved version ${revision + 1}`});
+  }
+  assert.equal((await owner.call("GET", currentDoc + "/versions/1")).status, 404);
+  assert.deepEqual(await worker.ok("POST", jobPath(pruned), canRead), {ok: true, studio_reference_unavailable: true});
 });
 
 test("attachment search is newest-first, case-insensitive and scoped to readable files", async () => {

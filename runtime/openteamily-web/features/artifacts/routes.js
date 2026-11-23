@@ -1,16 +1,16 @@
 import { sharedBotSocial } from '../../lib/c/bot-social.js'
 // Legacy /v1 artifact routes, executed inside this user's DS-Bot. The browser
 // shim turns the works-library page's existing fetches into artifacts/v1.
-import { digest, FeatureError, pagination, refuse, requireBodyKeys, validLongText } from '../../featurekit/http.js'
+import { digest, FeatureError, nowSeconds, pagination, refuse, requireBodyKeys, validLongText } from '../../featurekit/http.js'
 import {
   canEdit, catalogFacets, content, createArtifact, createMedia, createShare, duplicateArtifact, exportResult, HEX32, listShares, listing,
-  load, mediaDigests, parseExportFormat, recordVersion, replaceMedia, restoreArtifact, revokeShare, shareView,
-  unlinkMedia, updateArtifact, usernames, view, versionView,
+  load, mediaDigests, parseExportFormat, recordVersion, recoverShareToken, replaceMedia, restoreArtifact, revokeShare, shareView,
+  uniqueTitle, unlinkMedia, updateArtifact, usernames, view, versionView,
 } from './library.js'
 import { decodeUpload } from './media.js'
 import { WEBSITE_HTML, websitePreviewRevision } from '../../lib/website-preview.js'
 import { catalogSearchText } from './catalog-search.js'
-import { casefold, publicKind, SLIDES_SCHEMA, TITLE_MAX, validTitle } from './model.js'
+import { casefold, publicKind, SHA256, SLIDES_SCHEMA, TITLE_MAX, TOKEN, validBody, validTitle } from './model.js'
 import { normalizeSlides } from './structured.js'
 import { decodeWorkbook, normalizeWorkbook, WORKBOOK_SCHEMA, workbookText } from './workbook.js'
 
@@ -65,7 +65,7 @@ function catalogQuery(query) {
   const since = catalogTime(args.get('updated_since'))
   const before = catalogTime(args.get('updated_before'))
   const validLabel = (value, max) => value.length > 0 && value.length <= max && !/[\x00-\x1f\x7f]/.test(value)
-  if (needle.length > 80 || !['all', 'favorites', 'mine', 'memory'].includes(scope) ||
+  if (needle.length > 80 || !['all', 'favorites', 'mine', 'memory', 'automation'].includes(scope) ||
       !['all', 'document', 'website', 'whiteboard', 'slides', 'dashboard', 'spreadsheet', 'media', 'messages'].includes(kind) ||
       !['id', 'recent'].includes(order) || [...types].some(type => !FILE_TYPES.has(type)) ||
       [...creators].some(value => !validLabel(value, 100)) || [...sessions].some(value => !validLabel(value, 128)) ||
@@ -166,7 +166,7 @@ export async function dispatch(req, workspaceId, artifactId, action) {
     if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid artifact request')
     if (!canEdit('owner', req.owner, row)) refuse(403, 'forbidden', 'Not allowed to change this document')
     const body = requireBodyKeys(await req.json(), ['revision', 'to'])
-    return restoreArtifact(context, mustLoad(req, workspaceId, artifactId), body.revision, body.to)
+    return restoreArtifact(context, mustLoad(req, workspaceId, artifactId), body.revision, body.to, req.headers.get('idempotency-key'))
   }
   if (action) refuse(400, 'invalid', 'Invalid artifact request')
   if (req.method === 'GET' && !req.queryString) return { body: { artifact: view(row) } }
@@ -184,53 +184,219 @@ export async function history(req, workspaceId, artifactId, version, exporting) 
   if (req.method !== 'GET' || (req.queryString && !exporting)) refuse(400, 'invalid', 'Invalid artifact request')
   if (!version) {
     const user = usernames(req.store)
-    const items = req.store.all(`SELECT revision, title, kind, created, created_by, mime, byte_count, filename,
-      CASE WHEN kind='document' THEN body ELSE '' END AS body
-      FROM artifact_versions WHERE artifact_id=? ORDER BY revision DESC`, row.id)
+    const items = req.store.all(`SELECT v.revision, v.title, v.kind, v.created, v.created_by, v.mime, v.byte_count, v.filename,
+      CASE WHEN v.kind='document' THEN v.body ELSE '' END AS body, r.source_revision AS restored_from
+      FROM artifact_versions v LEFT JOIN artifact_restores r ON r.artifact_id=v.artifact_id AND r.revision=v.revision
+      WHERE v.artifact_id=? ORDER BY v.revision DESC`, row.id)
       .map((item) => versionView(item, false, user))
     return { body: { items } }
   }
   const revision = Number(version)
   if (!Number.isInteger(revision)) refuse(400, 'invalid', 'Invalid artifact request')
-  const snapshot = req.store.get('SELECT * FROM artifact_versions WHERE artifact_id=? AND revision=?', row.id, revision)
+  const snapshot = req.store.get(`SELECT v.*, r.source_revision AS restored_from FROM artifact_versions v
+    LEFT JOIN artifact_restores r ON r.artifact_id=v.artifact_id AND r.revision=v.revision
+    WHERE v.artifact_id=? AND v.revision=?`, row.id, revision)
   if (!snapshot) refuse(404, 'not_found', 'Version not found')
   if (exporting) return exportResult(snapshot, context.featureDir, workspaceId, true, parseExportFormat(req.query))
   return { body: { version: versionView(snapshot, true, usernames(req.store)) } }
 }
 
-export async function shares(req, workspaceId, artifactId, shareId, revoking) {
+async function copyToStudio(req, workspaceId, artifactId) {
+  if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid Studio copy request')
+  const {revision, title, body, target_workspace_id:target = workspaceId} = requireBodyKeys(await req.json(70_000),
+    ['revision', 'title', 'body', 'target_workspace_id'])
+  if (!Number.isSafeInteger(revision) || revision < 1 || typeof title !== 'string' || typeof body !== 'string' ||
+      typeof target !== 'string' || !HEX32.test(target)) {
+    refuse(400, 'invalid', 'Invalid Studio copy review')
+  }
+  const source = mustLoad(req, workspaceId, artifactId)
+  if (publicKind(source) !== 'document') refuse(400, 'invalid', 'Only plain documents can be copied to Studio')
+  const studioTitle = source.title.replace(/\s+/g, ' ').trim()
+  if (source.revision !== revision || studioTitle !== title || source.body !== body) {
+    refuse(409, 'source_changed', 'Review the current saved document before copying it to Studio')
+  }
+  // The team service checks active membership and consumes the same key even
+  // if the client did not receive the original acknowledgment.
+  const originalKey = ['artifact-studio-copy', workspaceId, artifactId, revision]
+  const clientKey = digest(JSON.stringify(target === workspaceId ? originalKey : [...originalKey,target]))
+  const scopedSource = target !== workspaceId && workspaceId !== req.identity?.instanceId
+  try {
+    const shared = await sharedBotSocial(req.host).post(`/v1/ot/teams/${target}/studio/documents`, {
+      title: studioTitle, body: source.body, client_key: clientKey,
+      ...(scopedSource ? {source_workspace_id:workspaceId} : {}),
+    })
+    if (HEX32.test(shared?.document?.id ?? '')) return {body: {id: shared.document.id, workspace_id:target}}
+  } catch (error) {
+    const code = /^social\/([a-z][a-z0-9_]{0,59})$/.exec(error?.code || '')?.[1]
+    if (code && Number.isInteger(error.status) && error.status >= 400 && error.status < 500) {
+      refuse(error.status, code, 'Studio could not create this team copy')
+    }
+  }
+  refuse(503, 'studio_copy_unconfirmed', 'Studio could not confirm the team copy')
+}
+
+const publishingShares = new Set()
+
+async function copyStudioToPersonal(req, workspaceId) {
+  if (req.method !== 'POST' || req.query.size) refuse(400, 'invalid', 'Invalid Studio copy request')
+  const {source_workspace_id:source, document_id:id, revision, fingerprint} = requireBodyKeys(await req.json(1024),
+    ['source_workspace_id', 'document_id', 'revision', 'fingerprint'])
+  if (typeof source !== 'string' || !HEX32.test(source) || source === workspaceId || typeof id !== 'string' || !HEX32.test(id) ||
+      !Number.isSafeInteger(revision) || revision < 1 ||
+      (fingerprint !== undefined && (typeof fingerprint !== 'string' || !SHA256.test(fingerprint)))) {
+    refuse(400, 'invalid', 'Invalid Studio copy review')
+  }
+  const binding = await req.host.call('agents/personal-binding', {})
+  if (binding?.workspace_id !== workspaceId) refuse(404, 'not_found', 'Personal workspace not found')
+  const sourceHash = digest(JSON.stringify(['studio-personal-copy', source, id, revision]))
+  const key = 'studio-copy-' + sourceHash.slice(0, 48)
+  if (fingerprint) {
+    const prior = req.store.get('SELECT id,request_hash FROM artifacts WHERE workspace_id=? AND key_hash=?',
+      workspaceId, digest('artifact:' + key))
+    if (prior) {
+      if (prior.request_hash !== fingerprint) refuse(409, 'source_changed', 'Review the saved Studio version again')
+      return {body: {artifact:view(load(req.store, workspaceId, prior.id))}}
+    }
+  }
+  let version
+  try {
+    ({version} = await sharedBotSocial(req.host).get(`/v1/ot/teams/${source}/studio/documents/${id}/versions/${revision}`,
+      {signal:req.signal}))
+  } catch (error) {
+    if (error?.status === 404 || error?.status === 403) refuse(404, 'source_unavailable', 'Studio version is unavailable')
+    refuse(503, 'unavailable', 'Could not read the Studio version')
+  }
+  if (version?.revision !== revision || typeof version.title !== 'string' || typeof version.body !== 'string') {
+    refuse(503, 'unavailable', 'Could not verify the Studio version')
+  }
+  const {title, body} = version
+  const reviewed = digest(JSON.stringify([sourceHash, title, body]))
+  const canCopy = validTitle(title) && validBody(body)
+  if (!fingerprint) return {body: {snapshot:{title, body, revision, fingerprint:reviewed, can_copy:canCopy}}}
+  if (fingerprint !== reviewed) refuse(409, 'source_changed', 'Review the saved Studio version again')
+  if (!canCopy) refuse(413, 'copy_too_large', 'The Studio version exceeds the personal work limits')
+  const name = uniqueTitle(req.store, workspaceId, title, sourceHash)
+  return createArtifact(ctx(req), workspaceId, {title:name, body, kind:'document'}, key, {receiptHash:reviewed})
+}
+
+async function copySharedText(req, workspaceId) {
+  if (req.method !== 'POST' || req.query.size) refuse(400, 'invalid', 'Invalid shared document request')
+  const {token, fingerprint} = requireBodyKeys(await req.json(1024), ['token', 'fingerprint'])
+  if (typeof token !== 'string' || !TOKEN.test(token) ||
+      (fingerprint !== undefined && (typeof fingerprint !== 'string' || !SHA256.test(fingerprint)))) {
+    refuse(400, 'invalid', 'Invalid shared document review')
+  }
+  const binding = await req.host.call('agents/personal-binding', {})
+  if (workspaceId !== binding?.workspace_id) refuse(404, 'not_found', 'Personal workspace not found')
+  const shareHash = digest('share:' + token)
+  const key = 'share-copy-' + shareHash.slice(0, 48)
+  if (fingerprint) {
+    const prior = req.store.get('SELECT id,request_hash FROM artifacts WHERE workspace_id=? AND key_hash=?',
+      workspaceId, digest('artifact:' + key))
+    if (prior) {
+      if (prior.request_hash !== fingerprint) refuse(409, 'share_changed', 'Review the shared text again')
+      return {body: {artifact:view(load(req.store, workspaceId, prior.id))}}
+    }
+  }
+  let snapshot
+  try {
+    snapshot = await sharedBotSocial(req.host).request('POST', '/v1/ot/public-shares/resolve', {token}, {signal:req.signal})
+  } catch (error) {
+    if (error?.status === 404) refuse(404, 'share_unavailable', 'Public share is unavailable')
+    refuse(503, 'unavailable', 'Could not read the public share')
+  }
+  if (!validTitle(snapshot?.title) || !validBody(snapshot?.body) || !snapshot.body.trim()) {
+    refuse(404, 'share_unavailable', 'Shared text is unavailable')
+  }
+  const {title, body} = snapshot
+  const reviewed = digest(JSON.stringify([shareHash, title, body]))
+  if (!fingerprint) return {body: {snapshot:{title, body, fingerprint:reviewed}}}
+  if (fingerprint !== reviewed) refuse(409, 'share_changed', 'Review the shared text again')
+  const name = uniqueTitle(req.store, workspaceId, title, shareHash)
+  return createArtifact(ctx(req), workspaceId, {title:name, body, kind:'document'}, key, {receiptHash:reviewed})
+}
+
+async function recoverShareLink(req, row, shareId) {
+  requireBodyKeys(await req.json(), [])
+  const active = () => {
+    const item = req.store.get('SELECT * FROM artifact_shares WHERE artifact_id=? AND id=?', row.id, shareId)
+    if (!item || item.revoked || (item.expires !== null && item.expires <= nowSeconds())) {
+      refuse(404, 'share_unavailable', '此分享已过期或撤销。')
+    }
+    if (publishingShares.has(item.id)) refuse(409, 'share_publishing', '分享正在创建，请稍后再试。')
+    return item
+  }
+  const item = active()
+  if (!canEdit('owner', req.owner, row)) refuse(404, 'not_found', 'Share not found')
+  const binding = await req.host.call('agents/personal-binding', {}).catch(() => null)
+  if (binding?.workspace_id !== row.workspace_id) {
+    const teams = await req.host.call('teams/activeWorkspaces', {}).catch(() => null)
+    if (!Array.isArray(teams) || !teams.some(team => team.id === row.workspace_id)) {
+      refuse(404, 'not_found', 'Share not found')
+    }
+  }
+  const token = recoverShareToken(req.store, item)
+  if (!token) refuse(404, 'share_unavailable', '无法恢复此前的分享链接。')
+  let status
+  try {
+    status = await sharedBotSocial(req.host).get('/v1/ot/public-shares/' + item.token_hash, {signal:req.signal})
+  } catch (error) {
+    if (error?.status === 404) refuse(404, 'share_unavailable', '此分享链接已不可用。')
+    refuse(503, 'share_link_unconfirmed', '暂时无法确认分享链接仍可访问。')
+  }
+  if (status?.active !== true) refuse(503, 'share_link_unconfirmed', '暂时无法确认分享链接仍可访问。')
+  active()
+  return {body: {share:{id:item.id, path:'/share/' + token}}}
+}
+
+export async function shares(req, workspaceId, artifactId, shareId, action) {
   const row = mustLoad(req, workspaceId, artifactId)
   if (!shareId && req.method === 'GET' && !req.queryString) {
-    return { body: { items: listShares(req.store, row.id).map((item) => shareView(item, { store: req.store })) } }
+    return { body: { items: listShares(req.store, row.id).map((item) => shareView(item, { store: req.store, now: req.now })) } }
   }
   if (!shareId && req.method === 'POST' && !req.queryString) {
     if (!canEdit('owner', req.owner, row)) refuse(403, 'forbidden', 'Not allowed to share this document')
-    const body = requireBodyKeys(await req.json(), ['expires_in'])
-    const created = createShare(req.store, row, req.owner, req.now, body.expires_in)
+    const {expires_in, revision} = requireBodyKeys(await req.json(), ['expires_in','revision'])
+    const source = mustLoad(req, workspaceId, artifactId)
+    if (revision !== undefined && (!Number.isSafeInteger(revision) || revision !== source.revision)) {
+      refuse(409, 'artifact_changed', '已保存的作品版本已更新，请查看后再创建分享链接。')
+    }
+    const created = createShare(req.store, source, req.owner, req.now, expires_in)
     // Public /share/<token> pages are served by the dedicated Bot Social from this
     // read-only snapshot; only the token hash leaves this DS-Bot.
     const item = req.store.get('SELECT * FROM artifact_shares WHERE id=?', created.body.share.id)
+    publishingShares.add(item.id)
     try {
-      const workbook = row.spreadsheet_json && decodeWorkbook(row.spreadsheet_json)
-      const body = workbook ? workbookText(workbook) : String(row.body ?? '')
+      const workbook = source.spreadsheet_json && decodeWorkbook(source.spreadsheet_json)
+      const body = workbook ? workbookText(workbook) : String(source.body ?? '')
       await sharedBotSocial(req.host).put('/v1/ot/public-shares', {
-        token_hash: item.token_hash, ref: row.id, title: row.title, kind: row.kind,
+        token_hash: item.token_hash, ref: source.id, title: source.title, kind: publicKind(source),
         body: body.slice(0,200000), expires_at: item.expires ? item.expires * 1000 : null,
       })
     } catch {
       revokeShare(req.store, row.id, item.id, req.now)
-      refuse(503, 'unavailable', 'Bot Social is not reachable; the share link was not created')
-    }
+      refuse(503, 'share_publish_unconfirmed', 'Public share creation could not be confirmed')
+    } finally { publishingShares.delete(item.id) }
     return created
   }
-  if (shareId && revoking) {
+  if (shareId && action === '/link') {
+    if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid share request')
+    return recoverShareLink(req, row, shareId)
+  }
+  if (shareId && action === '/revoke') {
     if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid artifact request')
     if (!canEdit('owner', req.owner, row)) refuse(403, 'forbidden', 'Not allowed to share this document')
     await req.json()
-    const revoked = revokeShare(req.store, row.id, shareId, req.now)
-    const item = req.store.get('SELECT * FROM artifact_shares WHERE id=?', shareId)
-    if (item) await sharedBotSocial(req.host).del(`/v1/ot/public-shares/${item.token_hash}`).catch(() => {})
-    return revoked
+    const item = req.store.get('SELECT * FROM artifact_shares WHERE artifact_id=? AND id=?', row.id, shareId)
+    if (!item) refuse(404, 'not_found', 'Share not found')
+    if (publishingShares.has(item.id)) refuse(409, 'share_publishing', 'This share is being created')
+    const desired = revokeShare(req.store, row.id, shareId, req.now)
+    if (item.revocation_confirmed_at != null) return desired
+    const result = await sharedBotSocial(req.host).del(`/v1/ot/public-shares/${item.token_hash}`).catch(() => null)
+    if (result?.revoked !== true) {
+      refuse(503, 'share_revoke_unconfirmed', 'Public share revocation could not be confirmed')
+    }
+    return revokeShare(req.store, row.id, shareId, req.now, { confirmed: true })
   }
   refuse(400, 'invalid', 'Invalid artifact request')
 }
@@ -336,9 +502,12 @@ async function artifactDraft(req, workspaceId, kind) {
 }
 
 export const routes = [
+  { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/studio-personal-copy$/, handle: copyStudioToPersonal },
+  { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/shared-copy$/, handle: copySharedText },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/activity$/, handle: activity },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/(spreadsheet|slides)\/draft$/, handle: artifactDraft },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/versions(?:\/(\d{1,8})(?:\/(export))?)?$/, handle: history },
-  { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/shares(?:\/([0-9a-f]{32})(\/revoke)?)?$/, handle: shares },
+  { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/shares(?:\/([0-9a-f]{32})(\/(?:revoke|link))?)?$/, handle: shares },
+  { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/studio-copy$/, handle: copyToStudio },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts(?:\/([0-9a-f]{32})(?:\/(remove|favorite|preview|file|export|restore))?)?$/, handle: dispatch },
 ]

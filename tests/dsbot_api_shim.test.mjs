@@ -6,6 +6,31 @@ const ORIGIN = 'https://openteamily.example';
 const WS = 'a'.repeat(32);
 const ID = 'b'.repeat(32);
 
+test('call recording consent uses the owner runtime on both call roots', () => {
+  for (const path of ['/v1/meeting-calls/recording', `/v1/workspaces/${WS}/social/conversations/otc_call/call/recording`]) {
+    assert.deepEqual(movedTarget(path, ORIGIN), {feature:'messenger', path});
+  }
+});
+
+test('workspace export routes only its canonical path and keeps paging in the owner runtime', () => {
+  const path = `/v1/workspaces/${WS}/export`;
+  const paged = path + '?type=memory&cursor=20';
+  const target = {feature:'export', path:paged};
+  assert.deepEqual(movedTarget(paged, ORIGIN),target);
+  assert.deepEqual(envelope(target, 'GET'),{endpoint:'export/v1', payload:{method:'GET',path:paged}});
+  assert.equal(movedTarget(path + '/another', ORIGIN), null);
+  assert.equal(movedTarget('/v1/workspaces/other/export', ORIGIN), null);
+  assert.equal(movedTarget('https://other.example' + path, ORIGIN), null);
+});
+
+test('copying shared work goes only to the signed owner artifact runtime', () => {
+  for (const action of ['shared-copy','studio-personal-copy']) {
+    const path = `/v1/workspaces/${WS}/artifacts/${action}`;
+    assert.deepEqual(movedTarget(path,ORIGIN),{feature:'artifacts',path});
+    assert.equal(movedTarget(path + '/extra',ORIGIN),null);
+  }
+});
+
 test('the personal sticker library routes only canonical paths to the owner runtime', () => {
   for (const path of ['/v1/stickers?limit=20', `/v1/stickers/${ID}`, `/v1/stickers/${ID}/file`]) {
     assert.deepEqual(movedTarget(path, ORIGIN), {feature:'stickers', path});
@@ -20,12 +45,14 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/artifact`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/memory`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/action?index=0&revision=1`, ORIGIN).feature, 'meetings');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/actions/from-meeting`, ORIGIN).feature, 'memory');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/draft`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/speech`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/share-recipients?conversation_id=otc_1`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/shares`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/shared`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/shared/${ID}/revoke`, ORIGIN).feature, 'meetings');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/shared/${ID}/discussion`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/transcribe`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/from-call/otcav_${'A'.repeat(26)}`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/from-call/otcav_${'O'.repeat(26)}`, ORIGIN), null);
@@ -54,6 +81,7 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/attachments?kind=file`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/messages/${ID}/retry`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/reply-progress?key=reply-test-key-123`, ORIGIN).feature, 'agents');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/reply-stop`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/api-keys`, ORIGIN).feature, 'agent-api');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/api-keys/${ID}/revoke`, ORIGIN).feature, 'agent-api');
   // Cross-user / provision routes stay on the platform.
@@ -100,6 +128,7 @@ test('members, team, messenger and discover /v1 routes go to the C features', ()
   assert.equal(movedTarget(`/v1/workspaces/${WS}/members`, ORIGIN).feature, 'members');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/members/${ID}/remove`, ORIGIN).feature, 'members');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/members/ann.home/suspend`, ORIGIN).feature, 'members');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/members/ann.home/transfer-ownership`, ORIGIN).feature, 'members');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/invites`, ORIGIN).feature, 'invites');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/invites/oti_01/revoke`, ORIGIN).feature, 'invites');
   assert.equal(movedTarget('/v1/invites/accept', ORIGIN).feature, 'invites');
@@ -134,6 +163,13 @@ test('Space activity stays in the owner artifact feature and does not reuse mana
   const activity = `/v1/workspaces/${WS}/artifacts/activity?artifact=${ID}`;
   assert.deepEqual(movedTarget(activity, ORIGIN), {feature: 'artifacts', path: activity});
   assert.equal(movedTarget(`/v1/workspaces/${WS}/events`, ORIGIN), null);
+});
+
+test('team studio is dispatched to the account runtime with its revision query', () => {
+  const path = `/v1/workspaces/${WS}/studio/documents/${ID}?revision=3`;
+  assert.deepEqual(movedTarget(path, ORIGIN), {feature:'studio',path});
+  const revision = `/v1/workspaces/${WS}/studio/documents/${ID}/versions/3`;
+  assert.deepEqual(movedTarget(revision, ORIGIN), {feature:'studio',path:revision});
 });
 
 test('answers become ordinary responses, downloads keep their name', async () => {
@@ -171,6 +207,8 @@ test('moved artifact routes go to the artifacts feature of the user\'s own DS-Bo
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/slides/draft`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/versions/3/export`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/shares/${ID}/revoke`, ORIGIN).feature, 'artifacts');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/shares/${ID}/link`, ORIGIN).feature, 'artifacts');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/shares/${ID}/link/extra`, ORIGIN), null);
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/favorite`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/bogus`, ORIGIN), null);
 });
@@ -229,6 +267,7 @@ test('collaboration pages use the owner runtime for private runs and Bot Social 
   const share = base + '/shared-runs/otsr_' + '1'.repeat(26);
   for (const [path, feature] of [
     [base + '/team-runs', 'team-runs'], [run + '/steps/0/artifact', 'team-runs'],
+    [run + '/export', 'team-runs'],
     [run + '/steps/7/retry', 'team-runs'], [run + '/share', 'shares'], [share + '/revoke', 'shares'],
   ]) {
     assert.deepEqual(movedTarget(path, origin), {feature, path});

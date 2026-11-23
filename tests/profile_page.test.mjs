@@ -41,9 +41,24 @@ class FakeElement {
   showModal() { this.open = true; }
   close() { this.open = false; for (const handler of this.handlers.close || []) handler(); }
   requestSubmit() { this.submits += 1; }
-  replaceChildren(...nodes) { this.children = nodes; }
-  append(...nodes) { (this.children ||= []).push(...nodes); }
-  appendChild(node) { (this.children ||= []).push(node); return node; }
+  replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
+  append(...nodes) {
+    for (const node of nodes) {
+      if (typeof node === 'object') node.parentElement = this;
+      this.children.push(node);
+    }
+  }
+  appendChild(node) { this.append(node); return node; }
+  querySelector(selector) {
+    const tags = selector.toUpperCase().split(',');
+    for (const child of this.children) {
+      if (tags.includes(child.tagName)) return child;
+      const nested = child.querySelector?.(selector);
+      if (nested) return nested;
+    }
+    return null;
+  }
+  remove() { this.parentElement.children = this.parentElement.children.filter(child => child !== this); }
 }
 
 const PROFILE_FIELDS = ['name', 'handle', 'bio', 'tags', 'gender', 'location', 'website'];
@@ -525,5 +540,49 @@ test('作品通知 reads the current followed creator and saves by Bot Social ha
     await toggle.handlers.change[0]();
     assert.deepEqual(changes, [{handle: 'vera.home', enabled: false}]);
     assert.equal(doc.getElementById('follow-work-status').textContent, '已关闭作品通知。');
+  } finally { restore(); env.restore(); }
+});
+
+test('收藏和点赞条目只能从对应标签取消，失败保留原条目', async () => {
+  const env = installShareGlobals();
+  const mutations = [];
+  const item = {id: 'otl_' + 'T'.repeat(26), title: '示例条目', slug: 'some-listing', kind: 'agent', collected: true, liked: true};
+  const {doc, restore} = await mountProfile({
+    tag: 'profile-reaction-removal', home: true,
+    social(url, init) {
+      if (init.method === 'POST') {
+        const change = JSON.parse(init.body);
+        mutations.push(change);
+        if (mutations.length === 1) return {status: 503};
+        return {body: change.action === 'like' ? {liked: false} : {collected: false}};
+      }
+      return url.searchParams.get('view') === 'counts' ? {body: {following: 0, followers: 0}} : {body: {items: [item]}};
+    },
+  });
+  try {
+    const click = id => doc.getElementById(id).handlers.click[0]();
+    const list = doc.getElementById('profile-feed-list');
+    assert.equal(list.children[0].querySelector('button'), null);
+    await click('tab-saved');
+    assert.equal(list.children[0].children[0].href, '/a/some-listing');
+    const first = list.children[0].querySelector('button');
+    assert.equal(first.textContent, '取消收藏');
+    await first.handlers.click[0]();
+    assert.equal(list.children.length, 1);
+    assert.equal(first.disabled, false);
+    assert.equal(doc.getElementById('profile-feed-action-status').textContent, '无法取消收藏，请重试。');
+    await first.handlers.click[0]();
+    assert.equal(list.children.length, 0);
+    assert.equal(doc.getElementById('profile-feed-explore').hidden, false);
+    await click('tab-liked');
+    const second = list.children[0].querySelector('button');
+    assert.equal(second.textContent, '取消点赞');
+    await second.handlers.click[0]();
+    assert.equal(list.children.length, 0);
+    assert.deepEqual(mutations, [
+      {listing_id: item.id, action: 'collect'},
+      {listing_id: item.id, action: 'collect'},
+      {listing_id: item.id, action: 'like'},
+    ]);
   } finally { restore(); env.restore(); }
 });

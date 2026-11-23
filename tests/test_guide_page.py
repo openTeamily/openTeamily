@@ -46,6 +46,12 @@ class GuidePageTests(unittest.TestCase):
         self.assertIn('export const CATALOG', script)
         self.assertIn('打开聊天', script)
         self.assertIn('通话窗口', script)
+        self.assertIn('export function guideIconPath', script)
+        self.assertIn('CATEGORY_ICON_PATHS', script)
+        self.assertNotIn(
+            'M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18zm0 2a7 7 0 1 0 0 14 7 7 0 0 0 0-14zm-1 3h2v5h-2V8zm0 6h2v2h-2v-2z',
+            script,
+        )
         self.assertNotIn('折叠会话列表', script)
         self.assertNotIn('innerHTML', script)
 

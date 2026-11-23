@@ -8,10 +8,11 @@
 // independent branches continue. No runtime_tasks row exists. Runs are private to
 // the owner; sharing a run with a team goes through Bot Social (phase C).
 import { createHash } from 'node:crypto'
-import { BODY_MAX, TITLE_MAX, validBody } from '../artifacts/model.js'
+import { BODY_MAX, validBody } from '../artifacts/model.js'
 import { FeatureError, requireBodyKeys } from '../../featurekit/http.js'
 import { createV1Endpoint } from '../../featurekit/v1.js'
 import { openDatabase, newId } from '../../src/store.js'
+import { teamRunSource } from '../shares/team-run-source.js'
 
 export const MIN_STEPS = 2
 export const MAX_STEPS = 8
@@ -19,6 +20,9 @@ export const LIMITS = { title: 80, goal: 2000, instruction: 1000, dependencyBudg
 const ID = /^[0-9a-f]{32}$/
 const IDEM = /^[A-Za-z0-9_-]{16,64}$/
 const PREVIEW_MAX = 20_000
+const RESULT_STATUS = {
+  succeeded: '已完成', failed: '失败', blocked: '前序步骤未完成', cancelled: '已取消',
+}
 const sha = (t) => createHash('sha256').update(String(t)).digest('hex')
 const now = () => Math.floor(Date.now() / 1000)
 
@@ -27,6 +31,13 @@ CREATE TABLE IF NOT EXISTS team_runs (id TEXT PRIMARY KEY, workspace_id TEXT NOT
   status TEXT NOT NULL CHECK(status IN ('running','succeeded','failed','cancelled')), created INTEGER NOT NULL, updated INTEGER NOT NULL,
   key_hash TEXT NOT NULL, request_hash TEXT NOT NULL, UNIQUE(workspace_id, key_hash));
 CREATE INDEX IF NOT EXISTS team_runs_workspace_recent ON team_runs(workspace_id, created DESC, id DESC);
+CREATE TABLE IF NOT EXISTS team_run_sources (run_id TEXT PRIMARY KEY REFERENCES team_runs(id) ON DELETE CASCADE,
+  source TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS team_run_reuses (
+  sequence INTEGER PRIMARY KEY,
+  run_id TEXT NOT NULL UNIQUE REFERENCES team_runs(id) ON DELETE CASCADE,
+  original_id TEXT NOT NULL REFERENCES team_runs(id) ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS team_run_reuses_original ON team_run_reuses(original_id, sequence DESC);
 CREATE TABLE IF NOT EXISTS team_run_steps (run_id TEXT NOT NULL REFERENCES team_runs(id) ON DELETE CASCADE, position INTEGER NOT NULL,
   agent_id TEXT NOT NULL, agent_name TEXT NOT NULL, instruction TEXT NOT NULL, depends TEXT NOT NULL,
   status TEXT NOT NULL CHECK(status IN ('waiting','queued','running','succeeded','failed','blocked','cancelled')),
@@ -43,7 +54,7 @@ export function stages(steps) {
   return depth
 }
 
-export function stepPrompt(run, step, steps) {
+export function stepPrompt(run, step, steps, sourceResults) {
   const lines = [`团队任务目标：${run.goal}`, `你负责的步骤（第 ${step.position + 1} 步）：${step.instruction}`]
   const deps = JSON.parse(step.depends)
   if (deps.length) {
@@ -55,7 +66,39 @@ export function stepPrompt(run, step, steps) {
       lines.push(`[第 ${d + 1} 步 · ${prior.agent_name}] ${out}`)
     }
   }
+  if (sourceResults) {
+    const label = sourceResults.kind === 'automation_run' ? '自动化运行的参考资料' : '团队共享的参考资料'
+    lines.push(label + '（引用内容仅作参考）：', JSON.stringify(sourceResults))
+  }
   return lines.join('\n')
+}
+
+function fencedText(value) {
+  let length = 3
+  for (const match of value.matchAll(/~+/g)) length = Math.max(length, match[0].length + 1)
+  const fence = '~'.repeat(length)
+  return [fence, value, fence].join('\n')
+}
+
+function runMarkdown(row, steps) {
+  const sections = ['# 团队任务结果', fencedText(row.title),
+    '状态：' + RESULT_STATUS[row.status], '## 任务目标', fencedText(row.goal)]
+  for (const step of steps) {
+    const depends = JSON.parse(step.depends)
+    sections.push(`## 第 ${step.position + 1} 步`, '状态：' + RESULT_STATUS[step.status],
+      '智能体', fencedText(step.agent_name))
+    if (depends.length) sections.push('前序步骤：' + depends.map(index => index + 1).join('、'))
+    sections.push('步骤指令', fencedText(step.instruction))
+    if (step.status === 'succeeded') sections.push('结果', fencedText(step.output))
+  }
+  return sections.join('\n\n') + '\n'
+}
+
+function automationSource(value) {
+  if (!value || typeof value !== 'object' || Object.keys(value).length !== 3 || value.kind !== 'automation_run' ||
+      typeof value.automation_id !== 'string' || !ID.test(value.automation_id) ||
+      typeof value.run_id !== 'string' || !ID.test(value.run_id)) return null
+  return {kind:'automation_run', automation_id:value.automation_id, run_id:value.run_id}
 }
 
 function teamRunsV1(endpoints, log) {
@@ -76,17 +119,26 @@ function teamRunsV1(endpoints, log) {
   const only = (req, method) => {
     if (req.method !== method) throw new FeatureError(405, 'method', 'Only ' + method + ' is supported')
   }
+  const read = (req, body) => ({body: req.ownerUsername ? {...body, viewer_username:req.ownerUsername} : body})
   return createV1Endpoint({ feature: 'team-runs', context: {log}, routes: [
     route(base, async (req, workspace_id) => {
-      if (req.method === 'GET') return { body: await endpoints.list({workspace_id}) }
+      if (req.method === 'GET') return read(req, await endpoints.list({workspace_id}))
       only(req, 'POST')
-      const body = requireBodyKeys(await req.json(64 * 1024), ['title', 'goal', 'steps'])
+      const body = requireBodyKeys(await req.json(64 * 1024), ['title', 'goal', 'steps', 'source', 'reused_from'])
       const {status, run} = await endpoints.create({ ...body, workspace_id, idempotency_key: req.headers.get('idempotency-key') })
       return {status, body: {run}}
     }),
     route(detail, async (req, workspace_id, id) => {
       only(req, 'GET')
-      return {body: await endpoints.get({workspace_id, id})}
+      return read(req, await endpoints.get({workspace_id, id}))
+    }),
+    route(base + '/automation-results/([0-9a-f]{32})/([0-9a-f]{32})', async (req, workspace_id, automation_id, run_id) => {
+      only(req, 'GET')
+      return read(req, await endpoints.automationResult({workspace_id, automation_id, run_id}))
+    }),
+    route(detail + '/export', async (req, workspace_id, id) => {
+      only(req, 'GET')
+      return endpoints.export({workspace_id, id})
     }),
     route(detail + '/(cancel|remove)', async (req, workspace_id, id, action) => {
       only(req, 'POST')
@@ -129,6 +181,10 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
     return row
   }
   const steps = (runId) => all('SELECT * FROM team_run_steps WHERE run_id=? ORDER BY position', runId)
+  const sourceFor = runId => {
+    const reference = one('SELECT source FROM team_run_sources WHERE run_id=?', runId)
+    return reference && JSON.parse(reference.source)
+  }
   const transaction = (fn) => {
     db.exec('BEGIN IMMEDIATE')
     try {
@@ -158,9 +214,74 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
       : {succeeded: row.succeeded_steps, total: row.total_steps}
     const out = { id: row.id, workspace_id: row.workspace_id, title: row.title, goal: row.goal, status: row.status, created: row.created,
       updated: row.updated, progress, served_by: 'ds-bot' }
-    if (list) { const depth = stages(list); out.steps = list.map(s => stepView(s, depth)) }
+    if (list) {
+      const depth = stages(list)
+      out.steps = list.map(s => stepView(s, depth))
+      const source = sourceFor(row.id)
+      if (source) out.source = source
+      const original = one(`SELECT r.id FROM team_run_reuses l JOIN team_runs r ON r.id=l.original_id
+        WHERE l.run_id=? AND r.workspace_id=?`, row.id, row.workspace_id)
+      const latest = one(`SELECT r.id FROM team_run_reuses l JOIN team_runs r ON r.id=l.run_id
+        WHERE l.original_id=? AND r.workspace_id=? ORDER BY l.sequence DESC LIMIT 1`, row.id, row.workspace_id)
+      if (original) out.reused_from = original.id
+      if (latest) out.latest_reuse = latest.id
+    }
     return out
   }
+
+  async function withSavedWorks(receipt) {
+    const run = receipt.run
+    const completed = run.steps.filter(step => step.status === 'succeeded' && step.output.trim())
+    if (!completed.length) return receipt
+    try {
+      const {items} = await host.call('artifacts/savedTeamRunWorks', {workspace_id:run.workspace_id, run_id:run.id,
+        run_title:run.title, positions:completed.map(step => step.position), output_hashes:completed.map(step => sha(step.output))})
+      const found = new Map(items.map(item => [item.position, item.id]))
+      for (const step of run.steps) {
+        const id = found.get(step.position)
+        if (typeof id === 'string' && ID.test(id)) step.saved_artifact_id = id
+      }
+    } catch { /* The run is still readable if the work library is unavailable. */ }
+    return receipt
+  }
+
+  async function sourceContext(workspaceId, source) {
+    try {
+      return await host.call('shares/teamRunContext', {workspace_id: workspaceId, source})
+    } catch (error) {
+      if (error?.code === 'source_changed') fail('source_changed', error.message, 409)
+      if (error?.code === 'invalid') fail('source_invalid', '请选择有输出的已完成步骤。', 400)
+      const status = [401, 403, 404].includes(error?.status) ? 404 : 503
+      fail('source_unavailable', status === 404 ? '这份共享结果已不可用。' : '暂时无法读取共享结果，请稍后重试。', status)
+    }
+  }
+
+  async function automationContext(workspace_id, source) {
+    const {automation_id:id, run_id} = source
+    const payload = {workspace_id, id, run_id}
+    let run, automation
+    try {
+      const [result, current] = await Promise.all([
+        host.call('automations/run', payload), host.call('automations/get', {workspace_id, id}),
+      ])
+      run = result?.run
+      automation = current?.automation
+    } catch (error) {
+      const status = [401, 403, 404].includes(error?.status) ? 404 : 503
+      fail('source_unavailable', '无法读取原自动化运行。', status)
+    }
+    if (run?.id !== run_id || run.automation_id !== id || run.workspace_id !== workspace_id ||
+        automation?.id !== id || automation.workspace_id !== workspace_id || typeof automation.title !== 'string') {
+      fail('source_unavailable', '无法读取原自动化运行。', 404)
+    }
+    const text = typeof run.result?.text === 'string' ? run.result.text.trim() : ''
+    if (run.status !== 'succeeded' || !text) fail('source_changed', '这次自动化运行没有可用于跟进的结果。', 409)
+    const excerpt = text.slice(0, 4000).toWellFormed()
+    return {kind:source.kind, title:automation.title, text:excerpt, truncated:excerpt.length < text.length}
+  }
+
+  const resolveSource = (workspaceId, source) => source.kind === 'automation_run'
+    ? automationContext(workspaceId, source) : sourceContext(workspaceId, source)
 
   // Launch one step as a DS-Bot turn of its agent; on completion advance the graph.
   function launch(runRow, step, list) {
@@ -172,7 +293,7 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
     if (!claim.changes) return
     const currentAttempt = () => one(`SELECT 1 FROM team_run_steps
       WHERE run_id=? AND position=? AND status='running' AND attempts=?`, runRow.id, step.position, attempt)
-    const live = {attempt, text:''}
+    const live = {attempt, text:'', controller:new AbortController()}
     previews.set(key, live)
     const onProgress = snapshot => {
       if (previews.get(key) === live && typeof snapshot === 'string') live.text = snapshot.slice(0, PREVIEW_MAX).toWellFormed()
@@ -181,8 +302,12 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
       try {
         await workspace(runRow)
         if (!currentAttempt()) return
+        const source = sourceFor(runRow.id)
+        const sourceResults = source && await resolveSource(runRow.workspace_id, source)
+        if (!currentAttempt()) return
         const reply = await host.call('agents/groupTurn', { agent_id: step.agent_id, key: `team-run:${runRow.id}:${step.position}:${attempt}`,
-          text: stepPrompt(runRow, step, list), request_id: `ot-team-run:${runRow.id}:${step.position}:${attempt}`, onProgress })
+          text: stepPrompt(runRow, step, list, sourceResults), request_id: `ot-team-run:${runRow.id}:${step.position}:${attempt}`,
+          onProgress, signal:live.controller.signal })
         if (!currentAttempt()) return
         const output = String(reply?.text ?? '').trim()
         if (!output) fail('empty-reply', 'DS-Bot turn ended without a reply', 502)
@@ -192,6 +317,9 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
         const native = String(error?.code ?? '')
         const code = ({
           'team-runs/workspace_unavailable': 'workspace_unavailable',
+          'team-runs/source_changed': 'source_changed',
+          'team-runs/source_invalid': 'source_changed',
+          'team-runs/source_unavailable': 'source_unavailable',
           'agents/model-unconfigured': 'model_unconfigured',
           'agents/empty-reply': 'empty_reply',
           'team-runs/empty-reply': 'empty_reply',
@@ -254,15 +382,38 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
         FROM team_runs r WHERE r.workspace_id=? ORDER BY r.created DESC,r.id DESC LIMIT ?`, workspaceId, LIMITS.runs)
       return { items: rows.map(row => view(row, false)) }
     },
-    get: async (p) => ({ run: view(loadRun(await workspace(p), p.id)) }),
+    get: async (p) => withSavedWorks({run: view(loadRun(await workspace(p), p.id))}),
+    async automationResult(p) {
+      const workspaceId = await workspace(p)
+      const source = automationSource({kind:'automation_run', automation_id:p.automation_id, run_id:p.run_id})
+      if (!source) fail('source_invalid', '自动化运行链接无效。', 400)
+      const context = await automationContext(workspaceId, source)
+      return {source, title:context.title}
+    },
+    async export(p) {
+      const row = loadRun(await workspace(p), p.id)
+      const list = steps(row.id)
+      if (row.status === 'running' || !list.some(step => step.status === 'succeeded' && step.output.trim())) {
+        fail('conflict', '任务结束后才能导出已完成的结果。', 409)
+      }
+      return {raw:runMarkdown(row, list), filename:`team-run-${row.id}.md`,
+        headers:{'content-type':'text/markdown; charset=utf-8'}}
+    },
     async create(p) {
       const workspaceId = await workspace(p)
       if (!text(p.title, LIMITS.title) || !text(p.goal, LIMITS.goal)) fail('invalid', 'Provide a title (<=80) and a goal (<=2000)', 400)
       const parsed = parseSteps(p.steps)
+      const source = p.source === undefined ? null : automationSource(p.source) ?? teamRunSource(p.source)
+      if (p.source !== undefined && !source) fail('source_invalid', '结果引用无效。', 400)
+      const originalId = p.reused_from
+      if (originalId !== undefined && (typeof originalId !== 'string' || !ID.test(originalId))) {
+        fail('invalid', '请选择有效的原任务。', 400)
+      }
       if (typeof p.idempotency_key !== 'string' || !IDEM.test(p.idempotency_key)) fail('invalid', 'Supply a 16–64 character Idempotency-Key', 400)
       const keyHash = sha('team-run:' + p.idempotency_key)
       const title = p.title.trim(), goal = p.goal.trim()
-      const requestHash = sha(JSON.stringify({ goal, steps: parsed.map(s => [s.agent_id, s.instruction, s.depends]), title }))
+      const requestHash = sha(JSON.stringify({ goal, steps: parsed.map(s => [s.agent_id, s.instruction, s.depends]), title,
+        ...(source && {source}), ...(originalId && {reused_from:originalId}) }))
       const existing = () => {
         const prior = one('SELECT * FROM team_runs WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
         if (!prior) return null
@@ -270,7 +421,7 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
         return { status: 200, run: view(prior) }
       }
       const prior = existing()
-      if (prior) return prior
+      if (prior) return withSavedWorks(prior)
       const heads = new Map()
       for (const id of new Set(parsed.map(s => s.agent_id))) {
         let agent
@@ -279,22 +430,38 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
         heads.set(id, agent.name)
       }
       await workspace(p)
+      if (source) {
+        try {
+          await resolveSource(workspaceId, source)
+        } catch (error) {
+          const concurrent = existing()
+          if (concurrent) return withSavedWorks(concurrent)
+          throw error
+        }
+      }
       const saved = transaction(() => {
         const concurrent = existing()
         if (concurrent) return concurrent
+        if (originalId) {
+          const original = one('SELECT status FROM team_runs WHERE id=? AND workspace_id=?', originalId, workspaceId)
+          if (!original) fail('reuse_unavailable', '原任务已不可用。可以移除引用后继续。', 404)
+          if (original.status === 'running') fail('reuse_active', '原任务仍在运行。完成后可以复用。', 409)
+        }
         const owned = one(`SELECT COUNT(*) AS total, COUNT(CASE WHEN status='running' THEN 1 END) AS active
           FROM team_runs WHERE workspace_id=?`, workspaceId)
         if (owned.total >= LIMITS.runs) fail('quota', 'Team run capacity reached; remove finished runs first', 429)
         if (owned.active >= LIMITS.active) fail('quota', 'Too many running team runs; wait or cancel one', 429)
         const id = newId(), t = clock()
         run('INSERT INTO team_runs VALUES(?,?,?,?,?,?,?,?,?)', id, workspaceId, title, goal, 'running', t, t, keyHash, requestHash)
+        if (source) run('INSERT INTO team_run_sources (run_id, source) VALUES (?,?)', id, JSON.stringify(source))
+        if (originalId) run('INSERT INTO team_run_reuses (run_id, original_id) VALUES (?,?)', id, originalId)
         for (const [position, s] of parsed.entries()) {
           run('INSERT INTO team_run_steps (run_id, position, agent_id, agent_name, instruction, depends, status) VALUES(?,?,?,?,?,?,?)',
             id, position, s.agent_id, heads.get(s.agent_id), s.instruction, JSON.stringify(s.depends), 'waiting')
         }
         return { id }
       })
-      return saved.run ? saved : { status: 201, run: view(advance(saved.id)) }
+      return saved.run ? withSavedWorks(saved) : { status: 201, run: view(advance(saved.id)) }
     },
     async cancel(p) {
       const row = loadRun(await workspace(p), p.id)
@@ -304,9 +471,14 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
             WHERE run_id=? AND status IN ('waiting','queued','running')`, clock(), row.id)
           run("UPDATE team_runs SET status='cancelled', updated=? WHERE id=?", clock(), row.id)
         })
-        for (const {position} of steps(row.id)) previews.delete(stepKey(row.id, position))
+        for (const {position} of steps(row.id)) {
+          const key = stepKey(row.id, position)
+          const live = previews.get(key)
+          previews.delete(key)
+          live?.controller.abort()
+        }
       }
-      return { run: view(one('SELECT * FROM team_runs WHERE id=?', row.id)) }
+      return withSavedWorks({run: view(one('SELECT * FROM team_runs WHERE id=?', row.id))})
     },
     async remove(p) {
       const row = loadRun(await workspace(p), p.id)
@@ -315,7 +487,13 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
       return { removed: row.id }
     },
     async retry(p) {
-      const row = loadRun(await workspace(p), p.id)
+      const workspaceId = await workspace(p)
+      let row = loadRun(workspaceId, p.id)
+      const source = sourceFor(row.id)
+      if (source) {
+        await resolveSource(workspaceId, source)
+        row = loadRun(workspaceId, p.id)
+      }
       const list = steps(row.id)
       const position = p.position
       if (!Number.isInteger(position) || position < 0 || position >= list.length || list[position].status !== 'failed') fail('conflict', 'Only a failed step can be retried', 409)
@@ -334,26 +512,16 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
         for (const index of reset) setStep(row.id, index, { status: 'waiting', error_code: null, started: null, finished: null })
         run("UPDATE team_runs SET status='running', updated=? WHERE id=?", clock(), row.id)
       })
-      return { run: view(advance(row.id)) }
+      return withSavedWorks({run: view(advance(row.id))})
     },
     async 'step-artifact'(p) {
       const row = loadRun(await workspace(p), p.id)
       const step = steps(row.id)[p.position]
       if (!step || step.status !== 'succeeded' || !step.output.trim()) fail('conflict', 'Only a finished step with output can be saved', 409)
       if (!validBody(step.output)) fail('too_large', `步骤结果无法保存为 ${BODY_MAX} 字以内的文档。`, 413)
-      const base = `${row.title} · 第 ${step.position + 1} 步`.slice(0, TITLE_MAX).toWellFormed()
-      const key = sha(`artifact-source:team_run:${row.id}:${step.position}`)
-      const save = title => host.call('artifacts/v1', { method: 'POST', path: `/v1/workspaces/${row.workspace_id}/artifacts`,
-        body: { title, body: step.output, kind: 'document' }, idempotency_key: key })
       try {
-        let result = await save(base)
-        if (result.status === 409 && result.body?.error?.code === 'conflict') {
-          result = await save(base.slice(0, TITLE_MAX - 11).toWellFormed() + ' · ' + key.slice(0, 8))
-        }
-        if (result.status !== 200 && result.status !== 201) {
-          fail(result.body?.error?.code ?? 'unavailable', result.body?.error?.message ?? '无法保存步骤结果。', result.status ?? 503)
-        }
-        return { status: result.status, artifact: result.body.artifact }
+        return await host.call('artifacts/saveTeamRunWork', {workspace_id:row.workspace_id, run_id:row.id,
+          run_title:row.title, position:step.position, body:step.output})
       } catch (error) {
         if (error?.code === 'openteamily/not-found') fail('unavailable', '资料空间暂不可用。', 503)
         throw error
@@ -382,5 +550,6 @@ export default async function teamRuns(host) {
   void host.runtime().then(resume, resume)
   const wrapped = {}
   for (const [name, fn] of Object.entries(feature.endpoints)) wrapped[name] = async (payload) => fn(payload ?? {})
+  wrapped.v1 = (payload, call) => feature.endpoints.v1(payload ?? {}, call)
   return { pages: ['team-runs'], endpoints: wrapped }
 }

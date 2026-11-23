@@ -1,5 +1,7 @@
 import { conversationChatHref } from '../shell/thumb.mjs';
 import { teamInviteCode, teamInviteFromHash, teamInviteHash, teamInviteUrl } from '../shell/team-invite-link.mjs';
+import {groupInviteFromHash, groupInviteHash} from '../shell/group-invite-link.mjs';
+import {showGroupInvitation} from './group-invite.mjs';
 
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
@@ -39,6 +41,8 @@ export function workspaceFromHash(hash = '') {
   return /^#?workspace=([a-f0-9]{32})$/.exec(hash)?.[1] || '';
 }
 
+const WORKSPACE_ID = /^[a-f0-9]{32}$/;
+const PENDING_INVITATION = 'openTeamilyPendingTeamInvite';
 const JOIN_STATES = {pending: '等待审批', approved: '已批准', rejected: '未获批准'};
 const unavailable = {status: 0, body: {}};
 
@@ -85,6 +89,10 @@ export function addableRoles(actor) {
 
 export function canChange(actor) {
   return actor === 'owner';
+}
+
+function canTransferOwnership(actor, item, self) {
+  return actor === 'owner' && (item?.role === 'admin' || item?.role === 'member') && !item.suspended && !samePerson(item, self);
 }
 
 export function canInvite(actor) {
@@ -143,21 +151,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
   const workspaceSelect = document.getElementById('workspace');
+  const workspaceChat = document.getElementById('workspace-chat');
   const view = document.defaultView;
   const receiveForm = document.getElementById('accept-form');
+  const receiveParent = receiveForm.parentNode;
+  const receiveNext = receiveForm.nextSibling;
   const receiveToken = document.getElementById('receive-invite-token');
   const receiveField = document.getElementById('receive-invite-field');
   const receivePreview = document.getElementById('invitation-preview');
   const receiveButton = document.getElementById('confirm-invite');
-  let linkedInvite = teamInviteFromHash(view?.location?.hash);
+  const addForm = document.getElementById('add-form');
+  const inviteForm = document.getElementById('invite-form');
+  const issuedBox = document.getElementById('issued-token');
+  const issuedLink = document.getElementById('issued-invite-link');
+  const memberWrite = {form:addForm, fields:['username','role'], button:document.getElementById('add-member-submit'),
+    feedback:document.getElementById('add-member-status'), pending:'正在添加成员…'};
+  const inviteWrite = {form:inviteForm, fields:['role','expires_days','max_uses','requires_approval'],
+    button:document.getElementById('create-invite-submit'), feedback:document.getElementById('create-invite-status'), pending:'正在生成邀请…'};
   let linkedWorkspace = workspaceFromHash(view?.location?.hash);
   let previewed = '';
   let inviteRequest = 0;
-  let accepting = false;
+  let accepting = null;
   let currentUser = null;
   let actor = null;
   let workspaces = [];
   let workspaceEpoch = 0;
+  let workspaceSelection = 0;
   let rosterRead = 0;
   let queueRead = 0;
   let loadRead = 0;
@@ -167,21 +186,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
   let myRequests = [];
   let myRequestsReady = false;
   let joinItems = [];
+  const busyTransfers = new Set();
+  const transferKey = scope => `${scope.viewer?.id}/${scope.id}`;
   const busyJoins = new Set();
   const busyDirectoryJoins = new Set();
+  const workspaceWrites = new Map();
+  let visibleWrites = null;
 
   function show(kind, text) {
     status.dataset.kind = kind;
     status.textContent = text;
   }
 
-  async function request(method, path, body, extraHeaders) {
+  async function request(method, path, body, extraHeaders, signal) {
     const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie)};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (extraHeaders) Object.assign(headers, extraHeaders);
     try {
       const response = await fetcher(path, {
-        method, headers, credentials: 'same-origin',
+        method, headers, signal, credentials: 'same-origin',
         body: body !== undefined ? JSON.stringify(body) : undefined,
       });
       const parsed = await response.json().catch(() => null);
@@ -202,6 +225,58 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
   function inWorkspace(scope) {
     return scope.id === workspaceId() && scope.viewer === currentUser && scope.epoch === workspaceEpoch;
   }
+
+  function paintWorkspaceWrites() {
+    for (const [controls, state] of [[memberWrite,visibleWrites?.member],[inviteWrite,visibleWrites?.invite]]) {
+      controls.button.disabled = Boolean(state?.busy);
+      for (const name of controls.fields) {
+        const field = controls.form.elements[name];
+        if (field) field.disabled = controls.button.disabled;
+      }
+      controls.button.setAttribute('aria-busy', String(Boolean(state?.busy)));
+      controls.feedback.textContent = state?.busy ? controls.pending : state?.message || '';
+      controls.feedback.hidden = !controls.feedback.textContent;
+      controls.feedback.dataset.kind = state?.kind || '';
+    }
+    const issued = visibleWrites?.issued;
+    const usable = canInvite(actor) && issued && addableRoles(actor).includes(issued.invite.role) &&
+      inviteState(issued.invite).startsWith('有效');
+    issuedBox.hidden = !usable;
+    const url = usable ? issued.url : '';
+    if (issuedLink.value !== url) issuedLink.value = url;
+  }
+
+  function restoreWorkspaceWrites(scope) {
+    if (!scope.id || !scope.viewer) return;
+    const key = transferKey(scope);
+    if (!workspaceWrites.has(key)) workspaceWrites.set(key, {member:{},invite:{}});
+    const state = workspaceWrites.get(key);
+    const changed = visibleWrites !== state;
+    visibleWrites = state;
+    if (changed) {
+      for (const [controls, draft] of [[memberWrite,state.member],[inviteWrite,state.invite]]) {
+        controls.form.reset();
+        for (const [name,value] of Object.entries(draft.fields || {})) {
+          const field = controls.form.elements[name];
+          if (field.type === 'checkbox') field.checked = value;
+          else field.value = value;
+        }
+      }
+    }
+    if (!canInvite(actor)) state.issued = null;
+    paintWorkspaceWrites();
+  }
+
+  function rememberWorkspaceForm(controls, draft) {
+    if (!draft) return;
+    draft.fields = Object.fromEntries(controls.fields.flatMap(name => {
+      const field = controls.form.elements[name];
+      return field ? [[name,field.type === 'checkbox' ? field.checked : field.value]] : [];
+    }));
+  }
+
+  addForm.addEventListener('input', () => rememberWorkspaceForm(memberWrite,visibleWrites?.member));
+  inviteForm.addEventListener('input', () => rememberWorkspaceForm(inviteWrite,visibleWrites?.invite));
 
   let pendingConfirm = null;
   let confirmSerial = 0;
@@ -263,14 +338,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     }
     const scope = workspaceScope();
     if (!scope.id || target.dataset.workspaceEpoch !== String(scope.epoch)) return;
-    if (target.dataset.rowAction === 'remove') {
+    if (target.dataset.rowAction === 'transfer' || target.dataset.rowAction === 'remove') {
+      const transfer = target.dataset.rowAction === 'transfer';
       const item = memberItems.find(entry => entry.user_id === target.dataset.userId);
-      if (!item) return;
+      if (!item || (transfer && !canTransferOwnership(actor, item, currentUser))) return;
       openConfirm({
         row: target.parentElement,
         trigger: target,
-        prompt: removalPrompt(item, currentUser),
-        action: () => removeMember(item, scope),
+        prompt: transfer ? {
+          question: `将工作区转让给 ${item.username}？转让后你将成为普通成员，可以退出工作区。原有管理员邀请链接会失效。`,
+          confirmLabel: '确认转让',
+        } : removalPrompt(item, currentUser),
+        action: () => transfer ? transferOwnership(item, scope) : removeMember(item, scope),
       });
       return;
     }
@@ -412,10 +491,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     for (const item of items) {
       const row = document.createElement('li');
       const roleText = (ROLE_LABELS[item.role] || item.role) + (item.suspended ? ' · 已停用' : '');
-      row.appendChild(identity(item.username, roleText));
+      row.appendChild(identity(item.username));
       const role = document.createElement('span');
       role.className = 'role-pill' + (item.role === 'owner' ? ' is-owner' : '');
-      role.textContent = ROLE_LABELS[item.role] || item.role;
+      role.textContent = roleText;
       row.appendChild(role);
       if (!samePerson(item, selfId)) {
         const message = document.createElement('button');
@@ -440,6 +519,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
         change.addEventListener('click', () => changeRole(item, item.role === 'admin' ? 'member' : 'admin', scope));
         row.appendChild(change);
       }
+      if (canTransferOwnership(actor, item, selfId)) {
+        const transfer = document.createElement('button');
+        transfer.type = 'button';
+        transfer.textContent = '转让所有权';
+        transfer.dataset.rowAction = 'transfer';
+        transfer.dataset.userId = item.user_id;
+        transfer.dataset.workspaceEpoch = String(scope.epoch);
+        transfer.disabled = busyTransfers.has(transferKey(scope));
+        row.appendChild(transfer);
+      }
       if (canRemove(actor, item, selfId)) {
         const remove = document.createElement('button');
         remove.type = 'button';
@@ -457,6 +546,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     const list = document.getElementById('invite-list');
     const empty = document.getElementById('invites-empty');
     inviteItems = items;
+    const issued = visibleWrites?.issued;
+    const latest = issued && items.find(item => item.id === issued.invite.id);
+    if (latest) {
+      issued.invite = latest;
+      paintWorkspaceWrites();
+    }
     if (pendingConfirm?.row.parentElement === list) closeConfirm({restoreFocus: false});
     list.textContent = '';
     empty.hidden = items.length > 0;
@@ -503,6 +598,36 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     await loadWorkspace();
   }
 
+  async function transferOwnership(item, scope) {
+    const key = transferKey(scope);
+    if (!scope.id || !inWorkspace(scope) || !canTransferOwnership(actor, item, scope.viewer) ||
+        busyTransfers.has(key)) return;
+    busyTransfers.add(key);
+    for (const button of document.querySelectorAll('#member-list [data-row-action="transfer"]')) button.disabled = true;
+    show('loading', '正在转让工作区…');
+    const result = await request('POST', `/v1/workspaces/${scope.id}/members/${item.user_id}/transfer-ownership`,
+      {}, undefined, AbortSignal.timeout(20000));
+    busyTransfers.delete(key);
+    if (scope.id !== workspaceId() || scope.viewer !== currentUser) return;
+    await loadWorkspace();
+    if (!inWorkspace(scope)) return;
+
+    const newOwner = memberItems.find(member => member.role === 'owner');
+    if (result.body.transferred === true || (newOwner?.user_id === item.user_id && actor !== 'owner')) {
+      show('ok', `已转让给 ${item.username}。你现在可以退出工作区。`);
+      document.getElementById('members-heading').focus();
+    } else {
+      const errors = {
+        member_suspended: '请先恢复该成员的访问，再转让所有权。',
+        member_not_found: '对方已不在该工作区，请选择其他成员。',
+        quota: '对方已达到可拥有的团队数上限。',
+        forbidden: '你的工作区角色已变更，请查看最新成员列表。',
+        ownership_changed: '工作区所有权已变更，请查看最新成员列表。',
+      };
+      show('error', errors[result.body.error?.code] || '暂时无法确认转让结果。请查看最新成员列表。');
+    }
+  }
+
   async function suspendMember(item, suspend, scope) {
     const {id} = scope;
     if (!id || !inWorkspace(scope)) return;
@@ -530,7 +655,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     if (leaving) {
       linkedWorkspace = null;
       if (workspaceFromHash(view?.location?.hash) !== null && view?.location) {
-        view.history?.replaceState(null, '', view.location.pathname + view.location.search);
+        view.history?.replaceState(view.history.state, '', view.location.pathname + view.location.search);
       }
       workspaces = workspaces.filter(item => item.id !== id);
       showWorkspaceOptions(workspaces);
@@ -544,6 +669,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     const {id} = scope;
     if (!id || !inWorkspace(scope) || !addableRoles(actor).includes(item.role)) return;
     const result = await request('POST', `/v1/workspaces/${id}/invites/${item.id}/${action}`, {});
+    const writeState = workspaceWrites.get(transferKey(scope));
+    if (result.status === 200 && writeState?.issued?.invite.id === item.id) {
+      Object.assign(writeState.issued.invite, action === 'revoke' ? {revoked:true} : {frozen:action === 'freeze'});
+      if (visibleWrites === writeState) paintWorkspaceWrites();
+    }
     if (!inWorkspace(scope)) return;
     if (result.status !== 200) {
       show('error', inviteFailure(result.body.error, action));
@@ -608,6 +738,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
 
   function clearWorkspaceView() {
     actor = null;
+    visibleWrites = null;
+    addForm.reset();
+    inviteForm.reset();
+    paintWorkspaceWrites();
+    workspaceChat.hidden = true;
+    workspaceChat.removeAttribute('href');
     closeConfirm({restoreFocus: false});
     renderMembers([]);
     renderInvites([]);
@@ -616,16 +752,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     for (const id of ['add-form', 'invite-form', 'invites-panel', 'join-requests-panel', 'directory-listing-form']) {
       document.getElementById(id).hidden = true;
     }
-    document.getElementById('issued-token').hidden = true;
-    document.getElementById('issued-invite-link').value = '';
   }
 
   async function loadWorkspace({reset = false} = {}) {
     const scope = workspaceScope();
     const {id} = scope;
     const seq = ++rosterRead;
-    const addForm = document.getElementById('add-form');
-    const inviteForm = document.getElementById('invite-form');
     const invitesPanel = document.getElementById('invites-panel');
     const membersPanel = document.getElementById('members-panel');
     const workspaceField = document.getElementById('member-workspace-field');
@@ -650,6 +782,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     const items = listed.body.items;
     const self = items.find(item => samePerson(item, currentUser));
     actor = self && !self.suspended ? self.role : null;
+    restoreWorkspaceWrites(scope);
+    workspaceChat.hidden = !actor || !WORKSPACE_ID.test(id);
+    if (workspaceChat.hidden) workspaceChat.removeAttribute('href');
+    else workspaceChat.setAttribute('href', '/chat#workspace=' + id);
     roleNote.textContent = actor ? `当前角色：${ROLE_LABELS[actor] || actor}` : '';
     renderMembers(items, scope);
     addForm.hidden = !canAdd(actor);
@@ -718,15 +854,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       pill.textContent = JOIN_STATES[item.status];
       row.appendChild(pill);
       if (item.status === 'approved' && workspace) {
-        const open = document.createElement('button');
-        open.type = 'button';
-        open.textContent = '打开工作区';
-        open.addEventListener('click', async () => {
-          if (!workspaces.some(entry => entry.id === workspace.id)) return;
-          await selectWorkspace(workspace.id);
-          if (workspaceId() === workspace.id) document.getElementById('members-heading').focus();
-        });
-        row.appendChild(open);
+        row.appendChild(openWorkspaceButton(workspace.id));
       }
       list.appendChild(row);
     }
@@ -794,15 +922,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     }
   }
 
-  async function selectWorkspace(id) {
-    linkedWorkspace = null;
-    workspaceSelect.value = id;
-    if (/^[a-f0-9]{32}$/.test(id) && view?.location) {
-      view.history?.replaceState(null, '', view.location.pathname + view.location.search + '#workspace=' + id);
+  function pinWorkspace(id) {
+    if (!WORKSPACE_ID.test(id)) return;
+    linkedWorkspace = id;
+    if (view?.location) {
+      view.history?.replaceState(view.history.state, '', view.location.pathname + view.location.search + '#workspace=' + id);
     }
+  }
+
+  async function selectWorkspace(id) {
+    workspaceSelection += 1;
+    workspaceSelect.value = id;
+    pinWorkspace(id);
     workspaceEpoch += 1;
     show('', '');
     await loadWorkspace({reset: true});
+  }
+
+  function openWorkspaceButton(id) {
+    const button = document.createElement('button');
+    const viewer = currentUser;
+    button.type = 'button';
+    button.textContent = '打开工作区';
+    button.addEventListener('click', async () => {
+      if (viewer !== currentUser || !WORKSPACE_ID.test(id)) return;
+      if (workspaces.some(entry => entry.id === id)) await selectWorkspace(id);
+      else {
+        workspaceSelection += 1;
+        pinWorkspace(id);
+        await refreshWorkspaces({preferred: id, explicit: true, initial: true});
+      }
+      if (viewer === currentUser && workspaceId() === id && actor) {
+        document.getElementById('members-heading').focus();
+      }
+    });
+    return button;
   }
 
   document.getElementById('refresh-my-join-requests').addEventListener('click', () => Promise.all([
@@ -826,7 +980,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       li.append(name, ' ', meta);
       const label = directoryMembershipLabel(team);
       if (label) {
-        li.append(' ' + label);
+        const membership = document.createElement('span');
+        membership.className = 'note';
+        membership.textContent = label;
+        li.append(membership);
+        if (team.membership === 'member' && WORKSPACE_ID.test(team.workspace_id || '')) {
+          li.append(openWorkspaceButton(team.workspace_id));
+        }
       } else {
         const join = document.createElement('button');
         join.type = 'button';
@@ -858,7 +1018,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
             join.textContent = '已暂停';
           } else {
             show('ok', '你已加入此团队。');
-            join.textContent = '已加入';
+            const joined = result.body.workspace_id || team.workspace_id;
+            if (WORKSPACE_ID.test(joined || '')) join.replaceWith(openWorkspaceButton(joined));
+            else join.textContent = '已加入';
             await refreshWorkspaces();
           }
           await loadMyRequests();
@@ -909,19 +1071,95 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     receiveButton.textContent = '查看邀请';
   }
 
+  function rememberInvitation(token, scrubFragment = false) {
+    const history = view?.history;
+    if (!history?.replaceState || !view.location) return;
+    const state = {...history.state};
+    if (token && currentUser?.id) state[PENDING_INVITATION] = {viewer:currentUser.id, token};
+    else if (Object.hasOwn(state, PENDING_INVITATION)) delete state[PENDING_INVITATION];
+    else if (!scrubFragment) return;
+    const {pathname, search, hash} = view.location;
+    const fragment = scrubFragment ? (WORKSPACE_ID.test(linkedWorkspace || '') ? '#workspace=' + linkedWorkspace : '') : hash;
+    history.replaceState(state, '', pathname + search + fragment);
+  }
+
+  function resumeInvitation() {
+    const pending = view?.history?.state?.[PENDING_INVITATION];
+    if (currentUser?.id && pending?.viewer === currentUser.id && teamInviteHash(pending.token)) return pending.token;
+    rememberInvitation(null);
+    return '';
+  }
+
+  function openLinkedInvitation(token, scrubFragment = false) {
+    accepting = null;
+    resetInvitePreview();
+    receiveForm.dataset.linked = 'true';
+    mainPanel.querySelector('.page-toolbar')?.before(receiveForm);
+    receiveToken.readOnly = false;
+    receiveToken.type = 'password';
+    receiveToken.value = token;
+    if (scrubFragment) rememberInvitation(token, true);
+    return previewInvite(token);
+  }
+
+  function leaveLinkedInvitation() {
+    if (receiveForm.dataset.linked !== 'true') return;
+    delete receiveForm.dataset.linked;
+    accepting = null;
+    receiveForm.reset();
+    receiveToken.readOnly = false;
+    receiveToken.type = 'text';
+    resetInvitePreview();
+    receiveButton.disabled = false;
+    receiveParent?.insertBefore(receiveForm, receiveNext || null);
+  }
+
+  function invitationReceipt(result) {
+    const invitation = result?.status === 200 ? result.body?.invitation : null;
+    if (invitation?.membership === 'pending') return {pending: true};
+    if (invitation?.membership === 'member' && WORKSPACE_ID.test(invitation.workspace_id || '')) {
+      return {joined: invitation.workspace_id};
+    }
+    return null;
+  }
+
+  async function showInvitationReceipt({pending, joined}, selection) {
+    rememberInvitation(null);
+    receiveForm.reset();
+    receiveToken.type = 'text';
+    resetInvitePreview();
+    receivePreview.hidden = false;
+    receivePreview.textContent = pending ? '已提交加入申请，等待审批。' : '已加入工作区。';
+    if (pending) await loadMyRequests();
+    else if (selection === workspaceSelection && WORKSPACE_ID.test(joined || '')) {
+      pinWorkspace(joined);
+      await refreshWorkspaces({preferred: joined, explicit: true, initial: true});
+    } else await refreshWorkspaces();
+  }
+
+  const readInvitation = token => request('POST', '/v1/invites/preview', {token}, undefined, AbortSignal.timeout(8000));
+
   async function previewInvite(token) {
     const sequence = ++inviteRequest;
+    const viewer = currentUser, selection = workspaceSelection;
     previewed = '';
     receivePreview.hidden = false;
     receivePreview.textContent = '正在查看邀请…';
     receiveButton.disabled = true;
     try {
-      const result = await request('POST', '/v1/invites/preview', {token}).catch(() => null);
-      if (sequence !== inviteRequest) return;
+      const result = await readInvitation(token);
+      if (sequence !== inviteRequest || viewer !== currentUser) return;
+      const receipt = invitationReceipt(result);
+      if (receipt) {
+        receiveButton.disabled = false;
+        await showInvitationReceipt(receipt, selection);
+        return;
+      }
       const invitation = result?.body?.invitation;
       if (result?.status !== 200 || !invitation?.team_name) {
-        receivePreview.textContent = result?.status === 404 || result?.status === 410
-          ? '这条邀请已失效。' : '暂时无法读取邀请，请重试。';
+        if ([403, 404, 410].includes(result?.status)) rememberInvitation(null);
+        receivePreview.textContent = result?.status === 403 ? '暂时无法通过这条邀请加入工作区。'
+          : result?.status === 404 || result?.status === 410 ? '这条邀请已失效。' : '暂时无法读取邀请，请重试。';
         return;
       }
       previewed = token;
@@ -935,10 +1173,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
 
   async function load() {
     const seq = ++loadRead;
+    const groupInvite = groupInviteFromHash(view?.location?.hash);
     const session = await request('GET', '/v1/auth/session');
     if (seq !== loadRead) return;
+    const groupPanel = document.getElementById('group-invite-panel');
+    if (groupPanel) groupPanel.hidden = true;
+    if (groupInvite && session.status === 401) {
+      goTo('/login' + groupInviteHash(groupInvite));
+      return;
+    }
+    if (groupInvite && session.status === 200 && session.body.user) {
+      resetInvitePreview();
+      if (currentUser?.id !== session.body.user.id) workspaceWrites.clear();
+      currentUser = session.body.user;
+      loginPanel.hidden = mainPanel.hidden = true;
+      show('', '');
+      return showGroupInvitation(document, {request, token: groupInvite, goTo,
+        isCurrent: () => seq === loadRead && groupInviteFromHash(view.location.hash) === groupInvite});
+    }
     if (session.status === 401) {
       currentUser = null;
+      accepting = null;
+      rememberInvitation(null);
+      workspaceWrites.clear();
       workspaces = [];
       myRequests = [];
       myRequestsReady = false;
@@ -948,6 +1205,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       renderMyRequests();
       receiveForm.reset();
       receiveToken.type = 'text';
+      receiveToken.readOnly = false;
       resetInvitePreview();
       receiveButton.disabled = false;
       loginPanel.hidden = false;
@@ -961,6 +1219,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       return;
     }
     if (currentUser?.id !== session.body.user?.id) {
+      workspaceWrites.clear();
       workspaces = [];
       myRequests = [];
       myRequestsReady = false;
@@ -972,16 +1231,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     loginPanel.hidden = true;
     mainPanel.hidden = false;
     document.getElementById('whoami').textContent = currentUser.username;
-    if (linkedInvite) {
-      const token = linkedInvite;
-      linkedInvite = '';
-      receiveForm.dataset.linked = 'true';
-      mainPanel.querySelector('.page-toolbar')?.before(receiveForm);
-      receiveToken.type = 'password';
-      receiveToken.value = token;
-      view.history.replaceState(null, '', view.location.pathname + view.location.search);
-      void previewInvite(token);
-    }
+    const linkedInvite = teamInviteFromHash(view?.location?.hash);
+    const token = linkedInvite || resumeInvitation();
+    if (token) void openLinkedInvitation(token, Boolean(linkedInvite));
     await Promise.all([
       refreshWorkspaces({preferred: linkedWorkspace, explicit: linkedWorkspace !== null, initial: true}),
       loadMyRequests(),
@@ -1002,73 +1254,113 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     await load();
   });
 
+  const refreshMembers = document.getElementById('refresh-members');
+  refreshMembers?.addEventListener('click', async () => {
+    refreshMembers.disabled = true;
+    try { await loadWorkspace(); }
+    finally { refreshMembers.disabled = false; }
+  });
   workspaceSelect.addEventListener('change', () => selectWorkspace(workspaceId()));
+  view?.addEventListener?.('hashchange', event => {
+    if (groupInviteFromHash(view.location.hash) || (event?.oldURL && groupInviteFromHash(new URL(event.oldURL).hash))) {
+      resetInvitePreview();
+      return load();
+    }
+    const invite = teamInviteFromHash(view.location.hash);
+    if (invite && currentUser) return openLinkedInvitation(invite, true);
+    const requested = workspaceFromHash(view.location.hash);
+    if (!currentUser || requested === null || requested === workspaceId()) return;
+    if (workspaces.some(item => item.id === requested)) return selectWorkspace(requested);
+    linkedWorkspace = requested;
+    workspaceSelection += 1;
+    workspaceEpoch += 1;
+    workspaceSelect.value = '';
+    clearWorkspaceView();
+    document.getElementById('role-note').textContent = '正在查看工作区…';
+    return refreshWorkspaces({preferred: requested, explicit: true, initial: true});
+  });
+  view?.addEventListener?.('popstate', () => {
+    if (!currentUser || groupInviteFromHash(view.location.hash) || teamInviteFromHash(view.location.hash)) return;
+    const token = resumeInvitation();
+    if (token && token !== receiveToken.value) void openLinkedInvitation(token);
+    if (!token) leaveLinkedInvitation();
+  });
 
-  document.getElementById('add-form').addEventListener('submit', async event => {
+  addForm.addEventListener('submit', async event => {
     event.preventDefault();
-    const form = event.currentTarget;
     const scope = workspaceScope();
     const {id} = scope;
-    if (!id) {
-      show('error', '先选择一个工作区。');
-      return;
-    }
-    const values = readAddMember(form);
+    const writes = visibleWrites;
+    if (!id || !writes || workspaceWrites.get(transferKey(scope)) !== writes || !canAdd(actor) || writes.member.busy) return;
+    const values = readAddMember(addForm);
     if (!values.username) {
       show('error', '请填写用户名。');
       return;
     }
-    const result = await request('POST', `/v1/workspaces/${id}/members`, values);
-    if (!inWorkspace(scope)) return;
-    if (result.status !== 200 && result.status !== 201) {
-      show('error', messageFor(result.body.error, '无法添加成员。'));
-      return;
+    rememberWorkspaceForm(memberWrite,writes.member);
+    writes.member.busy = true;
+    paintWorkspaceWrites();
+    const result = await request('POST', `/v1/workspaces/${id}/members`, values, undefined, AbortSignal.timeout(15000));
+    if (workspaceWrites.get(transferKey(scope)) !== writes) return;
+    const saved = result.status === 200 || result.status === 201;
+    writes.member.busy = false;
+    writes.member.kind = saved ? 'ok' : 'error';
+    writes.member.message = saved ? '已添加成员。' : messageFor(result.body.error, '无法添加成员。');
+    if (saved) writes.member.fields = {};
+    if (visibleWrites !== writes) return;
+    if (saved) {
+      addForm.reset();
+      setRoleOptions(addForm, actor);
     }
-    form.reset();
-    setRoleOptions(form, actor);
-    show('ok', '已添加。');
-    await loadWorkspace();
+    paintWorkspaceWrites();
+    if (saved) await loadWorkspace();
   });
 
-  document.getElementById('invite-form').addEventListener('submit', async event => {
+  inviteForm.addEventListener('submit', async event => {
     event.preventDefault();
     const scope = workspaceScope();
     const {id} = scope;
-    if (!id) {
-      show('error', '先选择一个工作区。');
-      return;
-    }
-    const values = readInvite(event.currentTarget);
-    const result = await request('POST', `/v1/workspaces/${id}/invites`, values);
-    if (!inWorkspace(scope)) return;
-    if (result.status !== 201) {
-      show('error', messageFor(result.body.error, '无法生成邀请。'));
-      return;
-    }
-    const box = document.getElementById('issued-token');
-    const url = teamInviteUrl(result.body.token, view?.location?.origin);
-    box.hidden = !url;
-    document.getElementById('issued-invite-link').value = url;
-    show(url ? 'ok' : 'error', url ? '已生成邀请链接，请现在复制。' : '无法显示这次生成的邀请链接。');
-    await loadWorkspace();
+    const writes = visibleWrites;
+    if (!id || !writes || workspaceWrites.get(transferKey(scope)) !== writes || !canInvite(actor) || writes.invite.busy) return;
+    const values = readInvite(inviteForm);
+    rememberWorkspaceForm(inviteWrite,writes.invite);
+    writes.invite.busy = true;
+    paintWorkspaceWrites();
+    const result = await request('POST', `/v1/workspaces/${id}/invites`, values, undefined, AbortSignal.timeout(15000));
+    if (workspaceWrites.get(transferKey(scope)) !== writes) return;
+    const {invite,token} = result.body;
+    const url = result.status === 201 && invite?.workspace_id === id && invite.id && teamInviteUrl(token, view?.location?.origin);
+    if (url) writes.issued = {invite,url};
+    writes.invite.busy = false;
+    writes.invite.kind = url ? 'ok' : 'error';
+    writes.invite.message = url ? '已生成邀请链接。' : result.status === 201 ? '无法显示这次生成的邀请链接。'
+      : messageFor(result.body.error, '无法确认邀请是否已生成，请查看已发出的邀请。');
+    if (visibleWrites !== writes) return;
+    paintWorkspaceWrites();
+    if (result.status === 201) await loadWorkspace();
   });
 
   document.getElementById('copy-issued-invite')?.addEventListener('click', async () => {
-    const field = document.getElementById('issued-invite-link');
-    if (!field.value) return;
-    const scope = workspaceScope(), value = field.value;
+    const writes = visibleWrites;
+    const value = issuedLink.value;
+    if (!writes || !value) return;
     try {
       await view.navigator.clipboard.writeText(value);
-      if (inWorkspace(scope) && field.value === value) show('ok', '已复制邀请链接。');
+      if (visibleWrites !== writes || issuedLink.value !== value) return;
+      writes.invite.message = '已复制邀请链接。';
+      writes.invite.kind = 'ok';
     } catch {
-      if (!inWorkspace(scope) || field.value !== value) return;
-      field.select();
-      show('error', '请复制选中的链接。');
+      if (visibleWrites !== writes || issuedLink.value !== value) return;
+      issuedLink.select();
+      writes.invite.message = '请复制选中的链接。';
+      writes.invite.kind = 'error';
     }
+    paintWorkspaceWrites();
   });
 
   receiveToken?.addEventListener('input', () => {
     if (accepting) return;
+    rememberInvitation(null);
     resetInvitePreview();
     receiveButton.disabled = false;
   });
@@ -1082,33 +1374,39 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       return;
     }
     if (token !== previewed) return previewInvite(token);
-    const viewer = currentUser;
-    accepting = true;
+    const viewer = currentUser, selection = workspaceSelection, sequence = inviteRequest;
+    const attempt = {};
+    accepting = attempt;
     receiveToken.readOnly = true;
     receiveButton.disabled = true;
     try {
-      const result = await request('POST', '/v1/invites/accept', {token}).catch(() => null);
-      if (viewer !== currentUser) return;
-      if (![200, 201, 202].includes(result?.status)) {
-        if (result?.status === 404 || result?.status === 410) {
+      const result = await request('POST', '/v1/invites/accept', {token}, undefined, AbortSignal.timeout(15000));
+      const current = () => viewer === currentUser && sequence === inviteRequest;
+      if (!current()) return;
+      if (![200, 201, 202].includes(result.status)) {
+        if (result.status === 0 || result.status === 408 || result.status >= 500) {
+          receivePreview.textContent = '正在确认加入结果…';
+          const checked = await readInvitation(token);
+          if (!current()) return;
+          const receipt = invitationReceipt(checked);
+          if (receipt) return await showInvitationReceipt(receipt, selection);
+        }
+        if (result.status === 404 || result.status === 410) {
+          rememberInvitation(null);
           resetInvitePreview();
           receivePreview.hidden = false;
           receivePreview.textContent = '这条邀请已失效。';
         } else receivePreview.textContent = '暂时无法接受邀请，请重试。';
         return;
       }
-      receiveForm.reset();
-      receiveToken.type = 'text';
-      resetInvitePreview();
-      receivePreview.hidden = false;
       const pending = result.status === 202 || result.body.join_request?.status === 'pending';
-      receivePreview.textContent = pending ? '已提交加入申请，等待审批。' : '已加入工作区。';
-      if (pending) await loadMyRequests();
-      else await refreshWorkspaces({preferred: result.body.workspace?.id, initial: true});
+      await showInvitationReceipt({pending, joined: result.body.workspace?.id}, selection);
     } finally {
-      accepting = false;
-      receiveToken.readOnly = false;
-      receiveButton.disabled = false;
+      if (accepting === attempt) {
+        accepting = null;
+        receiveToken.readOnly = false;
+        receiveButton.disabled = false;
+      }
     }
   });
 

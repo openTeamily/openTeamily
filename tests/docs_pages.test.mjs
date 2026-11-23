@@ -9,14 +9,30 @@ function read(relative) {
   return fs.readFileSync(path.join(ROOT, relative), 'utf8');
 }
 
-const HELP_LINK = '<a href="/help" role="menuitem">帮助中心</a>';
-const TERMS_LINK = '<a href="/terms" role="menuitem">服务条款</a>';
-const PRIVACY_LINK = '<a href="/privacy" role="menuitem">隐私政策</a>';
+const ACCOUNT_LINKS = [
+  {href: '/help', label: '帮助中心'},
+  {href: '/terms', label: '服务条款'},
+  {href: '/privacy', label: '隐私政策'},
+];
 const DISABLED = [
   '未实现：还没有 OpenTeamily 帮助中心页',
   '未实现：还没有 OpenTeamily 服务条款页',
   '未实现：还没有 OpenTeamily 隐私政策页',
 ];
+
+function hasAccountMenuLink(html, href, label) {
+  // Account-menu anchors may carry data-ui-text (or other) attributes, and
+  // attribute order varies across pages after the locale catalog landed.
+  const anchors = html.matchAll(/<a\b([^>]*?)>([^<]*)<\/a>/g);
+  for (const match of anchors) {
+    const attrs = match[1];
+    if (match[2] !== label) continue;
+    if (!new RegExp(`\\bhref="${href}"`).test(attrs)) continue;
+    if (!/\brole="menuitem"/.test(attrs)) continue;
+    return true;
+  }
+  return false;
+}
 
 const ACCOUNT_PAGES = fs.readdirSync(ROOT)
   .filter(name => fs.existsSync(path.join(ROOT, name, 'index.html')))
@@ -28,12 +44,10 @@ test('every account menu links to the help centre, terms and privacy pages', () 
     `expected the account menu on at least 17 pages, found ${ACCOUNT_PAGES.join(', ')}`);
   for (const page of ACCOUNT_PAGES) {
     const html = read(path.join(page, 'index.html'));
-    assert.ok(html.includes(HELP_LINK),
-      `${page}/index.html still has no real 帮助中心 link in the account menu`);
-    assert.ok(html.includes(TERMS_LINK),
-      `${page}/index.html still has no real 服务条款 link in the account menu`);
-    assert.ok(html.includes(PRIVACY_LINK),
-      `${page}/index.html still has no real 隐私政策 link in the account menu`);
+    for (const {href, label} of ACCOUNT_LINKS) {
+      assert.ok(hasAccountMenuLink(html, href, label),
+        `${page}/index.html still has no real ${label} link in the account menu`);
+    }
     for (const text of DISABLED) {
       assert.ok(!html.includes(text), `${page}/index.html still carries the disabled placeholder: ${text}`);
     }
@@ -43,7 +57,7 @@ test('every account menu links to the help centre, terms and privacy pages', () 
 test('the help centre lists each feature with what works and where it stops', () => {
   const html = read('help/index.html');
   assert.ok(html.includes('<h1>帮助中心</h1>'));
-  for (const anchor of ['chat', 'agents', 'artifacts', 'automations', 'meetings', 'memory', 'team', 'runtimes']) {
+  for (const anchor of ['chat', 'channels', 'agents', 'artifacts', 'automations', 'meetings', 'memory', 'team', 'runtimes']) {
     assert.ok(html.includes(`id="${anchor}"`), `the help centre has no section for ${anchor}`);
   }
   assert.ok(html.includes('现在能做什么'));

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import test from 'node:test';
-import {mount, readWizard, step1Ready, validName, validSlug} from '../openteamily/static/team/app.mjs';
+import {mount, parseInviteLines, readWizard, step1Ready, validName, validSlug} from '../openteamily/static/team/app.mjs';
 
 test('validName and validSlug match the contrast rules', () => {
   assert.equal(validName('团队'), true);
@@ -176,7 +176,7 @@ function fakeTeamDocument(html) {
 
 function jsonResponse(status, body) { return {status, json: async () => body}; }
 
-function teamFetcher({inviteStatus = 201, create} = {}) {
+function teamFetcher({inviteStatus = 201, create, invite} = {}) {
   const requests = [];
   const fetcher = async (path, options = {}) => {
     const method = options.method || 'GET';
@@ -192,7 +192,7 @@ function teamFetcher({inviteStatus = 201, create} = {}) {
     }
     if (path === '/v1/workspaces/wsnew/invites' && method === 'POST') {
       if (inviteStatus !== 201) return jsonResponse(inviteStatus, {error: {code: 'quota', message: 'Invite capacity reached'}});
-      return jsonResponse(201, {
+      const success = jsonResponse(201, {
         invite: {
           id: 'inv1', workspace_id: 'wsnew', role: 'member', created: 1763600000,
           expires: INVITE_EXPIRES, created_by: 'u1', max_uses: 1, use_count: 0,
@@ -200,6 +200,7 @@ function teamFetcher({inviteStatus = 201, create} = {}) {
         },
         token: TEAM_TOKEN,
       });
+      return invite ? invite(success) : success;
     }
     return jsonResponse(404, {error: {message: 'Not found'}});
   };
@@ -566,4 +567,47 @@ test('creating a team posts once with an idempotency key and lands on step 3', a
     assert.equal(elements.get('step-3').hidden, false);
     assert.equal(elements.get('step-2').hidden, true);
   });
+});
+
+test('batch recipient parsing drops duplicates and caps each batch at ten', () => {
+  const more = Array.from({length:12}, (_, index) => `person${index}@example.test`).join('\n');
+  const {entries, overflow} = parseInviteLines(' First@example.test \nfirst@EXAMPLE.test\n\ninvalid\n' + more);
+  assert.equal(entries.length,10);
+  assert.equal(overflow,4);
+  assert.deepEqual(entries.slice(0,2), [
+    {key:'first@example.test', email:'First@example.test', valid:true},
+    {key:'invalid', email:'invalid', valid:false},
+  ]);
+});
+
+test('batch links are individually generated and preserve successes and ambiguous requests when retried', async () => {
+  let count = 0;
+  const {el, requests} = await mountWizard({name:'Desk Team', slug:'desk-team', mode:'new'}, {
+    invite(success) {
+      count += 1;
+      if (count === 2) throw new TypeError('response lost');
+      if (count === 3) return jsonResponse(403, {error:{message:'role unavailable'}});
+      return success;
+    },
+  });
+  await el('next').dispatch('click');
+  await el('invite-skip').dispatch('click');
+  el('batch-role').value = 'admin';
+  el('batch-expiry').value = '86400';
+  el('batch-emails').value = 'first@example.test\nnot-an-email\nmaybe@example.test\nforbidden@example.test\nlast@example.test';
+  await el('batch-invite').dispatch('click');
+  const rows = el('batch-results').children;
+  assert.deepEqual(rows.map(row=>row.dataset.state), ['ok','failed','unknown','failed','ok']);
+  assert.match(rows[2].textContent,/成员页检查/);
+  assert.match(rows[3].textContent,/role unavailable/);
+  const inviteRequests = () => requests.filter(request=>request.method === 'POST' && request.path.endsWith('/invites'));
+  const requested = {role:'admin', expires_in:86400, max_uses:1};
+  assert.deepEqual(inviteRequests().map(({body})=>body), Array(4).fill(requested));
+  assert.equal(rows[0].children[2].children[0].value, 'https://workspace.test/login#team-invite=' + TEAM_TOKEN);
+  assert.match(rows[0].children[3].children[1].href,/mailto:first%40example.test/);
+
+  await el('batch-invite').dispatch('click');
+  assert.deepEqual(inviteRequests().map(({body})=>body), Array(5).fill(requested));
+  assert.deepEqual(rows.map(row=>row.dataset.state), ['ok','failed','unknown','ok','ok']);
+  assert.match(el('batch-summary').textContent,/已生成 3 条。 1 行未生成。 1 行待确认。/);
 });

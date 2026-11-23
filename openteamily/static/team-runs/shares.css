@@ -26,8 +26,27 @@
 }
 
 .shared-runs-feedback,
+.shared-run-meta,
 .shared-runs-list small {
   color: var(--ot-muted);
+}
+
+.shared-run-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .45rem;
+  margin-block: .4rem;
+}
+
+.shared-run-links .shared-runs-feedback {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.shared-run-link-fallback {
+  flex: 1 1 100%;
+  min-width: 0;
 }
 
 .shared-runs-feedback:empty {
@@ -85,6 +104,30 @@
 
 .shared-run-steps li {
   padding: .25rem 0;
+}
+
+.shared-run-choice,
+.shared-run-source {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .5rem;
+}
+
+.shared-run-choice {
+  width: fit-content;
+  min-height: 2.75rem;
+}
+
+.shared-run-source:not([hidden]) {
+  padding: .75rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .75rem;
+}
+
+.shared-run-source p {
+  flex-basis: 100%;
+  margin: 0;
 }
 
 #share-team-run .shared-runs-feedback {

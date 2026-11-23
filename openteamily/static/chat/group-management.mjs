@@ -1,6 +1,8 @@
 const WORKSPACE_ID = /^[a-f0-9]{32}$/;
 const CONVERSATION_ID = /^(?!\.{1,2}$)[A-Za-z0-9._-]{1,80}$/;
 const MEMBER_ID = /^[A-Za-z0-9_-]{1,80}$/;
+const REPLY_MODES = new Set(['default','everyone','lead']);
+const leadKey = lead => lead?.owner_id && lead.agent_id ? JSON.stringify([lead.owner_id,lead.agent_id]) : '';
 
 function managedGroup(context) {
   const conversation = context?.conversation;
@@ -35,6 +37,10 @@ export function mountGroupManagement(document, {request, context, onChanged, onL
   const cancel = node('cancel');
   const status = node('status');
   const refresh = node('refresh');
+  const replyMode = node('reply-mode');
+  const replyLead = node('reply-lead');
+  const replyLeadRow = node('reply-lead-row');
+  const replyLeadNote = node('reply-lead-note');
   const text = (zh, en) => document.documentElement.lang.startsWith('en') ? en : zh;
   const sameScope = target => sameGroup(target, managedGroup(context()));
   const active = new Set();
@@ -44,6 +50,7 @@ export function mountGroupManagement(document, {request, context, onChanged, onL
   function available(target, mode, memberId) {
     const {management, conversation} = target;
     if (mode === 'rename') return management.can_rename === true;
+    if (mode === 'reply_policy') return conversation.group_agent_routing?.can_edit === true;
     if (mode === 'leave') return management.can_leave === true || management.leave_requires_transfer === true;
     if (mode === 'member' || mode === 'remove' || mode === 'transfer') {
       const member = conversation.members?.find(item => item.group_member_id === memberId);
@@ -59,9 +66,47 @@ export function mountGroupManagement(document, {request, context, onChanged, onL
   }
 
   function setBusy(busy) {
-    confirm.disabled = busy;
+    const leading = view?.mode === 'reply_policy' && view.policyDraft.mode === 'lead';
+    confirm.disabled = busy || Boolean(view?.blocked) || (leading && !view.replyChoices.has(view.policyDraft.lead));
     nameField.disabled = busy;
     refresh.disabled = busy;
+    replyMode.disabled = busy;
+    replyLead.disabled = busy || !leading || !view.replyChoices.size;
+  }
+
+  function syncReplyFields() {
+    const {policyDraft, replyChoices} = view;
+    replyLeadRow.hidden = policyDraft.mode !== 'lead';
+    replyLeadNote.hidden = replyLeadRow.hidden || replyChoices.has(policyDraft.lead);
+    replyLeadNote.textContent = !replyChoices.size ? text('群里暂无可选智能体。', 'There are no eligible agents in this group.')
+      : policyDraft.lead ? text('原选择已不可用，请重新选择。', 'Your selection is unavailable. Choose another agent.') : '';
+    replyLeadNote.hidden ||= !replyLeadNote.textContent;
+    setBusy(false);
+  }
+
+  function renderReplyFields() {
+    const agents = view.target.conversation.agent_members || [];
+    const choices = new Map();
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = text('选择一位智能体', 'Choose an agent');
+    replyLead.replaceChildren(placeholder);
+    for (const agent of agents) {
+      const lead = {owner_id:agent.owner_id, agent_id:agent.id || agent.agent_id};
+      const key = leadKey(lead);
+      if (!key || !agent.name || agent.archived || agent.native_deleted || choices.has(key)) continue;
+      choices.set(key, lead);
+      const option = document.createElement('option');
+      option.value = key;
+      const owner = agent.mine ? text('我的', 'Mine') : agent.owner_name || agent.owner_handle || lead.owner_id;
+      option.textContent = agent.name + ' · ' + owner + (!agent.mine && agent.owner_handle && agent.owner_handle !== owner
+        ? ` (@${agent.owner_handle})` : '');
+      replyLead.append(option);
+    }
+    view.replyChoices = choices;
+    replyMode.value = view.policyDraft.mode;
+    replyLead.value = choices.has(view.policyDraft.lead) ? view.policyDraft.lead : '';
+    syncReplyFields();
   }
 
   function render() {
@@ -69,11 +114,13 @@ export function mountGroupManagement(document, {request, context, onChanged, onL
     const member = target.conversation.members?.find(item => item.group_member_id === memberId);
     const memberName = member?.username || text('该成员', 'this member');
     const rename = mode === 'rename';
+    const replyPolicy = mode === 'reply_policy';
     const choosing = mode === 'member';
     const transferFirst = mode === 'leave' && target.management.leave_requires_transfer === true;
     const recover = mode === 'transfer' && target.management.owner_inactive === true;
     const title = {
       rename: text('编辑群名', 'Edit group name'),
+      reply_policy: text('谁来回复', 'Who replies'),
       member: memberName,
       remove: text('移除成员', 'Remove member'),
       transfer: recover ? text('设置新群主', 'Set new owner') : text('转让群主', 'Transfer ownership'),
@@ -81,6 +128,8 @@ export function mountGroupManagement(document, {request, context, onChanged, onL
     }[mode];
     const description = {
       rename: '',
+      reply_policy: text('选择哪些智能体来判断是否回复普通群消息。用 @ 指定智能体，或用 @所有人请求全部智能体回复。',
+        'Choose which agents decide whether to reply to ordinary messages. Use @ to ask one agent or @all to ask every agent.'),
       member: '',
       remove: text(`将 ${memberName} 移出群聊？群消息及对方的工作区成员身份会保留。`,
         `Remove ${memberName} from this group? Group messages and their workspace membership will remain.`),
@@ -95,6 +144,7 @@ export function mountGroupManagement(document, {request, context, onChanged, onL
     node('heading').textContent = title;
     node('description').textContent = description;
     node('name-row').hidden = !rename;
+    node('reply-fields').hidden = !replyPolicy;
     node('member-actions').hidden = !choosing;
     node('remove').hidden = !choosing || !available(target, 'remove', memberId);
     node('transfer').hidden = !choosing || !available(target, 'transfer', memberId);
@@ -102,9 +152,10 @@ export function mountGroupManagement(document, {request, context, onChanged, onL
       : text('转让群主', 'Transfer ownership');
     node('choose-owner').hidden = !transferFirst;
     confirm.hidden = choosing || transferFirst;
-    confirm.textContent = rename ? text('保存', 'Save') : title;
+    confirm.textContent = rename || replyPolicy ? text('保存', 'Save') : title;
     confirm.classList.toggle('group-management-danger', mode === 'leave' || mode === 'remove');
-    setBusy(false);
+    if (replyPolicy) renderReplyFields();
+    else setBusy(false);
     say();
   }
 
@@ -117,12 +168,17 @@ export function mountGroupManagement(document, {request, context, onChanged, onL
     }
     view = {target, mode, memberId, blocked: false};
     if (mode === 'rename') nameField.value = target.conversation.title || '';
+    if (mode === 'reply_policy') {
+      const policy = target.conversation.group_agent_routing.policy;
+      view.policyDraft = {mode:REPLY_MODES.has(policy?.mode) ? policy.mode : 'default', lead:leadKey(policy?.lead)};
+    }
     render();
     dialog.showModal();
     if (mode === 'rename') {
       nameField.focus();
       nameField.select();
-    } else cancel.focus();
+    } else if (mode === 'reply_policy') replyMode.focus();
+    else cancel.focus();
   }
 
   function selectAction(mode) {
@@ -141,6 +197,7 @@ export function mountGroupManagement(document, {request, context, onChanged, onL
   function sync() {
     const target = managedGroup(context());
     node('rename').hidden = !target || !available(target, 'rename');
+    node('reply-policy').hidden = !target || !available(target, 'reply_policy');
     node('footer').hidden = !target || !available(target, 'leave');
     if (dialog.open && view && !sameGroup(target, view.target)) dialog.close();
   }
@@ -169,15 +226,27 @@ export function mountGroupManagement(document, {request, context, onChanged, onL
     return row;
   }
 
-  function checkAgain(next) {
+  function checkAgain(next, unavailable = false) {
     next.blocked = true;
     confirm.disabled = true;
-    say(text('群设置已变化，请刷新后再确认。', 'Group settings changed. Refresh before confirming.'), true);
+    say(unavailable ? text('所选智能体已不可用。刷新群信息后重新选择。', 'The selected agent is unavailable. Refresh group info to choose another.')
+      : text('群设置已变化，请刷新后再确认。', 'Group settings changed. Refresh before confirming.'), true);
   }
 
   dialog.addEventListener('close', () => { if (!dialog.open) view = null; });
   dialog.addEventListener('keydown', event => { if (event.key === 'Escape') event.stopPropagation(); });
   node('rename').addEventListener('click', () => open('rename'));
+  node('reply-policy').addEventListener('click', () => open('reply_policy'));
+  replyMode.addEventListener('change', () => {
+    if (view?.mode !== 'reply_policy' || replyMode.disabled || !REPLY_MODES.has(replyMode.value)) return;
+    view.policyDraft.mode = replyMode.value;
+    syncReplyFields();
+  });
+  replyLead.addEventListener('change', () => {
+    if (view?.mode !== 'reply_policy' || replyLead.disabled) return;
+    view.policyDraft.lead = replyLead.value;
+    syncReplyFields();
+  });
   node('leave').addEventListener('click', () => open('leave'));
   node('remove').addEventListener('click', () => selectAction('remove'));
   node('transfer').addEventListener('click', () => selectAction('transfer'));
@@ -207,6 +276,7 @@ export function mountGroupManagement(document, {request, context, onChanged, onL
     render();
     say(text('群信息已更新，请检查后确认。', 'Group info updated. Review it before confirming.'));
     if (next.mode === 'rename') nameField.focus();
+    else if (next.mode === 'reply_policy') replyMode.focus();
     else cancel.focus();
   });
 
@@ -232,6 +302,15 @@ export function mountGroupManagement(document, {request, context, onChanged, onL
         return;
       }
     }
+    if (action === 'reply_policy') {
+      const {mode, lead} = next.policyDraft;
+      payload.mode = mode;
+      if (mode === 'lead') {
+        const selected = next.replyChoices.get(lead);
+        if (!selected) return;
+        payload.lead = selected;
+      }
+    }
     const path = `/v1/workspaces/${target.workspace}/social/conversations/${target.conversationId}/management`;
     active.add(scopeKey);
     setBusy(true);
@@ -254,13 +333,14 @@ export function mountGroupManagement(document, {request, context, onChanged, onL
           managedGroup({...target, conversation})) {
         if (stillAsking) dialog.close();
         if (conversation.group_management.revision >= latest.management.revision) onChanged(conversation, target);
-        if (stillAsking && action !== 'rename') showMembers();
-        notify?.('ok', text('群信息已更新。', 'Group info updated.'));
+        if (stillAsking && (action === 'remove' || action === 'transfer')) showMembers();
+        notify?.('ok', action === 'reply_policy' ? text('群回复规则已更新。', 'Group reply policy updated.')
+          : text('群信息已更新。', 'Group info updated.'));
         return;
       }
     }
     if (!stillAsking) return;
-    if ([403, 404, 409].includes(result?.status)) checkAgain(next);
+    if ([403, 404, 409].includes(result?.status)) checkAgain(next, result.body?.error?.code === 'group_reply_lead_unavailable');
     else if (result?.status === 400 && action === 'rename') {
       say(text('群名无法保存，请检查后重试。', 'Check the group name and try again.'));
       nameField.focus();

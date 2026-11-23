@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { createBotSocial, setSharedBotSocial } from '../lib/c/bot-social.js'
 import { createAgentReplier, replyPrompt } from '../lib/c/agent-replies.js'
+import { createLegacyDispatch } from '../src/dispatch.js'
 import messenger from '../features/messenger/index.js'
 
 const SERVER = 'https://social.example.test'
@@ -48,6 +49,38 @@ test('messenger endpoints map to the shared conversation routes', async () => {
     'GET /v1/ot/conversations/otc_1/messages?before=10', 'POST /v1/ot/messages/otm_1/reactions', 'PUT /v1/ot/conversations/otc_1/agents/helper',
   ])
   assert.deepEqual(f.calls[0].body, { kind: 'dm', peer: 'bea.home' })
+})
+
+test('call consent forwards only the exact lease fields through either signed native call route', async () => {
+  const dir = fixture()
+  const workspace = 'a'.repeat(32)
+  const call_id = 'otcav_' + 'B'.repeat(26)
+  const peer_id = 'another-tab-fixture'
+  const recording_id = 'otrec_' + 'A'.repeat(26)
+  const pending = {id: recording_id, initiator_peer_id: peer_id, state: 'pending', participants: [{peer_id, allowed: true}]}
+  const sharedRoute = '/v1/ot/conversations/otc_room'
+  const f = fake({
+    ['GET ' + sharedRoute]: () => ({id: 'otc_room', kind: 'group', account_group: true}),
+    ['POST ' + sharedRoute + '/call/recording']: () => ({recording: pending}),
+    'POST /v1/ot/meeting-calls/recording': () => ({recording: pending}),
+  })
+  setSharedBotSocial(createBotSocial({ server: SERVER, credentialsPath: join(dir, 'bot', 'flybot-social.json'), fetch: f.fetch }))
+  const {v1} = messenger({dataDir: dir, async call(name) {
+    assert.equal(name, 'agents/personal-binding')
+    return {workspace_id: workspace}
+  }}).endpoints
+  const recordingBody = {call_id, peer_id, action: 'request'}
+  const group = `/v1/workspaces/${workspace}/social/conversations/otc_room/call/recording`
+  const meeting = '/v1/meeting-calls/recording'
+  assert.equal((await v1({method: 'POST', path: group, body: {...recordingBody, audio: 'invalid data'}})).status, 400)
+  assert.equal((await v1({method: 'POST', path: meeting, body: {...recordingBody, action: 'allow'}})).status, 400)
+  assert.equal(f.calls.length, 0)
+  assert.deepEqual(await v1({method: 'POST', path: group, body: recordingBody}), {status: 200, body: {recording: pending}})
+  const stop = {...recordingBody, action: 'stop', recording_id}
+  assert.deepEqual(await v1({method: 'POST', path: meeting, body: stop}), {status: 200, body: {recording: pending}})
+  assert.deepEqual(f.calls.filter(call => call.method === 'POST').map(({path, body}) => ({path, body})), [
+    {path: sharedRoute + '/call/recording', body: recordingBody}, {path: '/v1/ot/meeting-calls/recording', body: stop},
+  ])
 })
 
 test('the reply prompt fences other members\' text and keeps the owner\'s private data out', () => {
@@ -91,6 +124,61 @@ test('without a DS-Bot runtime nothing is fetched or answered', async () => {
   const r = createAgentReplier({ bs, host: { currentRuntime: () => null }, stateFile: join(dir, 's.json') })
   assert.deepEqual(await r.once(), { skipped: 'runtime' })
   assert.equal(f.calls.length, 0)
+})
+
+test('the background inbox keeps one long wait, restarts it on local wake and aborts it on stop', {timeout:3000}, async t => {
+  const reads = [Promise.withResolvers(), Promise.withResolvers(), Promise.withResolvers()]
+  let pulls = 0
+  let waiting = 0
+  const bs = {
+    async get(path, {signal}) {
+      assert.equal(path, '/v1/ot/agent-inbox?managed=1&after=0&wait_ms=8000')
+      assert.equal(waiting++, 0)
+      const reply = Promise.withResolvers()
+      signal.addEventListener('abort', () => reply.reject(signal.reason), {once:true})
+      reads[pulls++].resolve({signal, close:reply.resolve})
+      try { return await reply.promise } finally { waiting-- }
+    },
+  }
+  const host = {currentRuntime: () => ({chatTurn() {}})}
+  const replier = createAgentReplier({bs, host, stateFile:join(fixture(), 'inbox.json')})
+  const stop = replier.start()
+  t.after(stop)
+  assert.equal(replier.start(), stop)
+  const first = await reads[0].promise
+  replier.wake()
+  const second = await reads[1].promise
+  assert.equal(first.signal.aborted, true)
+  second.close({cursor:0, jobs:[], items:[], wake_supported:true})
+  const third = await reads[2].promise
+  stop()
+  await delay(20)
+  assert.equal(third.signal.aborted, true)
+  assert.equal(waiting, 0)
+  assert.equal(pulls, 3)
+})
+
+test('legacy inbox responses back off while a same-runtime send can wake the worker', {timeout:3000}, async t => {
+  const secondRead = Promise.withResolvers()
+  let pulls = 0
+  const bs = {
+    async get(_path, {signal}) {
+      if (++pulls === 1) return {cursor:0, jobs:[], items:[]}
+      secondRead.resolve()
+      return new Promise((_, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), {once:true})
+      })
+    },
+  }
+  const host = {currentRuntime: () => ({chatTurn() {}})}
+  const replier = createAgentReplier({bs, host, stateFile:join(fixture(), 'inbox.json')})
+  const stop = replier.start(1000)
+  t.after(stop)
+  await delay(25)
+  assert.equal(pulls, 1)
+  replier.wake()
+  await secondRead.promise
+  assert.equal(pulls, 2)
 })
 
 test('a managed group reply relays bounded snapshots from its owner before posting one durable reply', {timeout:3000}, async () => {
@@ -137,7 +225,7 @@ test('a managed group reply relays bounded snapshots from its owner before posti
   const claim_id = posts[0].body.claim_id
   assert.match(claim_id, CLAIM_ID)
   assert.deepEqual(posts.slice(0,2),[
-    {path:'/v1/ot/agent-reply-jobs/otj_live',body:{action:'start',attempt:2,claim_id,source_revision:3}},
+    {path:'/v1/ot/agent-reply-jobs/otj_live',body:{action:'start',attempt:2,claim_id,source_revision:3,accept_studio_reference:true,accept_group_text_turn:true}},
     {path:'/v1/ot/agent-reply-jobs/otj_live/progress',body:{attempt:2,claim_id,revision:1,text:'First visible'}},
   ])
   await Promise.all([second.promise,delay(350)])
@@ -210,7 +298,7 @@ test('a managed start replays its claim after a transient failure but a stale co
       assert.equal(ownerReplays.length,2)
       assert.equal(new Set(ownerReplays).size,1)
       assert.equal(claims.length,3)
-      assert.deepEqual(JSON.parse(ownerReplays[0]),{action:'start',attempt:4,claim_id:claimed,source_revision:7})
+      assert.deepEqual(JSON.parse(ownerReplays[0]),{action:'start',attempt:4,claim_id:claimed,source_revision:7,accept_studio_reference:true,accept_group_text_turn:true})
     })
   }
 })
@@ -221,10 +309,10 @@ test('a managed reply retries transient delivery once with the same payload and 
   const scenarios = [
     {name:'connection drops after commit', outcomes:['lost','ok'], replied:1},
     {name:'server recovers from 503', outcomes:[503,'ok'], replied:1},
-    {name:'repeated 503 runs out of retries', outcomes:[503,503], replied:0},
+    {name:'repeated 503 keeps the final reply pending', outcomes:[503,503], replied:0, pending:true},
     {name:'conflict is not retried', outcomes:[409], replied:0},
   ]
-  for (const {name,outcomes,replied} of scenarios) {
+  for (const {name,outcomes,replied,pending} of scenarios) {
     await t.test(name, async () => {
       const dir = fixture()
       const deliveries = []
@@ -271,9 +359,12 @@ test('a managed reply retries transient delivery once with the same payload and 
         job_id:'otj_live',attempt:2,claim_id,
       })
       assert.deepEqual(actions,[
-        {action:'start',attempt:2,claim_id,source_revision:3},
-        ...(replied ? [] : [{action:'fail',attempt:2,claim_id}]),
+        {action:'start',attempt:2,claim_id,source_revision:3,accept_studio_reference:true,accept_group_text_turn:true},
+        ...(replied || pending ? [] : [{action:'fail',attempt:2,claim_id}]),
       ])
+      const saved = JSON.parse(readFileSync(join(dir,'inbox.json'), 'utf8')).completions
+      assert.deepEqual(Object.values(saved).map(completion => completion.payload),
+        pending ? [JSON.parse(deliveries[0])] : [])
     })
   }
 })
@@ -282,6 +373,7 @@ test('manual group reply uses the same managed send and progress reads follow th
   const workspace = 'a'.repeat(32)
   const personal = 'b'.repeat(32)
   const wrong = 'c'.repeat(32)
+  const studio = {document_id:'d'.repeat(32),revision:3}
   const sharedProgress = {id:'otj_live',message_id:'otm_source',attempt:1,status:'running',text:''}
   const accountProgress = {...sharedProgress,status:'queued'}
   const f = fake({
@@ -290,7 +382,10 @@ test('manual group reply uses the same managed send and progress reads follow th
     [`GET /v1/ot/teams/by-workspace/${wrong}`]: () => ({id:'ott_other'}),
     'GET /v1/ot/conversations/otc_1': () => ({kind:'group',team_id:'ott_group',
       agents:[{agent_ref:'helper',name:'Helper',mine:true}]}),
+    'GET /v1/ot/conversations/otc_account': () => ({kind:'group',account_group:true,
+      agents:[{agent_ref:'helper',name:'Helper',mine:true}]}),
     'POST /v1/ot/conversations/otc_1/messages': input => ({id:'otm_source',body:input.body,
+      ...(input.studio_reference ? {studio_reference:{...input.studio_reference,excerpt:'private response field'}} : {}),
       reply_jobs:[{id:'otj_live',status:'queued',attempt:1}]}),
     'GET /v1/ot/conversations/otc_1/messages': () => ({messages:[
       {id:'otm_source',body:'Please help',author:{kind:'member',owner_id:'owner-a'}},
@@ -316,7 +411,17 @@ test('manual group reply uses the same managed send and progress reads follow th
   assert.deepEqual(f.calls.at(-1).body,{body:'Please help',workspace,direct:false,client_key:'group-reply-test-key',
     agent_mentions:[{owner_id:'owner-a',agent_id:'helper'}]})
   assert.equal((await feature.v1({...payload,path:from(wrong)+'/agent-replies'})).status,404)
-  assert.equal(f.calls.filter(call => call.method === 'POST').length,1)
+  const referenced = await feature.v1({...payload,body:{...payload.body,studio_reference:studio}})
+  assert.equal(referenced.status,202)
+  assert.deepEqual(referenced.body.message.studio_reference,studio)
+  assert.deepEqual(f.calls.at(-1).body.studio_reference,studio)
+  const unexpectedText = {...payload,body:{...payload.body,studio_reference:{...studio,excerpt:'must not accept'}}}
+  assert.equal((await feature.v1(unexpectedText)).status,400)
+  const accountReference = await feature.v1({...payload,path:from(personal,'otc_account')+'/agent-replies',
+    body:{...payload.body,studio_reference:studio}})
+  assert.equal(accountReference.status,404)
+  assert.equal(accountReference.body.error.code,'studio_reference_unavailable')
+  assert.equal(f.calls.filter(call => call.method === 'POST').length,2)
   const shared = await feature.v1({method:'GET',path:from(workspace)+'/reply-progress'})
   assert.deepEqual(shared,{status:200,body:{items:[sharedProgress]}})
   const account = await feature.v1({method:'GET',path:from(personal,'otc_account')+'/reply-progress'})
@@ -353,6 +458,27 @@ test('legacy chat forwards explicitly selected group agents to Bot Social', asyn
   const result = await e.v1({method:'POST',path,body:{body:'Question',agent_mentions:targets}})
   assert.equal(result.status, 201)
   assert.deepEqual(f.calls.at(-1).body.agent_mentions, targets)
+
+  const dispatch = createLegacyDispatch({endpoints:{'messenger/v1':e.v1}})
+  const url = new URL('http://dsbot/api/openteamily/legacy')
+  url.search = new URLSearchParams({feature:'messenger',path})
+  const file = new Blob(['the attachment'], {type:'text/plain'})
+  const form = new FormData()
+  form.set('file',file,'plan.txt')
+  form.set('body','Caption question')
+  form.set('agent_mentions',JSON.stringify(targets))
+  const send = () => dispatch(new Request(url,{method:'POST',body:form,headers:{'Idempotency-Key':'caption-group-fixture'}}))
+  assert.equal((await send()).status,201)
+  assert.deepEqual(f.calls.at(-1).body.agent_mentions,targets)
+  assert.equal(f.calls.at(-1).body.body,'Caption question')
+  assert.equal(f.calls.at(-1).body.attachment.title,'plan.txt')
+
+  const forwarded = f.calls.length
+  form.append('agent_mentions',JSON.stringify(targets))
+  assert.equal((await send()).status,400)
+  form.set('agent_mentions','invalid JSON')
+  assert.equal((await send()).status,400)
+  assert.equal(f.calls.length,forwarded)
 })
 
 test('only exported saved works add version metadata to group attachments and resource results', async () => {
@@ -380,7 +506,15 @@ test('only exported saved works add version metadata to group attachments and re
   const posted = await feature.v1({method:'POST',path:base+'/messages',
     body:{artifact_id:artifactId,artifact_revision:2}})
   assert.deepEqual(posted.body.message.attachment.resource,resource)
+  assert.equal(posted.body.message.body,'出货报告 · 版本 2')
   assert.deepEqual(f.calls.at(-1).body.attachment,{...file,resource})
+  const withNote = await feature.v1({method:'POST',path:base+'/messages',
+    body:{artifact_id:artifactId,artifact_revision:2,body:'  请核对出货报告。  '}})
+  assert.equal(withNote.body.message.body,'请核对出货报告。')
+  assert.deepEqual(withNote.body.message.attachment.resource,resource)
+  const invalidNote = await feature.v1({method:'POST',path:base+'/messages',
+    body:{artifact_id:artifactId,artifact_revision:2,body:{text:'not text'}}})
+  assert.equal(invalidNote.status,400)
   const plain = await feature.v1({method:'POST',path:base+'/messages',body:{attachment:{...file,resource}}})
   assert.equal(plain.body.message.attachment.resource,undefined)
   await feature.send({conversation_id:'otc_1',attachment:{...file,resource}})
@@ -426,6 +560,35 @@ test('member history forwards older, around and search cursors to Bot Social', a
     const sent=new URL(f.calls.at(-1).path,SERVER)
     for (const [key,value] of new URL(path+query,SERVER).searchParams) assert.equal(sent.searchParams.get(key),value)
   }
+})
+
+test('opening a saved reading position returns one workspace-scoped history window with pins', async () => {
+  const dir = fixture()
+  const personal = 'a'.repeat(32)
+  const team = 'b'.repeat(32)
+  const upstream = '/v1/ot/conversations/otc_1/messages'
+  const f = fake({
+    [`GET /v1/ot/teams/by-workspace/${team}`]: () => ({id:'ott_1'}),
+    'GET /v1/ot/conversations/otc_1': () => ({id:'otc_1',kind:'group',team_id:'ott_1'}),
+    [`GET ${upstream}`]: () => ({messages:[{id:'otm_old',seq:9,body:'Previous reading position'}],
+      pinned_messages:[{id:'otm_pin'}],next_before:9,has_newer:true}),
+  })
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:join(dir,'bot','flybot-social.json'),fetch:f.fetch}))
+  const feature = messenger({dataDir:dir, async call() {return {workspace_id:personal}}}).endpoints
+  const path = `/v1/workspaces/${team}/social/conversations/otc_1`
+  const page = await feature.v1({method:'GET',path:path+'?around=otm_old'})
+  assert.equal(page.status,200)
+  assert.equal(page.body.items[0].id,'otm_old')
+  assert.deepEqual(page.body.pinned_messages,[{id:'otm_pin'}])
+  assert.equal(page.body.cursor,9)
+  assert.equal(page.body.has_newer,true)
+  const requests = f.calls.filter(call => call.path.startsWith(upstream))
+  assert.equal(requests.length,1)
+  assert.deepEqual(Object.fromEntries(new URL(requests[0].path,SERVER).searchParams),
+    {limit:'50',pins:'1',around:'otm_old',workspace_id:team})
+  assert.equal((await feature.v1({method:'GET',path:path+'?around=otm_old&start=unread'})).status,400)
+  assert.equal((await feature.v1({method:'GET',path:path+'?around=otm_old&around=other'})).status,400)
+  assert.ok(f.calls.every(call => call.method === 'GET'))
 })
 
 test('attachment search uses the owner binding and existing chat download metadata', async () => {
@@ -476,5 +639,212 @@ test('group sender retry forwards the displayed attempt to Bot Social', async ()
   const body = {job_id:'otj_live',attempt:3}
   const result = await feature.v1({method:'POST',path,body})
   assert.deepEqual(result,{status:200,body:{reply_jobs:jobs}})
-  assert.deepEqual(f.calls.at(-1),{method:'POST',path:upstream,body})
+  assert.deepEqual(f.calls.at(-1),{method:'POST',path:upstream,body:{...body,workspace}})
+})
+
+test('Studio claims only expose a matching pin to a stateless group turn', async () => {
+  const studio = {document_id:'f'.repeat(32),revision:4}
+  const receipt = { ...studio, title:'Release', excerpt:'Use staging first 🌿', truncated:false }
+  const item = {job_id:'otj_studio',attempt:2,conversation_id:'otc_group',agent_ref:'helper',agent_name:'Helper',
+    mode:'mention',message:{id:'otm_studio',revision:1,studio_reference:{...studio,excerpt:'not authorized from inbox'}}}
+  for (const [claim, ok] of [
+    [{studio_reference:receipt},true],
+    [{studio_reference:{...receipt,revision:5}},false],
+    [{studio_reference_unavailable:true},false],
+    [{},false],
+  ]) {
+    const calls = []
+    const replier = createAgentReplier({
+      stateFile:join(fixture(),'cursor.json'),
+      bs:{
+        async get() { return {jobs:[item]} },
+        async post(path, body) {
+          calls.push(body.action || path)
+          if (body.action === 'start') return claim
+        },
+      },
+      host:{
+        currentRuntime:() => ({chatTurn() {}}),
+        async call(endpoint, payload) {
+          assert.equal(endpoint,'agents/groupTextTurn')
+          assert.equal(payload.agent_id,'helper')
+          assert.equal(payload.includePersona,true)
+          assert.match(payload.text,/Use staging first 🌿/)
+          assert.doesNotMatch(payload.text,/not authorized from inbox/)
+          assert.equal(typeof payload.onProgress,'function')
+          calls.push(endpoint)
+          return {text:'First use staging.'}
+        },
+      },
+    })
+    assert.equal((await replier.once()).replied, Number(ok))
+    assert.deepEqual(calls, ok
+      ? ['start','agents/groupTextTurn','/v1/ot/conversations/otc_group/agent-messages']
+      : ['start','fail'])
+  }
+})
+
+test('group chooser forwards distinct owner-agent pairs, projected attribution, and rejects old servers', async () => {
+  const workspace = 'a'.repeat(32)
+  const agent = 'f'.repeat(32)
+  const targets = [{owner_id:'owner-a',agent_id:agent},{owner_id:'owner-b',agent_id:agent}]
+  const owner = {owner_id:'owner-b',display_name:'Bea',handle:'bea.home'}
+  let supportsPairs = false
+  const f = fake({
+    'GET /v1/ot/me': () => ({owner_id:'owner-a',handle:'ann.home'}),
+    ['GET /v1/ot/teams/by-workspace/'+workspace]: () => ({id:'ott_group'}),
+    'GET /v1/ot/conversations/otc_1': () => ({kind:'group',team_id:'ott_group', ...(supportsPairs ? {
+      group_agent_requests:true,
+    } : {})}),
+    'POST /v1/ot/conversations/otc_1/messages': () => ({id:'otm_requested',reply_jobs:[{
+      id:'otj_reply', agent_id:agent, agent_owner_id:'owner-b', agent_owner_name:'Bea',status:'queued',
+    }]}),
+    'GET /v1/ot/conversations/otc_1/messages': () => ({messages:[
+      {id:'otm_result',body:'Done',author:{kind:'agent',agent_ref:agent,name:'Helper',owner},reply_job_id:'otj_reply'},
+      {id:'otm_unmanaged',body:'Hello',author:{kind:'agent',agent_ref:agent,name:'Helper',owner}},
+    ]}),
+  })
+  const dir = fixture()
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:join(dir,'bot','flybot-social.json'),fetch:f.fetch}))
+  const feature = messenger({dataDir:dir, async call() {return {workspace_id:'b'.repeat(32)}}}).endpoints
+  const room = '/v1/workspaces/'+workspace+'/social/conversations/otc_1'
+  const send = {method:'POST',path:room+'/agent-replies',idempotency_key:'group-pairs-fixture',
+    body:{prompt:'Please help',agent_targets:targets}}
+  assert.equal((await feature.v1(send)).status,503)
+  assert.equal(f.calls.filter(call=>call.method==='POST').length,0)
+  supportsPairs = true
+  for (const bad of [[targets[0],targets[0]], [{...targets[0],owner_id:'a/b'}], [{...targets[1],run_tools:true}]]) {
+    assert.equal((await feature.v1({...send,body:{...send.body,agent_targets:bad}})).status,400)
+  }
+  assert.equal((await feature.v1({...send,body:{...send.body,agent_ids:[agent]}})).status,400)
+  const accepted = await feature.v1(send)
+  assert.equal(accepted.status,202)
+  assert.deepEqual(f.calls.at(-1).body,{body:'Please help',workspace,direct:false,agent_mentions:targets,
+    client_key:'group-pairs-fixture',group_agent_request:true})
+  assert.equal(accepted.body.message.reply_jobs[0].agent_owner_name,'Bea')
+  const transcript = await feature.v1({method:'GET',path:room})
+  assert.equal(transcript.body.conversation.group_agent_requests,true)
+  assert.equal(transcript.body.items[0].agent_owner_id,'owner-b')
+  assert.equal(transcript.body.items[0].agent_owner_handle,'bea.home')
+  assert.equal(transcript.body.items[1].agent_owner_id,undefined)
+})
+
+test('a teammate request is text-only and fails closed if its claim lacks the restriction', async () => {
+  const job = {job_id:'otj_teammate',attempt:1,conversation_id:'otc_group',agent_ref:'helper',agent_name:'Helper',
+    mode:'mention',message:{id:'otm_member',revision:1},group_text_only:true,
+    context:[{author:{display_name:'Member'},body:'Summarize our project'}]}
+  for (const [receipt, replies] of [[{group_text_only:true},1],[{},0]]) {
+    const actions = []
+    const replier = createAgentReplier({
+      stateFile:join(fixture(),'state.json'),
+      bs:{
+        async get(){return {jobs:[job]}},
+        async post(path,body) {
+          actions.push(body.action || path)
+          if (body.action === 'start') {
+            assert.equal(body.accept_group_text_turn,true)
+            return receipt
+          }
+        },
+      },
+      host:{
+        currentRuntime:() => ({chatTurn() {}}),
+        async call(endpoint,payload) {
+          assert.equal(endpoint,'agents/groupTextTurn')
+          assert.equal(payload.includePersona,false)
+          assert.match(payload.text,/Summarize our project/)
+          return {text:'A teammate’s answer'}
+        },
+      },
+    })
+    assert.equal((await replier.once()).replied,replies)
+    assert.deepEqual(actions,['start',replies ? '/v1/ot/conversations/otc_group/agent-messages' : 'fail'])
+  }
+})
+
+test('direct agent requests use exact pairs and cannot attach documents or cross into a group', async () => {
+  const workspace = 'a'.repeat(32)
+  const teamWorkspace = 'b'.repeat(32)
+  const room = '/v1/workspaces/'+workspace+'/social/conversations/otc_direct'
+  const social = '/v1/ot/conversations/otc_direct'
+  const targets = [{owner_id:'owner-b',agent_id:'helper'}]
+  let conversation = {id:'otc_direct',kind:'dm',direct:true}
+  let failure
+  const f = fake({
+    [`GET ${social}`]: () => conversation,
+    [`GET ${social}/messages`]: () => ({messages:[]}),
+    [`POST ${social}/messages`]: () => ({id:'otm_direct',body:'Please help'}),
+    [`GET /v1/ot/teams/by-workspace/${teamWorkspace}`]: () => ({id:'ott_team'}),
+    'GET /v1/ot/me': () => ({owner_id:'owner-a',handle:'ann.home'}),
+  })
+  const dir = fixture()
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:join(dir,'bot','flybot-social.json'),fetch(url, init) {
+    if (failure && init.method === 'POST' && url.endsWith(social+'/messages')) {
+      return new Response(JSON.stringify({error:{code:failure,message:'Direct request rejected'}}),{status:409})
+    }
+    return f.fetch(url,init)
+  }}))
+  const feature = messenger({dataDir:dir, async call(){return {workspace_id:workspace}}}).endpoints
+  const send = {method:'POST',path:room+'/messages',idempotency_key:'scoped-direct-fixture',
+    body:{body:'Please help',agent_mentions:targets,reply_to:'otm_quote',direct_agent_request:true}}
+  assert.equal((await feature.v1(send)).status,404)
+  conversation.direct_agent_requests = true
+  assert.equal((await feature.v1({...send,body:{...send.body,artifact_id:'secret'}})).status,400)
+  assert.equal((await feature.v1({...send,body:{...send.body,agent_mentions:[targets[0],targets[0]]}})).status,400)
+  assert.equal(f.calls.filter(call=>call.method==='POST').length,0)
+  assert.equal((await feature.v1(send)).status,201)
+  assert.deepEqual(f.calls.find(call=>call.method==='POST').body,{direct:true,direct_agent_request:true,body:'Please help',
+    reply_to:'otm_quote',agent_mentions:targets,client_key:'scoped-direct-fixture'})
+  assert.equal((await feature.v1({method:'GET',path:room})).body.conversation.direct_agent_requests,true)
+  const fromTeam = {...send,path:send.path.replace(workspace,teamWorkspace)}
+  assert.equal((await feature.v1(fromTeam)).status,201)
+  assert.equal(f.calls.filter(call=>call.method==='POST').at(-1).body.workspace,teamWorkspace)
+  for (failure of ['direct_agent_unavailable','direct_agent_request_conflict']) {
+    const result = await feature.v1(fromTeam)
+    assert.equal(result.status,409)
+    assert.equal(result.body.error.code,failure)
+  }
+  failure = undefined
+  conversation = {...conversation,kind:'group'}
+  assert.equal((await feature.v1(send)).status,404)
+})
+
+test('a direct reply uses only the prompt and quote returned by its scoped claim', async () => {
+  const job = {job_id:'otj_direct',attempt:1,conversation_id:'otc_direct',agent_ref:'helper',
+    mode:'mention',direct_text_only:true,message:{id:'otm_member',revision:1,body:'inbox secret'},
+    context:[{author:{display_name:'Peer'},body:'other private history'}],
+    group_memories:[{id:'note',title:'secret',body:'memory secret'}]}
+  const approved = {direct_text_only:true,direct_prompt:'Approved direct request',quoted_message:{text:'Approved quote'}}
+  for (const [receipt, replies] of [[approved,1],[{direct_text_only:true},0],[{direct_prompt:'unscoped'},0]]) {
+    const actions = []
+    const replier = createAgentReplier({
+      stateFile:join(fixture(),'direct-state.json'),
+      bs:{
+        async get(){return {jobs:[job]}},
+        async post(path,body) {
+          actions.push(body.action || 'deliver')
+          if (body.action === 'start') {
+            assert.equal(body.accept_direct_text_turn,true)
+            assert.equal(body.source_revision,1)
+            return receipt
+          }
+          assert.equal(body.group_memory_ids,undefined)
+        },
+      },
+      host:{
+        currentRuntime:() => ({chatTurn() {}}),
+        async call(endpoint,payload) {
+          assert.equal(endpoint,'agents/groupTextTurn')
+          assert.equal(payload.direct,true)
+          assert.equal(payload.includePersona,undefined)
+          assert.match(payload.text,/Approved direct request/)
+          assert.match(payload.text,/Approved quote/)
+          assert.doesNotMatch(payload.text,/secret|private history/)
+          return {text:'Scoped direct answer'}
+        },
+      },
+    })
+    assert.equal((await replier.once()).replied,replies)
+    assert.deepEqual(actions,['start',replies ? 'deliver' : 'fail'])
+  }
 })

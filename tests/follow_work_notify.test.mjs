@@ -34,6 +34,6 @@ test('a follow_work notification names the author and the new work', () => {
   );
   assert.equal(
     notificationSummary({kind: 'follow_work', actor_username: '', title: ''}),
-    '你关注的作者发布了新作品',
+    '你关注的作者 发布了新作品',
   );
 });

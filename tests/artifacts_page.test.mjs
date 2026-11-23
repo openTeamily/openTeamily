@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {artifactNoticeTarget, mountArtifactNotifications} from '../openteamily/static/artifacts/notifications.mjs';
+import {studioDiscussionContext} from '../openteamily/static/artifacts/studio-discussion.mjs';
+import {sharedWorkCopyToken} from '../openteamily/static/artifacts/shared-work-copy.mjs';
 import {
   websiteTitle, websiteStub, websitePrompt, saveableSocialMessage, saveableAgentMessage,
   socialSavePath, agentSavePath, defaultSaveTitle, conversationChatHref,
@@ -9,11 +11,33 @@ import {
 } from '../openteamily/static/shell/thumb.mjs';
 import {
   csrfCookie, listQuery, visibleArtifacts, artifactMatchesType,
-  artifactMatchesModified, artifactModifiedBounds, viewFromSearch, queryForView, FILE_TYPE_LABELS,
+  artifactMatchesModified, artifactModifiedBounds, viewFromSearch, queryForView, artifactOrigin, FILE_TYPE_LABELS,
   sessionFilterChoices, applyDirectoryCollapsed, artifactDeletePrompt, mount,
   createArtifactActivity,
   meetingRows, meetingActionLabel, meetingTimeLabel, meetingsForScope,
 } from '../openteamily/static/artifacts/app.mjs';
+
+test('a shared copy deep link accepts only one exact private share token', () => {
+  const token = 'Ab_Cd-'.repeat(7) + 'e';
+  assert.equal(sharedWorkCopyToken('#shared-work=' + token),token);
+  assert.equal(sharedWorkCopyToken('#shared-work=' + token + '&shared-work=' + token),'');
+  assert.equal(sharedWorkCopyToken('#shared-work=' + token + '&workspace=' + 'a'.repeat(32)),'');
+  assert.equal(sharedWorkCopyToken('#shared-work=%2F'),'');
+  assert.equal(sharedWorkCopyToken('#shared-work=x'),'');
+});
+
+test('Studio discussion identifies the saved revision and bounds the excerpt on Unicode characters', () => {
+  const source = {title:'行动方案', revision:7, body:'核对负责人'};
+  assert.deepEqual(studioDiscussionContext(source), {
+    text:'团队文档《行动方案》 · 版本 7\n\n核对负责人', clipped:false,
+  });
+  assert.deepEqual(studioDiscussionContext({...source, body:' \n  '}), {text:'',clipped:false});
+  const excerpt = studioDiscussionContext({...source, body:'📋'.repeat(3000)});
+  assert.equal(excerpt.clipped,true);
+  assert.ok(excerpt.text.length <= 2900);
+  assert.match(excerpt.text,/…$/u);
+  assert.equal(excerpt.text,Buffer.from(excerpt.text).toString());
+});
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -315,13 +339,45 @@ test('viewFromSearch and queryForView stay on the recorded allowlist', () => {
   assert.deepEqual(viewFromSearch('?view=created'), {kind: 'all', scope: 'mine'});
   assert.deepEqual(viewFromSearch('?view=starred'), {kind: 'all', scope: 'favorites'});
   assert.deepEqual(viewFromSearch('?view=memory'), {kind: 'all', scope: 'memory'});
+  assert.deepEqual(viewFromSearch('?view=automation'), {kind: 'all', scope: 'automation'});
   assert.deepEqual(viewFromSearch('?view=meetings'), {kind: 'meetings', scope: 'all'});
   assert.deepEqual(viewFromSearch('?view=unknown'), {kind: 'all', scope: 'all'});
   assert.equal(queryForView('all', 'all'), '');
   assert.equal(queryForView('all', 'mine'), '?view=created');
   assert.equal(queryForView('all', 'favorites'), '?view=starred');
   assert.equal(queryForView('all', 'memory'), '?view=memory');
+  assert.equal(queryForView('all', 'automation'), '?view=automation');
   assert.equal(queryForView('meetings', 'all'), '?view=meetings');
+});
+
+test('Space opens only the saved source coordinates from the selected workspace', () => {
+  const workspace = 'a'.repeat(32);
+  const automation = 'b'.repeat(32);
+  const run = 'c'.repeat(32);
+  const result = {workspace_id: workspace, source: {
+    kind: 'automation_run', id: run, automation_id: automation, automation_title: '整理日报',
+  }};
+  assert.deepEqual(visibleArtifacts([result, {source:{kind:'agent_task'}}, {}], {scope:'automation'}), [result]);
+  assert.deepEqual(artifactOrigin(result, workspace), {
+    kind:'自动化运行', title:'整理日报', label:'查看原运行',
+    href:`/automations?workspace=${workspace}&automation=${automation}&run=${run}`,
+  });
+  assert.equal(artifactOrigin(result, 'd'.repeat(32)).href, '');
+  assert.equal(artifactOrigin({...result, source:{...result.source, id:'../../other'}}, workspace).href, '');
+  const step = {workspace_id:workspace,source:{kind:'team_run_step',id:run,position:1,run_title:'整理日报'}};
+  assert.deepEqual(artifactOrigin(step,workspace),{kind:'团队任务',title:'整理日报',label:'查看来源步骤',
+    href:`/team-runs#workspace=${workspace}&run=${run}&step=1`});
+  assert.equal(artifactOrigin(step,'d'.repeat(32)).href,'');
+  assert.equal(artifactOrigin({...step,source:{...step.source,position:8}},workspace).href,'');
+  assert.equal(artifactOrigin({...step,source:{...step.source,position:'1'}},workspace).href,'');
+  const chat = {workspace_id:workspace, source:{
+    kind:'agent_message', id:'message_01', conversation_id:'otc_example', conversation_title:'工作群',
+  }};
+  assert.equal(artifactOrigin(chat, workspace).href, `/chat#workspace=${workspace}&social=otc_example&message=message_01`);
+  chat.source = {...chat.source, id:run, agent_id:automation, conversation_id:'d'.repeat(32)};
+  assert.equal(artifactOrigin(chat, workspace).href,
+    `/chat#workspace=${workspace}&agent=${automation}&conversation=${chat.source.conversation_id}&message=${run}`);
+  assert.deepEqual(artifactOrigin({source:{kind:'agent_task', id:run}}, workspace), {kind:'智能体任务'});
 });
 
 test('applyDirectoryCollapsed hides the directory in session only', () => {
@@ -632,8 +688,8 @@ async function openArtifactsPage({items = [], artifact, meetings = [], meetingsS
       if (meetingsStatus !== 200) return reply({status: meetingsStatus, body: meetingsError || {}});
       return reply({body: {items: meetings, cursor: null}});
     }
-    if (path === '/v1/runtime/tasks' && method === 'GET') return reply({body: {items: tasks}});
-    const taskSave = /^\/v1\/runtime\/tasks\/([0-9a-f]+)\/artifact$/.exec(path);
+    if (path === '/v1/skills/runs' && method === 'GET') return reply({body: {items: tasks.map(task => ({task, verified: task.status === 'succeeded' && !!task.result?.text?.trim()}))}});
+    const taskSave = /^\/v1\/skills\/runs\/([0-9a-f]+)\/artifact$/.exec(path);
     if (taskSave && method === 'POST') {
       saveCalls.push({id: taskSave[1], body: options.body ? JSON.parse(options.body) : null});
       if (saveReply) return reply(saveReply);
@@ -759,12 +815,108 @@ test('Space sends the saved version to the selected private or group conversatio
 
     const choices = await open();
     await choices.find(button => button.textContent === groupChoice.textContent).dispatch('click');
+    page.elements.get('send-to-chat-note').value = '请先核对清单。';
     await confirm.dispatch('click');
     assert.equal(dialog.hidden, true);
     assert.equal(sends[2].path, socialPath);
     assert.equal(sends[2].body.artifact_revision, 5);
+    assert.equal(sends[2].body.body, '请先核对清单。');
     assert.notEqual(sends[2].key, sends[1].key);
   } finally { page.close(); }
+});
+
+test('Space starts an agent thread only on confirmation and links to the exact versioned send', async () => {
+  const agent = 'b'.repeat(32);
+  const thread = 'c'.repeat(32);
+  const message = 'd'.repeat(32);
+  const item = {id:'a1', title:'交付原件', kind:'document', revision:4, created_by:'alice'};
+  const collection = '/v1/workspaces/w1/agents/' + agent + '/conversations';
+  const sent = [];
+  const page = await openArtifactsPage({items:[item],native:true,extraRequest(path,options) {
+    if (path === '/v1/workspaces/w1/social/conversations?limit=100') return reply({body:{items:[]}});
+    if (path === '/v1/workspaces/w1/agents?limit=100&include=conversations') {
+      return reply({body:{items:[{id:agent,name:'资料助手'},{id:'e'.repeat(32),name:'已删除',native_deleted:true}],conversations:[]}});
+    }
+    if (path === collection || path === collection + '/' + thread + '/messages') {
+      sent.push({path,body:JSON.parse(options.body),key:options.headers['Idempotency-Key']});
+      if (path === collection) {
+        return sent.length === 1 ? reply({status:503})
+          : reply({status:200,body:{conversation:{id:thread,workspace_id:'w1',agent_id:agent}}});
+      }
+      return sent.length === 3 ? reply({status:503}) : reply({status:202,body:{message:{id:message}}});
+    }
+  }});
+  try {
+    const dialog = page.elements.get('send-to-chat-dialog');
+    const select = page.elements.get('send-to-chat-agent');
+    const confirm = page.elements.get('send-to-chat-confirm');
+    page.elements.get('send-to-chat-list').querySelectorAll = () => [];
+    await page.created.find(node=>node.className === 'artifact-menu-send').dispatch('click');
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(page.elements.get('send-to-chat-new').hidden,false);
+    assert.deepEqual(select.children.map(option=>option.value),['',agent]);
+    select.value = agent;
+    await select.dispatch('change');
+    page.elements.get('send-to-chat-note').value = '这个版本缺哪些交付项？';
+    assert.deepEqual(sent,[]);
+    await confirm.dispatch('click');
+    assert.equal(dialog.hidden,false);
+    assert.equal(page.elements.get('send-to-chat-note').value,'这个版本缺哪些交付项？');
+    await confirm.dispatch('click');
+    assert.equal(dialog.hidden,false);
+    await confirm.dispatch('click');
+    assert.equal(dialog.hidden,true);
+    assert.deepEqual(sent[1],sent[0]);
+    assert.deepEqual(sent[3],sent[2]);
+    assert.deepEqual(sent[3].body,{artifact_id:item.id,artifact_revision:4,body:'这个版本缺哪些交付项？'});
+    assert.equal(page.elements.get('status').children.at(-1).href,
+      '/chat#workspace=w1&agent=' + agent + '&conversation=' + thread + '&message=' + message);
+  } finally { page.close(); }
+});
+
+test('Space enables creation when the workspace resolves even if its catalogue is still loading', {timeout:3000}, async () => {
+  const {doc,form} = fakeDocument();
+  const el = id => doc.getElementById(id);
+  form.hidden = true;
+  const workspaceStarted = deferred();
+  const workspace = deferred();
+  const catalogueStarted = deferred();
+  const catalogue = deferred();
+  const saved = globalThis.document;
+  globalThis.document = doc;
+  const loading = mount(doc,{fetcher:async path => {
+    if (path === '/v1/auth/session') return reply({body:{user:{id:'u1',username:'alice'}}});
+    if (path === '/v1/workspaces?limit=100') {
+      workspaceStarted.finish();
+      return workspace.promise;
+    }
+    if (path === '/v1/workspaces/w1/artifacts') {
+      catalogueStarted.finish();
+      return catalogue.promise;
+    }
+    return reply();
+  }});
+  try {
+    await workspaceStarted.promise;
+    assert.equal(el('main-panel').hidden,false);
+    assert.equal(el('workspace-pending').hidden,false);
+    assert.equal(el('new-menu-button').disabled,true);
+    assert.equal(el('new-artifact').disabled,true);
+    await el('new-artifact').dispatch('click');
+    assert.equal(form.hidden,true);
+    workspace.finish(reply({body:{items:[{id:'w1',name:'Desk'}]}}));
+    await catalogueStarted.promise;
+    assert.equal(el('workspace-pending').hidden,true);
+    assert.equal(el('new-menu-button').disabled,false);
+    await el('new-artifact').dispatch('click');
+    await new Promise(setImmediate);
+    assert.equal(form.hidden,false);
+  } finally {
+    workspace.finish(reply());
+    catalogue.finish(reply({body:{items:[]}}));
+    await loading;
+    if (saved === undefined) delete globalThis.document; else globalThis.document = saved;
+  }
 });
 
 test('artifactDeletePrompt names the artifact and never echoes an empty title', () => {
@@ -1187,14 +1339,14 @@ test('saving a completed task artifact posts the task id and lists the document'
   const page = await openArtifactsPage({
     items: [],
     tasks: [
-      {id: 'abc123', status: 'succeeded', prompt: '整理周报', workspace_id: 'w1', result: {text: '周报正文'}},
-      {id: 'def456', status: 'running', prompt: '还在跑', workspace_id: 'w1', result: {}},
-      {id: 'aaa999', status: 'succeeded', prompt: '空结果', workspace_id: 'w1', result: {text: '   '}},
+      {id: 'a'.repeat(32), status: 'succeeded', prompt: '整理周报', workspace_id: 'w1', result: {text: '周报正文'}},
+      {id: 'd'.repeat(32), status: 'running', prompt: '还在跑', workspace_id: 'w1', result: {}},
+      {id: 'b'.repeat(32), status: 'succeeded', prompt: '空结果', workspace_id: 'w1', result: {text: '   '}},
     ],
   });
   try {
     await page.doc.getElementById('empty-save-agent').dispatch('click');
-    assert.equal(page.calls.some(call => call.path === '/v1/runtime/tasks' && call.method === 'GET'), true,
+    assert.equal(page.calls.some(call => call.path === '/v1/skills/runs' && call.method === 'GET'), true,
                  'the agent save panel must read the real task list');
     const dialog = page.created.find(node => node.id === 'agent-task-dialog');
     assert.ok(dialog, 'the panel is rendered');
@@ -1206,7 +1358,7 @@ test('saving a completed task artifact posts the task id and lists the document'
     assert.equal(save.textContent, '保存');
     await save.dispatch('click');
     assert.equal(page.saveCalls.length, 1);
-    assert.equal(page.saveCalls[0].id, 'abc123');
+    assert.equal(page.saveCalls[0].id, 'a'.repeat(32));
     assert.deepEqual(page.saveCalls[0].body, {workspace_id: 'w1'});
     assert.equal(page.elements.get('status').textContent, '已保存。');
     const list = page.elements.get('artifact-list');
@@ -1220,7 +1372,7 @@ test('saving a completed task artifact posts the task id and lists the document'
 test('a refused save shows the server reason and keeps the task on screen', async () => {
   const page = await openArtifactsPage({
     items: [],
-    tasks: [{id: 'abc123', status: 'succeeded', prompt: '整理周报', workspace_id: 'w1', result: {text: '正文'}}],
+    tasks: [{id: 'a'.repeat(32), status: 'succeeded', prompt: '整理周报', workspace_id: 'w1', result: {text: '正文'}}],
     saveReply: {status: 409, body: {error: {code: 'conflict', message: 'Only a succeeded task with a text result can be saved'}}},
   });
   try {
@@ -1243,7 +1395,7 @@ test('a refused save shows the server reason and keeps the task on screen', asyn
 test('an unauthorised save asks the user to sign in instead of failing silently', async () => {
   const page = await openArtifactsPage({
     items: [],
-    tasks: [{id: 'abc123', status: 'succeeded', prompt: '整理周报', workspace_id: 'w1', result: {text: '正文'}}],
+    tasks: [{id: 'a'.repeat(32), status: 'succeeded', prompt: '整理周报', workspace_id: 'w1', result: {text: '正文'}}],
     saveReply: {status: 401, body: {error: {code: 'unauthorized', message: 'Sign in first'}}},
   });
   try {
@@ -1430,9 +1582,14 @@ test('saved result deep links require an exact authorized workspace and artifact
   const {artifactTargetFromSearch}=await import('../openteamily/static/artifacts/app.mjs');
   const wid='a'.repeat(32),aid='b'.repeat(32);
   assert.deepEqual(artifactTargetFromSearch('?workspace='+wid+'&artifact='+aid),{workspace:wid,artifact:aid});
+  assert.deepEqual(artifactTargetFromSearch('?workspace='+wid+'&artifact='+aid+'&revision=12'),{workspace:wid,artifact:aid,revision:12});
   assert.deepEqual(artifactTargetFromSearch('?workspace='+wid),{workspace:wid});
   assert.equal(artifactTargetFromSearch('?new=document'),null);
   for(const query of ['?artifact='+aid,'?workspace='+wid+'&artifact=','?workspace='+wid+'&workspace='+wid,'?workspace=../private&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&new=document','?workspace='+wid+'&artifact='+aid+'&x=1'])assert.deepEqual(artifactTargetFromSearch(query),{invalid:true});
+  for(const revision of ['0','-1','01','+1','1.2','100000000','1&revision=2']) {
+    assert.deepEqual(artifactTargetFromSearch('?workspace='+wid+'&artifact='+aid+'&revision='+revision),{invalid:true});
+  }
+  assert.deepEqual(artifactTargetFromSearch('?workspace='+wid+'&revision=1'),{invalid:true});
 });
 
 const linkedWorkspace = 'a'.repeat(32);
@@ -1460,7 +1617,8 @@ function linkFixture(respond, search = linkedSearch, {native = false} = {}) {
   }
   page.form.hidden = true;
   const view = new FakeNode();
-  view.location = {search, hash: '', pathname: '/space'};
+  const initial = new URL('/space'+search, 'https://example.test');
+  view.location = {search:initial.search, hash:initial.hash, pathname:initial.pathname};
   view.history = {
     replaceState(_state, _title, relative) {
       const url = new URL(relative, 'https://example.test');
@@ -1483,6 +1641,39 @@ function linkFixture(respond, search = linkedSearch, {native = false} = {}) {
   };
   return {...page, view, calls, mounted: mount(page.doc, {fetcher})};
 }
+
+test('Space keeps the selected workspace in its catalog address and reloads the intended catalog', async () => {
+  const personal = 'c'.repeat(32);
+  const respond = path => {
+    if (path === '/v1/workspaces?scope=personal') return reply({body: {items:[{id:personal,name:'个人空间'}]}});
+    if (path === '/v1/workspaces?limit=100') return reply({body: {items:[
+      {id:personal,name:'个人空间'}, {id:linkedWorkspace,name:'团队空间'},
+    ]}});
+    if (path === '/v1/workspaces/'+personal+'/artifacts' || path === linkedCatalog) return reply({body: {items:[]}});
+  };
+  const page = linkFixture(respond,'');
+  await page.mounted;
+  await nextTask();
+  const picker = page.elements.get('workspace');
+  picker.value = linkedWorkspace;
+  await picker.dispatch('change');
+  assert.equal(page.view.location.hash, '#workspace='+linkedWorkspace);
+  assert.equal(page.view.location.search, '');
+  const restored = linkFixture(respond,page.view.location.hash);
+  await restored.mounted;
+  assert.equal(restored.elements.get('workspace').value,linkedWorkspace);
+  assert.ok(restored.calls.some(call => call.path === linkedCatalog));
+  assert.equal(restored.calls.some(call => call.path === '/v1/workspaces/'+personal+'/artifacts'),false);
+});
+
+test('Space leaves an inaccessible pinned workspace unselected before starting any catalog read', async () => {
+  const page = linkFixture(() => undefined,'#workspace='+'d'.repeat(32));
+  await page.mounted;
+  assert.equal(page.elements.get('workspace').value,'');
+  assert.match(page.elements.get('status').textContent,/无法访问此工作区/);
+  assert.equal(page.elements.get('new-menu-button').disabled,true);
+  assert.equal(page.calls.some(call => /\/artifacts(?:\?|$)/.test(call.path)),false);
+});
 
 test('copying a historic version recovers a lost receipt without discarding an unsaved Space draft', async () => {
   const copy = {...linkedRecord,id:'c'.repeat(32),title:'历史副本',body:'第一版内容'};
@@ -1576,6 +1767,52 @@ test('an authorized direct link opens editable content with the catalog and opti
   directory.finish(reply({body: {items: [linkedRecord]}}));
   await nextTask();
   assert.equal(artifactRows(page.elements.get('artifact-list')).length, 1);
+});
+
+test('Space follows a saved revision while idle and keeps an edit typed during the next read', async () => {
+  const activityPath = linkedCatalog + '/activity?artifact=' + linkedArtifact;
+  const stale = {...linkedRecord, revision: 2, body: '另一会话已保存'};
+  const newer = {...linkedRecord, revision: 3, body: '更新的服务器内容'};
+  const pending = deferred();
+  const requested = deferred();
+  let remote = linkedRecord;
+  const page = linkFixture((path, options) => {
+    if (path === linkedCatalog) return reply({body: {items: []}});
+    if (path === activityPath) return reply({body: {version: String(remote.revision).repeat(64), revision: remote.revision}});
+    if (path === linkedDetail && options.method === 'POST') {
+      return reply({status: 409, body: {error: {code: 'conflict', current: remote}}});
+    }
+    if (path === linkedDetail && remote === newer) {
+      requested.finish();
+      return pending.promise;
+    }
+    if (path === linkedDetail) return reply({body: {artifact: remote}});
+  });
+  await page.mounted;
+  const retry = page.elements.get('workspace-events-retry');
+  remote = stale;
+  await retry.dispatch('click');
+  assert.equal(page.form.elements.body.value, stale.body);
+  assert.equal(page.elements.get('artifact-live-update').hidden, true);
+
+  remote = newer;
+  const checking = retry.dispatch('click');
+  await requested.promise;
+  page.form.elements.body.value = '本地未保存内容';
+  pending.finish(reply({body: {artifact: remote}}));
+  await checking;
+  assert.equal(page.form.elements.body.value, '本地未保存内容');
+  assert.equal(page.elements.get('artifact-live-update').hidden, false);
+  assert.equal(page.elements.get('artifact-live-compare').href, '/space' + linkedSearch);
+
+  const reads = page.calls.filter(call => call.path === linkedDetail && call.method === 'GET').length;
+  await retry.dispatch('click');
+  assert.equal(page.calls.filter(call => call.path === linkedDetail && call.method === 'GET').length, reads);
+  await page.form.dispatch('submit');
+  const saved = page.calls.find(call => call.path === linkedDetail && call.method === 'POST');
+  assert.equal(JSON.parse(saved.body).revision, stale.revision);
+  assert.match(page.elements.get('status').textContent, /保存遇到新版本/);
+  assert.equal(page.form.elements.body.value, '本地未保存内容');
 });
 
 test('an unauthorized direct link reports its error while the authorized catalog is pending', async () => {

@@ -9,6 +9,7 @@ export function startChatReads(read, start, allowLocal) {
   const params = new URLSearchParams({scope: 'personal', include: 'chat'});
   if (start.workspace) params.set('workspace', start.workspace);
   const id = /^[a-f0-9]{32}$/;
+  if (start.social && id.test(start.workspace)) params.set('directory', '0');
   if (!start.social && id.test(start.workspace) && id.test(start.agent) && (!start.conversation || id.test(start.conversation))) {
     params.set('entry_agent', start.agent);
     if (start.conversation) {
@@ -20,8 +21,40 @@ export function startChatReads(read, start, allowLocal) {
   return {sessionRequest, localRequest};
 }
 
+function fitChatToKeyboard(view) {
+  const {document, visualViewport: viewport} = view;
+  if (!viewport || !view.matchMedia?.('(any-pointer: coarse)').matches) return;
+  const root = document.documentElement;
+  let frame = 0;
+  let fitted = false;
+  function update() {
+    frame = 0;
+    const editing = document.activeElement?.matches('textarea, input, [contenteditable]:not([contenteditable="false"])');
+    // Some touch browsers pan the visible viewport above the keyboard while
+    // the layout viewport and its viewport units keep their original height.
+    const keyboard = viewport.height > 0 && root.clientHeight - viewport.height > 80 &&
+      Math.abs(viewport.scale - 1) < .01 && (editing || fitted);
+    if (keyboard) {
+      root.style.setProperty('--chat-viewport-height', Math.floor(viewport.height) + 'px');
+      root.style.setProperty('--chat-viewport-top', Math.max(0, Math.floor(viewport.offsetTop)) + 'px');
+      if (!fitted) root.setAttribute('data-chat-keyboard', '');
+    } else if (fitted) {
+      root.removeAttribute('data-chat-keyboard');
+      root.style.removeProperty('--chat-viewport-height');
+      root.style.removeProperty('--chat-viewport-top');
+    }
+    fitted = keyboard;
+  }
+  const schedule = () => { if (!frame) frame = view.requestAnimationFrame(update); };
+  viewport.addEventListener('resize', schedule);
+  viewport.addEventListener('scroll', schedule);
+  document.addEventListener('focusin', schedule);
+  schedule();
+}
+
 let early;
 const view = typeof window === 'undefined' ? null : window;
+if (view) fitChatToKeyboard(view);
 if (view?.document.querySelector('meta[name="openteamily-instance"]')) {
   const {href, hash} = view.location;
   // These two GETs are already routed by the gateway. Starting them directly

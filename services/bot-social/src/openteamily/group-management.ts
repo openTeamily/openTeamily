@@ -11,8 +11,35 @@ CREATE TABLE IF NOT EXISTS ot_group_management_receipts (
 `;
 
 export type Group = {id: string; kind: string; dm_key: string | null; title: string; created_by: string;
-  team_id: string | null; account_group: number; group_owner_id: string | null; group_revision: number; group_archived_at: number | null};
-type GroupAction = {action: "rename"; title: string} | {action: "remove" | "transfer"; member_id: string} | {action: "leave"};
+  team_id: string | null; account_group: number; group_owner_id: string | null; group_revision: number; group_archived_at: number | null;
+  group_reply_policy?: string | null};
+type Lead = {owner_id: string; agent_id: string};
+type ReplyPolicy = {mode: "default" | "everyone"} | {mode: "lead"; lead: Lead};
+type GroupAction = {action: "rename"; title: string} | {action: "remove" | "transfer"; member_id: string} |
+  {action: "leave"} | ({action: "reply_policy"} & ReplyPolicy);
+const AGENT_PAIR_ID = /^[A-Za-z0-9._:-]{1,80}$/;
+
+function validLead(value: unknown): value is Lead {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const lead = value as Record<string, unknown>;
+  return Object.keys(lead).length === 2 && typeof lead.owner_id === "string" && AGENT_PAIR_ID.test(lead.owner_id) &&
+    typeof lead.agent_id === "string" && AGENT_PAIR_ID.test(lead.agent_id);
+}
+
+function validReplyPolicy(input: Record<string, unknown>): input is ReplyPolicy {
+  return input.mode === "lead" ? validLead(input.lead)
+    : (input.mode === "default" || input.mode === "everyone") && !Object.hasOwn(input, "lead");
+}
+
+export function readGroupReplyPolicy(group: Pick<Group, "group_reply_policy">): ReplyPolicy {
+  if (group.group_reply_policy) {
+    try {
+      const policy = JSON.parse(group.group_reply_policy);
+      if (policy && validReplyPolicy(policy)) return policy;
+    } catch { /* An invalid stored policy cannot select an agent. */ }
+  }
+  return {mode: "default"};
+}
 
 export const groupOwner = (group: Group) => group.group_owner_id ?? group.created_by;
 export const ordinaryGroup = (group: Group) => group.kind === "group" && group.dm_key === null;
@@ -22,6 +49,7 @@ export function registerGroupManagement(ot: OtContext, columns: Set<string>) {
   if (!columns.has("group_owner_id")) ot.run("ALTER TABLE ot_conversations ADD COLUMN group_owner_id TEXT");
   if (!columns.has("group_revision")) ot.run("ALTER TABLE ot_conversations ADD COLUMN group_revision INTEGER NOT NULL DEFAULT 0");
   if (!columns.has("group_archived_at")) ot.run("ALTER TABLE ot_conversations ADD COLUMN group_archived_at INTEGER");
+  if (!columns.has("group_reply_policy")) ot.run("ALTER TABLE ot_conversations ADD COLUMN group_reply_policy TEXT");
   ot.db.exec(`
     CREATE TRIGGER IF NOT EXISTS ot_group_revision_title AFTER UPDATE OF title ON ot_conversations
     WHEN NEW.kind='group' AND NEW.dm_key IS NULL AND NEW.title IS NOT OLD.title
@@ -76,10 +104,11 @@ export function groupManagementView(ot: OtContext, group: Group, actor: string) 
 
 export function groupManagementRequest(input: Record<string, unknown>) {
   const {action, revision, direct, workspace} = input;
-  assert(action === "rename" || action === "remove" || action === "transfer" || action === "leave",
+  assert(action === "rename" || action === "remove" || action === "transfer" || action === "leave" || action === "reply_policy",
     400,"invalid_request","Invalid group management action");
   const fields = ["action","revision","direct","workspace",
-    ...(action === "rename" ? ["title"] : action === "remove" || action === "transfer" ? ["member_id"] : [])];
+    ...(action === "rename" ? ["title"] : action === "remove" || action === "transfer" ? ["member_id"]
+      : action === "reply_policy" ? ["mode","lead"] : [])];
   assert(Object.keys(input).every(field => fields.includes(field)) && typeof revision === "number"
     && Number.isSafeInteger(revision) && revision >= 0, 400,"invalid_request","Provide the current group management revision");
   assert((direct === true && workspace === undefined)
@@ -89,6 +118,10 @@ export function groupManagementRequest(input: Record<string, unknown>) {
   if (action === "rename") change = {action,title:text(input.title,"title",{min:1,max:80})};
   else if (action === "remove" || action === "transfer") {
     change = {action,member_id:text(input.member_id,"member_id",{min:1,max:80})};
+  } else if (action === "reply_policy") {
+    assert(validReplyPolicy(input), 400,"invalid_request","请选择有效的智能体回复策略。");
+    change = input.mode === "lead" ? {action,mode:input.mode,lead:{owner_id:input.lead.owner_id,agent_id:input.lead.agent_id}}
+      : {action,mode:input.mode};
   } else change = {action};
   const fingerprint = hashCode(JSON.stringify([direct === true ? "personal" : workspace,change]));
   return {change,revision,workspace:typeof workspace === "string" ? workspace : null,fingerprint};
@@ -115,6 +148,22 @@ export function changeGroup(ot: OtContext, group: Group, actor: string, change: 
   assert(access.active_member_ids.includes(actor), 404,"conversation_not_found","No such group conversation");
   const owner = access.owner_id;
   switch (change.action) {
+    case "reply_policy": {
+      assert(actor === owner && managedGroup(group), 403,"forbidden","只有群主可以设置智能体回复策略。");
+      if (change.mode === "lead") {
+        const {owner_id,agent_id} = change.lead;
+        assert(access.active_member_ids.includes(owner_id) && ot.get(`SELECT 1 FROM ot_conversation_agents
+          WHERE conversation_id=? AND owner_id=? AND agent_ref=? AND direct_grant_id IS NULL`, group.id,owner_id,agent_id),
+        409,"group_reply_lead_unavailable","所选智能体已无法在此群聊回复，请重新选择。");
+      }
+      const {action: _,...policy} = change;
+      const saved = readGroupReplyPolicy(group);
+      if (JSON.stringify(saved) === JSON.stringify(policy)) return false;
+      const encoded = change.mode === "default" ? null : JSON.stringify(policy);
+      ot.run(`UPDATE ot_conversations SET group_reply_policy=?,group_revision=group_revision+1,activity_revision=activity_revision+1
+        WHERE id=?`, encoded,group.id);
+      break;
+    }
     case "rename":
       assert(access.can_rename, 403,"forbidden","Only the group owner may rename it");
       if (change.title === group.title) return false;
@@ -125,18 +174,21 @@ export function changeGroup(ot: OtContext, group: Group, actor: string, change: 
       assert(change.member_id !== owner, 400,"invalid_request","Use the leave action for your own membership");
       assert(members.some(member => member.id === change.member_id), 404,"member_not_found","No such group member");
       evict(ot, group, change.member_id);
+      ot.run("DELETE FROM ot_group_invites WHERE conversation_id=?", group.id);
       break;
     case "transfer":
       assert(actor === owner || access.can_transfer, 403,"forbidden","Only the current group owner or an active team manager may transfer it");
       assert(change.member_id !== owner && access.active_member_ids.includes(change.member_id),
         404,"member_not_found","Select an active group member");
       ot.run("UPDATE ot_conversations SET group_owner_id=? WHERE id=?", change.member_id,group.id);
+      ot.run("DELETE FROM ot_group_invites WHERE conversation_id=?", group.id);
       break;
     case "leave":
       assert(!access.leave_requires_transfer, 409,"group_owner_transfer_required","请先把群主转让给其他成员。");
       if (actor === owner) {
         ot.run("UPDATE ot_conversations SET group_archived_at=? WHERE id=?",ot.now(),group.id);
         evict(ot,group);
+        ot.run("DELETE FROM ot_group_invites WHERE conversation_id=?", group.id);
       } else evict(ot,group,actor);
       break;
   }

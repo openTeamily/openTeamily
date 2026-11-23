@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/shell/app.css">
   <link rel="stylesheet" href="/artifacts/app.css">
   <link rel="modulepreload" href="/artifacts/notifications.mjs">
+  <link rel="modulepreload" href="/artifacts/entry.mjs">
   <link rel="modulepreload" href="/shell/thumb.mjs">
   <link rel="modulepreload" href="/shell/action-menu.mjs">
   <link rel="modulepreload" href="/shell/work-notification.mjs">
@@ -19,21 +20,23 @@
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
     <a class="brand-mark" href="/" title="OpenTeamily 首页" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
-    <a href="/" title="首页" aria-label="首页"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z"/></svg><span class="rail-label">首页</span></a>
-    <a href="/chat" title="聊天" aria-label="聊天"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H9l-5 4V4Z"/></svg><span class="rail-label">聊天</span></a>
-    <a href="/agents" title="智能体" aria-label="智能体"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14v12H5z M9 3h6 M12 3v4 M8 12h1 M15 12h1 M9 16h6"/></svg><span class="rail-label">智能体</span></a>
-        <a href="/skills" title="技能" aria-label="技能"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Z M8.5 10.5h7 M8.5 14h4.5"/></svg><span class="rail-label">技能</span></a>
-<a href="/automations" title="自动化" aria-label="自动化"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg><span class="rail-label">自动化</span></a>
-    <a href="/memory" title="记忆" aria-label="记忆"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4a4 4 0 0 0-4 4v8a4 4 0 0 0 4 4 M16 4a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4 M8 8h8 M8 12h8 M8 16h8 M12 4v16"/></svg><span class="rail-label">记忆</span></a>
-    <a href="/space" title="作品" aria-label="作品"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg><span class="rail-label">作品</span></a>
-    <a href="/meetings" title="会议" aria-label="会议"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v14H4z M8 3v4 M16 3v4 M4 10h16"/></svg><span class="rail-label">会议</span></a>
-    <a href="/discover" title="发现" aria-label="发现"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg><span class="rail-label">发现</span></a>
-    <span class="rail-spacer"></span>
-    <a href="/profile" class="rail-signed-in" hidden title="我的资料" aria-label="我"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7a4 4 0 1 0 8 0 4 4 0 0 0-8 0 M4 21v-2a8 8 0 0 1 16 0v2"/></svg><span class="rail-label">我</span></a>
+    <div class="rail-actions">
+      <a href="/" title="首页" aria-label="首页"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z"/></svg><span class="rail-label">首页</span></a>
+      <a href="/chat" title="聊天" aria-label="聊天"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H9l-5 4V4Z"/></svg><span class="rail-label">聊天</span></a>
+      <a href="/agents" title="智能体" aria-label="智能体"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14v12H5z M9 3h6 M12 3v4 M8 12h1 M15 12h1 M9 16h6"/></svg><span class="rail-label">智能体</span></a>
+      <a href="/skills" title="技能" aria-label="技能"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Z M8.5 10.5h7 M8.5 14h4.5"/></svg><span class="rail-label">技能</span></a>
+      <a href="/automations" title="自动化" aria-label="自动化"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg><span class="rail-label">自动化</span></a>
+      <a href="/memory" title="记忆" aria-label="记忆"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4a4 4 0 0 0-4 4v8a4 4 0 0 0 4 4 M16 4a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4 M8 8h8 M8 12h8 M8 16h8 M12 4v16"/></svg><span class="rail-label">记忆</span></a>
+      <a href="/space" title="作品" aria-label="作品"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg><span class="rail-label">作品</span></a>
+      <a href="/meetings" title="会议" aria-label="会议"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v14H4z M8 3v4 M16 3v4 M4 10h16"/></svg><span class="rail-label">会议</span></a>
+      <a href="/discover" title="发现" aria-label="发现"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg><span class="rail-label">发现</span></a>
+      <a href="/download" title="下载" aria-label="下载"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12 m-5-5 5 5 5-5 M4 16v5h16v-5"/></svg><span class="rail-label">下载</span></a>
+    </div>
     <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换浅色或深色。会写入已有外观设置；按钮在深色下显示「深色」。点击后的标签变化未经 Teamily 核实。">浅色</button>
-    <a href="/download" title="下载" aria-label="下载"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12 m-5-5 5 5 5-5 M4 16v5h16v-5"/></svg><span class="rail-label">下载</span></a>
     <div class="account-slot" hidden>
-      <button type="button" id="account-menu-button" class="account-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="账户菜单">账户</button>
+      <button type="button" id="account-menu-button" class="account-trigger" data-account-icon aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" aria-label="账户菜单" title="账户菜单">
+        <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7a4 4 0 1 0 8 0 4 4 0 0 0-8 0 M4 21v-2a8 8 0 0 1 16 0v2"/></svg>
+      </button>
       <div id="account-menu" class="account-menu" role="menu" hidden>
         <p id="account-identity" class="account-identity"></p>
         <a href="/profile" role="menuitem" aria-label="查看我的资料">查看我的资料</a>
@@ -78,6 +81,7 @@
             <button type="button" id="mobile-editor-markdown" aria-controls="document-source" hidden>切换 Markdown</button>
             <button type="button" id="mobile-editor-version" aria-controls="version-panel" hidden>版本与导出</button>
             <button type="button" id="mobile-editor-share" aria-controls="share-panel" hidden>只读分享</button>
+            <button type="button" id="studio-copy-mobile" aria-haspopup="dialog" aria-controls="studio-copy-dialog" hidden>复制到团队协作</button>
             <button type="button" id="mobile-editor-discover" aria-controls="discover-panel" hidden>公开到发现页</button>
             <button type="button" id="mobile-editor-reconnect">检查更新</button>
             <button type="button" id="mobile-editor-delete" class="danger" hidden>删除作品</button>
@@ -85,7 +89,7 @@
         </details>
         <button type="submit" form="editor-form" id="mobile-editor-save">保存</button>
       </div>
-      <button type="button" id="dir-expand" class="dir-expand" hidden aria-label="展开侧边栏" title="展开侧边栏（收起后的版式未经对照核实）">展开侧边栏</button>
+      <button type="button" id="dir-expand" class="dir-expand" hidden aria-label="展开侧边栏" title="展开侧边栏">展开侧边栏</button>
       <div class="catalog-quick-actions" id="catalog-quick-actions">
         <h1 class="visually-hidden" id="space-title">作品库</h1>
       </div>
@@ -93,6 +97,7 @@
         <button type="button" data-scope="all" aria-current="page">全部</button>
         <button type="button" data-scope="mine">我创建的</button>
         <button type="button" data-scope="favorites">收藏</button>
+        <button type="button" data-scope="automation">自动化结果</button>
         <button type="button" data-scope="memory">记忆</button>
       </nav>
       <div id="meetings-chrome" hidden>
@@ -108,8 +113,10 @@
         <div class="workspace-selection">
           <label for="workspace">工作区</label>
           <select id="workspace"></select>
+          <button type="button" id="studio-open" aria-haspopup="dialog" aria-controls="studio-dialog" hidden>团队协作</button>
         </div>
         <div class="workspace-recovery">
+          <span id="workspace-pending" class="note" role="status" hidden>正在读取工作区…</span>
           <span id="workspace-events-status" class="note" role="status"></span>
           <button type="button" id="workspace-events-retry" aria-label="检查更新" title="检查更新">
             <span class="workspace-retry-label">检查更新</span><span class="workspace-retry-icon" aria-hidden="true">↻</span>
@@ -192,18 +199,17 @@
         <span id="artifact-notify-count" aria-hidden="true" hidden></span>
       </button>
     </header>
-    <p id="layout-note" class="note" hidden>封面由作品自身内容生成：文档首行、网页标题、白板笔画、幻灯片首页、看板组件和图片原图；音视频只显示类型。作品菜单可将已保存的版本发送到群聊、单聊或智能体会话。</p>
     <p id="whoami" class="visually-hidden"></p>
     <section id="list-panel" class="artifacts-workspace">
       <aside class="artifact-dir" id="artifact-dir">
         <div class="dir-header">
-          <h2 class="dir-title" id="dir-title">资料空间</h2>
+          <h2 class="dir-title" id="dir-title">作品分类</h2>
           <button type="button" id="dir-collapse" class="dir-collapse" aria-expanded="true" aria-controls="artifact-dir" aria-label="收起侧边栏" title="收起侧边栏">
             <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5 5h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm4 1.5H5v11h4v-11z"/></svg>
           </button>
         </div>
         <div class="new-menu-wrap">
-          <button type="button" id="new-menu-button" aria-expanded="false" aria-haspopup="menu" aria-controls="new-menu">
+          <button type="button" id="new-menu-button" aria-expanded="false" aria-haspopup="menu" aria-controls="new-menu" disabled>
             <span class="new-menu-label">+ 新建</span>
             <span class="new-menu-caret" aria-hidden="true">▾</span>
           </button>
@@ -220,6 +226,7 @@
         </div>
         <div class="dir-search">
           <label class="visually-hidden" for="search">搜索作品</label>
+          <svg class="dir-search-icon" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="5.5"/><path d="m15 15 4 4"/></svg>
           <input id="search" type="search" maxlength="80" autocomplete="off" placeholder="搜索">
           <button type="button" id="clear-artifact-search" aria-label="清空搜索" title="清空搜索" hidden>×</button>
         </div>
@@ -237,6 +244,10 @@
           <span id="artifact-list-note" class="note" role="status"></span>
           <button type="button" id="retry-artifact-list" hidden>重试</button>
         </div>
+        <div id="artifact-draft-resume" class="artifact-draft-heading artifact-draft-resume" hidden>
+          <button type="button" id="resume-draft-document" hidden>继续文档草稿</button>
+          <button type="button" id="resume-draft-website" hidden>继续网站草稿</button>
+        </div>
         <ul id="artifact-list"></ul>
         <div id="artifact-pagination" hidden>
           <p id="artifact-pagination-note" class="note" role="status" hidden></p>
@@ -248,7 +259,7 @@
           <div id="empty-all">
             <div class="empty-hero" aria-hidden="true"><span class="empty-cta-icon" data-tone="stack" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 8.5 12 5l8 3.5-8 3.5L4 8.5zm0 4.2 8 3.5 8-3.5v1.8L12 18 4 14.5v-1.8z"/></svg></span></div>
             <h2>你的资料空间从这里开始</h2>
-            <p>你创建或保存的内容都会出现在这里。</p>
+            <p>创建一份文档，或把对话里的内容保存到这里。</p>
             <div class="empty-cta-list">
               <button type="button" class="empty-cta" id="empty-new-document">
                 <span class="empty-cta-icon" data-tone="doc" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm7 1.6V9h4.4"/></svg></span>
@@ -257,12 +268,12 @@
               </button>
               <button type="button" class="empty-cta" id="empty-agent-website">
                 <span class="empty-cta-icon" data-tone="globe" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18zm0 1.6a7.4 7.4 0 0 0 0 14.8V4.6zm2.4 1.2c.9 1.3 1.5 3.3 1.6 5.6H20A7.4 7.4 0 0 0 14.4 5.8zM4 11.4h4c.1-2.3.7-4.3 1.6-5.6A7.4 7.4 0 0 0 4 11.4z"/></svg></span>
-                <span class="empty-cta-copy"><strong>让智能体搭建网站</strong><span class="hint">在本页填写需求、选择智能体。会先创建网站作品再发出搭建请求；没有运行时时会如实说明，不会假装已经搭好。</span></span>
+                <span class="empty-cta-copy"><strong>让智能体搭建网站</strong><span class="hint">填写需求并选择负责搭建的智能体。</span></span>
                 <span class="empty-cta-go" aria-hidden="true">→</span>
               </button>
               <button type="button" class="empty-cta" id="empty-save-message">
                 <span class="empty-cta-icon" data-tone="chat" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-6l-4 3v-3H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/></svg></span>
-                <span class="empty-cta-copy"><strong>保存聊天中的消息</strong><span class="hint">从本工作区已有对话里选择一条已完成的消息，保存为云文档。</span></span>
+                <span class="empty-cta-copy"><strong>保存聊天中的消息</strong><span class="hint">从本工作区的对话中选取消息。</span></span>
                 <span class="empty-cta-go" aria-hidden="true">→</span>
               </a>
             </div>
@@ -295,6 +306,10 @@
             <p>智能体生成的作品将显示在此处。</p>
             <p>清除筛选条件或切换作品类型，以扩大结果范围。</p>
           </div>
+          <div id="empty-automation" hidden>
+            <h2>暂无自动化结果</h2>
+            <p>在自动化的运行详情中选择「保存到作品库」，即可在这里找到结果。</p>
+          </div>
           <div id="empty-kind" hidden>
             <p id="empty-kind-note" class="note">这一类还没有作品。</p>
             <button type="button" id="new-website">新建网站</button>
@@ -318,10 +333,24 @@
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>
       <label for="editor-title">标题 <textarea id="editor-title" name="title" rows="1" maxlength="80" required autocomplete="off" enterkeyhint="done" placeholder="输入标题"></textarea></label>
       <p id="editor-meta" class="note"></p>
+      <button type="button" id="studio-copy-open" class="secondary" aria-haspopup="dialog" aria-controls="studio-copy-dialog" hidden>复制到团队协作</button>
       <div id="artifact-live-update" hidden>
         <p id="artifact-live-message" role="status"></p>
-        <button type="button" id="artifact-live-load">读取服务器版本</button>
+        <div class="artifact-live-actions">
+          <button type="button" id="artifact-live-load">切换到服务器版本</button>
+          <a id="artifact-live-compare" target="_blank" rel="noopener">在新标签页查看</a>
+        </div>
       </div>
+      <section id="artifact-draft-recovery" class="artifact-draft-recovery" aria-label="草稿恢复" hidden>
+        <div class="artifact-draft-heading">
+          <p id="artifact-draft-message" role="status"></p>
+          <button type="button" id="artifact-draft-discard">放弃草稿</button>
+        </div>
+        <details id="artifact-draft-details" hidden>
+          <summary>查看草稿原文</summary>
+          <textarea id="artifact-draft-copy" aria-label="先前草稿原文" rows="5" readonly></textarea>
+        </details>
+      </section>
       <section id="document-editor" hidden aria-label="文档编辑器">
         <div class="document-toolbar" role="toolbar" aria-label="文档格式">
           <button type="button" data-doc-format="undo" aria-label="撤销">↶</button>
@@ -439,25 +468,42 @@
       <iframe id="website-preview" title="网站预览" sandbox referrerpolicy="no-referrer" hidden></iframe>
       <details id="version-panel" class="artifact-editor-panel" hidden>
         <summary>版本与导出</summary>
-        <p class="note">每次保存都会保留一个版本，可以复制为新作品、导出或恢复。</p>
+        <p class="note">查看已保存版本，或将历史内容复制、导出、恢复。</p>
         <p id="version-status" class="note" role="status" hidden></p>
         <ul id="version-list"></ul>
         <p id="version-empty" class="note" hidden>还没有历史版本。</p>
-        <label for="export-format">当前版本导出格式</label><select id="export-format"><option value="original">原格式</option><option value="docx">Word DOCX（文档）</option><option value="pdf">文本 PDF（文档 / 幻灯片提纲 / 看板数据）</option><option value="xlsx">Excel XLSX（电子表格 / 看板）</option><option value="pptx">PowerPoint PPTX（幻灯片标题与条目）</option></select><p class="note">DOCX 保留文本与标题，非完整 Office 编辑器；PDF 是分页文字，不是页面 / 媒体截图，暂不支持 emoji 等非 BMP 字符。电子表格导出保留支持的公式。PPTX 是实际幻灯片包，含标题与条目，不含宏、媒体或外部链接，也不是渲染缩略图或完整编辑器。历史版本下载仍为其原格式。</p>
+        <label for="export-format">当前版本导出格式</label><select id="export-format"><option value="original">原格式</option><option value="docx">Word DOCX（文档）</option><option value="pdf">文本 PDF（文档 / 幻灯片提纲 / 看板数据）</option><option value="xlsx">Excel XLSX（电子表格 / 看板）</option><option value="pptx">PowerPoint PPTX（幻灯片标题与条目）</option></select><p class="note">DOCX 保留文本与标题，非完整 Office 编辑器；PDF 是分页文字，不是页面 / 媒体截图，暂不支持 emoji 等非 BMP 字符。电子表格导出保留支持的公式。PPTX 是实际幻灯片包，含标题与条目，不含宏、媒体或外部链接，也不是渲染缩略图或完整编辑器。打开历史版本后也可以选择支持的导出格式。</p>
         <button type="button" id="export-artifact">导出当前版本</button>
       </details>
       <details id="share-panel" class="artifact-editor-panel" hidden>
         <summary>只读分享</summary>
-        <p class="note">链接需要点下面的按钮才会生成，撤销后立即失效。不会自动发布。</p>
+        <p class="note">知道链接的人可查看创建时已保存的版本。</p>
+        <p id="share-revision" class="note"></p>
         <p id="share-status" class="note" role="status" hidden></p>
         <ul id="share-list"></ul>
         <p id="share-empty" class="note" hidden>还没有分享链接。</p>
-        <button type="button" id="create-share">创建只读分享链接</button>
-        <p id="share-once" class="note" hidden></p>
+        <div class="artifact-share-actions">
+          <label for="share-expires">有效期</label>
+          <select id="share-expires">
+            <option value="">直到撤销</option><option value="86400">1 天</option>
+            <option value="604800">7 天</option><option value="2592000">30 天</option>
+          </select>
+          <button type="button" id="create-share">创建只读分享链接</button>
+        </div>
+        <div id="share-once" class="artifact-share-once" hidden>
+          <label for="share-url">分享链接</label>
+          <input id="share-url" type="url" readonly autocomplete="off" spellcheck="false">
+          <div class="artifact-share-actions">
+            <button type="button" id="copy-share">复制链接</button>
+            <a id="open-share" target="_blank" rel="noopener noreferrer">打开只读页面</a>
+          </div>
+          <p id="share-copy-status" class="note" role="status"></p>
+        </div>
       </details>
       <details id="discover-panel" class="artifact-editor-panel" hidden>
         <summary>公开到发现页</summary>
         <p class="note">发布后，任何人都能在发现页查看已保存的作品，并下载公开的图片、音频、视频和 3D 文件。</p>
+        <p id="discover-revision" class="note" hidden></p>
         <p id="discover-status" class="note" role="status" hidden></p>
         <a id="discover-public-link" target="_blank" rel="noopener" hidden>打开公开作品</a>
         <div id="discover-form" class="discover-form" role="group" aria-label="公开到发现页">
@@ -484,6 +530,13 @@
       <p id="send-to-chat-lead" class="note"></p>
       <ul id="send-to-chat-list"></ul>
       <p id="send-to-chat-empty" class="empty-state" hidden>这个工作区还没有可发送的会话。</p>
+      <details id="send-to-chat-new" hidden>
+        <summary>新建智能体对话</summary>
+        <label for="send-to-chat-agent">选择工作区智能体</label>
+        <select id="send-to-chat-agent"></select>
+      </details>
+      <label for="send-to-chat-note" class="send-chat-note-label">附言或给智能体的指示（可选）</label>
+      <textarea id="send-to-chat-note" rows="2" maxlength="2000"></textarea>
       <p id="send-to-chat-error" class="note" role="status" hidden></p>
       <div class="send-dialog-actions">
         <button type="button" id="send-to-chat-cancel">取消</button>
@@ -491,6 +544,48 @@
       </div>
     </div>
   </div>
+  <dialog id="work-version-dialog" class="send-dialog-card" aria-labelledby="work-version-title" aria-describedby="work-version-meta">
+    <header class="work-version-header">
+      <div>
+        <h2 id="work-version-title"></h2>
+        <p id="work-version-meta" class="note"></p>
+      </div>
+      <button type="button" id="work-version-close" autofocus>关闭</button>
+    </header>
+    <div id="work-version-preview" tabindex="0" aria-label="历史版本内容"></div>
+    <p id="work-version-status" class="note" role="status"></p>
+    <button type="button" id="work-version-retry" hidden>重试</button>
+    <div id="work-version-tools" hidden>
+      <div class="work-version-actions">
+        <label>导出格式 <select id="work-version-format"></select></label>
+        <a id="work-version-download">导出此版本</a>
+        <button type="button" id="work-version-copy">复制版本链接</button>
+        <button type="button" id="work-version-restore" hidden>恢复为新修订</button>
+      </div>
+      <input id="work-version-link" type="url" readonly aria-label="版本链接" hidden>
+      <section id="work-version-restore-review" aria-label="确认恢复版本" hidden>
+        <p id="work-version-restore-summary"></p>
+        <div class="space-action-row">
+          <button type="button" id="work-version-restore-cancel">取消恢复</button>
+          <button type="button" id="work-version-restore-confirm" class="primary">确认恢复</button>
+        </div>
+      </section>
+    </div>
+  </dialog>
+  <dialog id="shared-work-copy-dialog" class="send-dialog-card" aria-labelledby="shared-work-copy-heading">
+    <h2 id="shared-work-copy-heading">保存共享文字</h2>
+    <p class="note">确认后，文字会成为个人空间中的可编辑文档。</p>
+    <section id="shared-work-copy-preview" hidden>
+      <h3 id="shared-work-copy-title"></h3>
+      <pre id="shared-work-copy-body" tabindex="0" aria-label="共享文字预览"></pre>
+    </section>
+    <p id="shared-work-copy-status" class="note" role="status"></p>
+    <div class="space-action-row">
+      <button type="button" id="shared-work-copy-cancel" autofocus>关闭</button>
+      <button type="button" id="shared-work-copy-retry" hidden>重新查看</button>
+      <button type="button" id="shared-work-copy-confirm" class="primary" hidden>保存副本</button>
+    </div>
+  </dialog>
   <dialog id="duplicate-artifact-dialog" class="send-dialog-card" aria-labelledby="duplicate-artifact-heading">
     <form id="duplicate-artifact-form">
       <h2 id="duplicate-artifact-heading">复制为新作品</h2>
@@ -503,6 +598,23 @@
         <button type="submit" class="primary" id="duplicate-artifact-submit">创建副本</button>
       </div>
     </form>
+  </dialog>
+  <dialog id="studio-copy-dialog" class="send-dialog-card" aria-labelledby="studio-copy-heading" aria-describedby="studio-copy-description">
+    <h2 id="studio-copy-heading">复制到团队协作</h2>
+    <p id="studio-copy-description" class="note">确认后，团队成员可以编辑下方内容的副本。原文档仍保存在你的资料空间。</p>
+    <label id="studio-copy-target-field">团队工作区 <select id="studio-copy-target-workspace"></select></label>
+    <p id="studio-copy-scope"><strong id="studio-copy-target" hidden></strong><span id="studio-copy-revision" class="note"></span></p>
+    <section id="studio-copy-preview" aria-label="要复制的内容">
+      <h3 id="studio-copy-title"></h3>
+      <pre id="studio-copy-body" tabindex="0"></pre>
+      <p id="studio-copy-empty" class="note" hidden>正文为空</p>
+    </section>
+    <p id="studio-copy-status" class="note" role="status"></p>
+    <div class="send-dialog-actions">
+      <button type="button" id="studio-copy-dismiss" autofocus>取消</button>
+      <button type="button" id="studio-copy-confirm" class="primary">确认复制</button>
+      <a id="studio-copy-result" hidden>打开团队文档</a>
+    </div>
   </dialog>
   <dialog id="artifact-notifications" aria-labelledby="artifact-notifications-heading">
     <div class="artifact-notifications-head">
@@ -518,6 +630,124 @@
       <p id="artifact-notifications-empty" class="note" hidden>暂无作品通知。</p>
       <ul id="artifact-notifications-list"></ul>
     </div>
+  </dialog>
+  <dialog id="studio-dialog" aria-labelledby="studio-heading">
+    <header class="studio-header">
+      <div>
+        <p id="studio-workspace-name" class="note"></p>
+        <h2 id="studio-heading">团队协作</h2>
+      </div>
+      <button type="button" id="studio-close" class="secondary">关闭</button>
+    </header>
+    <p id="studio-status" role="status"></p>
+    <section id="studio-catalog">
+      <div class="studio-catalog-search">
+        <label class="visually-hidden" for="studio-catalog-query">搜索团队文档</label>
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="5.5"/><path d="m15 15 4 4"/></svg>
+        <input id="studio-catalog-query" type="search" maxlength="80" autocomplete="off" placeholder="搜索团队文档或更新人" aria-controls="studio-list">
+        <button type="button" id="studio-catalog-clear" aria-label="清除搜索" hidden>×</button>
+      </div>
+      <p id="studio-catalog-no-match" class="note" role="status" hidden>没有匹配的团队文档。</p>
+      <ul id="studio-list"></ul>
+      <div class="studio-actions">
+        <button type="button" id="studio-add">新建团队文档</button>
+        <button type="button" id="studio-refresh" class="secondary">刷新列表</button>
+      </div>
+    </section>
+    <form id="studio-form" hidden>
+      <div class="studio-actions">
+        <button type="button" id="studio-back" class="secondary">← 返回团队文档</button>
+        <div class="studio-actions">
+          <button type="button" id="studio-discuss" class="secondary" hidden>与个人智能体讨论</button>
+          <button type="button" id="studio-copy-link" class="secondary" hidden>复制文档链接</button>
+          <button type="button" id="studio-save-personal" class="secondary" aria-haspopup="dialog" hidden>保存个人副本</button>
+          <button type="submit" id="studio-save">保存</button>
+        </div>
+      </div>
+      <label id="studio-link-wrap" hidden>文档链接<input id="studio-link" readonly></label>
+      <p id="studio-presence" class="note" aria-live="polite" hidden></p>
+      <div id="studio-conflict" class="studio-conflict" hidden>
+        <p>两份修改需要确认。请比较后选择要继续编辑的版本。</p>
+        <details id="studio-compare">
+          <summary>比较我的草稿和团队版本</summary>
+          <div class="studio-comparison">
+            <section aria-label="我的草稿">
+              <h3>我的草稿</h3>
+              <p id="studio-local-title"></p>
+              <pre id="studio-local-body" tabindex="0" aria-label="我的草稿正文"></pre>
+            </section>
+            <section aria-label="团队版本">
+              <h3>团队版本</h3>
+              <p id="studio-server-title"></p>
+              <pre id="studio-server-body" tabindex="0" aria-label="团队版本正文"></pre>
+            </section>
+          </div>
+          <div class="studio-actions">
+            <button type="button" id="studio-use-server" class="secondary">采用团队版本</button>
+            <button type="button" id="studio-rebase" class="secondary">保留我的草稿</button>
+          </div>
+        </details>
+      </div>
+      <label for="studio-title">标题</label>
+      <input id="studio-title" maxlength="120" required autocomplete="off">
+      <label for="studio-body">正文</label>
+      <textarea id="studio-body" maxlength="60000" rows="10"></textarea>
+      <div class="studio-actions">
+        <p id="studio-revision" class="note"></p>
+        <button type="button" id="studio-history-open" class="secondary" aria-haspopup="dialog" hidden>版本历史</button>
+      </div>
+      <button type="button" id="studio-delete" class="danger" hidden>删除团队文档</button>
+    </form>
+  </dialog>
+  <dialog id="studio-personal-dialog" class="send-dialog-card" aria-labelledby="studio-personal-heading">
+    <h2 id="studio-personal-heading">保存到我的资料空间</h2>
+    <p id="studio-personal-meta" class="note"></p>
+    <section id="studio-personal-preview" aria-labelledby="studio-personal-title" hidden>
+      <h3 id="studio-personal-title"></h3>
+      <pre id="studio-personal-body" tabindex="0"></pre>
+    </section>
+    <p id="studio-personal-status" class="note" role="status"></p>
+    <div class="space-action-row">
+      <button type="button" id="studio-personal-close" autofocus>关闭</button>
+      <button type="button" id="studio-personal-retry" hidden>重新查看</button>
+      <a id="studio-personal-download" hidden>下载 Markdown</a>
+      <button type="button" id="studio-personal-confirm" class="primary" hidden>保存副本</button>
+      <a id="studio-personal-result" target="_blank" rel="noopener" hidden>打开个人副本</a>
+    </div>
+  </dialog>
+  <dialog id="studio-discussion-dialog" aria-labelledby="studio-discussion-title">
+    <h2 id="studio-discussion-title">与个人智能体讨论</h2>
+    <p id="studio-discussion-source" class="note"></p>
+    <form id="studio-discussion-form">
+      <label for="studio-discussion-question">你的问题</label>
+      <textarea id="studio-discussion-question" rows="3" maxlength="1000" required></textarea>
+      <label class="studio-discussion-choice"><input type="checkbox" id="studio-discussion-include">附上已保存的正文片段</label>
+      <div id="studio-discussion-preview-wrap" hidden>
+        <label for="studio-discussion-preview">将附到草稿的内容</label>
+        <textarea id="studio-discussion-preview" rows="6" readonly></textarea>
+        <p id="studio-discussion-notice" class="note"></p>
+      </div>
+      <p id="studio-discussion-status" role="status" aria-live="polite"></p>
+      <div class="studio-actions">
+        <button type="button" id="studio-discussion-cancel" class="secondary">返回文档</button>
+        <button type="submit" id="studio-discussion-submit">打开私人草稿</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="studio-history" aria-labelledby="studio-history-heading">
+    <header class="studio-header">
+      <h2 id="studio-history-heading">团队文档版本历史</h2>
+      <button type="button" id="studio-history-close" class="secondary">关闭</button>
+    </header>
+    <p id="studio-history-status" role="status"></p>
+    <button type="button" id="studio-history-refresh" class="secondary">刷新版本</button>
+    <ul id="studio-history-list" aria-label="已保存的版本"></ul>
+    <section id="studio-history-preview" hidden aria-labelledby="studio-history-title">
+      <h3 id="studio-history-title"></h3>
+      <pre id="studio-history-body"></pre>
+      <button type="button" id="studio-history-restore" class="secondary">恢复为新版本</button>
+      <button type="button" id="studio-history-save-personal" class="secondary" aria-haspopup="dialog" hidden>保存个人副本</button>
+    </section>
   </dialog>
   </main>
   <nav class="mobile-primary-nav" aria-label="主导航" data-ui-label="shell.nav.mobile"></nav>

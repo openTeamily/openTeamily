@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { applyComposioRows, applyConnectorSearch, applySettingsView, composioRowState, pickConnection, CONNECTOR_CATALOG, csrfCookie, describeAppearance, diff, filterConnectorCatalog, mount, newlineBinding, privacyChanges, readForm, renderModelApi, settingsViewFromLocation, syncAppearanceExtras, syncMcpDialog, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
+import { applyComposioRows, applyConnectorSearch, applySettingsView, composioMessage, composioRowState, pickConnection, CONNECTOR_CATALOG, csrfCookie, describeAppearance, diff, filterConnectorCatalog, mount, newlineBinding, privacyChanges, readForm, renderModelApi, settingsViewFromLocation, syncAppearanceExtras, syncOverviewCurrentValues, syncMcpDialog, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -80,6 +80,50 @@ test('describeAppearance names the current look and next switch without inventin
   assert.doesNotMatch(auto, /拿不到你所在的位置/);
   assert.match(describeAppearance({appearance: 'system'}, afternoon, {matches: false}), /当前为浅色（跟随系统）。/);
   assert.match(describeAppearance({appearance: 'system'}, afternoon, {matches: true}), /当前为深色（跟随系统）。/);
+});
+
+
+test('syncOverviewCurrentValues shows saved choices in the current language', () => {
+  const appearance = {textContent: ''};
+  const folding = {textContent: ''};
+  const nodes = {'appearance-current': appearance, 'folding-current': folding};
+  const document = {documentElement: {lang: 'zh-CN'}, getElementById: (id) => nodes[id]};
+  syncOverviewCurrentValues(document, {appearance: 'auto', message_folding: 'standard'});
+  assert.equal(appearance.textContent, '自动');
+  assert.equal(folding.textContent, '标准');
+  document.documentElement.lang = 'en';
+  syncOverviewCurrentValues(document, {appearance: 'light', message_folding: 'compact'});
+  assert.equal(appearance.textContent, 'Light');
+  assert.equal(folding.textContent, 'Compact');
+  syncOverviewCurrentValues(document, {appearance: 'unknown', message_folding: ''});
+  assert.equal(appearance.textContent, '');
+  assert.equal(folding.textContent, '');
+});
+
+test('the settings overview lists preference and support rows in the recorded Teamily order', () => {
+  const html = readFileSync(new URL('../openteamily/static/settings/index.html', import.meta.url), 'utf8');
+  const prefs = html.slice(html.indexOf('id="group-prefs"'), html.indexOf('id="group-notification-prefs"'));
+  const prefHrefs = [...prefs.matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(prefHrefs, [
+    '/settings/message-folding',
+    '/settings/appearance',
+    '/settings/privacy',
+    '/settings/shortcuts',
+  ]);
+  assert.match(prefs, /id="folding-current"/);
+  assert.match(prefs, /id="appearance-current"/);
+  assert.match(prefs, /settings-row-label">隐私设置</);
+  const support = html.slice(html.indexOf('id="group-support"'), html.indexOf('id="settings-form"'));
+  const supportHrefs = [...support.matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(supportHrefs, [
+    '/help',
+    '/guide',
+    '/terms',
+    '/privacy',
+    '/about',
+    'https://github.com/openTeamily/openTeamily/issues',
+  ]);
+  assert.doesNotMatch(support, /退款政策/);
 });
 
 test('settingsViewFromLocation maps recorded paths and leftover hashes', () => {
@@ -306,6 +350,9 @@ test('filterConnectorCatalog matches name, about, or id and is empty when nothin
   const payments = filterConnectorCatalog('payments');
   assert.deepEqual(payments.map((item) => item.id), ['stripe', 'paypal', 'square']);
   assert.deepEqual(filterConnectorCatalog('no-such-connector-xyz'), []);
+  assert.equal(filterConnectorCatalog('', CONNECTOR_CATALOG, 'dev').length, 6);
+  assert.deepEqual(filterConnectorCatalog('cloudflare', CONNECTOR_CATALOG, 'docs').map(item => item.id), ['cloudflare-docs']);
+  assert.deepEqual(filterConnectorCatalog('github', CONNECTOR_CATALOG, 'mail'), []);
 });
 
 test('applyConnectorSearch hides unmatched rows and shows the empty state', () => {
@@ -329,7 +376,7 @@ test('applyConnectorSearch hides unmatched rows and shows the empty state', () =
   assert.equal(rows.find((row) => row.id === 'mail').hidden, false);
   assert.equal(rows.filter((row) => !row.hidden).length, 1);
   assert.equal(empty.hidden, true);
-  applyConnectorSearch(document, 'no-such-connector-xyz');
+  applyConnectorSearch(document, 'mailbox', 'dev');
   assert.equal(rows.every((row) => row.hidden), true);
   assert.equal(empty.hidden, false);
   applyConnectorSearch(document, '');
@@ -349,6 +396,9 @@ test('settings connectors markup lists the catalog as disconnected without leaki
   assert.equal((html.match(/data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">\+ 连接<\/button>/g) || []).length, 31);
   assert.equal((html.match(/disabled title="未接通：Composio 没有这个应用，暂时不能连接。">\+ 连接<\/button>/g) || []).length, 8);
   assert.match(html, /id="composio-key-input" name="api_key" type="password"/);
+  assert.match(html, /id="connectors-key-jump" href="#composio-key-input" hidden/);
+  const groups = [...html.matchAll(/data-connector-group="([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(new Set(groups), new Set(['all', ...CONNECTOR_CATALOG.map(item => item.category)]));
   assert.equal((html.match(/class="connector-mark"/g) || []).length, 39);
   assert.match(html, /data-mark="github"/);
   assert.match(html, /class="channel-mark" data-mark="slack"/);
@@ -595,6 +645,51 @@ async function mountSettingsPage({secrets} = {}) {
   };
 }
 
+test('notification settings load native values, save only the changed switch and restore it on failure', async () => {
+  const {doc} = settingsDocument();
+  const api = makeSettingsApi({});
+  const calls = [];
+  const stored = {mentions: true, task_completion: false, artifacts: true};
+  let fail = false;
+  const fetcher = async (path, options) => {
+    if (path !== '/v1/notification-prefs') return api.fetcher(path, options);
+    calls.push(options.method);
+    if (options.method === 'PUT') {
+      if (fail) throw new Error('network unavailable');
+      const {changes} = JSON.parse(options.body);
+      assert.deepEqual(changes, {mentions: false});
+      Object.assign(stored, changes);
+    }
+    return settingsJson(200, {prefs: {...stored}});
+  };
+  const restore = stubWindowListeners();
+  stubFormData(doc.getElementById('settings-form'));
+  try {
+    await mount(doc, {fetcher});
+    const mention = doc.getElementById('notify-mentions');
+    const task = doc.getElementById('notify-task-completion');
+    const work = doc.getElementById('notify-artifacts');
+    assert.deepEqual([mention.checked, task.checked, work.checked], [true, false, true]);
+    assert.deepEqual([mention.disabled, task.disabled, work.disabled], [false, false, false]);
+    mention.checked = false;
+    doc.fire('change', {target: mention});
+    await settleSettings();
+    assert.equal(mention.checked, false);
+    assert.match(doc.getElementById('notification-prefs-state').textContent, /隐藏/);
+    fail = true;
+    task.checked = true;
+    doc.fire('change', {target: task});
+    await settleSettings();
+    assert.equal(task.checked, false);
+    assert.equal(task.disabled, false);
+    assert.match(doc.getElementById('notification-prefs-state').textContent, /未能保存/);
+    assert.deepEqual(calls, ['GET', 'PUT', 'PUT']);
+  } finally {
+    globalThis.FormData = REAL_FORM_DATA;
+    restore();
+  }
+});
+
 async function checkMediaModelForm(type, provider, model) {
   const {doc} = settingsDocument();
   const api = makeSettingsApi({});
@@ -788,14 +883,26 @@ test('re-rendering the list retires a pending delete question', async () => {
   assert.equal(doc.activeElement, null, 'Escape finds no stale question left over from the old rows');
 });
 
+test('connector errors distinguish a conflict, rate limit and upstream service failure', () => {
+  const conflict = composioMessage({code: 'composio_conflict'}, '');
+  const limited = composioMessage({code: 'composio_rate_limited'}, '');
+  const upstream = composioMessage({code: 'composio_upstream'}, '');
+  assert.match(conflict, /连接冲突.*刷新页面查看当前连接/);
+  assert.doesNotMatch(conflict, /已经有|断开/);
+  assert.match(limited, /限制了请求次数.*稍后重试/);
+  assert.match(upstream, /服务暂时异常.*稍后重试/);
+  assert.equal(composioMessage({code: 'constructor'}, '无法开始连接。'), '无法开始连接。');
+});
+
 test('composioRowState never shows success without a real connected state', () => {
   const mapped = {toolkit: 'github', managed: 'yes'};
   assert.deepEqual(composioRowState(null, true, null).disabled, true);
   assert.equal(composioRowState({toolkit: null}, true, null).status, '未接通');
   const unconfigured = composioRowState(mapped, false, {state: 'connected', id: 'x'});
   assert.equal(unconfigured.status, '未配置 Composio');
-  assert.equal(unconfigured.disabled, true);
-  assert.match(unconfigured.title, /你自己的 Composio API key/);
+  assert.equal(unconfigured.disabled, false);
+  assert.equal(unconfigured.action, 'focus-key');
+  assert.equal(unconfigured.button, '配置密钥');
   assert.equal(composioRowState(mapped, true, null).status, '未连接');
   assert.equal(composioRowState(mapped, true, null).action, 'connect');
   assert.equal(composioRowState(mapped, true, {state: 'connecting'}).status, '连接中…');
@@ -830,7 +937,12 @@ test('applyComposioRows updates status, button and connection id from server dat
   }
   const github = node({'data-connector-id': 'github', 'data-composio-toolkit': 'github', 'data-composio-managed': 'yes'});
   const amap = node({'data-connector-id': 'amap'});
-  const document = {getElementById: id => id === 'connectors-catalog' ? {querySelectorAll: () => [github, amap]} : null};
+  const count = {hidden: true};
+  const nodes = {
+    'connectors-catalog': {querySelectorAll: () => [github, amap]},
+    'connectors-connected-count': count,
+  };
+  const document = {getElementById: id => nodes[id]};
   applyComposioRows(document, true, [{id: 'c1', toolkit: 'github', state: 'connected', created_at: 1}]);
   assert.equal(github.status.textContent, '已连接');
   assert.equal(github.status.attrs['data-state'], 'connected');
@@ -839,9 +951,13 @@ test('applyComposioRows updates status, button and connection id from server dat
   assert.equal(github.button.attrs['data-connection-id'], 'c1');
   assert.equal(amap.status.textContent, '未接通');
   assert.equal(amap.button.disabled, true);
+  assert.equal(count.textContent, '1 个已连接');
+  assert.equal(count.hidden, false);
   applyComposioRows(document, false, []);
   assert.equal(github.status.textContent, '未配置 Composio');
-  assert.equal(github.button.disabled, true);
+  assert.equal(github.button.disabled, false);
+  assert.equal(github.button.attrs['data-composio-action'], 'focus-key');
+  assert.equal(count.textContent, '0 个已连接');
   assert.equal(github.button.attrs['data-connection-id'], undefined);
 });
 

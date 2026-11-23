@@ -13,8 +13,10 @@ import { Fault } from '../b4/http.js'
 import { ownerId } from '../../featurekit/v1.js'
 import { sharedBotSocial, seg, qs } from './bot-social.js'
 import { GLB_MIME } from '../glb.js'
+import { studioReference } from './studio-reference.js'
 
 const HEX = /^[0-9a-f]{32}$/
+const GROUP_AGENT_ID = /^[A-Za-z0-9._:-]{1,80}$/
 const PLATFORM_USERNAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/
 const PUBLIC_LISTING_ID = /^otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/
 const LATEST_WORK_CURSOR = /^l\.(0|[1-9][0-9]{0,15})\.otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}\.[a-f0-9]{24}$/
@@ -23,7 +25,7 @@ const DISCOVER_WORK = '/v1/discover/works/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])'
 const WORK_COMMENT = 'otwc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}'
 const COMMENT_KEY = /^[A-Za-z0-9_-]{16,64}$/
 const PROFILE_HANDLE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/
-const GROUP_MANAGEMENT_FIELDS = {rename:'title',remove:'member_id',transfer:'member_id',leave:''}
+const GROUP_MANAGEMENT_FIELDS = {rename:'title',remove:'member_id',transfer:'member_id',leave:'',reply_policy:'mode'}
 const DISCOVER_MEDIA_KINDS = new Map([
   ['image/png', 'image'], ['image/jpeg', 'image'], ['image/gif', 'image'], ['image/webp', 'image'],
   ['audio/mpeg', 'audio'], ['audio/ogg', 'audio'], ['audio/wav', 'audio'],
@@ -124,7 +126,12 @@ function conversationItem(row, me, env, workspaceId) {
     pinned: !!row.pinned,
     first_unread_seq: row.unread > 0 ? (row.read_seq || 0) + 1 : null,
     members,
-    agent_members: (row.agents || []).map((a) => ({ id: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply, mine: a.mine === true, owner_id: a.owner?.owner_id || '', owner_name: a.owner?.display_name || a.owner?.handle || '' })),
+    ...(row.group_agent_requests === true ? {group_agent_requests: true} : {}),
+    ...(row.group_agent_routing ? {group_agent_routing: row.group_agent_routing} : {}),
+    ...(row.kind === 'dm' && row.direct_agent_requests === true ? {direct_agent_requests:true} : {}),
+    agent_members: (row.agents || []).map((a) => ({ id: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply,
+      mine: a.mine === true, owner_id: a.owner?.owner_id || '', owner_name: a.owner?.display_name || a.owner?.handle || '',
+      owner_handle: a.owner?.handle || '' })),
   }
 }
 
@@ -138,6 +145,7 @@ function attachmentItem({ title, mime, bytes, resource, sticker }, workspaceId, 
 function messageItem(row, me, env, workspaceId) {
   const author = row.author || { handle: null, owner_id: row.author_id, display_name: row.agent_name }
   const agent = row.author_kind === 'agent' || author.kind === 'agent'
+  const studio = !agent && !row.retracted && studioReference(row.studio_reference)
   return {
     id: row.id,
     seq: row.seq,
@@ -154,8 +162,12 @@ function messageItem(row, me, env, workspaceId) {
     ...(row.voice ? { voice: row.voice } : {}),
     ...(row.reply_preview ? {reply_preview: row.reply_preview} : {}),
     ...(row.forwarded_from ? {forwarded_from: row.forwarded_from} : {}),
+    ...(studio ? {studio_reference: studio} : {}),
     ...(row.reply_jobs?.length ? {reply_jobs: row.reply_jobs} : {}),
-    ...(agent && row.reply_job_id ? {reply_job_id: row.reply_job_id} : {}),
+    ...(agent && row.reply_job_id ? {reply_job_id: row.reply_job_id,
+      ...(author.owner?.owner_id ? {agent_owner_id: author.owner.owner_id,
+        agent_owner_name: author.owner.display_name || author.owner.handle || '',
+        agent_owner_handle: author.owner.handle || ''} : {})} : {}),
     ...(row.group_memory_refs?.length ? {group_memory_refs:row.group_memory_refs} : {}),
     ...(row.attachment ? { attachment: attachmentItem(row.attachment, workspaceId, row.conversation_id, row.id) } : {}),
     ...(agent ? { role: 'agent', agent_id: row.agent_ref || author.agent_ref, agent_name: row.agent_name || author.name, source: 'runtime_infer' } : {}),
@@ -181,6 +193,7 @@ function workItem(row) {
     kind,
     kind_label: WORK_LABELS[kind] || kind,
     author: usernameOf(row.creator) || row.creator?.display_name || '',
+    ...(row.creator?.handle ? {creator: {handle: row.creator.handle, name: row.creator.display_name || usernameOf(row.creator)}} : {}),
     updated: unix(row.updated_at),
     path: row.path || ('/w/' + row.slug),
     likes: row.likes ?? 0,
@@ -237,19 +250,31 @@ function rethrow(error) {
     call_full: 'call_full',
     call_already_joined: 'call_already_joined',
     call_ended: 'call_ended',
+    call_recording_busy: 'call_recording_busy',
+    call_recording_changed: 'call_recording_changed',
     meeting_ended: 'meeting_ended',
     group_management_conflict: 'group_management_conflict',
+    group_reply_lead_unavailable: 'group_reply_lead_unavailable',
     group_owner_transfer_required: 'group_owner_transfer_required',
+    ownership_changed: 'ownership_changed',
+    member_suspended: 'member_suspended',
     member_not_found: 'member_not_found',
     public_chat_closed: 'public_chat_closed',
     public_agent_changed: 'public_agent_changed',
     listing_changed: 'listing_changed',
+    artifact_changed: 'artifact_changed',
     title_conflict: 'title_conflict',
     quick_start_changed: 'quick_start_changed',
     popularity_expired: 'popularity_expired',
     comment_not_found: 'not_found',
     comment_conflict: 'conflict',
     reply_unavailable: 'reply_unavailable',
+    group_agent_unavailable: 'group_agent_unavailable',
+    group_agent_request_conflict: 'group_agent_request_conflict',
+    direct_agent_unavailable: 'direct_agent_unavailable',
+    direct_agent_request_conflict: 'direct_agent_request_conflict',
+    studio_reference_changed: 'studio_reference_changed',
+    studio_reference_unavailable: 'studio_reference_unavailable',
   })[code] || (status === 404 ? 'not_found' : status === 403 ? 'forbidden' : status === 409 ? 'conflict' : status === 410 ? 'not_found' : status === 429 ? 'quota' : code || 'internal')
   throw new Fault(status === 410 ? 404 : status, mapped, error?.message || 'Bot Social request failed')
 }
@@ -330,14 +355,15 @@ function membersRoutes(host) {
       },
     },
     {
-      method: 'POST', path: /^\/v1\/workspaces\/([0-9a-f]{32})\/members\/([A-Za-z0-9._-]{1,80})\/(remove|suspend|unsuspend)$/,
+      method: 'POST', path: /^\/v1\/workspaces\/([0-9a-f]{32})\/members\/([A-Za-z0-9._-]{1,80})\/(remove|suspend|unsuspend|transfer-ownership)$/,
       async handle({ match }) {
         return wrap(async () => {
           const bs = client(host)
           const team = await teamFor(bs, match[1], 'Workspace', env)
-          const me = await meOf(bs, env)
           const action = match[3]
           const path = `/v1/ot/teams/${seg(team.id, 'team_id')}/members/${seg(match[2], 'handle')}`
+          if (action === 'transfer-ownership') return [200, await bs.post(path + '/transfer-ownership', {})]
+          const me = await meOf(bs, env)
           if (action === 'remove') {
             await bs.del(path)
             return [200, {}]
@@ -392,6 +418,23 @@ function invitesRoutes(host) {
       },
     },
     {
+      method: 'POST', path: /^\/v1\/invites\/group\/(preview|accept)$/,
+      async handle({ match, body }) {
+        return wrap(async () => {
+          const accepted = match[1] === 'accept'
+          const binding = accepted ? await host.call('agents/personal-binding', {}) : null
+          if (accepted && !HEX.test(binding?.workspace_id || '')) {
+            throw new Fault(503, 'personal_binding_unavailable', '请等待个人工作区启动后重试。')
+          }
+          const result = await client(host).post('/v1/ot/group-invites/' + match[1], {code: body?.token})
+          return [200, accepted ? {
+            conversation_id: result.conversation_id,
+            workspace_id: result.workspace_id || binding.workspace_id,
+          } : result]
+        })
+      },
+    },
+    {
       method: 'POST', path: /^\/v1\/invites\/preview$/,
       async handle({ body }) {
         return wrap(async () => {
@@ -400,11 +443,16 @@ function invitesRoutes(host) {
             throw new Fault(400, 'invalid_invite', '邀请链接格式不正确。')
           }
           const data = await client(host).post('/v1/ot/invites/preview', { code: token })
-          if (!data.usable) throw new Fault(410, 'invite_unavailable', '这条邀请已失效。')
+          if (data.membership === 'suspended') throw new Fault(403, 'forbidden', '此工作区已暂停你的访问。')
+          const joined = data.membership === 'member' && HEX.test(data.workspace_id || '')
+          const pending = data.membership === 'pending'
+          if (!data.usable && !joined && !pending) throw new Fault(410, 'invite_unavailable', '这条邀请已失效。')
           return [200, { invitation: {
             team_name: String(data.team?.name || '').slice(0, 80),
             role: data.role === 'admin' ? 'admin' : 'member',
             requires_approval: data.requires_approval === true,
+            ...(joined ? {membership: 'member', workspace_id: data.workspace_id}
+              : pending ? {membership: 'pending'} : {}),
           } }]
         })
       },
@@ -519,6 +567,17 @@ function teamsRoutes(host) {
               }
               return [200, result]
             }
+            if (include === 'personal-agent') {
+              Object.assign(result, platformViewer(call))
+              const workspace = q.getAll('workspace')
+              if (personal && (personal.owner_id || result.viewer_username) && q.getAll('include').length === 1
+                  && (!workspace.length || (workspace.length === 1 && workspace[0] === personal.id))) {
+                result.personal_agent_id = localBinding.agent_id
+                const settings = await host.call('settings/look', {}).catch(() => null)
+                result.personal_look = settings?.look ?? null
+              }
+              return [200, result]
+            }
             if (include === 'artifacts' || include === 'chat') {
               Object.assign(result, platformViewer(call))
               if (personal && (personal.owner_id || result.viewer_username)) {
@@ -623,15 +682,17 @@ function teamsRoutes(host) {
         return wrap(async () => {
           const bs = client(host)
           const q = parseQuery(query)
-          const data = await bs.get('/v1/ot/directory' + qs({ q: q.get('q'), limit: q.get('limit') }))
+          const data = await bs.get('/v1/ot/directory' + qs({ q: q.get('q'), limit: q.get('limit'), cursor: q.get('cursor') }))
           return [200, {
             items: (data.teams || []).map((t) => ({
               name: t.name,
               summary: t.summary || '',
               member_count: t.member_count ?? 0,
+              team_id: t.id,
               workspace_id: t.workspace_id || t.id,
               membership: t.membership || null,
             })),
+            cursor: data.cursor || null,
           }]
         })
       },
@@ -647,7 +708,10 @@ function teamsRoutes(host) {
             : id
           const data = await bs.post(`/v1/ot/directory/${seg(teamId, 'team_id')}/join`)
           if (data.status === 'pending') return [202, { join_request: { id: data.request_id, status: 'pending' } }]
-          return [200, { status: data.status || 'member' }]
+          return [200, {
+            status: data.status || 'member',
+            ...(data.status === 'member' && HEX.test(data.workspace_id || '') ? { workspace_id: data.workspace_id } : {}),
+          }]
         })
       },
     },
@@ -700,6 +764,19 @@ async function requireSharedGroupScope(host,bs,workspace,cid) {
     throw new Fault(404,'not_found','该群聊不在当前工作区。')
   }
   return group
+}
+
+function sharedAgentTargets(input) {
+  if (!Array.isArray(input) || input.length < 1 || input.length > 5 || input.some(target =>
+    !target || typeof target.owner_id !== 'string' || typeof target.agent_id !== 'string' ||
+    Object.keys(target).length !== 2 || !GROUP_AGENT_ID.test(target.owner_id) || !GROUP_AGENT_ID.test(target.agent_id))) {
+    throw new Fault(400, 'invalid', '请选择 1 至 5 个有效的智能体。')
+  }
+  const ordered = input.map(({owner_id, agent_id}) => ({owner_id, agent_id}))
+  if (new Set(ordered.map(item => JSON.stringify(item))).size !== ordered.length) {
+    throw new Fault(400, 'invalid', '不能重复选择同一个智能体。')
+  }
+  return ordered
 }
 
 export async function shareGroupMemory(host, payload) {
@@ -785,17 +862,29 @@ function messengerRoutes(host, wakeReplies) {
           const scope = await messengerScope(host, bs, match[1], match[2])
           const me = await meOf(bs, env)
           const conv = scope.conversation || await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}`)
-          const unread = parseQuery(query).get('start') === 'unread' && !conv.public_agent
+          const q = parseQuery(query)
+          const around = q.get('around') ?? undefined
+          const startUnread = q.get('start') === 'unread'
+          const unread = startUnread && !conv.public_agent
+          if (around !== undefined && (startUnread || q.getAll('around').length !== 1)) {
+            throw new Fault(400, 'invalid', 'Choose one message cursor')
+          }
           const page = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages` + qs({
-            limit: unread ? 50 : 100, pins: 1, unread: unread ? 1 : undefined,
-            workspace_id: unread && !scope.personal ? match[1] : undefined,
-          }))
+            limit: unread || around !== undefined ? 50 : 100, pins: 1, unread: unread ? 1 : undefined, around,
+            workspace_id: !scope.personal && (unread || around !== undefined || conv.kind === 'dm') ? match[1] : undefined,
+          })).catch(error => {
+            if (around !== undefined && error?.code === 'social/message_not_found') {
+              throw new Fault(404, 'history_anchor_missing', '找不到原来的阅读位置。')
+            }
+            throw error
+          })
           return [200, {
             conversation: conversationItem(conv, me, env, match[1]),
             items: (page.messages || []).map((m) => messageItem({ ...m, conversation_id: conv.id }, me, env, match[1])),
             agent_replies: [],
             pinned_messages: page.pinned_messages || [],
             cursor: page.next_before ?? null,
+            ...(around !== undefined ? {has_newer:page.has_newer === true} : {}),
             ...(unread ? {unread_window: {first:page.first_unread, read_seq:page.read_seq, last_seq:page.last_seq,
               has_newer:page.has_newer === true}} : {}),
           }]
@@ -818,19 +907,27 @@ function messengerRoutes(host, wakeReplies) {
       async handle({match,body}) {
         return wrap(async () => {
           const [ , workspace, id ] = match
-          const {action, revision, title, member_id:memberId} = body || {}
+          const {action, revision, title, member_id:memberId, mode, lead} = body || {}
           const field = typeof action === 'string' && Object.hasOwn(GROUP_MANAGEMENT_FIELDS,action) ? GROUP_MANAGEMENT_FIELDS[action] : null
+          const policy = action === 'reply_policy'
           if (field === null || !Number.isSafeInteger(revision) || revision < 0 ||
-              Object.keys(body).some(key => key !== 'action' && key !== 'revision' && key !== field) ||
+              Object.keys(body).some(key => key !== 'action' && key !== 'revision' && key !== field && !(policy && key === 'lead')) ||
               (field === 'title' && (typeof title !== 'string' || !title.trim() || title.length > 80)) ||
               (field === 'member_id' && (typeof memberId !== 'string' || !/^[A-Za-z0-9._-]{1,80}$/.test(memberId)))) {
             throw new Fault(400, 'invalid', '群聊管理请求无效。')
+          }
+          if (policy) {
+            if (!['default','everyone','lead'].includes(mode) || (mode !== 'lead' && Object.hasOwn(body,'lead'))) {
+              throw new Fault(400, 'invalid', '请选择有效的智能体回复策略。')
+            }
+            if (mode === 'lead') sharedAgentTargets([lead])
           }
           const bs = client(host)
           const binding = await host.call('agents/personal-binding', {})
           const direct = binding?.workspace_id === workspace
           const result = await bs.post(`/v1/ot/conversations/${seg(id,'conversation_id')}/management`, {
-            action, revision, ...(field ? {[field]:body[field]} : {}), ...(direct ? {direct:true} : {workspace}),
+            action, revision, ...(field ? {[field]:body[field]} : {}), ...(policy && mode === 'lead' ? {lead} : {}),
+            ...(direct ? {direct:true} : {workspace}),
           })
           if (action === 'leave') {
             if (result.left === true && result.conversation_id === id) return [200,{left:true,conversation_id:id}]
@@ -932,6 +1029,28 @@ function messengerRoutes(host, wakeReplies) {
         return wrap(async () => {
           const bs = client(host)
           const scope = await messengerScope(host, bs, match[1], match[2])
+          if (body?.direct_agent_request !== undefined) {
+            const [, workspace, conversationId] = match
+            const path = '/v1/ot/conversations/' + seg(conversationId)
+            const conversation = scope.conversation || await bs.get(path)
+            if (conversation.kind !== 'dm' || !conversation.direct || conversation.direct_agent_requests !== true) {
+              throw new Fault(404, 'not_found', '此私聊无法请求智能体。')
+            }
+            if (body.direct_agent_request !== true || typeof body.body !== 'string' ||
+                !body.body.trim() || body.body.length > 4000 ||
+                typeof idempotency_key !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(idempotency_key) ||
+                Object.keys(body).some(k => !['body','agent_mentions','reply_to','direct_agent_request'].includes(k))) {
+              throw new Fault(400, 'invalid', '只能向私聊智能体发送文字或引用一条消息。')
+            }
+            const data = await bs.post(path + '/messages', {
+              direct:true, direct_agent_request:true, body:body.body, reply_to:body.reply_to,
+              agent_mentions:sharedAgentTargets(body.agent_mentions), client_key:idempotency_key,
+              ...(!scope.personal ? {workspace} : {}),
+            })
+            if (data.reply_jobs?.some(job => job.status === 'queued')) wakeReplies()
+            const me = await meOf(bs, env)
+            return [201, {message:messageItem({...data,conversation_id:conversationId},me,env,workspace)}]
+          }
           let attachment
           let stickerReplay = false
           if (body?.sticker_id !== undefined) {
@@ -951,9 +1070,12 @@ function messengerRoutes(host, wakeReplies) {
             if (body.voice || body.attachment || scope.conversation?.public_agent) {
               throw new Fault(400, 'invalid', '请选择可以接收附件的群聊或单聊。')
             }
+            if (body.body !== undefined && (typeof body.body !== 'string' || body.body.length > 4000)) {
+              throw new Fault(400, 'invalid', '附言不能超过 4000 个字符。')
+            }
             const snapshot = await host.call('artifacts/chatAttachment', {workspace_id: match[1],
               artifact_id: body.artifact_id, revision: body.artifact_revision})
-            body = {...body,body:snapshot.body}
+            body = {...body,body:body.body?.trim() || snapshot.body}
             attachment = snapshot.attachment
           } else if (body?.attachment !== undefined) {
             const {title,mime,data} = body.attachment || {}
@@ -1011,19 +1133,43 @@ function messengerExtraRoutes(host, wakeReplies) {
     if (scope.personal && !accountConversation(scope.conversation)) throw new Fault(404, 'not_found', '该会话没有通话功能。')
     return scope.team?.id
   }
+  const recordingInput = body => {
+    const action = body?.action
+    const fields = ['call_id', 'peer_id', 'action', ...(action === 'request' ? [] : ['recording_id'])]
+    const valid = value => typeof value === 'string' && /^[A-Za-z0-9_-]{16,64}$/.test(value)
+    if (!['request', 'allow', 'decline', 'stop'].includes(action) ||
+        Object.keys(body).length !== fields.length || !fields.every(field => Object.hasOwn(body, field)) ||
+        fields.some(field => field !== 'action' && !valid(body[field]))) {
+      throw new Fault(400, 'invalid', '录制同意请求无效。')
+    }
+    return body
+  }
   return [
     {
-      method: 'POST', path: /^\/v1\/meeting-calls\/(create|preview|join|poll|signal|leave|end)$/,
-      handle: ({ match, body }) => wrap(async () => [200, await client(host).post('/v1/ot/meeting-calls/' + match[1], body)]),
+      method: 'POST', path: /^\/v1\/meeting-calls\/(create|preview|join|poll|signal|leave|end|recording)$/,
+      handle: ({ match, body }) => wrap(async () => [200, await client(host).post('/v1/ot/meeting-calls/' + match[1],
+        match[1] === 'recording' ? recordingInput(body) : body)]),
     },
+    ...['GET', 'POST', 'DELETE'].map(method => ({
+      method, path: re('\\/group-invite'),
+      handle: ({ match }) => wrap(async () => {
+        const [, workspace, conversation] = match
+        const bs = client(host)
+        await requireSharedGroupScope(host, bs, workspace, conversation)
+        const path = conv(conversation) + '/invite'
+        if (method === 'GET') return [200, await bs.get(path)]
+        if (method === 'POST') return [201, await bs.post(path, {})]
+        return [200, await bs.del(path)]
+      }),
+    })),
     {
       method: 'POST', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})\\/agent-retry'),
       handle: ({match, body}) => wrap(async () => {
         const [, workspace, conversation, message] = match
         const bs = client(host)
-        await messengerScope(host, bs, workspace, conversation)
+        const scope = await messengerScope(host, bs, workspace, conversation)
         const result = await bs.post(conv(conversation) + '/messages/' + seg(message) + '/agent-retry',
-          {job_id: body?.job_id, attempt: body?.attempt})
+          {job_id:body?.job_id, attempt:body?.attempt, ...(!scope.personal ? {workspace} : {})})
         wakeReplies()
         return [200, result]
       }),
@@ -1072,11 +1218,12 @@ function messengerExtraRoutes(host, wakeReplies) {
       }),
     },
     {
-      method: 'POST', path: re('\\/call\\/(join|poll|signal|leave)'),
+      method: 'POST', path: re('\\/call\\/(join|poll|signal|leave|recording)'),
       handle: async ({ match, body }) => wrap(async () => {
+        const input = match[3] === 'recording' ? recordingInput(body) : body
         const bs = client(host)
         const teamId = await callTeam(bs, match[1], match[2])
-        return [200, await bs.post(conv(match[2]) + '/call/' + match[3], {...body, team_id: teamId})]
+        return [200, await bs.post(conv(match[2]) + '/call/' + match[3], {...input, team_id: teamId})]
       }),
     },
     ...['GET','POST'].map(method=>({method,path:re('\\/(translation|translations)'),
@@ -1205,12 +1352,26 @@ function messengerExtraRoutes(host, wakeReplies) {
       method: 'POST', path: re('\\/agents'),
       async handle({ match, body }) {
         return wrap(async () => {
-          const bs = client(host); await messengerScope(host, bs, match[1], match[2])
+          const bs = client(host)
+          const scope = await messengerScope(host, bs, match[1], match[2])
+          const conversation = scope.conversation || await bs.get(conv(match[2]))
           const ids = Array.isArray(body?.agent_ids) ? body.agent_ids.slice(0, 10) : []
           if (!ids.length) throw new Fault(400, 'invalid', 'Provide agent_ids')
+          let workspace = match[1]
+          const direct = conversation.kind === 'dm'
+          if (direct) {
+            if (conversation.direct_agent_requests !== true) throw new Fault(404,'not_found','此私聊无法加入智能体。')
+            workspace = (await host.call('agents/personal-binding', {}))?.workspace_id
+            if (!workspace) throw new Fault(503,'unavailable','无法加载个人智能体。')
+          }
           for (const id of ids) {
-            const { agent } = await host.call('agents/get', { id, workspace_id: match[1] })
-            await bs.put(`${conv(match[2])}/agents/${seg(agent.id, 'agent_ref')}`, { name: String(agent.name).slice(0, 40), auto_reply: false })
+            const { agent } = await host.call('agents/get', { id, workspace_id:workspace })
+            if (direct && (agent.archived || agent.native_deleted)) throw new Fault(404,'not_found','该个人智能体不可用。')
+            await bs.put(`${conv(match[2])}/agents/${seg(agent.id, 'agent_ref')}`,
+              {
+                name:String(agent.name).slice(0,40), ...(!direct ? {auto_reply:false} : {}),
+                ...(direct && !scope.personal ? {workspace:match[1]} : {}),
+              })
           }
           return [201, { added: ids.length }]
         })
@@ -1229,10 +1390,20 @@ function messengerExtraRoutes(host, wakeReplies) {
     },
     {
       method: 'POST', path: re('\\/agents\\/([A-Za-z0-9._:-]{1,80})\\/remove'),
-      async handle({ match }) {
+      async handle({ match, body }) {
         return wrap(async () => {
-          const bs = client(host); await messengerScope(host, bs, match[1], match[2])
-          await bs.del(`${conv(match[2])}/agents/${seg(match[3], 'agent_ref')}`)
+          const bs = client(host)
+          const scope = await messengerScope(host, bs, match[1], match[2])
+          const conversation = scope.conversation || await bs.get(conv(match[2]))
+          let owner = ''
+          if (conversation.kind === 'dm') {
+            if (conversation.direct_agent_requests !== true) throw new Fault(404,'not_found','此私聊无法移除智能体。')
+            if (typeof body?.owner_id !== 'string' || !GROUP_AGENT_ID.test(body.owner_id)) {
+              throw new Fault(400,'invalid','请选择要移除的智能体。')
+            }
+            owner = qs({owner_id:body.owner_id, ...(!scope.personal ? {workspace:match[1]} : {})})
+          }
+          await bs.del(`${conv(match[2])}/agents/${seg(match[3], 'agent_ref')}${owner}`)
           return [200, { removed: true }]
         })
       },
@@ -1255,22 +1426,38 @@ function messengerExtraRoutes(host, wakeReplies) {
       async handle({ match, body, idempotency_key: key }) {
         return wrap(async () => {
           const [, workspace, conversationId] = match
+          const paired = body?.agent_targets !== undefined
           const ids = Array.isArray(body?.agent_ids) ? [...new Set(body.agent_ids)] : []
           const prompt = typeof body?.prompt === 'string' ? body.prompt.trim() : ''
-          if (!ids.length || ids.length > 5 || !ids.every(id => typeof id === 'string') || !prompt || prompt.length > 4000
+          if ((paired ? body.agent_ids !== undefined : !ids.length || ids.length > 5 || !ids.every(id => typeof id === 'string'))
+              || !prompt || prompt.length > 4000
               || typeof key !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(key)) {
             throw new Fault(400, 'invalid', 'Provide up to five group agents, a prompt and a send key')
           }
+          const selected = paired ? sharedAgentTargets(body.agent_targets) : null
+          const reference = body.studio_reference
+          const studio = studioReference(reference)
+          if (reference !== undefined && (!studio || Object.keys(reference).length !== 2)) {
+            throw new Fault(400, 'invalid', '选择有效的团队文档版本。')
+          }
           const bs = client(host)
           const conversation = await requireSharedGroupScope(host, bs, workspace, conversationId)
+          if (studio && accountConversation(conversation)) {
+            throw new Fault(404, 'studio_reference_unavailable', '此群聊无法使用团队文档。')
+          }
           const me = await meOf(bs, env)
-          const targets = ids.map(agentId => {
+          const targets = selected || ids.map(agentId => {
             const agent = (conversation.agents || []).find(a => a.agent_ref === agentId && a.mine)
             if (!agent) throw new Fault(404, 'not_found', 'That agent of yours is not in this group')
             return {owner_id:me.owner_id, agent_id:agentId}
           })
+          if (paired && conversation.group_agent_requests !== true) {
+            throw new Fault(503, 'unavailable', '群内智能体请求暂时不可用，请刷新后重试。')
+          }
           const source = await bs.post(`${conv(conversationId)}/messages`, {
             body:prompt, workspace, direct:accountConversation(conversation), agent_mentions:targets, client_key:key,
+            ...(paired ? {group_agent_request:true} : {}),
+            ...(studio ? {studio_reference:studio} : {}),
           })
           if (source.reply_jobs?.some(job => job.status === 'queued')) wakeReplies()
           return [202, {message:messageItem({...source, conversation_id:conversationId}, me, env, workspace)}]
@@ -1280,25 +1467,32 @@ function messengerExtraRoutes(host, wakeReplies) {
   ]
 }
 
-function remixInstructions(row) {
-  if (!row?.snapshot) return ''
+function agentPublication(row) {
   try {
-    const data = JSON.parse(row.snapshot)
-    const instructions = data?.instructions
-    return data?.version === 1 && typeof instructions === 'string' && instructions.length <= agentLimits.instructions
-      ? instructions : ''
-  } catch { return '' }
-}
-
-function publishesQuickStarts(row) {
-  try { return Array.isArray(JSON.parse(row?.snapshot || 'null')?.quick_starts) } catch { return false }
+    const data = JSON.parse(row?.snapshot ?? 'null')
+    if (data?.version === 1) {
+      const instructions = typeof data.instructions === 'string' && data.instructions.length <= agentLimits.instructions
+        ? data.instructions : ''
+      const sharesQuickStarts = Array.isArray(data.quick_starts)
+      const quickStarts = sharesQuickStarts ? data.quick_starts.slice(0, agentLimits.quickStarts).flatMap(value => {
+        if (typeof value !== 'string' || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value)) return []
+        const text = value.replace(/\s+/g, ' ').trim()
+        return text && text.length <= agentLimits.quickStart ? [text] : []
+      }) : []
+      return { instructions, quickStarts, sharesQuickStarts }
+    }
+  } catch { /* Older or malformed snapshots may lack an agent publication. */ }
+  return { instructions: '', quickStarts: [], sharesQuickStarts: false }
 }
 
 function remixTemplate(row) {
+  const { instructions, quickStarts } = agentPublication(row)
   const template = { name: row.title, summary: row.summary || '', category: agentCategories.includes(row.category) ? row.category : null,
-    instructions: remixInstructions(row) }
-  const revision = createHash('sha256').update(JSON.stringify([row.id, template])).digest('hex')
-  return { ...template, revision }
+    instructions }
+  // Keep previous no-starter revisions valid. A copy containing starters must be previewed again.
+  const release = quickStarts.length ? { ...template, quick_starts: quickStarts } : template
+  const revision = createHash('sha256').update(JSON.stringify([row.id, release])).digest('hex')
+  return { ...template, quick_starts: quickStarts, revision }
 }
 
 function workCommentItem(row) {
@@ -1349,6 +1543,7 @@ function discoverRoutes(host) {
   })
   const workListing = async (bs, artifactId) => ((await bs.get('/v1/ot/listings/mine')).listings || []).find((l) => l.kind === 'work' && l.ref === artifactId)
   const workMeta = (row) => (row && row.listed ? { listed: true, slug: row.slug, updated: unix(row.updated_at), path: row.path,
+    ...(Number.isSafeInteger(row.source_revision) && row.source_revision > 0 ? {published_revision:row.source_revision} : {}),
     ...(row.editable_remix === true ? {editable_remix:true} : {}) } : { listed: false })
   return [
     {
@@ -1372,6 +1567,13 @@ function discoverRoutes(host) {
       async handle({ match, body }) {
         return wrap(async () => {
           const notices = match[1] === 'follow-work'
+          if (!notices && body && !Array.isArray(body) && Object.keys(body).length === 2
+            && typeof body.listing_id === 'string' && PUBLIC_LISTING_ID.test(body.listing_id)
+            && ['like', 'collect'].includes(body.action)) {
+            const result = await client(host).post(`/v1/ot/listings/${body.listing_id}/${body.action}`, {on: false})
+            const field = body.action === 'like' ? 'liked' : 'collected'
+            return [200, {[field]: result[field]}]
+          }
           const key = notices ? 'enabled' : 'on'
           if (!body || Array.isArray(body) || Object.keys(body).length !== 2
             || typeof body.handle !== 'string' || !PROFILE_HANDLE.test(body.handle) || typeof body[key] !== 'boolean') {
@@ -1440,6 +1642,7 @@ function discoverRoutes(host) {
           const data = await bs.put('/v1/ot/listings', {
             kind: 'work', ref: match[2], slug: body?.slug, title: String(artifact.title || body?.slug).slice(0, 80),
             work_kind: kind,
+            ...(Number.isSafeInteger(artifact.revision) && artifact.revision > 0 ? {source_revision:artifact.revision} : {}),
             ...(siteHtml ? {site_html: siteHtml} : {summary: snapshot.slice(0, 300), snapshot: snapshot.slice(0, 200000)}),
             ...(editableSnapshot ? {editable_snapshot:editableSnapshot} : {}),
             ...file,
@@ -1500,9 +1703,10 @@ function discoverRoutes(host) {
           const binding = await host.call('agents/personal-binding', {})
           if (binding?.workspace_id !== workspaceId) await teamFor(bs, workspaceId, 'Workspace', env)
           try {
-            const created = await host.call('agents/create', {
+            const created = await host.call('agents/createRemix', {
               workspace_id: workspaceId, idempotency_key, name: body?.name ?? template.name,
               summary: template.summary, category: template.category, instructions: template.instructions,
+              quick_starts: template.quick_starts,
             })
             return [created.status, { agent: { id: created.agent.id, name: created.agent.name, workspace_id: workspaceId } }]
           } catch (error) {
@@ -1631,9 +1835,10 @@ function discoverRoutes(host) {
           const mine = await bs.get('/v1/ot/listings/mine')
           const row = (mine.listings || []).find((l) => l.kind === 'agent' && l.ref === match[2] && l.listed)
           const listing = row ? await bs.get('/v1/ot/discover/' + seg(row.slug, 'slug')) : null
+          const publication = agentPublication(listing)
           return [200, { discover: listing?.listed
-            ? { listed: true, slug: row.slug, category: row.category, chat_enabled: row.chat_enabled === true, copy_instructions: Boolean(remixInstructions(listing)),
-              publish_quick_starts: publishesQuickStarts(listing), updated: unix(row.updated_at) }
+            ? { listed: true, slug: row.slug, category: row.category, chat_enabled: row.chat_enabled === true, copy_instructions: Boolean(publication.instructions),
+              publish_quick_starts: publication.sharesQuickStarts, updated: unix(row.updated_at) }
             : { listed: false } }]
         })
       },

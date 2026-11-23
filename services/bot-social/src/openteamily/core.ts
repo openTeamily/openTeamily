@@ -145,6 +145,7 @@ const VISIBLE_ARTIFACT_NOTICE = `SELECT 1 FROM ot_messages message
             AND sender_team.owner_id=message.author_id AND sender_team.suspended=0)
       ))))
     )`;
+const MUTABLE_NOTIFICATION_KINDS = new Set(['messenger.mention', 'artifact.shared', 'artifact']);
 const WORK_NOTIFICATION = `(kind='artifact.shared' OR (kind='discover.published' AND EXISTS (
   SELECT 1 ${ACTIVE_NOTIFICATION_LISTING} AND listing.kind='work')))`;
 const NOTIFICATION_DATA = `CASE WHEN kind='discover.published' THEN (
@@ -160,7 +161,11 @@ function notificationVisibility(workspace: string | null | undefined, otherEvent
       ${workspace === undefined ? "" : "AND s.workspace_id IS ?"} AND ${MEETING_RECIPIENT_VISIBLE})
       ELSE (${otherEvents}) AND (kind<>'discover.published' OR EXISTS (
         SELECT 1 ${ACTIVE_NOTIFICATION_LISTING}))
-        AND (kind<>'artifact.shared' OR EXISTS (${VISIBLE_ARTIFACT_NOTICE})) END`,
+        AND (kind<>'artifact.shared' OR EXISTS (${VISIBLE_ARTIFACT_NOTICE})) END
+      AND NOT EXISTS (
+        SELECT 1 FROM ot_conversation_members muted_member
+        WHERE muted_member.conversation_id=json_extract(ot_notifications.data,'$.conversation_id')
+          AND muted_member.owner_id=ot_notifications.owner_id AND muted_member.muted=1)`,
     args: workspace === undefined ? args : [workspace, ...args],
   };
 }
@@ -216,7 +221,13 @@ export function registerCore(app: FastifyInstance, ot: OtContext) {
   const scopedNotifications = (owner: string, source: Record<string, unknown>) => {
     assert(source.kind === undefined || source.kind === "work", 400, "invalid_request", "invalid notification kind");
     const scope = notificationScope(owner, source);
-    return source.kind === "work" ? {...scope, sql: scope.sql + ` AND ${WORK_NOTIFICATION}`} : scope;
+    const exclude = one(source.exclude, "exclude");
+    const excluded = exclude === undefined ? [] : exclude.split(",");
+    assert(excluded.length <= MUTABLE_NOTIFICATION_KINDS.size && new Set(excluded).size === excluded.length
+      && excluded.every(kind => MUTABLE_NOTIFICATION_KINDS.has(kind)), 400, "invalid_request", "invalid notification exclusions");
+    const work = source.kind === "work" ? ` AND ${WORK_NOTIFICATION}` : "";
+    const muted = excluded.length ? ` AND kind NOT IN (${excluded.map(() => "?").join(",")})` : "";
+    return {sql: scope.sql + work + muted, args: [...scope.args, ...excluded], exclude};
   };
   app.get("/v1/ot/notifications", async (req, reply) => {
     reply.header("cache-control", "private, no-store");
@@ -231,7 +242,8 @@ export function registerCore(app: FastifyInstance, ot: OtContext) {
       FROM ot_notifications WHERE owner_id = ? AND seq > ?` + scope.sql
       + (q.unread === "1" ? " AND read_at IS NULL" : "") + ` ORDER BY seq ${order} LIMIT ?`, me.ownerId, after, ...scope.args, limit);
     const unread = ot.get<any>("SELECT COUNT(*) AS n FROM ot_notifications WHERE owner_id = ? AND read_at IS NULL" + scope.sql, me.ownerId, ...scope.args).n;
-    return { unread, notifications: rows.map((r) => ({ seq: r.seq, id: r.id, kind: r.kind, data: JSON.parse(r.data), created_at: r.created_at, read: r.read_at !== null })) };
+    return { unread, notifications: rows.map((r) => ({ seq: r.seq, id: r.id, kind: r.kind, data: JSON.parse(r.data), created_at: r.created_at, read: r.read_at !== null })),
+      ...(scope.exclude === undefined ? {} : {exclude: scope.exclude}) };
   });
   app.post("/v1/ot/notifications/read", async (req, reply) => {
     reply.header("cache-control", "private, no-store");
@@ -248,6 +260,6 @@ export function registerCore(app: FastifyInstance, ot: OtContext) {
     }
     const r = ot.run("UPDATE ot_notifications SET read_at=? WHERE owner_id=? AND read_at IS NULL" + scope.sql + suffix, ot.now(), me.ownerId, ...scope.args, ...args);
     const unread = ot.get<any>("SELECT COUNT(*) AS n FROM ot_notifications WHERE owner_id=? AND read_at IS NULL" + scope.sql, me.ownerId, ...scope.args).n;
-    return { marked: r.changes, unread };
+    return { marked: r.changes, unread, ...(scope.exclude === undefined ? {} : {exclude: scope.exclude}) };
   });
 }

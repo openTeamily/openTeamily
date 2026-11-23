@@ -42,6 +42,22 @@ CREATE TABLE IF NOT EXISTS ot_join_requests (
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 const RESERVED = new Set(["admin", "api", "automations", "docs", "health", "invite", "invites", "login", "logout", "me", "members", "new", "settings", "static", "team", "teams", "v1", "workspaces"]);
 const DAY = 86_400_000;
+const MAX_OWNED_TEAMS = 50;
+
+function decodeDirectoryCursor(raw: string | undefined, q: string) {
+  if (raw === undefined) return null;
+  assert(/^[a-zA-Z0-9_-]{1,512}$/.test(raw), 400, "invalid_request", "invalid team directory cursor");
+  let value: unknown;
+  try {
+    value = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+  } catch { /* The query-scoped cursor is validated below. */ }
+  assert(Array.isArray(value) && value.length === 4 && value[0] === q
+    && Number.isSafeInteger(value[1]) && value[1] >= 0
+    && Number.isSafeInteger(value[2]) && value[2] >= 0
+    && typeof value[3] === "string" && /^ott_[0-9A-Z]{26}$/.test(value[3]),
+    400, "invalid_request", "invalid team directory cursor");
+  return { members: value[1] as number, updated: value[2] as number, id: value[3] as string };
+}
 
 export function roleOf(ot: OtContext, teamId: string, ownerId: string): { role: string; suspended: boolean } | undefined {
   const row = ot.get<any>("SELECT role, suspended FROM ot_team_members WHERE team_id = ? AND owner_id = ?", teamId, ownerId);
@@ -156,7 +172,7 @@ function ensureTeamColumns(ot: OtContext) {
 
 function insertTeam(ot: OtContext, meOwnerId: string, { name, slug, summary, workspaceId }: { name: string; slug: string | null; summary: string; workspaceId: string | null }) {
   if (workspaceId) assert(!ot.get("SELECT 1 FROM ot_teams WHERE workspace_id = ?", workspaceId), 409, "workspace_bound", "that workspace already has a team");
-  assert(ot.get<any>("SELECT COUNT(*) AS n FROM ot_teams WHERE owner_id = ?", meOwnerId).n < 50, 429, "too_many_teams", "an account can own at most 50 teams");
+  assert(ot.get<any>("SELECT COUNT(*) AS n FROM ot_teams WHERE owner_id = ?", meOwnerId).n < MAX_OWNED_TEAMS, 429, "too_many_teams", "an account can own at most 50 teams");
   const id = newId("ott");
   const now = ot.now();
   ot.tx(() => {
@@ -338,6 +354,29 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
     ot.notify(target, "team.membership_changed", { team_id: team.id, team_name: team.name });
     return memberView(ot, ot.get("SELECT * FROM ot_team_members WHERE team_id = ? AND owner_id = ?", team.id, target));
   });
+  app.post("/v1/ot/teams/:id/members/:handle/transfer-ownership", async (req) => {
+    const me = ot.me(req);
+    return ot.tx(() => {
+      const { team } = requireMember(ot, params(req).id, me.ownerId, ["owner"]);
+      assert(team.owner_id === me.ownerId, 409, "ownership_changed", "team ownership has changed");
+      const target = ot.ownerByHandle(params(req).handle);
+      assert(target !== me.ownerId, 400, "invalid_request", "choose another team member");
+      const current = roleOf(ot, team.id, target);
+      assert(current, 404, "member_not_found", "not a member of this team");
+      assert(!current.suspended, 409, "member_suspended", "restore member access before transferring ownership");
+      assert(ot.get<{n: number}>("SELECT COUNT(*) AS n FROM ot_teams WHERE owner_id = ?", target)!.n < MAX_OWNED_TEAMS,
+        409, "too_many_teams", "the new owner can own at most 50 teams");
+      ot.run("UPDATE ot_team_members SET role = 'member' WHERE team_id = ? AND owner_id = ?", team.id, me.ownerId);
+      ot.run("UPDATE ot_team_members SET role = 'owner' WHERE team_id = ? AND owner_id = ?", team.id, target);
+      const now = ot.now();
+      ot.run("UPDATE ot_teams SET owner_id = ?, updated_at = ? WHERE id = ?", target, now, team.id);
+      // Usable administrator grants should not become valid again if an owner returns.
+      ot.run(`UPDATE ot_invites SET revoked = 1 WHERE team_id = ? AND role = 'admin' AND revoked = 0
+        AND expires_at > ? AND use_count < max_uses`, team.id, now);
+      ot.notify(target, "team.owner_transferred", { team_id: team.id, team_name: team.name, workspace_id: team.workspace_id });
+      return { transferred: true };
+    });
+  });
   app.delete("/v1/ot/teams/:id/members/:handle", async (req) => {
     const me = ot.me(req);
     const teamId = params(req).id;
@@ -345,7 +384,7 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
     if (target === me.ownerId) {
       const r = roleOf(ot, teamId, me.ownerId);
       assert(r, 404, "team_not_found", "no such team");
-      assert(r.role !== "owner", 409, "owner_cannot_leave", "the owner cannot leave; delete the team instead");
+      assert(r.role !== "owner", 409, "owner_cannot_leave", "transfer ownership to another member before leaving");
     } else {
       const { role } = requireMember(ot, teamId, me.ownerId, ["owner", "admin"]);
       const current = roleOf(ot, teamId, target);
@@ -382,14 +421,20 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
     return inviteView(ot.get("SELECT * FROM ot_invites WHERE id = ?", inv.id));
   });
   app.post("/v1/ot/invites/preview", async (req) => {
-    ot.me(req);
+    const me = ot.me(req);
     const code = text(body(req).code, "code", { min: 16, max: 128 });
     const inv = ot.get<any>("SELECT * FROM ot_invites WHERE code_hash = ?", hashCode(code));
     assert(inv, 404, "invite_not_found", "no such invite");
     const team = ot.get<any>("SELECT * FROM ot_teams WHERE id = ?", inv.team_id);
+    const existing = roleOf(ot, inv.team_id, me.ownerId);
+    const pending = !existing && inv.requires_approval && ot.get(
+      "SELECT 1 FROM ot_join_requests WHERE team_id = ? AND owner_id = ? AND invite_id = ? AND status = 'pending'",
+      inv.team_id, me.ownerId, inv.id);
+    const membership = existing ? (existing.suspended ? "suspended" : "member") : pending ? "pending" : null;
     return { team: { id: team.id, name: team.name, summary: team.summary, owner: ot.profileView(team.owner_id) },
       role: inv.role, requires_approval: !!inv.requires_approval, usable: inviteCanGrantRole(inv, team.owner_id) && usable(inv, ot.now()),
-      expires_at: inv.expires_at };
+      expires_at: inv.expires_at, ...(membership ? {membership} : {}),
+      ...(membership === "member" && team.workspace_id ? {workspace_id: team.workspace_id} : {}) };
   });
   app.post("/v1/ot/invites/accept", async (req) => {
     const me = ot.me(req);
@@ -449,19 +494,45 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
     });
     return teamView(ot, ot.get("SELECT * FROM ot_teams WHERE id = ?", team.id), me.ownerId);
   });
-  app.get("/v1/ot/directory", async (req) => {
+  app.get("/v1/ot/directory", async (req, reply) => {
     const me = ot.me(req);
-    const q = (one(query(req).q, "q") ?? "").trim().toLowerCase().slice(0, 60);
-    const limit = intParam(query(req).limit, "limit", 30, 100);
+    const input = query(req);
+    const q = (one(input.q, "q") ?? "").trim().toLowerCase().slice(0, 60);
+    const limit = intParam(input.limit, "limit", 30, 100);
+    const before = decodeDirectoryCursor(one(input.cursor, "cursor"), q);
+    reply.header("cache-control", "private, no-store");
+    if (!limit) return {teams: [], cursor: null};
     const like = `%${q.replace(/[\\%_]/g, (c) => "\\" + c)}%`;
-    const rows = ot.all<any>("SELECT t.* FROM ot_teams t WHERE t.listed = 1 AND (lower(t.name) LIKE ? ESCAPE '\\' OR lower(t.summary) LIKE ? ESCAPE '\\') ORDER BY (SELECT COUNT(*) FROM ot_team_members m WHERE m.team_id = t.id) DESC, t.updated_at DESC LIMIT ?", like, like, limit);
+    const rows = ot.all<{
+      id: string; name: string; summary: string; member_count: number; updated_at: number;
+      workspace_id: string | null; suspended: number | null; request_status: string | null;
+    }>(`WITH listed AS (
+      SELECT t.id, t.name, t.summary, t.updated_at, t.workspace_id,
+        (SELECT COUNT(*) FROM ot_team_members m WHERE m.team_id = t.id) AS member_count
+      FROM ot_teams t
+      WHERE t.listed = 1 AND (lower(t.name) LIKE ? ESCAPE '\\' OR lower(t.summary) LIKE ? ESCAPE '\\')
+    ), page AS (
+      SELECT * FROM listed
+      WHERE (? IS NULL OR (member_count, updated_at, id) < (?, ?, ?))
+      ORDER BY member_count DESC, updated_at DESC, id DESC LIMIT ?
+    )
+    SELECT page.*, member.suspended, request.status AS request_status
+    FROM page
+    LEFT JOIN ot_team_members member ON member.team_id = page.id AND member.owner_id = ?
+    LEFT JOIN ot_join_requests request ON request.team_id = page.id AND request.owner_id = ?
+    ORDER BY page.member_count DESC, page.updated_at DESC, page.id DESC`,
+    like, like, before?.id ?? null, before?.members ?? 0, before?.updated ?? 0, before?.id ?? "", limit + 1,
+    me.ownerId, me.ownerId);
+    const tail = rows[limit - 1];
     return {
-      teams: rows.map((t) => {
-        const r = roleOf(ot, t.id, me.ownerId);
-        const pending = ot.get<any>("SELECT status FROM ot_join_requests WHERE team_id = ? AND owner_id = ?", t.id, me.ownerId);
-        const v = teamView(ot, t, me.ownerId);
-        return { id: v.id, name: v.name, summary: v.summary, member_count: v.member_count, updated_at: v.updated_at, membership: r?.suspended ? "suspended" : r ? "member" : pending?.status === "pending" ? "pending" : null };
-      }),
+      teams: rows.slice(0, limit).map(t => ({
+        id: t.id, name: t.name, summary: t.summary, member_count: t.member_count, updated_at: t.updated_at,
+        membership: t.suspended === 1 ? "suspended" : t.suspended === 0 ? "member"
+          : t.request_status === "pending" ? "pending" : null,
+        ...(t.suspended === 0 && t.workspace_id ? {workspace_id: t.workspace_id} : {}),
+      })),
+      cursor: rows.length > limit
+        ? Buffer.from(JSON.stringify([q, tail.member_count, tail.updated_at, tail.id])).toString("base64url") : null,
     };
   });
   app.post("/v1/ot/directory/:id/join", async (req) => {

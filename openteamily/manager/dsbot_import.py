@@ -13,7 +13,8 @@ from tempfile import TemporaryFile
 
 from .safety import ManagerError, require
 
-FEATURES = ('settings', 'model-api', 'connectors', 'meetings', 'memory', 'automations', 'agents', 'artifacts', 'skills', 'skill-secrets', 'message-assists')
+FEATURES = ('settings', 'model-api', 'connectors', 'meetings', 'memory', 'automations',
+            'agents', 'artifacts', 'skills', 'skill-secrets', 'message-assists', 'skill-run-history')
 BUNDLE_NAME = re.compile(r'^[a-z0-9-]{1,40}-v[0-9]{1,4}\.bundle$')
 VERSION = 1
 IMPORT_DIR = '/data/openteamily/import'

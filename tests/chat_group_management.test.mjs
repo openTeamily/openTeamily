@@ -29,6 +29,7 @@ class Element {
   fire(name) { return this.events.get(name)?.({preventDefault() {}}); }
   click() { return this.fire('click'); }
   append(child) { this.children.push(child); }
+  replaceChildren(...children) { this.children = children; }
   querySelector() { return this.note; }
   setAttribute() {}
   showModal() { this.open = true; }
@@ -119,4 +120,89 @@ test('a successful late leave receipt cannot close or change a different group',
   assert.equal(control('dialog').open, false);
   finish({status: 200, body: {left: true, conversation_id: group}});
   await pending;
+});
+
+test('reply policy preserves exact owner qualification through stale revision and hides edits from members', async () => {
+  const agents = [
+    {owner_id:'one', id:'same', name:'Writer', owner_name:'First owner', mine:true},
+    {owner_id:'two', id:'same', name:'Writer', owner_name:'Second owner'},
+  ];
+  const routing = {mode:'shared', policy:{mode:'default'}, can_edit:true};
+  let current = viewOf();
+  Object.assign(current.conversation, {agent_members:agents, group_agent_routing:routing});
+  const writes = [];
+  const {control, controller} = ui(() => current, {
+    request: async (_method, _path, body) => {
+      writes.push(body);
+      if (writes.length === 1) return {status:409, body:{error:{code:'group_management_conflict'}}};
+      return {status:200, body:{conversation:{...current.conversation,
+        group_management:{...current.conversation.group_management, revision:6},
+        group_agent_routing:{...routing, policy:{mode:body.mode,lead:body.lead}}}}};
+    },
+    onRefresh: async () => {
+      current.conversation.group_management.revision = 5;
+      return true;
+    },
+    onChanged: conversation => { current = {...current, conversation}; },
+  });
+  controller.sync();
+  assert.equal(control('reply-policy').hidden, false);
+  control('reply-policy').click();
+  assert.equal(control('reply-mode').value, 'default');
+  control('reply-mode').value = 'lead';
+  control('reply-mode').fire('change');
+  assert.equal(control('confirm').disabled, true);
+  const lead = control('reply-lead');
+  assert.deepEqual(lead.children.map(option => option.value), ['', '["one","same"]', '["two","same"]']);
+  lead.value = lead.children[2].value;
+  lead.fire('change');
+  assert.equal(control('confirm').disabled, false);
+  await control('form').fire('submit');
+  assert.equal(control('confirm').disabled, true);
+  assert.equal(control('refresh').hidden, false);
+  await control('refresh').click();
+  assert.equal(control('reply-mode').value, 'lead');
+  assert.equal(lead.value, '["two","same"]');
+  assert.equal(writes.length, 1);
+  await control('form').fire('submit');
+  assert.deepEqual(writes, [4,5].map(revision => ({action:'reply_policy', revision, mode:'lead', lead:{owner_id:'two',agent_id:'same'}})));
+  assert.equal(current.conversation.group_agent_routing.policy.lead.owner_id, 'two');
+  assert.equal(control('dialog').open, false);
+  current = viewOf({actor:member});
+  current.conversation.group_agent_routing = {...routing, can_edit:false};
+  controller.sync();
+  assert.equal(control('reply-policy').hidden, true);
+  control('reply-policy').click();
+  assert.equal(control('dialog').open, false);
+});
+
+test('a stale preferred agent is never replaced by a matching agent from another owner', async () => {
+  const original = {owner_id:'owner', id:'same', name:'Writer', mine:true};
+  const teammate = {owner_id:'peer', id:'same', name:'Writer', owner_name:'Peer'};
+  let current = viewOf();
+  Object.assign(current.conversation, {agent_members:[original, teammate],
+    group_agent_routing:{mode:'shared', can_edit:true, policy:{mode:'lead', lead:{owner_id:'owner',agent_id:'same'}}}});
+  const writes = [];
+  const {control} = ui(() => current, {
+    request: async (_method,_path,body) => {
+      writes.push(body);
+      return {status:409, body:{error:{code:'group_reply_lead_unavailable'}}};
+    },
+    onRefresh: async () => {
+      current.conversation.agent_members = [teammate];
+      current.conversation.group_management.revision = 5;
+      current.conversation.group_agent_routing.policy.lead_unavailable = true;
+      return true;
+    },
+  });
+  control('reply-policy').click();
+  await control('form').fire('submit');
+  assert.match(control('status').textContent, /selected agent is unavailable/);
+  await control('refresh').click();
+  assert.equal(control('reply-mode').value, 'lead');
+  assert.equal(control('reply-lead').value, '');
+  assert.match(control('reply-lead-note').textContent, /selection is unavailable/);
+  assert.equal(control('confirm').disabled, true);
+  await control('form').fire('submit');
+  assert.equal(writes.length, 1);
 });

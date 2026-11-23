@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {memoryCitationFromSearch, mount} from '../openteamily/static/memory/app.mjs';
+import {actionSaveAttempt, encodeActionReview, decodeActionReview, decodeNewActionAttempt, decodeActionEdit,
+  advanceActionEdit, reconcileActionEdit} from '../openteamily/static/memory/action-review.mjs';
 import test from 'node:test';
 import {actionQuery, applyDirectoryCollapsed, bindGraphNodeGestures, csrfCookie, directoryGroups, dueAtFromDate, dueDateValue, exportDownloadName, fillGraphHoverCard, formatTopics, applyMarkdown, graphHoverAllowed, graphLayout, graphPreviewModel, hideGraphHoverCard, memoryDirectoryQuery, MEMORY_EMPTY_NO_MATCH, MEMORY_EMPTY_WORKSPACE, memoryPageFromSearch, memoryPageMeta, memoryPagePreview, memoryUpdatedLabel, parseTopics, queryForMemoryPage, showGraphHoverCard, topicTag} from '../openteamily/static/memory/app.mjs';
 
@@ -25,6 +27,58 @@ test('directory and action queries encode filters and omit empty values', () => 
   assert.equal(actionQuery('', 'open'), '?status=open');
   assert.equal(actionQuery('跟进', 'done'), '?q=%E8%B7%9F%E8%BF%9B&status=done');
   assert.equal(actionQuery('', ''), '');
+  const dueCursor = '0:1800000000:' + 'a'.repeat(32);
+  assert.deepEqual(Object.fromEntries(new URLSearchParams(actionQuery('', 'open', dueCursor, 20, 'due'))),
+    {status:'open', after:dueCursor, limit:'20', order:'due'});
+});
+
+test('action edit drafts preserve concurrent changes and isolate overlapping fields for review', () => {
+  const base = {title:'旧标题', notes:'原备注', status:'open', due:'', memory_page_id:''};
+  const fields = {...base, title:'我的标题', notes:'我的备注'};
+  const saved = {...base, notes:'另一设备的备注', status:'done'};
+  assert.deepEqual(decodeActionEdit(JSON.stringify({base,fields})), {base,fields});
+  assert.equal(decodeActionEdit(JSON.stringify({base,fields:{...fields, memory_page_id:'malformed'}})), null);
+  assert.deepEqual(reconcileActionEdit(base,fields,saved), {
+    fields:{...saved,title:'我的标题'}, conflicts:['notes'],
+  });
+  assert.deepEqual(reconcileActionEdit(base,fields,fields), {fields,conflicts:[]});
+});
+
+test('an in-flight action edit keeps a return to the old value as a new draft after its save commits', () => {
+  const base = {title:'标题', notes:'原备注', status:'open', due:'', memory_page_id:''};
+  const submitted = {...base, notes:'提交的备注'};
+  const pending = {revision:1, submitted};
+  const draft = {base, fields:base, pending};
+  assert.deepEqual(decodeActionEdit(JSON.stringify(draft)), draft);
+  assert.deepEqual(advanceActionEdit(draft, base, 1), draft);
+  const saved = {...submitted, status:'done'};
+  const confirmed = advanceActionEdit(draft, saved, 2);
+  assert.deepEqual(confirmed, {base:submitted, fields:base});
+  assert.deepEqual(reconcileActionEdit(confirmed.base, confirmed.fields, saved), {fields:{...base,status:'done'}, conflicts:[]});
+  const concurrent = {...saved, notes:'另一设备修改'};
+  const newer = advanceActionEdit(draft, concurrent, 3);
+  assert.deepEqual(reconcileActionEdit(newer.base, newer.fields, concurrent).conflicts, ['notes']);
+});
+
+test('recovered action review retains the original request and only resends the previously selected actions', () => {
+  const source = {id:'a'.repeat(32), title:'Older note', revision:3};
+  const otherSource = {id:'b'.repeat(32), title:'Current note', revision:9};
+  const selected = new Map([[source.id,source], [otherSource.id,otherSource]]);
+  const items = [
+    {title:' Rewritten next step ', memory_page_id:otherSource.id, selected:true},
+    {title:'Skipped next step', memory_page_id:source.id, selected:false},
+  ];
+  const state = {selected, sources:[source,otherSource], items, open:true};
+  const generation = {key:'c'.repeat(32), sources:[{id:source.id, revision:2},{id:otherSource.id, revision:9}]};
+  assert.deepEqual(decodeActionReview(encodeActionReview({...state, generateAttempt:generation})).generateAttempt, generation);
+  const saved = actionSaveAttempt(state, 'd'.repeat(32));
+  const restored = decodeActionReview(encodeActionReview({...state, saveAttempt:saved}));
+  assert.deepEqual(restored.selected, selected);
+  assert.equal(restored.open, true);
+  assert.equal(restored.saveAttempt.key, saved.key);
+  assert.deepEqual(restored.saveAttempt.items, [{title:'Rewritten next step', memory_page_id:otherSource.id, source_revision:9}]);
+  assert.equal(restored.saveAttempt.chosen[0], restored.items[0]);
+  assert.equal(decodeActionReview(encodeActionReview({...state, sources:[source]})), null);
 });
 
 test('due date helpers convert UTC calendar days', () => {
@@ -33,6 +87,14 @@ test('due date helpers convert UTC calendar days', () => {
   assert.equal(dueDateValue(Date.UTC(2027, 0, 15) / 1000), '2027-01-15');
   assert.equal(dueDateValue(null), '');
   assert.equal(dueDateValue('bad'), '');
+});
+
+test('recovering an action create retains the exact request key and body', () => {
+  const draft = {key:'a'.repeat(32), payload:{title:'Prepare launch', notes:'Reviewed notes', due_at:1799990000, memory_page_id:'b'.repeat(32)}};
+  assert.deepEqual(decodeNewActionAttempt(JSON.stringify(draft)),draft);
+  assert.equal(decodeNewActionAttempt(JSON.stringify({...draft,key:'uncorrelated'})),null);
+  assert.equal(decodeNewActionAttempt(JSON.stringify({...draft,payload:{...draft.payload,memory_page_id:'a different scope'}})),null);
+  assert.equal(decodeNewActionAttempt(JSON.stringify({...draft,payload:{...draft.payload,due_at:2 ** 31 + 1}})),null);
 });
 
 test('parseTopics splits unique names and formatTopics joins them', () => {
@@ -525,6 +587,14 @@ test('rich memory editor round-trips stored markdown through the DOM', () => {
   }
 });
 
+test('malformed Markdown fence remains literal and does not block subsequent headings', () => {
+  assert.deepEqual(markdownToBlocks('开头\n```invalid language !\n正文\n\n### 下一步'), [
+    {type:'p', text:'开头'},
+    {type:'p', text:'```invalid language !\n正文'},
+    {type:'h3', text:'下一步'},
+  ]);
+});
+
 test('rich memory editor drops unsafe links and keeps a list nested in a paragraph', () => {
   assert.equal(safeHref('javascript:alert(1)'), '');
   assert.equal(safeHref('https://example.com/a'), 'https://example.com/a');
@@ -716,7 +786,7 @@ function citationFixture({versionStatus = 200, pageStatus = 200} = {}) {
   const {doc, el} = fakeMemoryDocument(memoryHtml);
   const calls = [];
   const path = `/v1/workspaces/${citedWorkspace}/memory/${citedPage}`;
-  const page = {...memoryPage(citedPage, '当前标题'), revision: 2};
+  const page = {...memoryPage(citedPage, '当前标题'), workspace_id: citedWorkspace, revision: 2};
   const version = {title: '原始标题', revision: 1, body: '<img src=evil> 原始内容'};
   const location = {pathname: '/memory', search: citationQuery};
   doc.defaultView = {location, history: {replaceState(_state, _title, url) {location.search = new URL(url, 'https://fixture.invalid').search;}}};
@@ -731,7 +801,9 @@ function citationFixture({versionStatus = 200, pageStatus = 200} = {}) {
     if (url === '/v1/settings') return jsonResponse(200, {settings: {values: {}}});
     if (url.startsWith('/v1/workspaces') && !url.startsWith('/v1/workspaces/')) return jsonResponse(200, {items: [{id: citedWorkspace, name: '来源空间'}]});
     if (url === path + '/versions/1') return jsonResponse(versionStatus, versionStatus === 200 ? {version, current: 2} : {});
-    if (url === path && options.method === 'POST') return jsonResponse(200, {page: {...page, revision: 3}});
+    if (url === path && options.method === 'POST') {
+      return jsonResponse(200, {page: {...page, ...JSON.parse(options.body).changes, revision: 3}});
+    }
     if (url === path) return jsonResponse(pageStatus, pageStatus === 200 ? {page} : {});
     if (url.endsWith('/graph')) return jsonResponse(200, {nodes: [], edges: [], topics: [], counts: {}});
     return jsonResponse(200, {items: [], total: 0});
@@ -761,6 +833,7 @@ test('the cited revision is read-only and editing fetches the latest page while 
     assert.equal(el('editor-form').elements.title.value, '当前标题');
     assert.equal(el('editor-form').elements.title.focused, true);
     assert.equal(new URLSearchParams(location.search).has('revision'), false);
+    el('editor-form').elements.title.value = '修改后的当前标题';
     await el('editor-form').dispatch('submit');
     const save = calls.find(([method, url]) => method === 'POST' && url === path);
     assert.equal(JSON.parse(save[2]).revision, 2);
@@ -814,7 +887,7 @@ function memoryFetcher() {
     }
     const listed = /^\/v1\/workspaces\/(ws[12])\/memory\?order=recent&limit=20$/.exec(path);
     if (listed) return jsonResponse(200, {items: Object.values(pages), total: Object.keys(pages).length});
-    const actions = /^\/v1\/workspaces\/(ws[12])\/memory\/actions$/.exec(path);
+    const actions = /^\/v1\/workspaces\/(ws[12])\/memory\/actions$/.exec(path.split('?')[0]);
     if (actions) return jsonResponse(200, {items: [action]});
     const graphPath = /^\/v1\/workspaces\/(ws[12])\/memory\/graph$/.exec(path);
     if (graphPath) return jsonResponse(200, graph);
@@ -850,7 +923,7 @@ async function mountMemory() {
     for (let round = 0; round < 6; round += 1) await memoryTick();
   };
   const openActionRow = async (index) => {
-    await el('action-list').children[index].children[0].dispatch('click');
+    await el('action-list').children[index].children[1].dispatch('click');
     for (let round = 0; round < 6; round += 1) await memoryTick();
   };
   return {doc, el, requests, posted, openPageRow, openActionRow};

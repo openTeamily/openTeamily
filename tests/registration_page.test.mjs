@@ -31,7 +31,7 @@ test('failure text never echoes response/exception credentials', async () => {
 });
 function elements(valid = true) {
   const ids = ['register-form', 'register-submit', 'register-status', 'register-username', 'register-password'];
-  const all = Object.fromEntries(ids.map(id => [id, {value: synthetic, textContent: '', disabled: false, focus() {}}]));
+  const all = Object.fromEntries(ids.map(id => [id, {value: synthetic, textContent: '', dataset: {}, disabled: false, focus() {}}]));
   all['register-form'].reportValidity = () => valid;
   all['register-form'].addEventListener = (_, fn) => { all.submit = fn; };
   return {all, document: {getElementById: id => all[id]}};
@@ -136,4 +136,73 @@ test('denied tab storage or missing signup identity keeps the same-origin cookie
     assert.equal(result.ok, false);
     assert.deepEqual(reads, ['/v1/auth/register', '/v1/auth/session']);
   }
+});
+
+test('an ambiguous registration result resumes the confirmed personal Chat without another write', async () => {
+  const id = 'a'.repeat(32);
+  const personal_chat = {workspace_id: 'b'.repeat(32), agent_id: 'c'.repeat(32)};
+  const personalChat = `/chat#workspace=${personal_chat.workspace_id}&agent=${personal_chat.agent_id}`;
+  for (const lostResponse of [false, true]) {
+    const values = new Map();
+    const view = {sessionStorage: {
+      setItem: (key, value) => values.set(key, value), getItem: key => values.get(key), removeItem: key => values.delete(key),
+    }};
+    const reads = [];
+    const result = await registerAccount('  SYNTHETIC ', synthetic, async (url, options) => {
+      reads.push([url, options.method]);
+      assert.equal(options.credentials, 'same-origin');
+      assert.equal(options.mode, 'same-origin');
+      assert.equal(options.redirect, 'error');
+      if (url === '/v1/auth/register') {
+        if (lostResponse) throw new TypeError('lost registration response');
+        return {status: 502};
+      }
+      assert.equal(options.body, undefined);
+      if (url === '/v1/auth/session') return {status: 200, json: async () => ({user: {id, username: 'synthetic'}})};
+      return {status: 200, json: async () => ({user_id: id, personal_chat})};
+    }, view);
+    assert.deepEqual(result, {ok: true, recovered: true, personalChat});
+    assert.deepEqual(reads, [
+      ['/v1/auth/register', 'POST'], ['/v1/auth/session', 'GET'], ['/v1/auth/runtime-readiness?include=personal-chat', 'GET'],
+    ]);
+    assert.equal(takeSignupSession(view), id);
+  }
+});
+
+test('recovery requires matching session and personal runtime identity', async () => {
+  const id = 'a'.repeat(32);
+  for (const {session, owner, expectedReads} of [
+    {session: {status: 401}, expectedReads: 2},
+    {session: {status: 200, json: async () => ({user: {id, username: 'someone-else'}})}, expectedReads: 2},
+    {session: {status: 200, json: async () => ({user: {id: 'non-platform-id', username: 'synthetic'}})}, expectedReads: 2},
+    {session: {status: 200, json: async () => ({user: {id, username: 'synthetic'}})}, owner: 'd'.repeat(32), expectedReads: 3},
+  ]) {
+    const calls = [];
+    const result = await registerAccount('synthetic', synthetic, async url => {
+      calls.push(url);
+      if (url === '/v1/auth/register') return {status: 502};
+      if (url === '/v1/auth/session') return session;
+      return {status: 200, json: async () => ({user_id: owner})};
+    }, {sessionStorage: {setItem() { assert.fail('foreign or missing session carried'); }}});
+    assert.equal(result.ok, false);
+    assert.match(result.message, /登录/);
+    assert.equal(calls.length, expectedReads);
+  }
+});
+
+test('recovered signup continues a valid invitation and accurately confirms the session', async () => {
+  const {all, document} = elements();
+  const id = 'a'.repeat(32);
+  const hash = '#team-invite=validSyntheticInvite';
+  document.defaultView = {location: {hash}};
+  let destination;
+  mountRegistration(document, path => { destination = path; }, async url => {
+    if (url === '/v1/auth/register') return {status: 502};
+    if (url === '/v1/auth/session') return {status: 200, json: async () => ({user: {id, username: synthetic}})};
+    return {status: 200, json: async () => ({user_id: id})};
+  });
+  await all.submit({preventDefault() {}});
+  assert.equal(all['register-status'].textContent, '已确认登录，正在打开你访问的页面…');
+  assert.equal(all['register-password'].value, '');
+  assert.equal(destination, '/login' + hash);
 });

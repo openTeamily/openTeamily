@@ -278,3 +278,37 @@ body.app-workspace:not(.chat-open) > main > #main-panel:has(> .directory-top) { 
   margin-top: 0.35rem;
   align-self: flex-start;
 }
+
+.directory-list-heading { display:flex; justify-content:space-between; align-items:center; gap:.75rem; margin-bottom:.5rem; }
+.directory-list-heading .directory-count { margin:0; }
+.directory-list-heading label { display:flex; align-items:center; gap:.5rem; margin:0; color:var(--ot-muted); font-size:.8125rem; }
+.directory-list-heading select { width:auto; min-height:2.75rem; font-size:.8125rem; }
+#agent-list .agent-card .chat-cta { min-height:2.75rem; }
+#agent-list .agent-card .archive-label { flex:none; color:var(--ot-muted); font-size:.75rem; }
+#agent-share-dialog {
+  box-sizing: border-box;
+  width: min(28rem, calc(100vw - 2rem));
+  max-height: min(43rem, 88dvh);
+  padding: 1.25rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 1rem;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+#agent-share-dialog::backdrop { background: rgb(12 22 17 / 42%); }
+#agent-share-dialog h2 { margin: 0 0 .5rem; font-size: 1.125rem; }
+#agent-share-dialog h3 { font-size: .875rem; }
+#agent-share-form { margin: .75rem 0; padding: 0; border: 0; background: transparent; box-shadow: none; }
+#agent-share-form > label, #agent-share-link-field { display: grid; gap: .35rem; }
+#agent-share-dialog :is(select, input[readonly]) { box-sizing: border-box; width: 100%; min-width: 0; font-size: 1rem; }
+#agent-share-form fieldset { display: grid; gap: .375rem; padding: .5rem .75rem; }
+#agent-share-form fieldset label { display: flex; align-items: center; gap: .5rem; min-height: 2rem; }
+#agent-share-form input[type="checkbox"] { flex: none; }
+#agent-share-sent { display: grid; gap: .5rem; list-style: none; margin: 0 0 .75rem; padding: 0; }
+#agent-share-sent li { display: flex; align-items: center; flex-wrap: wrap; gap: .375rem; }
+#agent-share-sent li > span { flex: 1 1 9rem; min-width: 0; }
+#agent-share-status:empty { display: none; }
+#agent-share-dialog button { min-height: 2.75rem; }
+#agent-share-open-chat { display: inline-flex; align-items: center; min-height: 2.75rem; }

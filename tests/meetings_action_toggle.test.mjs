@@ -2,6 +2,7 @@
 // through the existing edit route, without pressing 保存.
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {actionToggleBody} from '../openteamily/static/meetings/app.mjs';
 
 class FakeElement {
   constructor(tag = 'div') {
@@ -39,6 +40,11 @@ class FakeElement {
   replaceChildren(...nodes) { this.children = nodes; this.pickFirstOption(); }
   focus() {}
   click() { for (const handler of this.handlers.click || []) handler(); }
+  showModal() { this.open = true; }
+  close() {
+    this.open = false;
+    for (const handler of this.handlers.close || []) handler();
+  }
   reset() {}
   get options() { return this.children.filter((child) => child.tagName === 'option'); }
 }
@@ -66,6 +72,7 @@ function fakeDocument() {
 const WORKSPACE = 'a'.repeat(32);
 const MEETING_ID = 'b'.repeat(32);
 const OTHER_MEETING_ID = 'c'.repeat(32);
+const OWNER = 'd'.repeat(32);
 
 function meeting(id = MEETING_ID, revision = 3, actions = [
   {text: 'A', done: false, owner: ''},
@@ -80,7 +87,7 @@ function meeting(id = MEETING_ID, revision = 3, actions = [
   };
 }
 
-async function mountPage(tag, { revokeWith = 200, beforeWrite = () => {}, afterWrite = () => {}, native = false, mobile = false, readList, saveArtifact, intercept } = {}) {
+async function mountPage(tag, { revokeWith = 200, beforeWrite = () => {}, afterWrite = () => {}, native = false, mobile = false, readList, saveArtifact, intercept, historyEntry } = {}) {
   const {doc, elements} = fakeDocument();
   if (native) doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
   const state = {calls: [], body: meeting(), posted: [], revokeWith};
@@ -90,7 +97,7 @@ async function mountPage(tag, { revokeWith = 200, beforeWrite = () => {}, afterW
     state.calls.push(`${method} ${path}`);
     const custom = intercept?.({method, path, options, state, json});
     if (custom) return custom;
-    if (path === '/v1/auth/session') return json(200, {user: {username: 'alice'}});
+    if (path === '/v1/auth/session') return json(200, {user: {username: 'alice', id:OWNER}});
     if (path === '/v1/workspaces?limit=100' || path === '/v1/workspaces?scope=personal') {
       return json(200, {items: [{id: WORKSPACE, name: 'Team'}]});
     }
@@ -129,14 +136,26 @@ async function mountPage(tag, { revokeWith = 200, beforeWrite = () => {}, afterW
     throw new Error('unexpected ' + method + ' ' + path);
   };
   const saved = {document: globalThis.document, fetch: globalThis.fetch, FormData: globalThis.FormData, matchMedia: globalThis.matchMedia};
+  const oldHistory = globalThis.history, oldLocation = globalThis.location;
   globalThis.document = doc;
   globalThis.fetch = fetcher;
   globalThis.matchMedia = () => ({matches: mobile});
+  if (historyEntry) {
+    const location = globalThis.location = new URL('https://local.test/meetings#workspace=' + WORKSPACE);
+    globalThis.history = {state:historyEntry, replaceState(value, _title, url) {
+      this.state = value;
+      location.href = new URL(url, location).href;
+    }};
+  }
   const restore = () => {
     if (saved.document === undefined) delete globalThis.document; else globalThis.document = saved.document;
     if (saved.fetch === undefined) delete globalThis.fetch; else globalThis.fetch = saved.fetch;
     if (saved.matchMedia === undefined) delete globalThis.matchMedia; else globalThis.matchMedia = saved.matchMedia;
     globalThis.FormData = saved.FormData;
+    if (historyEntry) {
+      if (oldHistory === undefined) delete globalThis.history; else globalThis.history = oldHistory;
+      if (oldLocation === undefined) delete globalThis.location; else globalThis.location = oldLocation;
+    }
   };
   await import('../openteamily/static/meetings/app.mjs?toggle=' + tag);
   await settle();
@@ -147,11 +166,39 @@ async function settle() {
   for (let i = 0; i < 14; i += 1) await new Promise((resolve) => setImmediate(resolve));
 }
 
+test('meeting catalogue restores filtered pagination only for the matching account and workspace', async () => {
+  for (const [owner, workspace, matches] of [[OWNER, WORKSPACE, true], [MEETING_ID, WORKSPACE, false], [OWNER, OTHER_MEETING_ID, false]]) {
+    const {doc, state, restore} = await mountPage(`catalogue-${owner}-${workspace}`, {native:true, mobile:true,
+      historyEntry:{meetingCatalogue:{owner, workspace, query:'shipping review', open:true, size:41}},
+    });
+    try {
+      const fields = new URLSearchParams(state.calls.find(call => call.includes('/meetings?')).split('?')[1]);
+      assert.equal(fields.get('q'), matches ? 'shipping review' : null);
+      assert.equal(fields.get('open'), matches ? '1' : null);
+      assert.equal(fields.get('limit'), matches ? '41' : '20');
+      assert.equal(doc.getElementById('meeting-search').value, matches ? 'shipping review' : '');
+      assert.equal(doc.getElementById('meeting-open-only').checked, matches);
+      assert.equal(globalThis.location.href.includes('shipping'), false);
+    } finally { restore(); }
+  }
+});
+
 function checkbox(doc, index) {
   const row = doc.getElementById('action-list').children[index];
-  const label = row && row.children[2];
+  const label = row?.children.find(child => child.className === 'action-done');
   return label && label.children[0];
 }
+
+test('an inline completion carries every saved deadline and omits empty deadlines', () => {
+  const payload = actionToggleBody([
+    {text: 'A', done: false, owner: '', due_date: '2032-02-29'},
+    {text: 'B', done: false, owner: '', due_date: ''},
+  ], 0, true, 3);
+  assert.deepEqual(payload.changes.action_items, [
+    {text: 'A', done: true, owner: '', due_date: '2032-02-29'},
+    {text: 'B', done: false, owner: ''},
+  ]);
+});
 
 test('ticking an action item writes the meeting back without pressing 保存', async () => {
   const {doc, state, restore} = await mountPage('tick-' + Math.random());
@@ -258,6 +305,7 @@ test('an earlier write cannot update the newly selected meeting', async () => {
     await doc.getElementById('meeting-list').handlers.click[0]({
       target: {closest: () => ({dataset: {meeting: OTHER_MEETING_ID}})},
     });
+    await doc.getElementById('discard-meeting-edits').handlers.click[0]();
     assert.match(doc.getElementById('meeting-meta').textContent, /修订 8/);
     finish();
     await sent;
@@ -357,7 +405,8 @@ test('native follow-up opens only saved open items and artifact save uses the st
     },
   });
   const ele = id => doc.getElementById(id);
-  const link = index => ele('action-list').children[index].children[4];
+  const link = index => ele('action-list').children[index].children.find(child => child.className === 'action-destinations')
+    .children.find(child => child.className === 'action-followup');
   try {
     assert.equal(link(0).href, `/automations?workspace=${WORKSPACE}&meeting=${MEETING_ID}&action=0&revision=3`);
     assert.equal(link(0).target, '_blank');
@@ -562,6 +611,7 @@ test('an older confirmed create cannot enter a newly selected draft', async () =
     ele('meeting-title').value = '先创建的会议';
     const writing = ele('meeting-form').handlers.submit[0]({preventDefault() {}});
     ele('new-meeting').click();
+    ele('discard-meeting-edits').click();
     ele('meeting-title').value = '新选中的草稿';
     acknowledge();
     await writing;
@@ -594,6 +644,7 @@ test('a failed navigation retains the unresolved create attempt in the visible d
     await ele('meeting-list').handlers.click[0]({
       target: {closest: () => ({dataset: {meeting: OTHER_MEETING_ID}})},
     });
+    await ele('discard-meeting-edits').handlers.click[0]();
     assert.equal(ele('save-meeting').textContent, '确认并重试保存');
     ele('meeting-title').value = '仍在编辑的标题';
     await submit();
@@ -602,6 +653,32 @@ test('a failed navigation retains the unresolved create attempt in the visible d
     assert.match(ele('meeting-meta').textContent, /修订 1/);
   } finally {
     await settle();
+    restore();
+  }
+});
+
+test('a meeting switch reads nothing and keeps pending edits until discard is confirmed', async () => {
+  const {doc, state, restore} = await mountPage('guard-editor-switch');
+  const element = id => doc.getElementById(id);
+  const openOther = () => element('meeting-list').handlers.click[0]({
+    target: {closest: () => ({dataset: {meeting: OTHER_MEETING_ID}})},
+  });
+  try {
+    element('meeting-transcript').value = 'Unsaved minutes';
+    const reads = state.calls.length;
+    await openOther();
+    assert.equal(element('meeting-unsaved-dialog').open, true);
+    assert.equal(state.calls.length, reads);
+    element('keep-meeting-edits').click();
+    assert.equal(element('meeting-unsaved-dialog').open, false);
+    assert.equal(element('meeting-transcript').value, 'Unsaved minutes');
+    assert.equal(state.calls.length, reads);
+    await openOther();
+    await element('discard-meeting-edits').handlers.click[0]();
+    assert.equal(element('meeting-transcript').value, '');
+    assert.equal(element('meeting-title').value, 'Other');
+    assert.deepEqual(state.calls.slice(reads), [`GET ${meetingPath}/${OTHER_MEETING_ID}`]);
+  } finally {
     restore();
   }
 });

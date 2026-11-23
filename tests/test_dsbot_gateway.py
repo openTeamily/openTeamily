@@ -1,10 +1,12 @@
 """Platform → own DS-Bot gateway decisions (docs/DSBOT_PLUGIN_ARCHITECTURE.md §4)."""
 import json
 import os
+import re
 import secrets
 import tempfile
 import time
 import unittest
+from urllib.parse import parse_qs, urlsplit
 
 from openteamily import dsbot_gateway as gw
 from openteamily import lifecycle
@@ -85,6 +87,16 @@ class GatewayTest(unittest.TestCase):
             db.execute("UPDATE instances SET health='unknown' WHERE id=?", (canonical,))
         self.assertEqual(self.call(self.tokens[owner])[0], 503)
 
+    def test_skill_runs_use_own_runtime_and_the_old_namespace_is_retired_at_the_edge(self):
+        task = 'a' * 32
+        token = self.tokens['a' * 32]
+        status, headers = self.call(token, uri=f'/v1/skills/runs/{task}/artifact')
+        self.assertEqual(status, 204)
+        self.assertIn('feature=skills', headers['X-OT-Upstream-Path'])
+        self.assertEqual(self.call(token, uri=f'/v1/runtime/tasks/{task}/artifact')[0], 404)
+        config = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key=KEY)
+        self.assertIn('location ^~ /v1/runtime/ {\n    default_type application/json;\n    return 410', config)
+
     def test_each_user_reaches_only_their_own_dsbot(self):
         a, b = self.tokens['a' * 32], self.tokens['b' * 32]
         status, headers = self.call(a)
@@ -150,6 +162,11 @@ class GatewayTest(unittest.TestCase):
         self.assertTrue({'chat', 'meetings', 'skills', 'memory', 'settings', 'onboarding', 'automations', 'agents', 'artifacts'} <= gw.load_routes()['moved_pages'])
         self.assertTrue({'members', 'team', 'messenger', 'discover'} <= gw.load_routes()['moved_pages'])
         self.assertEqual(gw.target_for('/chat/app.mjs', gw.load_routes()), '/api/openteamily/page?path=%2Fchat%2Fapp.mjs')
+        release_base = '/chat/assets/' + 'a' * 32
+        for module in ('chat/app.mjs', 'chat/files.mjs', 'chat/translation.mjs', 'shell/thumb.mjs'):
+            path = f'{release_base}/{module}'
+            expected = '/api/openteamily/page?path=' + path.replace('/', '%2F')
+            self.assertEqual(gw.target_for(path, gw.load_routes()), expected)
         self.assertEqual(gw.target_for('/settings', gw.load_routes()), '/api/openteamily/page?path=%2Fsettings')
         self.assertEqual(gw.target_for('/settings/connectors', gw.load_routes()), '/api/openteamily/page?path=%2Fsettings%2Fconnectors')
         self.assertEqual(gw.target_for('/onboarding', gw.load_routes()), '/api/openteamily/page?path=%2Fonboarding')
@@ -164,6 +181,15 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.target_for('/team/', gw.load_routes()), '/api/openteamily/page?path=%2Fteam%2F')
         ws, aid = 'a' * 32, 'b' * 32
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/export'), 'artifacts')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/studio-copy'), 'artifacts')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/shared-copy'), 'artifacts')
+        self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/shared-copy/extra'))
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/studio-personal-copy'), 'artifacts')
+        self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/studio-personal-copy/extra'))
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/studio/documents/{aid}/live'), 'studio')
+        self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/studio/documents/{aid}/live/anything'))
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/shared/{aid}/action'), 'meetings')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/shared/{aid}/discussion'), 'meetings')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/spreadsheet/draft'), 'artifacts')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/slides/draft'), 'artifacts')
         work = '/v1/discover/works/work-demo'
@@ -186,10 +212,13 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/websites/{aid}'), 'websites')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/models-3d/{aid}'), 'model3d')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/shares/{aid}/revoke'), 'artifacts')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/shares/{aid}/link'), 'artifacts')
+        self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/shares/{aid}/link/extra'))
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/discover'), 'discover')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/messages/{aid}/files/0'), 'agents')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/attachments'), 'agents')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/reply-progress'), 'agents')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/reply-stop'), 'agents')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/messages/{aid}/retry'), 'agents')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/social/conversations/otc_01/attachments'), 'messenger')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/memory/profile/dream'), 'memory')
@@ -207,6 +236,7 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/{aid}/artifact'), 'meetings')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/{aid}/memory'), 'meetings')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/{aid}/action'), 'meetings')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/memory/actions/from-meeting'), 'memory')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/shared/{aid}/revoke'), 'meetings')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/transcribe'), 'meetings')
         self.assertEqual(gw.moved_api('/v1/stickers'), 'stickers')
@@ -224,8 +254,10 @@ class GatewayTest(unittest.TestCase):
         shared = f'/v1/workspaces/{workspace}/shared-runs'
         for path, feature in (
             (base, 'team-runs'),
+            (f'{base}/{run}/export', 'team-runs'),
             (f'{base}/{run}/steps/7/retry', 'team-runs'),
             (f'{base}/{run}/steps/1/artifact', 'team-runs'),
+            (f'{base}/automation-results/{run}/{workspace}', 'team-runs'),
             (f'{base}/{run}/share', 'shares'),
             (f'{shared}/{share}/revoke', 'shares'),
         ):
@@ -256,6 +288,7 @@ class GatewayTest(unittest.TestCase):
             (f'/v1/workspaces/{ws}/social/conversations/{ident}/agent-replies', 'messenger'),
             ('/v1/meeting-calls/create', 'messenger'),
             ('/v1/meeting-calls/join', 'messenger'),
+            ('/v1/meeting-calls/recording', 'messenger'),
             ('/v1/discover/works', 'discover'),
             (f'/v1/workspaces/{ws}/agents/{ident}/discover', 'discover'),
         ):
@@ -318,7 +351,8 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('location = /onboarding { return 418; }', conf)
         self.assertIn('location = /artifacts { return 418; }', conf)
         self.assertIn('location ^~ /artifacts/ { return 418; }', conf)
-        self.assertIn('location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$ { return 418; }', conf)
+        self.assertIn('location ~ "^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:activity|shared-copy|studio-personal-copy|(?:spreadsheet|slides)/draft)$" { return 418; }', conf)
+        self.assertIn('location ~ "^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|studio-copy|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/(?:revoke|link))?)?))?)?$" { return 418; }', conf)
         self.assertIn('location = /members { return 418; }', conf)
         self.assertIn('location = /discover { return 418; }', conf)
         self.assertIn('absolute_redirect off;', conf)
@@ -326,7 +360,7 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('rewrite ^ /_ot_discover_guest$uri last;', conf)
         self.assertIn('return 302 /login;', conf)
         self.assertNotIn('location = /login { return 418; }', conf)
-        self.assertIn('location ^~ /v1/discover/ { return 418; }', conf)
+        self.assertIn('location ~ "^/v1/discover/(?:agents|works|me/works)$" { return 418; }', conf)
 
     def test_nginx_config_optional_social_path(self):
         routes = gw.load_routes()
@@ -538,6 +572,21 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(headers['X-OT-Instance'], '1' * 32)
         self.assertIn('feature=automations', headers['X-OT-Upstream-Path'])
 
+    def test_workspace_export_forwards_queries_to_authenticating_users_runtime(self):
+        path = f"/v1/workspaces/{'a' * 32}/export"
+        query = 'type=memory&cursor=20'
+        for owner, instance in (('a', '1'), ('b', '2')):
+            status, headers = self.call(self.tokens[owner * 32], uri=path + '?' + query)
+            self.assertEqual(status, 204)
+            self.assertEqual(headers['X-OT-Instance'], instance * 32)
+            target = urlsplit(headers['X-OT-Upstream-Path'])
+            self.assertEqual(target.path, '/api/openteamily/legacy')
+            self.assertEqual(parse_qs(target.query), {
+                'feature': ['export'], 'path': [path], 'query': [query],
+            })
+        self.assertEqual(self.call(uri=path)[0], 401)
+        self.assertEqual(self.call(self.tokens['a' * 32], uri=path + '/another')[0], 404)
+
     def test_profile_page_and_social_activity_use_owners_runtime(self):
         routes = gw.load_routes()
         for path, encoded in (('/profile', '%2Fprofile'), ('/profile/edit/', '%2Fprofile%2Fedit'),
@@ -554,19 +603,68 @@ class GatewayTest(unittest.TestCase):
             self.assertIn('feature=discover', headers['X-OT-Upstream-Path'])
         self.assertEqual(gw.moved_api('/v1/profile/follow-work'), 'discover')
 
-    def test_nginx_forwards_moved_v1_apis_except_platform_exceptions(self):
-        conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)
-        self.assertIn('location = /v1/settings { return 418; }', conf)
+    def test_nginx_fences_every_moved_api_from_the_same_matchers(self):
+        routes = gw.load_routes()
+        conf = gw.nginx_config(routes, '127.0.0.1:8080', 8081, key=KEY, bot_social='bot-social:8787')
+        rules = [line for line in conf.splitlines() if line.lstrip().startswith('location ')
+                 and '/v1/' in line and 'return 418;' in line]
+        patterns = [pattern.pattern for pattern, _feature in gw.MOVED_APIS]
+        self.assertEqual(rules, [f'  location ~ "{pattern}" {{ return 418; }}' for pattern in patterns])
+        token = self.tokens['a' * 32]
+        ws, ident = 'a' * 32, 'b' * 32
+        grant, conversation = 'otag_' + 'A' * 26, 'otc_' + 'B' * 26
+        for uri, feature in (
+            ('/v1/settings', 'settings'),
+            ('/v1/stickers/' + ident + '/file', 'stickers'),
+            ('/v1/skills/runs/' + ident + '/artifact', 'skills'),
+            ('/v1/discover/works?kind=slides', 'discover'),
+            ('/v1/discover/agents/test-agent/remix', 'discover'),
+            ('/v1/agent-copy-grants/recipients', 'agents'),
+            (f'/v1/agent-copy-grants/{grant}/remix', 'agents'),
+            ('/v1/profile/follow-work', 'discover'),
+            ('/v1/onboarding/automations', 'automations'),
+            (f'/v1/workspaces/{ws}/agents/{ident}/conversations', 'agents'),
+            (f'/v1/workspaces/{ws}/agents/{ident}/shares/{grant}/revoke', 'agents'),
+            (f'/v1/workspaces/{ws}/agents/{ident}/access/{conversation}/revoke', 'agents'),
+            (f'/v1/workspaces/{ws}/memory/actions/from-chat', 'memory'),
+            (f'/v1/workspaces/{ws}/memory/{ident}/versions/123/restore', 'memory'),
+            (f'/v1/workspaces/{ws}/team-runs/automation-results/{ident}/{ident}', 'team-runs'),
+        ):
+            with self.subTest(uri=uri):
+                path = uri.partition('?')[0]
+                self.assertTrue(any(re.fullmatch(pattern, path) for pattern in patterns))
+                self.assertEqual(gw.moved_api(path), feature)
+                status, headers = self.call(token, uri=uri)
+                self.assertEqual(status, 204)
+                self.assertIn('feature=' + feature, headers['X-OT-Upstream-Path'])
         self.assertIn('location = /space { return 418; }', conf)
         self.assertIn('location = /profile { return 418; }', conf)
-        self.assertIn('location = /v1/profile/social { return 418; }', conf)
-        self.assertIn('location = /v1/profile/follow-work { return 418; }', conf)
-        self.assertEqual(conf.count('location = /v1/onboarding/automations'), 1)
-        self.assertIn('location = /v1/onboarding/automations { return 418; }', conf)
-        self.assertIn('location = /v1/composio/callback', conf)
-        # Exceptions must appear before the prefix locations that would catch them.
-        self.assertLess(conf.index('location = /v1/composio/callback'), conf.index('location ^~ /v1/composio/'))
+        self.assertIn('rewrite ^/v1/discover/(works|agents)$ /_ot_public_feed/$1 last;', conf)
 
+    def test_nginx_leaves_platform_api_exceptions_outside_runtime_fence(self):
+        conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key=KEY)
+        patterns = re.findall(r'^  location ~ "(\^/v1/.*)" \{ return 418; \}$', conf, flags=re.M)
+        self.assertIn('location = /v1/agent-homepages/start { return 410; }', conf)
+        self.assertIn('location = /v1/composio/callback { proxy_pass http://127.0.0.1:8080;', conf)
+        ws, ident = 'a' * 32, 'b' * 32
+        for path in (
+            '/v1/agent-homepages/start',
+            '/v1/runtime/tasks',
+            '/v1/composio/callback',
+            '/v1/skills/unknown',
+            '/v1/discover/unknown',
+            '/v1/agent-copy-grants/unknown',
+            '/v1/onboarding/unknown',
+            '/v1/mcp/servers-other',
+            f'/v1/workspaces/{ws}/agents/{ident}/runtime',
+            f'/v1/workspaces/{ws}/agents/{ident}/runtime/unbind',
+            f'/v1/workspaces/{ws}/agents/{ident}/homepage',
+            f'/v1/workspaces/{ws}/agents/{ident}/homepage/revoke',
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(any(re.fullmatch(pattern, path) for pattern in patterns))
+                self.assertIsNone(gw.target_for(path, gw.load_routes()))
+                self.assertEqual(self.call(self.tokens['a' * 32], uri=path)[0], 404)
 
     def test_manager_import_bundles_are_scoped_to_the_granted_owner(self):
         import io

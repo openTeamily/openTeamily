@@ -6,16 +6,15 @@ from tests import test_settings_page as settings_page_tests
 
 PAGES = (
     '/settings', '/agents', '/chat', '/automations', '/artifacts', '/space',
-    '/members', '/team', '/runtimes', '/memory', '/discover',
+    '/members', '/team', '/memory', '/discover',
     '/profile', '/onboarding', '/meetings', '/download', '/guide',
 )
 
 CAPTURE_IDS = {
     '/settings': ('login-panel', 'username', 'password', 'settings-panel',
                   'whoami', 'model-key-state', 'model-api-form', 'settings-index'),
-    '/agents': ('main-panel', 'agent-list', 'edit-form', 'chat-panel',
-                'conversation-list', 'message-list', 'chat-form',
-                'homepage-panel', 'publish-homepage', 'revoke-homepage',
+    '/agents': ('main-panel', 'agent-search', 'agent-list', 'edit-form', 'chat-panel',
+                'open-in-chat', 'homepage-panel', 'manage-public-homepage',
                 'manage-drawer', 'open-create'),
     '/discover': ('main-panel', 'feed-panel', 'feed-note', 'discover-list',
                   'discover-empty', 'manage-list', 'manage-empty', 'workspace'),
@@ -36,13 +35,6 @@ CAPTURE_IDS = {
     '/members': ('member-list', 'invite-list'),
     '/team': ('wizard-form', 'step-1', 'step-2', 'step-3', 'next', 'back',
                'submit', 'invite-skip'),
-    '/runtimes': ('runtimes-panel', 'connect-panel', 'key-list',
-                  'connection-list', 'issued-token', 'detect-runtimes',
-                  'detected-list', 'hosted-agent-section',
-                  'hosted-computer-section', 'local-runtime-section',
-                  'generate-key', 'keys-empty', 'daemon-pending',
-                  'daemon-command', 'device-id', 'install-unix',
-                  'install-windows'),
     '/memory': ('main-panel', 'memory-list', 'editor-form',
                 'search', 'new-page', 'graph-canvas', 'topic-list',
                 'overview-panel', 'actions-panel', 'action-list',
@@ -55,7 +47,7 @@ CAPTURE_IDS = {
     '/meetings': ('main-panel', 'meeting-list', 'meeting-form', 'meeting-title',
                   'meeting-started-at', 'action-list', 'save-meeting'),
     '/download': ('main-panel', 'download-web', 'download-runtime',
-                  'download-unavailable', 'daemon-command'),
+                  'download-unavailable'),
     '/guide': ('main-panel', 'whoami', 'guide-search', 'guide-categories',
                'guide-list', 'guide-count', 'guide-empty', 'guide-dialog',
                'guide-dialog-title', 'guide-dialog-body', 'guide-dialog-path',
@@ -92,7 +84,7 @@ class ShellPageTests(unittest.TestCase):
         self.assertIn(b'export function accountNameFromLabel', script['body'])
         self.assertIn(b'export function ensureOnboardingMenuItem', script['body'])
         self.assertIn(b'export function ensureChannelsAndConnectorsMenuItems', script['body'])
-        self.assertIn('工作背景'.encode(), script['body'])
+        self.assertIn("ONBOARDING_MENU_LABEL = '新手引导'".encode(), script['body'])
         self.assertIn(b'/onboarding', script['body'])
         self.assertIn('Agent 渠道'.encode(), script['body'])
         self.assertIn(b'/settings/channels', script['body'])
@@ -129,6 +121,12 @@ class ShellPageTests(unittest.TestCase):
         self.assertEqual(head['status'], 200)
         self.assertEqual(head['body'], b'')
 
+    def test_central_runtime_console_and_pairing_keys_are_retired(self):
+        self.assertEqual(self.client.call('GET', '/runtimes')['status'], 404)
+        pairing_keys = self.client.call('GET', '/v1/runtime-keys')
+        self.assertEqual(pairing_keys['status'], 410)
+        self.assertEqual(pairing_keys['body']['error']['code'], 'moved_to_dsbot')
+
     def test_management_pages_share_the_shell_and_keep_functional_ids(self):
         for path in PAGES:
             page = self.raw.call('GET', path)
@@ -164,18 +162,15 @@ class ShellPageTests(unittest.TestCase):
             if path == '/onboarding':
                 self.assertIn('href="/onboarding"', html, path)
                 self.assertIn('工作背景', html, path)
-            self.assertNotIn('>新手引导</a>', html, path)
             self.assertIn('href="/download"', html, path)
             self.assertIn('id="appearance-toggle"', html, path)
             self.assertIn('href="/discover"', html, path)
             self.assertNotIn('未实现：发现动态', html, path)
             self.assertIn("default-src 'none'", page['headers']['Content-Security-Policy'])
-            if path == '/runtimes':
-                self.assertIn('data-tab="connect"', html)
-                self.assertIn('已检测到的运行时', html)
-                self.assertIn('连接远程机器', html)
             if path == '/agents':
                 self.assertIn('name="name"', html)
+                self.assertIn('id="open-in-chat" href="/chat"', html)
+                self.assertIn('id="manage-public-homepage" href="/discover?', html)
             if path in ('/artifacts', '/space'):
                 self.assertIn('textarea', html)
                 self.assertIn('href="/space"', html)

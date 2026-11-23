@@ -55,6 +55,19 @@ FEATURE_TABLES = {
         ('skill_bindings', 'SELECT * FROM skill_bindings WHERE user_id=? ORDER BY scope,skill_id'),
         ('skill_installs', 'SELECT * FROM skill_installs WHERE user_id=? ORDER BY installed,skill_id'),
     ],
+    'skill-run-history': [('skill_run_history', """
+        SELECT r.task_id AS id, r.scope, r.skill_id, t.prompt, t.status,
+               t.created, t.updated, COALESCE(m.acknowledged, 0) AS loaded,
+               CASE WHEN t.status='succeeded' AND json_valid(t.result) THEN
+                    CASE WHEN json_type(t.result, '$.text')='text'
+                         THEN json_extract(t.result, '$.text') END
+               END AS result_text
+        FROM skill_runs r
+        JOIN runtime_tasks t ON t.id=r.task_id AND t.user_id=r.user_id
+        LEFT JOIN skill_task_material m ON m.task_id=t.id
+        WHERE r.user_id=? AND t.status IN ('succeeded','failed')
+        ORDER BY t.created,t.id
+    """)],
     'skill-secrets': [('skill_secrets', 'SELECT name,updated FROM skill_secrets WHERE user_id=? ORDER BY name')],
     'meetings': [
         ('meetings', 'SELECT m.* FROM meetings m JOIN workspaces w ON w.id = m.workspace_id '

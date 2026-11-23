@@ -1,6 +1,9 @@
 import {mountCandidates, sourceHref} from './candidates.mjs';
+import {ACTION_EDIT_FIELDS, actionSaveAttempt, encodeActionReview, decodeActionReview, decodeNewActionAttempt,
+  actionEditCommitted, advanceActionEdit, decodeActionEdit, reconcileActionEdit} from './action-review.mjs';
 import { domToMarkdown, renderMarkdown, safeHref } from './rich.mjs';
 import { readWorkspaceChoices } from '../shell/dsbot-api.mjs';
+import { actionFollowupChannel } from '../shell/action-followup-events.mjs';
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
@@ -15,14 +18,29 @@ export function memoryDirectoryQuery({needle, topic, updatedAfter, cursor} = {})
   return '?' + params.toString();
 }
 
-export function actionQuery(needle, status, cursor, limit) {
+const ACTION_DUE_CURSOR = /^[012]:-?\d{1,11}:[0-9a-f]{32}$/;
+
+export function actionQuery(needle, status, cursor, limit, order) {
   const params = new URLSearchParams();
   if (needle) params.set('q', needle);
   if (status) params.set('status', status);
-  if (cursor) params.set('cursor', cursor);
+  if (cursor) params.set(order === 'due' ? 'after' : 'cursor', cursor);
   if (limit) params.set('limit', String(limit));
+  if (order) params.set('order', order);
   const query = params.toString();
   return query ? `?${query}` : '';
+}
+
+function actionChatHref(source) {
+  if (!['agent', 'social'].includes(source?.kind)) return '';
+  return sourceHref(source.workspace_id, source.kind === 'social' ? {...source, kind:'group'} : source);
+}
+
+function actionFollowupHref(workspace, action) {
+  if (action?.status !== 'open' || action.workspace_id !== workspace ||
+      ![workspace, action.id].every(id => /^[0-9a-f]{32}$/.test(id || '')) ||
+      !Number.isInteger(action.revision) || action.revision < 1 || action.revision > 2 ** 31) return '';
+  return '/automations?' + new URLSearchParams({workspace, memory_action:action.id, revision:action.revision});
 }
 
 export function dueDateValue(dueAt) {
@@ -368,11 +386,6 @@ function messageFor(error, fallback) {
   return fallback;
 }
 
-function applyTheme(settings) {
-  const appearance = settings && settings.appearance;
-  document.body.dataset.theme = appearance === 'dark' || appearance === 'light' ? appearance : '';
-}
-
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
@@ -387,6 +400,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const directoryRetry = document.getElementById('memory-directory-retry');
   const editor = document.getElementById('editor-form');
   const actionEditor = document.getElementById('action-editor-form');
+  const actionSearch = document.getElementById('action-search');
+  const actionFilter = document.getElementById('action-filter');
+  const actionQuickStatus = document.getElementById('action-quick-status');
+  const actionMore = document.getElementById('action-list-more');
+  const actionRetry = document.getElementById('action-list-retry');
+  const actionFollowup = document.getElementById('action-follow-up');
+  const actionFollowupHistory = document.getElementById('action-follow-up-history');
+  const actionFollowupList = document.getElementById('action-follow-up-list');
+  const newActionForm = document.getElementById('new-action-form');
+  const newActionButton = document.getElementById('new-action');
+  const newActionStatus = document.getElementById('new-action-status');
+  const newActionFields = Object.fromEntries(['title', 'notes', 'due', 'page'].map(name => [name, document.getElementById('new-action-' + name)]));
+  let personalWorkspaces = new Set();
   const newPageButton = document.getElementById('new-page');
   const listPanel = document.getElementById('list-panel');
   const mobileGraph = document.getElementById('memory-mobile-graph');
@@ -406,6 +432,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let sessionRequest = 0;
   let currentPage = null;
   let currentAction = null;
+  let actionFollowupRequest = 0;
   let pageChoices = [];
   let browseDirectory = null;
   let activeDirectory = null;
@@ -495,14 +522,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function actionDraftState() {
-    return actionDrafts.get(actionDraftScope());
+    const scope = actionDraftScope();
+    if (!scope) return null;
+    if (!actionDrafts.has(scope)) {
+      let restored;
+      try { restored = decodeActionReview(document.defaultView.sessionStorage.getItem('openteamily.memory-action-review:' + scope)); } catch {}
+      actionDrafts.set(scope, restored || null);
+    }
+    return actionDrafts.get(scope);
+  }
+
+  function persistActionDraft(scope, state) {
+    if (!scope || actionDrafts.get(scope) !== state) return;
+    try {
+      const storage = document.defaultView.sessionStorage;
+      const key = 'openteamily.memory-action-review:' + scope;
+      if (state.open || state.selected.size || state.items.length || state.generateAttempt || state.saveAttempt) {
+        storage.setItem(key, encodeActionReview(state));
+      } else storage.removeItem(key);
+    } catch {}
   }
 
   function updateActionDraftControls(state) {
     const blocked = Boolean(state.busy || state.saveAttempt);
     const choices = Array.from(actionDraftSources.children).map(label => label.children[0]);
     for (const box of choices) box.disabled = blocked || (!box.checked && state.selected.size >= 5);
-    actionDraftGenerate.disabled = blocked || !choices.some(box => box.checked);
+    actionDraftGenerate.disabled = blocked || (!state.generateAttempt && !choices.some(box => box.checked));
+    actionDraftGenerate.textContent = state.generateAttempt && !state.busy ? '继续生成建议' : '生成建议';
     actionDraftSave.disabled = Boolean(state.busy) ||
       (!state.saveAttempt && (!state.items.some(item => item.selected)
         || state.items.some(item => item.selected && (!item.title.trim() || item.title.trim().length > 80))));
@@ -512,7 +558,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function renderActionDrafts() {
     if (!actionDraftPanel) return;
     const scope = actionDraftScope();
-    const state = actionDrafts.get(scope);
+    const state = actionDraftState();
     const pagesReady = scope && actionDraftPageScope === scope;
     const opened = currentView === 'actions' && Boolean(state?.open);
     actionDraftOpener.disabled = !pagesReady && !state;
@@ -522,13 +568,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     actionDraftItems.replaceChildren();
     if (!opened) return;
 
-    const pages = pagesReady ? pageChoices : [];
-    if (pagesReady) {
-      const available = new Set(pages.map(page => page.id));
-      for (const id of state.selected) if (!available.has(id)) state.selected.delete(id);
+    const pages = new Map((pagesReady ? pageChoices : []).map(page => [page.id, page]));
+    for (const [id, selected] of state.selected) {
+      if (pages.has(id)) state.selected.set(id, pages.get(id));
+      else pages.set(id, selected);
     }
-    document.getElementById('action-draft-empty').hidden = !pagesReady || pages.length > 0;
-    for (const page of [...pages].sort((a, b) => (b.updated || 0) - (a.updated || 0))) {
+    document.getElementById('action-draft-empty').hidden = !pagesReady || pages.size > 0;
+    for (const page of [...pages.values()].sort((a, b) => (b.updated || 0) - (a.updated || 0))) {
       const label = document.createElement('label');
       const pick = document.createElement('input');
       pick.type = 'checkbox';
@@ -536,8 +582,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       pick.checked = state.selected.has(page.id);
       pick.addEventListener('change', () => {
         if (actionDraftState() !== state || pick.disabled) return;
-        if (pick.checked) state.selected.add(page.id);
+        if (pick.checked) state.selected.set(page.id, page);
         else state.selected.delete(page.id);
+        if (state.generateAttempt) {
+          state.generateAttempt = null;
+          state.message = '';
+          document.getElementById('action-draft-status').textContent = '';
+        }
+        persistActionDraft(scope, state);
         updateActionDraftControls(state);
       });
       label.append(pick, document.createTextNode(page.title));
@@ -555,6 +607,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       pick.addEventListener('change', () => {
         if (actionDraftState() !== state || pick.disabled) return;
         item.selected = pick.checked;
+        persistActionDraft(scope, state);
         updateActionDraftControls(state);
       });
       include.append(pick, document.createTextNode('保存此行动'));
@@ -567,6 +620,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       title.addEventListener('input', () => {
         if (actionDraftState() !== state || title.disabled) return;
         item.title = title.value;
+        persistActionDraft(scope, state);
         updateActionDraftControls(state);
       });
       heading.append(document.createTextNode('标题'), title);
@@ -581,7 +635,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       source.value = item.memory_page_id;
       source.addEventListener('change', () => {
-        if (actionDraftState() === state && !source.disabled) item.memory_page_id = source.value;
+        if (actionDraftState() !== state || source.disabled) return;
+        item.memory_page_id = source.value;
+        persistActionDraft(scope, state);
       });
       label.append(document.createTextNode('关联记忆页'), source);
       row.append(include, heading, label);
@@ -595,28 +651,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   actionDraftOpener?.addEventListener('click', () => {
     const scope = actionDraftScope();
     if (!scope) return;
-    let state = actionDrafts.get(scope);
-    if (!state) actionDrafts.set(scope, state = {selected:new Set(), items:[], sources:[], message:''});
+    let state = actionDraftState();
+    if (!state) actionDrafts.set(scope, state = {selected:new Map(), items:[], sources:[], message:''});
     state.open = !state.open;
+    persistActionDraft(scope, state);
     renderActionDrafts();
   });
   document.getElementById('action-draft-close')?.addEventListener('click', () => {
     const state = actionDraftState();
-    if (state) state.open = false;
+    if (state) {
+      state.open = false;
+      persistActionDraft(actionDraftScope(), state);
+    }
     renderActionDrafts();
     actionDraftOpener.focus?.();
   });
   document.getElementById('action-draft-form')?.addEventListener('submit', async event => {
     event.preventDefault();
     const state = actionDraftState();
+    const scope = actionDraftScope();
     const workspace = workspaceId();
-    if (!state?.open || actionDraftGenerate.disabled || actionDraftPageScope !== actionDraftScope()) return;
-    const sources = pageChoices.filter(page => state.selected.has(page.id)).map(({id, revision}) => ({id, revision}));
+    if (!state?.open || actionDraftGenerate.disabled) return;
+    const sources = state.generateAttempt?.sources || [...state.selected.values()].map(({id, revision}) => ({id, revision}));
     if (!sources.length || sources.length > 5) return;
-    const fingerprint = JSON.stringify(sources);
-    if (state.generateAttempt?.fingerprint !== fingerprint) state.generateAttempt = {fingerprint, key:randomKey()};
+    state.generateAttempt ??= {sources, key:randomKey()};
     state.busy = true;
     state.message = '正在根据所选记忆页生成行动建议…';
+    persistActionDraft(scope, state);
     renderActionDrafts();
     const result = await request('POST', `/v1/workspaces/${workspace}/memory/actions/draft`, {sources},
       {'Idempotency-Key':state.generateAttempt.key}).catch(() => ({status:0, body:{}}));
@@ -627,26 +688,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       state.items = result.body.suggestions.map(item => ({...item, selected:true}));
       state.message = state.items.length ? '' : '所选记忆页中没有明确的下一步行动。';
     } else {
-      if (result.status >= 400 && result.status < 500 && result.status !== 429) state.generateAttempt = null;
+      if ([400, 404, 409].includes(result.status)) state.generateAttempt = null;
       state.message = messageFor(result.body.error, '无法生成行动建议，请重试。');
     }
+    persistActionDraft(scope, state);
     if (actionDraftState() === state) renderActionDrafts();
   });
   actionDraftSave?.addEventListener('click', async () => {
     const state = actionDraftState();
+    const scope = actionDraftScope();
     const workspace = workspaceId();
     if (!state?.open || actionDraftSave.disabled) return;
-    if (!state.saveAttempt) {
-      const chosen = state.items.filter(item => item.selected);
-      const revisions = new Map(state.sources.map(page => [page.id, page.revision]));
-      const items = chosen.map(({title, memory_page_id}) => ({
-        title:title.trim(), memory_page_id, source_revision:revisions.get(memory_page_id),
-      }));
-      state.saveAttempt = {chosen, items, key:randomKey()};
-    }
+    state.saveAttempt ??= actionSaveAttempt(state, randomKey());
     const attempt = state.saveAttempt;
+    if (!attempt) return;
     state.busy = true;
     state.message = '正在保存所选行动…';
+    persistActionDraft(scope, state);
     renderActionDrafts();
     const result = await request('POST', `/v1/workspaces/${workspace}/memory/actions/draft/save`, {items:attempt.items},
       {'Idempotency-Key':attempt.key}).catch(() => ({status:0, body:{}}));
@@ -657,9 +715,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       state.items = state.items.filter(item => !attempt.chosen.includes(item));
       state.message = `已保存 ${attempt.items.length} 条行动。`;
     } else {
-      if (result.status >= 400 && result.status < 500) state.saveAttempt = null;
+      if ([400, 404, 409].includes(result.status)) state.saveAttempt = null;
       state.message = messageFor(result.body.error, '无法确认保存结果，请重试保存。');
     }
+    persistActionDraft(scope, state);
     if (actionDraftState() !== state) return;
     renderActionDrafts();
     if (confirmed) await loadActions();
@@ -786,8 +845,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (selectedRow) focusDirectoryRow(selectedRow);
   }
 
+  function directoryRow(id) {
+    if (!id) return;
+    return [...(listEl.querySelectorAll?.('[data-id]') || [])].find(button => button.dataset.id === id);
+  }
+
   function focusDirectoryRow(id) {
-    [...(listEl.querySelectorAll?.('[data-id]') || [])].find(button => button.dataset.id === id)?.focus();
+    directoryRow(id)?.focus();
+  }
+
+  function syncDirectorySelection() {
+    for (const button of listEl.querySelectorAll?.('[data-id]') || []) {
+      if (button.dataset.id === currentPage?.id && !editor.hidden) button.setAttribute('aria-current', 'page');
+      else button.removeAttribute('aria-current');
+    }
   }
 
   function directoryWindow(options = {}) {
@@ -1081,6 +1152,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   function showView(name, {sync = true} = {}) {
+    persistPageDraft();
     currentView = name || 'overview';
     if (currentView !== 'overview') setMobileGraph(false);
     if (mobileGraph) mobileGraph.hidden = currentView !== 'overview';
@@ -1134,8 +1206,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     // An action may reference a page past the first directory page while the
     // graph is still loading. Keep the stored link selected in the meantime.
-    if (selected && !pages.has(selected) && currentAction?.memory_page_id === selected) {
-      pages.set(selected, currentAction.memory_page_title || '已关联的记忆页');
+    if (selected && !pages.has(selected)) {
+      if (currentAction?.memory_page_id === selected) pages.set(selected, currentAction.memory_page_title || '已关联的记忆页');
+      else if (select === newActionFields.page && newActionAttempt()?.payload.memory_page_id === selected) pages.set(selected, '已选择的记忆页');
+      else if (select === actionEditor.elements.memory_page_id && MEMORY_ID.test(selected)) pages.set(selected, '已选择的记忆页');
     }
     select.replaceChildren();
     const empty = document.createElement('option');
@@ -1153,64 +1227,206 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function renderActions(items) {
     const list = document.getElementById('action-list');
-    const empty = document.getElementById('action-empty');
+    const focus = list.contains?.(document.activeElement) ? document.activeElement.dataset || {} : {};
+    const scope = actionDraftScope();
+    const now = new Date();
+    const today = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
     list.replaceChildren();
     for (const item of items) {
       const li = document.createElement('li');
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'action-row-toggle';
+      toggle.dataset.actionToggle = item.id;
+      toggle.dataset.status = item.status;
+      toggle.setAttribute('aria-label', `${item.status === 'done' ? '重新打开' : '标记完成'}：${item.title}`);
+      const busy = pendingQuickActions.has(quickActionKey(scope, item.id));
+      toggle.setAttribute('aria-busy', String(busy));
+      toggle.setAttribute('aria-disabled', String(busy));
+      toggle.addEventListener('click', () => changeActionStatus(item));
       const button = document.createElement('button');
       button.type = 'button';
+      button.className = 'action-row-detail';
+      const title = document.createElement('strong');
+      title.textContent = item.title;
+      const meta = document.createElement('span');
+      meta.className = 'action-row-meta';
       const due = dueDateValue(item.due_at);
-      const linked = item.memory_page_title ? ` · ${item.memory_page_title}` : '';
-      button.textContent = `${item.status === 'done' ? '已完成' : '未完成'} · ${item.title}${due ? ` · ${due}` : ''}${linked}`;
+      meta.textContent = [item.status === 'done' ? '已完成' : '未完成',
+        due && `截止 ${due}`, item.memory_page_title].filter(Boolean).join(' · ');
+      if (item.status === 'open' && due && due < today) {
+        const overdue = document.createElement('span');
+        overdue.className = 'action-row-overdue';
+        overdue.textContent = '已逾期';
+        meta.append(document.createTextNode(' · '), overdue);
+      }
+      const copy = document.createElement('span');
+      copy.className = 'action-row-copy';
+      copy.append(title, meta);
+      const arrow = document.createElement('span');
+      arrow.className = 'action-row-arrow';
+      arrow.setAttribute('aria-hidden', 'true');
+      arrow.textContent = '›';
+      button.append(copy, arrow);
+      button.dataset.status = item.status;
       button.dataset.id = item.id;
       button.addEventListener('click', () => openAction(item.id));
-      li.appendChild(button);
+      li.append(toggle, button);
       list.appendChild(li);
+      if (focus.id === item.id) button.focus({preventScroll: true});
+      if (focus.actionToggle === item.id) toggle.focus({preventScroll: true});
     }
-    empty.hidden = items.length > 0;
-    syncActionComposer(items.length > 0);
+    syncActionComposer();
   }
 
-  function syncActionComposer(hasItems) {
+  function syncActionComposer() {
     const form = document.getElementById('new-action-form');
     const opener = document.getElementById('new-action-open');
-    const filter = document.getElementById('action-filter-label');
     if (!form) return;
-    const keep = form.dataset.open === 'true';
-    form.hidden = !(hasItems || keep);
-    if (opener) opener.hidden = hasItems || keep;
-    if (filter) filter.hidden = !(hasItems || keep);
+    form.hidden = form.dataset.open !== 'true';
+    if (opener) {
+      opener.setAttribute('aria-expanded', String(!form.hidden));
+      opener.textContent = form.hidden ? '新建行动' : '收起表单';
+    }
   }
 
-  let actionListRequest = 0;
-  let actionListWorkspace, actionListOwner;
-  async function loadActions() {
-    const id = workspaceId();
-    const owner = currentUser;
-    const token = ++actionListRequest;
+  let actionListing;
+  let actionSearchTimer;
+  const pendingQuickActions = new Set();
+  const quickActionKey = (scope, id) => JSON.stringify([scope, id]);
+
+  async function changeActionStatus(item) {
+    const state = actionListing;
+    const scope = actionDraftScope();
+    const key = quickActionKey(scope, item.id);
+    if (!state || !scope || pendingQuickActions.has(key) || !state.items.includes(item)) return;
+    const status = item.status === 'done' ? 'open' : 'done';
+    const path = `/v1/workspaces/${state.workspace}/memory/actions/${item.id}`;
+    pendingQuickActions.add(key);
+    actionQuickStatus.textContent = '正在更新行动…';
+    renderActions(state.items);
+    const timeout = () => globalThis.AbortSignal?.timeout?.(8000);
+    const result = await request('POST', path, {revision: item.revision, changes: {status}}, undefined, timeout())
+      .catch(() => ({status:0, body:{}}));
+    let updated = result.status === 200 ? result.body.action : result.body.error?.current;
+    if (!updated && actionDraftScope() === scope &&
+      (result.status === 0 || result.status === 408 || result.status >= 500)) {
+      const checked = await request('GET', path, undefined, undefined, timeout()).catch(() => ({status:0, body:{}}));
+      if (checked.status === 200) updated = checked.body.action;
+    }
+    pendingQuickActions.delete(key);
+    if (actionDraftScope() !== scope) return;
+    const active = actionListing;
+    if (!active) return;
+    const index = active.items.findIndex(row => row.id === item.id);
+    const keepFocus = document.activeElement?.dataset.actionToggle === item.id;
+    const valid = updated?.id === item.id && updated.workspace_id === state.workspace && updated.revision >= item.revision;
+    const confirmed = valid && updated.status === status && updated.revision > item.revision;
+    const current = valid && index >= 0 && updated.revision >= active.items[index].revision;
+    const removed = current && active.status && active.status !== updated.status;
+    if (removed) active.items.splice(index, 1);
+    else if (current) active.items[index] = updated;
+    renderActions(active.items);
+    renderActionListing(active);
+    if (keepFocus && removed) {
+      const toggles = document.querySelectorAll('#action-list .action-row-toggle');
+      (toggles[Math.min(index, toggles.length - 1)] || actionSearch).focus({preventScroll:true});
+    }
+    actionQuickStatus.textContent = confirmed ? (status === 'done' ? '行动已完成。' : '行动已重新打开。')
+      : valid && updated.revision > item.revision ? '行动已在别处更新。请核对最新状态。'
+        : '无法确认更新，请重试。';
+    if (current && updated.revision > item.revision && !removed) {
+      const limit = Math.max(20, active.items.length);
+      const refresh = loadActions({limit: Math.min(100, limit)});
+      const refreshed = actionListing;
+      await refresh;
+      if (limit > 100 && ownsActionListing(refreshed) && refreshed.cursor) {
+        await readActionPage(refreshed, refreshed.cursor, false, limit - 100);
+      }
+    }
+  }
+
+  function renderActionListing(state) {
     const list = document.getElementById('action-list');
     const empty = document.getElementById('action-empty');
-    if (id !== actionListWorkspace || owner !== actionListOwner) {
-      actionListWorkspace = id;
-      actionListOwner = owner;
-      renderActions([]);
-      if (id && empty) empty.hidden = true;
-    }
-    if (!id) {
-      renderActions([]);
+    const count = state?.items.length || 0;
+    list.setAttribute('aria-busy', String(Boolean(state?.busy)));
+    empty.hidden = !state || Boolean(count || state.busy || state.error);
+    empty.textContent = state?.needle ? '没有符合搜索条件的行动。'
+      : state?.status === 'done' ? '暂无已完成的行动。'
+        : state?.status === 'open' ? '暂无未完成的行动。' : '暂无行动。';
+    document.getElementById('action-list-count').textContent = state?.error ? '无法读取行动，请重试。'
+      : state?.busy ? '正在读取行动…' : count ? `已显示 ${count} 项行动` : '';
+    actionMore.hidden = !state?.cursor || Boolean(state.error);
+    actionMore.disabled = Boolean(state?.busy);
+    actionRetry.hidden = !state?.error;
+    actionRetry.disabled = Boolean(state?.busy);
+  }
+
+  function stopActionListing() {
+    clearTimeout(actionSearchTimer);
+    actionSearchTimer = undefined;
+    actionListing?.controller?.abort();
+  }
+
+  const ownsActionListing = state => actionListing === state && state.owner === currentUser && state.workspace === workspaceId();
+
+  async function readActionPage(state, cursor, focusResults = false, limit) {
+    if (!ownsActionListing(state) || state.controller) return;
+    const controller = state.controller = new AbortController();
+    state.busy = true;
+    state.error = false;
+    renderActionListing(state);
+    const path = `/v1/workspaces/${state.workspace}/memory/actions${actionQuery(state.needle, state.status, cursor, limit, 'due')}`;
+    const listed = await request('GET', path, undefined, undefined, controller.signal).catch(() => ({status:0, body:{}}));
+    if (!ownsActionListing(state)) return;
+    state.controller = null;
+    state.busy = false;
+    if (listed.status !== 200 || !Array.isArray(listed.body.items)) {
+      state.error = true;
+      state.retryCursor = cursor;
+      renderActionListing(state);
       return;
     }
-    const status = document.getElementById('action-filter').value;
-    const listed = await request('GET', `/v1/workspaces/${id}/memory/actions${actionQuery('', status)}`)
-      .catch(() => ({status:0, body:{}}));
-    if (token !== actionListRequest || owner !== currentUser || workspaceId() !== id) return;
-    if (listed.status !== 200) {
-      if (list) list.replaceChildren();
-      if (empty) empty.hidden = true;
-      show('error', messageFor(listed.body.error, '无法加载下一步行动。'));
-      return;
+    const seen = new Set(cursor ? state.items.map(item => item.id) : []);
+    const items = listed.body.items.filter(item => {
+      if (!item?.id || seen.has(item.id)) return false;
+      seen.add(item.id);
+      return true;
+    });
+    state.items = cursor ? [...state.items, ...items] : items;
+    const next = listed.body.cursor;
+    state.cursor = next !== cursor && ACTION_DUE_CURSOR.test(next || '') ? next : '';
+    renderActions(state.items);
+    renderActionListing(state);
+    if (focusResults) {
+      const row = [...(document.getElementById('action-list').querySelectorAll?.('[data-id]') || [])]
+        .find(button => button.dataset.id === items[0]?.id);
+      (row || actionSearch).focus?.();
     }
-    renderActions(listed.body.items || []);
+  }
+
+  function loadActions({delay = 0, limit} = {}) {
+    stopActionListing();
+    const workspace = workspaceId();
+    const owner = currentUser;
+    const previous = actionListing;
+    const sameScope = previous && previous.workspace === workspace && previous.owner === owner;
+    if (!sameScope) {
+      actionSearch.value = '';
+      if (actionQuickStatus) actionQuickStatus.textContent = '';
+    }
+    const needle = actionSearch.value.trim(), status = actionFilter.value;
+    const keep = sameScope && previous.needle === needle && previous.status === status;
+    const state = actionListing = workspace ? {workspace, owner, needle, status, items:keep ? previous.items : [], busy:true} : null;
+    if (!keep) renderActions([]);
+    renderActionListing(state);
+    if (!state) return;
+    if (!delay) return readActionPage(state, '', false, limit);
+    actionSearchTimer = setTimeout(() => {
+      actionSearchTimer = undefined;
+      void readActionPage(state, '');
+    }, delay);
   }
 
 
@@ -1418,6 +1634,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function fillWorkspaces(items) {
     const previous = workspaceId();
+    personalWorkspaces = new Set(items.filter(space => space.kind === 'personal').map(space => space.id));
     workspaceSelect.replaceChildren();
     for (const space of items) {
       const option = document.createElement('option');
@@ -1427,14 +1644,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (items.some(item => item.id === previous)) workspaceSelect.value = previous;
     if (!workspaceSelect.value && items[0]) workspaceSelect.value = items[0].id;
+    if (currentAction) syncActionFollowup();
   }
 
   async function loadSession() {
+    persistPageDraft();
     const seq = ++sessionRequest;
     const session = await request('GET', '/v1/auth/session');
     if (seq !== sessionRequest) return;
     if (session.status !== 200 || !session.body.user) {
+      persistPageDraft();
       currentUser = null;
+      currentPage = null;
+      currentAction = null;
+      syncNewActionWorkspace();
+      stopActionListing();
+      actionListing = null;
       setCitation(null);
       cancelDirectorySearch();
       browseDirectory?.controller?.abort();
@@ -1452,6 +1677,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (currentUser?.id !== session.body.user.id) {
+      persistPageDraft();
+      currentPage = null;
+      currentAction = null;
+      editor.hidden = true;
+      actionEditor.hidden = true;
       actionDrafts.clear();
       actionDraftPageScope = '';
     }
@@ -1461,9 +1691,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const whoami = document.getElementById('whoami');
     whoami.dataset.username = currentUser.username;
     whoami.textContent = '已登录：' + currentUser.username;
-    void request('GET', '/v1/settings').then(prefs => {
-      if (seq === sessionRequest && prefs.status === 200) applyTheme(prefs.body.settings);
-    }).catch(() => {});
     const linked = new URLSearchParams(document.defaultView?.location?.search || '');
     const citation = memoryCitationFromSearch(linked);
     const workspace = linked.get('workspace'), pageId = linked.get('page');
@@ -1528,6 +1755,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function loadWorkspace({syncView = true} = {}) {
+    persistPageDraft();
+    directoryReturn = null;
     closeDeleteConfirm({restoreFocus: false});
     const id = workspaceId();
     const switched = browseDirectory?.workspace !== id || browseDirectory?.owner !== currentUser;
@@ -1546,7 +1775,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     pageChoices = [];
     renderRecent([]);
-    fillPageSelect(document.getElementById('new-action-page'), '');
+    syncNewActionWorkspace();
+    fillPageSelect(newActionFields.page, newActionFields.page.value);
     actionDraftPageScope = '';
     renderActionDrafts();
     newPageButton.disabled = true;
@@ -1558,14 +1788,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     listPanel.hidden = false;
     showView(currentView, {sync:syncView});
     renderDirectory();
-    if (!id) return;
+    if (!id) return loadActions();
     searchDirectory();
     await Promise.allSettled([loadDirectoryPage(browseDirectory), loadActions(), loadGraph()]);
   }
 
+  let directoryReturn = null;
+
   // While a page or action is open the directory column stays visible (as in
   // the recorded editor); only the overview/side/actions/profile panels hide.
   function showPageMode() {
+    if (listPanel.dataset.view !== 'page' && listPanel.dataset.mobileGraph !== 'true') {
+      const scrollers = [document.scrollingElement, document.getElementById('main'), listPanel,
+        document.getElementById('memory-dir'), listEl].filter(Boolean);
+      directoryReturn = {state: activeDirectory, scroll: scrollers.map(node => [node, node.scrollTop])};
+    }
     closeProfilePreview();
     candidates.show(false);
     listPanel.hidden = false;
@@ -1577,6 +1814,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (document.defaultView?.matchMedia?.('(max-width: 700px)').matches) listPanel.scrollTop = 0;
   }
 
+  function focusDetailBack(id) {
+    const back = document.getElementById(id);
+    back?.scrollIntoView?.({block: 'nearest', inline: 'nearest'});
+    back?.focus?.({preventScroll: true});
+  }
+
   const rich = document.getElementById('editor-rich');
   const sourceToggle = document.getElementById('editor-source-toggle');
   let sourceMode = false;
@@ -1586,6 +1829,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function syncBodyFromRich() {
     if (!rich || sourceMode || !richDirty) return;
     const markdown = domToMarkdown(rich);
+    richDirty = false;
     editor.elements.body.value = markdown;
     const length = document.getElementById('editor-length');
     if (length) {
@@ -1622,6 +1866,139 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
   if (sourceToggle) sourceToggle.addEventListener('click', () => setSourceMode(!sourceMode));
+
+  const draftPanel = document.getElementById('memory-page-draft');
+  const draftStatus = document.getElementById('memory-page-draft-status');
+  const draftDetails = document.getElementById('memory-page-draft-details');
+  const draftCopy = document.getElementById('memory-page-draft-copy');
+  const draftDiscard = document.getElementById('memory-page-draft-discard');
+  const savePageButton = document.getElementById('save-page');
+  const savingPages = new Set();
+  let draftTimer;
+
+  function pageDraftKey(page = currentPage, owner = currentUser) {
+    if (!page?.workspace_id || !page.id || !owner?.id) return '';
+    return 'openteamily.memory-draft:' + JSON.stringify([owner.id, page.workspace_id, page.id]);
+  }
+
+  function pageDraft(key) {
+    if (!key) return null;
+    try {
+      const value = JSON.parse(document.defaultView.sessionStorage.getItem(key));
+      if (Number.isSafeInteger(value?.revision) && value.revision > 0 &&
+          ['title','body','topics'].every(field => typeof value[field] === 'string')) return value;
+    } catch {}
+    return null;
+  }
+
+  function clearPageDraft(key) {
+    if (!key) return;
+    try { document.defaultView.sessionStorage.removeItem(key); } catch {}
+  }
+
+  function writePageDraft(key, {title, body, topics}, revision) {
+    try { document.defaultView.sessionStorage.setItem(key, JSON.stringify({title, body, topics, revision})); } catch {}
+  }
+
+  function syncPageSaveButton() {
+    if (!savePageButton) return;
+    const saving = savingPages.has(pageDraftKey());
+    savePageButton.disabled = saving;
+    savePageButton.textContent = saving ? '正在保存…' : '保存';
+  }
+
+  function editorFields() {
+    syncBodyFromRich();
+    const {title, body, topics} = editor.elements;
+    return {title: title.value, body: body.value, topics: topics.value};
+  }
+
+  function sameFields(left, right) {
+    return Boolean(left && left.title === right.title && left.body === right.body && left.topics === right.topics);
+  }
+
+  function pageMatchesDraft(page, draft) {
+    const savedTopics = new Set(page.topics || []);
+    const topics = parseTopics(draft.topics);
+    return page.title === draft.title.trim() && (page.body || '') === draft.body &&
+      savedTopics.size === topics.length && topics.every(topic => savedTopics.has(topic));
+  }
+
+  function fillEditorFields(fields) {
+    editor.elements.title.value = fields.title;
+    editor.elements.body.value = fields.body;
+    editor.elements.topics.value = fields.topics;
+    loadRichBody(fields.body);
+  }
+
+  function updatePageSaveHint(page, dirty = false) {
+    const hint = document.getElementById('editor-saved');
+    if (!hint) return;
+    const when = memoryUpdatedLabel(page.updated);
+    hint.hidden = false;
+    hint.textContent = dirty ? '有未保存的修改' : '已保存 · ' + (when || '修订 ' + page.revision);
+  }
+
+  function showPageDraft({restore = false} = {}) {
+    if (!draftPanel) return;
+    const key = pageDraftKey();
+    const entry = pageDraft(key);
+    draftPanel.hidden = true;
+    draftDetails.open = false;
+    draftCopy.value = '';
+    if (!entry || pageMatchesDraft(currentPage, entry)) {
+      if (entry) clearPageDraft(key);
+      return;
+    }
+    const conflict = entry.revision !== currentPage.revision;
+    if (restore && !conflict) {
+      fillEditorFields(entry);
+      updatePageSaveHint(currentPage, true);
+    }
+    draftPanel.hidden = false;
+    draftDetails.hidden = !conflict;
+    draftStatus.textContent = conflict ? '此页已更新。旧草稿可复制，清除后可继续保存新的草稿。'
+      : '此标签页已保留草稿。点击保存后会更新记忆页。';
+    if (conflict) draftCopy.value = [entry.title, entry.body, entry.topics].join('\n\n');
+  }
+
+  function persistPageDraft() {
+    clearTimeout(draftTimer);
+    const key = pageDraftKey();
+    if (!key || editor.hidden) return;
+    const fields = editorFields();
+    const entry = pageDraft(key);
+    if (entry && entry.revision !== currentPage.revision) return;
+    if (pageMatchesDraft(currentPage, fields)) {
+      clearPageDraft(key);
+    } else writePageDraft(key, fields, currentPage.revision);
+    // Leave an expanded revision-conflict preview alone while the user copies it.
+    if (!draftDetails?.open) showPageDraft();
+  }
+
+  function pageDraftChanged() {
+    if (!currentPage || editor.hidden) return;
+    updatePageSaveHint(currentPage, !pageMatchesDraft(currentPage, editorFields()));
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(persistPageDraft, 200);
+  }
+
+  editor.addEventListener('input', pageDraftChanged);
+  document.defaultView?.addEventListener?.('pagehide', persistPageDraft);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') persistPageDraft();
+  });
+  draftDiscard?.addEventListener('click', () => {
+    const key = pageDraftKey();
+    const entry = pageDraft(key);
+    if (!entry) return;
+    clearTimeout(draftTimer);
+    clearPageDraft(key);
+    if (entry.revision === currentPage.revision) applyPageToEditor(currentPage);
+    else persistPageDraft();
+    showPageDraft();
+    editor.elements.title.focus();
+  });
 
   function richCommand(kind) {
     if (!rich) return;
@@ -1845,6 +2222,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openCitedRevision(citation, revision, isCurrent) {
+    persistPageDraft();
     showPageMode();
     currentPage = currentAction = null;
     editor.hidden = true;
@@ -1928,7 +2306,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function showPage(page, revision) {
-    currentPage = page;
+    persistPageDraft();
     if (activeCitation && !citationFor(page.id)) setCitation(null);
     hideCitationPreview();
     const source = document.getElementById('memory-page-chat-source');
@@ -1947,23 +2325,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     showPageMode();
     if (actionEditor) actionEditor.hidden = true;
     editor.hidden = false;
-    editor.elements.title.value = currentPage.title;
-    editor.elements.body.value = currentPage.body || '';
-    loadRichBody(currentPage.body || '');
-    editor.elements.topics.value = formatTopics(currentPage.topics);
-    document.getElementById('editor-meta').textContent =
-      `修订 ${currentPage.revision} · 作者 ${currentPage.created_by} · 最近更新 ${currentPage.updated_by}`;
-    const savedHint = document.getElementById('editor-saved');
-    if (savedHint) {
-      const when = memoryUpdatedLabel(currentPage.updated);
-      savedHint.hidden = false;
-      savedHint.textContent = when ? ('已保存 · ' + when) : ('已保存 · 修订 ' + currentPage.revision);
-    }
-
-    renderPageLinks();
+    applyPageToEditor(page);
+    showPageDraft({restore: true});
     syncExportButton();
     syncPageUrl(revision);
-    renderDirectory();
+    syncDirectorySelection();
+    focusDetailBack('close-editor');
   }
 
   function syncPageUrl(revision) {
@@ -2029,18 +2396,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function applyPageToEditor(page) {
     currentPage = page;
-    editor.elements.title.value = page.title;
-    editor.elements.body.value = page.body || '';
-    loadRichBody(page.body || '');
-    editor.elements.topics.value = formatTopics(page.topics);
+    syncPageSaveButton();
+    fillEditorFields({title: page.title, body: page.body || '', topics: formatTopics(page.topics)});
     document.getElementById('editor-meta').textContent =
       `修订 ${page.revision} · 作者 ${page.created_by} · 最近更新 ${page.updated_by}`;
-    const savedHint = document.getElementById('editor-saved');
-    if (savedHint) {
-      const when = memoryUpdatedLabel(page.updated);
-      savedHint.hidden = false;
-      savedHint.textContent = when ? ('已保存 · ' + when) : ('已保存 · 修订 ' + page.revision);
-    }
+    updatePageSaveHint(page);
     renderPageLinks();
   }
 
@@ -2116,6 +2476,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!wid || !editing || !historySelection) return;
     const revision = historySelection;
     const status = document.getElementById('page-history-status');
+    if (!pageMatchesDraft(editing, editorFields())) {
+      if (status) status.textContent = '请先保存或清除当前草稿，再回滚历史版本。';
+      return;
+    }
     const result = await request(
       'POST', `/v1/workspaces/${wid}/memory/${editing.id}/versions/${revision}/restore`,
       {revision: editing.revision}).catch(() => ({status:0, body:{}}));
@@ -2133,7 +2497,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         : '没有回滚成功。';
       return;
     }
+    persistPageDraft();
     applyPageToEditor(result.body.page);
+    showPageDraft();
     rememberPage(result.body.page);
     syncPageUrl();
     historySelection = 0;
@@ -2151,11 +2517,245 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const historyRestore = document.getElementById('page-history-restore');
   if (historyRestore) historyRestore.addEventListener('click', restorePageVersion);
 
+  function savedActionFollowups() {
+    const workspace = workspaceId();
+    if (!personalWorkspaces.has(workspace) || currentAction?.workspace_id !== workspace ||
+        !Array.isArray(currentAction?.automation_followups)) return [];
+    return currentAction.automation_followups.filter(item => /^[0-9a-f]{32}$/.test(item?.id || '') &&
+      Number.isSafeInteger(item.revision) && item.revision > 0 && typeof item.title === 'string');
+  }
+
+  function renderActionFollowups() {
+    if (!actionFollowupHistory || !actionFollowupList) return;
+    const rows = savedActionFollowups();
+    actionFollowupList.replaceChildren(...rows.map(row => {
+      const item = document.createElement('li');
+      const link = document.createElement('a');
+      link.href = '/automations?' + new URLSearchParams({workspace: workspaceId(), automation: row.id});
+      link.target = '_blank';
+      link.rel = 'noopener';
+      const title = document.createElement('strong');
+      title.textContent = row.title;
+      const meta = document.createElement('small');
+      meta.className = 'note';
+      meta.textContent = `行动项修订 ${row.revision} · ${row.enabled ? '已启用' : '已暂停'}`;
+      link.append(title, meta);
+      item.append(link);
+      return item;
+    }));
+    actionFollowupHistory.hidden = !rows.length;
+  }
+
+  async function refreshActionFollowups() {
+    const action = currentAction;
+    const workspace = workspaceId();
+    if (!action || actionEditor.hidden || action.workspace_id !== workspace ||
+        !personalWorkspaces.has(workspace)) return;
+    const owner = currentUser;
+    const token = ++actionFollowupRequest;
+    try {
+      const response = await request('GET', `/v1/workspaces/${workspace}/memory/actions/${action.id}`);
+      if (token !== actionFollowupRequest || owner !== currentUser || workspace !== workspaceId() || currentAction !== action) return;
+      const fresh = response.body?.action;
+      if (response.status !== 200 || fresh?.id !== action.id || fresh.workspace_id !== workspace ||
+          !Array.isArray(fresh.automation_followups) ||
+          JSON.stringify(fresh.automation_followups) === JSON.stringify(action.automation_followups)) return;
+      action.automation_followups = fresh.automation_followups;
+      renderActionFollowups();
+      syncActionFollowup();
+    } catch { /* Reopening the action also refreshes the list. */ }
+  }
+
+  document.defaultView?.addEventListener?.('focus', refreshActionFollowups);
+  const actionFollowupEvents = actionFollowupChannel(document.defaultView);
+  actionFollowupEvents?.addEventListener('message', ({data}) => {
+    if (data?.workspace === workspaceId() && data?.action === currentAction?.id) void refreshActionFollowups();
+  });
+
+  function syncActionFollowup() {
+    const workspace = workspaceId();
+    const linked = savedActionFollowups();
+    const hasCurrentFollowup = linked.some(item => item.revision === currentAction?.revision);
+    const href = !hasCurrentFollowup && personalWorkspaces.has(workspace) && actionFollowupHref(workspace, currentAction);
+    actionFollowup.hidden = !href;
+    actionFollowup.textContent = linked.length ? '跟进当前修订' : '跟进自动化';
+    const note = document.getElementById('action-follow-up-status');
+    if (!href) {
+      actionFollowup.removeAttribute('href');
+      actionFollowup.removeAttribute('aria-disabled');
+      note.textContent = '';
+      return;
+    }
+    const fields = actionEditor.elements;
+    const dirty = actionEditConflict || actionEditsSaving.has(actionEditKey()) ||
+      fields.title.value.trim() !== currentAction.title || fields.notes.value !== (currentAction.notes || '') ||
+      fields.status.value !== currentAction.status || fields.due.value !== dueDateValue(currentAction.due_at) ||
+      (fields.memory_page_id.value || null) !== (currentAction.memory_page_id || null);
+    if (dirty) {
+      actionFollowup.removeAttribute('href');
+      actionFollowup.setAttribute('aria-disabled', 'true');
+      note.textContent = '保存修改后可准备跟进。';
+    } else {
+      actionFollowup.href = href;
+      actionFollowup.removeAttribute('aria-disabled');
+      note.textContent = '';
+    }
+  }
+
+  const actionSave = document.getElementById('save-action');
+  const actionEditHint = document.getElementById('action-edit-hint');
+  const actionConflictPanel = document.getElementById('action-edit-conflict');
+  const actionConflictPreview = document.getElementById('action-edit-conflict-preview');
+  const actionEditsSaving = new Set();
+  let actionEditConflict = null;
+
+  function actionEditKey(action = currentAction, user = currentUser) {
+    if (![user?.id, action?.workspace_id, action?.id].every(value => MEMORY_ID.test(value || ''))) return '';
+    return 'openteamily.memory-action-edit:' + JSON.stringify([user.id, action.workspace_id, action.id]);
+  }
+
+  function readActionEdit(key) {
+    try { return decodeActionEdit(key && document.defaultView.sessionStorage.getItem(key)); }
+    catch { return null; }
+  }
+
+  function writeActionEdit(key, {base, fields, pending}) {
+    if (!key) return;
+    try {
+      const storage = document.defaultView.sessionStorage;
+      if (pending || ACTION_EDIT_FIELDS.some(name => fields[name] !== base[name])) {
+        storage.setItem(key, JSON.stringify({base, fields, pending}));
+      } else storage.removeItem(key);
+    } catch {}
+  }
+
+  function actionFields(action) {
+    if (!action) return Object.fromEntries(ACTION_EDIT_FIELDS.map(name => [name, actionEditor.elements[name].value]));
+    return {title:action.title, notes:action.notes || '', status:action.status, due:dueDateValue(action.due_at),
+      memory_page_id:action.memory_page_id || ''};
+  }
+
+  function showActionEdit() {
+    const draft = actionFields();
+    const saved = actionFields(currentAction);
+    const dirty = ACTION_EDIT_FIELDS.some(name => draft[name] !== saved[name]);
+    const pending = actionEditsSaving.has(actionEditKey());
+    actionSave.disabled = Boolean(actionEditConflict || pending);
+    for (const name of ACTION_EDIT_FIELDS) actionEditor.elements[name].disabled = Boolean(actionEditConflict);
+    actionConflictPanel.hidden = !actionEditConflict;
+    actionEditHint.textContent = pending ? '正在确认保存…' : dirty && !actionEditConflict ? '有未保存的行动草稿。' : '';
+    syncActionFollowup();
+  }
+
+  function storeActionEdit() {
+    if (!currentAction || actionEditor.hidden || actionEditConflict) return;
+    const key = actionEditKey();
+    writeActionEdit(key, {base:actionFields(currentAction), fields:actionFields(), pending:readActionEdit(key)?.pending});
+    showActionEdit();
+  }
+
+  function fillActionEdit(fields) {
+    for (const name of ACTION_EDIT_FIELDS) {
+      if (name === 'memory_page_id') fillPageSelect(actionEditor.elements[name], fields[name]);
+      else actionEditor.elements[name].value = fields[name];
+    }
+  }
+
+  function restoreActionEdit(draft) {
+    const saved = actionFields(currentAction);
+    const active = draft && advanceActionEdit(draft, saved, currentAction.revision);
+    const result = active && reconcileActionEdit(active.base, active.fields, saved);
+    actionEditConflict = result?.conflicts.length ? {...result, local:active.fields} : null;
+    actionConflictPreview.textContent = '';
+    if (actionEditConflict) {
+      const names = {title:'标题', notes:'备注', status:'状态', due:'截止日期', memory_page_id:'关联记忆页'};
+      const display = (field, value) => !value ? '空' : field === 'status' ? (value === 'done' ? '已完成' : '未完成')
+        : field === 'memory_page_id' ? (pageChoices.find(page => page.id === value)?.title || value) : value;
+      actionConflictPreview.textContent = result.conflicts.map(name =>
+        `${names[name]}\n我的草稿：${display(name,active.fields[name])}\n已保存：${display(name,saved[name])}`).join('\n\n');
+    }
+    fillActionEdit(result?.fields || saved);
+    if (!actionEditConflict) {
+      writeActionEdit(actionEditKey(), {base:saved, fields:actionFields(), pending:active?.pending});
+    } else writeActionEdit(actionEditKey(), active);
+    showActionEdit();
+  }
+
+  function resolveActionEdit(keepLocal) {
+    if (!actionEditConflict) return;
+    const {fields, conflicts, local} = actionEditConflict;
+    if (keepLocal) for (const name of conflicts) fields[name] = local[name];
+    actionEditConflict = null;
+    actionConflictPreview.textContent = '';
+    fillActionEdit(fields);
+    storeActionEdit();
+    actionEditor.elements.title.focus();
+  }
+
+  document.getElementById('action-edit-keep')?.addEventListener('click', () => resolveActionEdit(true));
+  document.getElementById('action-edit-use-saved')?.addEventListener('click', () => resolveActionEdit(false));
+
+  async function resolveActionMeetingSource(action, meeting, status) {
+    const workspace = workspaceId();
+    const user = currentUser;
+    status.textContent = '正在核对来源行动项…';
+    const result = await request('GET', `/v1/workspaces/${workspace}/memory/actions/${action.id}/meeting-source`)
+      .catch(() => ({status:0}));
+    if (currentUser !== user || workspaceId() !== workspace || currentAction !== action || actionEditor.hidden) return;
+    if ([403, 404].includes(result.status)) {
+      status.textContent = '原会议已删除或无法访问。';
+      return;
+    }
+    const original = action.source;
+    const source = result.body?.source;
+    const link = new URLSearchParams({workspace:original.workspace_id, meeting:original.meeting_id});
+    const resolved = result.status === 200 && source?.workspace_id === original.workspace_id &&
+      source.meeting_id === original.meeting_id && Number.isSafeInteger(source.revision) &&
+      source.revision >= original.revision;
+    const hasAction = resolved && Number.isInteger(source.action_index) && source.action_index >= 0 && source.action_index < 50;
+    if (hasAction) {
+      link.set('action', source.action_index);
+      link.set('revision', source.revision);
+    }
+    meeting.href = '/meetings#' + link;
+    meeting.textContent = hasAction ? '查看来源行动项' : '查看原会议';
+    meeting.hidden = false;
+    status.textContent = hasAction ? '' : resolved
+      ? '来源行动项已变更，可在最新纪要中核对。' : '暂时无法定位行动项，可直接打开会议。';
+  }
+
+  function renderActionDetail() {
+    document.getElementById('action-editor-meta').textContent =
+      `修订 ${currentAction.revision} · 作者 ${currentAction.created_by} · 最近更新 ${currentAction.updated_by}`;
+    const source = currentAction.source;
+    const meeting = document.getElementById('action-source-meeting');
+    const meetingStatus = document.getElementById('action-source-meeting-status');
+    const ownedMeeting = source?.kind === 'meeting' && /^[0-9a-f]{32}$/.test(source.workspace_id || '') &&
+      /^[0-9a-f]{32}$/.test(source.meeting_id || '') && Number.isSafeInteger(source.revision) && source.revision > 0 &&
+      Number.isInteger(source.action_index) && source.action_index >= 0 && source.action_index < 50;
+    meeting.hidden = source?.kind !== 'shared_meeting';
+    meeting.removeAttribute('href');
+    meetingStatus.textContent = '';
+    if (ownedMeeting) {
+      void resolveActionMeetingSource(currentAction, meeting, meetingStatus);
+    } else if (!meeting.hidden) {
+      meeting.href = '/meetings#' + new URLSearchParams({workspace:source.workspace_id, shared:source.share_id});
+      meeting.textContent = `查看来源纪要 · 版本 ${source.revision}`;
+    }
+    const chat = document.getElementById('action-source-chat');
+    const chatLink = actionChatHref(currentAction.source_chat);
+    chat.hidden = !chatLink;
+    if (chatLink) chat.href = chatLink;
+    else chat.removeAttribute('href');
+    document.getElementById('action-editor-source').hidden = !ownedMeeting && meeting.hidden && chat.hidden;
+    renderActionFollowups();
+    syncActionFollowup();
+  }
+
   async function openAction(actionId) {
     closeDeleteConfirm({restoreFocus: false});
     const id = workspaceId();
     if (!id) return;
-    const hadCitation = Boolean(activeCitation);
     const citation = citationFor('todos', actionId);
     if (citation !== activeCitation) setCitation(citation);
     hideCitationPreview();
@@ -2169,20 +2769,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       else show('error', messageFor(seen.body.error, '无法打开下一步行动。'));
       return;
     }
+    persistPageDraft();
     currentAction = seen.body.action;
     currentPage = null;
     syncExportButton();
     showPageMode();
     editor.hidden = true;
     actionEditor.hidden = false;
-    actionEditor.elements.title.value = currentAction.title;
-    actionEditor.elements.notes.value = currentAction.notes || '';
-    actionEditor.elements.status.value = currentAction.status;
-    actionEditor.elements.due.value = dueDateValue(currentAction.due_at);
-    fillPageSelect(actionEditor.elements.memory_page_id, currentAction.memory_page_id || '');
-    document.getElementById('action-editor-meta').textContent =
-      `修订 ${currentAction.revision} · 作者 ${currentAction.created_by} · 最近更新 ${currentAction.updated_by}`;
-    if (hadCitation) syncCitationUrl(new URLSearchParams({workspace: id, page: 'todos', action: actionId}), citation);
+    currentView = 'actions';
+    restoreActionEdit(readActionEdit(actionEditKey()));
+    renderActionDetail();
+    if ([id, actionId].every(value => MEMORY_ID.test(value))) {
+      syncCitationUrl(new URLSearchParams({workspace: id, page: 'todos', action: actionId}), citation);
+    }
+    syncDirectorySelection();
+    focusDetailBack('close-action-editor');
   }
 
   document.getElementById('login-form').addEventListener('submit', async (event) => {
@@ -2399,7 +3000,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const state = activeDirectory;
     if (state?.error) return loadDirectoryPage(state, state.cursor, document.activeElement === directoryRetry);
   });
-  document.getElementById('action-filter').addEventListener('change', () => loadActions());
+  actionFilter.addEventListener('change', () => loadActions());
+  actionSearch.addEventListener('input', event => {
+    if (!event?.isComposing) void loadActions({delay:180});
+  });
+  actionSearch.addEventListener('compositionend', () => loadActions({delay:180}));
+  document.getElementById('action-list-filters').addEventListener('submit', event => {
+    event.preventDefault();
+    return loadActions();
+  });
+  actionMore.addEventListener('click', () => {
+    if (actionListing?.cursor && !actionListing.busy) return readActionPage(actionListing, actionListing.cursor,
+      document.activeElement === actionMore);
+  });
+  actionRetry.addEventListener('click', () => {
+    if (actionListing?.error) return readActionPage(actionListing, actionListing.retryCursor,
+      document.activeElement === actionRetry);
+  });
 
   for (const button of document.querySelectorAll('.memory-views [data-view]')) {
     button.addEventListener('click', (event) => {
@@ -2534,9 +3151,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (sourceMode || !rich) {
         if (kind !== 'undo' && kind !== 'redo') applyMarkdown(editor.elements.body, kind);
         editor.elements.body.focus();
+        pageDraftChanged();
         return;
       }
       richCommand(kind);
+      pageDraftChanged();
     });
   }
 
@@ -2545,47 +3164,87 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const id = workspaceId();
     const owner = currentUser;
     const editing = currentPage;
-    if (!id || !editing) return;
-    syncBodyFromRich();
-    const submittedTopics = editor.elements.topics.value;
-    const saved = await request('POST', `/v1/workspaces/${id}/memory/${editing.id}`, {
-      revision: editing.revision,
-      changes: {
-        title: editor.elements.title.value,
-        body: editor.elements.body.value,
-        topics: parseTopics(submittedTopics),
-      },
-    }).catch(() => ({status:0, body:{}}));
-    if (workspaceId() !== id || currentUser !== owner) return;
-    if (saved.status !== 200 || !saved.body.page) {
-      if (currentPage === editing) show('error', messageFor(saved.body.error, '无法保存记忆页。'));
+    const key = pageDraftKey(editing, owner);
+    if (!id || !editing || !key || editor.hidden || savingPages.has(key)) return;
+    const submitted = editorFields();
+    persistPageDraft();
+    if (pageMatchesDraft(editing, submitted)) { show('ok', '已保存。'); return; }
+
+    const path = `/v1/workspaces/${id}/memory/${editing.id}`;
+    const sameOwner = () => currentUser?.id === owner.id;
+    const visiblePage = () => sameOwner() && workspaceId() === id && !editor.hidden &&
+      currentPage?.id === editing.id && currentPage.revision === editing.revision;
+    const exactPage = page => page?.id === editing.id && page.workspace_id === id &&
+      Number.isSafeInteger(page.revision) && page.revision >= editing.revision;
+    const timeout = () => globalThis.AbortSignal?.timeout?.(8000);
+    savingPages.add(key);
+    syncPageSaveButton();
+    let saved, page, confirmed, uncertain;
+    try {
+      saved = await request('POST', path, {
+        revision: editing.revision, changes:{...submitted, topics:parseTopics(submitted.topics)},
+      }, undefined, timeout()).catch(() => ({status:0, body:{}}));
+      page = saved.body?.page;
+      confirmed = saved.status === 200 && exactPage(page) && pageMatchesDraft(page, submitted);
+      uncertain = saved.status === 0 || saved.status === 408 || saved.status >= 500 || (saved.status === 200 && !confirmed);
+      if (!confirmed && sameOwner() && (uncertain || saved.status === 409)) {
+        const checked = await request('GET', path, undefined, undefined, timeout()).catch(() => ({status:0, body:{}}));
+        page = checked.status === 200 && exactPage(checked.body?.page) ? checked.body.page : null;
+        confirmed = Boolean(page && page.revision > editing.revision && pageMatchesDraft(page, submitted));
+      }
+    } finally {
+      savingPages.delete(key);
+      syncPageSaveButton();
+    }
+
+    if (!sameOwner()) return;
+    const visible = visiblePage();
+    if (confirmed && !visible) {
+      const entry = pageDraft(key);
+      if (entry?.revision === editing.revision) {
+        if (pageMatchesDraft(page, entry)) clearPageDraft(key);
+        else writePageDraft(key, entry, page.revision);
+      }
+      if (workspaceId() === id) {
+        rememberPage(page);
+        void loadGraph();
+      }
       return;
     }
-    if (currentPage !== editing) {
-      rememberPage(saved.body.page);
-      void loadGraph();
+    if (!visible) return;
+    if (!confirmed) {
+      if (page && exactPage(page) && page.revision > editing.revision && (uncertain || saved.status === 409)) {
+        persistPageDraft();
+        applyPageToEditor(page);
+        showPageDraft();
+        syncPageUrl();
+        closeDeleteConfirm({restoreFocus: false});
+        closePageHistory({restoreFocus: false});
+        rememberPage(page);
+        void loadGraph();
+        show('note', '此页已在别处更新，旧草稿已保留。');
+      } else if (uncertain) show('note', '尚未确认保存，草稿已保留。');
+      else show('error', messageFor(saved.body?.error, '无法保存记忆页。'));
       return;
     }
+
     closeDeleteConfirm({restoreFocus: false});
-    currentPage = saved.body.page;
+    const fields = editorFields();
+    if (pageDraft(key)?.revision === editing.revision) clearPageDraft(key);
+    currentPage = page;
+    if (sameFields(fields, submitted)) fillEditorFields({title: page.title, body: page.body || '', topics: formatTopics(page.topics)});
+    persistPageDraft();
+    updatePageSaveHint(page, !pageMatchesDraft(page, editorFields()));
     if (!historySelection) syncPageUrl();
     if (citationFor(currentPage.id)) setCitationStatus('已保存为修订 ' + currentPage.revision + '。');
     rememberPage(currentPage);
     syncExportButton();
-    if (editor.elements.topics.value === submittedTopics) editor.elements.topics.value = formatTopics(currentPage.topics);
     document.getElementById('editor-meta').textContent =
       `修订 ${currentPage.revision} · 作者 ${currentPage.created_by} · 最近更新 ${currentPage.updated_by}`;
-    const savedHint = document.getElementById('editor-saved');
-    if (savedHint) {
-      const when = memoryUpdatedLabel(currentPage.updated);
-      savedHint.hidden = false;
-      savedHint.textContent = when ? ('已保存 · ' + when) : ('已保存 · 修订 ' + currentPage.revision);
-    }
 
-    await loadGraph();
-    if (workspaceId() !== id || currentUser !== owner || currentPage !== saved.body.page) return;
-    if (historyPanel && !historyPanel.hidden) await loadPageHistory();
     show('ok', '已保存。');
+    void loadGraph();
+    if (historyPanel && !historyPanel.hidden) void loadPageHistory();
   });
 
   const deleteParts = {
@@ -2653,6 +3312,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         kind === 'page' ? '无法删除记忆页。' : '无法删除下一步行动。'));
       return;
     }
+    if (kind === 'page') {
+      clearTimeout(draftTimer);
+      if (currentPage?.id === pending.id) editor.hidden = true;
+      clearPageDraft(pageDraftKey({workspace_id: pending.workspace, id: pending.id}, owner));
+    } else {
+      const key = actionEditKey({workspace_id:pending.workspace, id:pending.id}, owner);
+      try { if (key) document.defaultView.sessionStorage.removeItem(key); } catch {}
+    }
     show('ok', '已删除。');
     const restoreCitation = citation && activeCitation === citation;
     const directory = loadWorkspace({syncView: !restoreCitation});
@@ -2701,88 +3368,207 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function returnToList() {
+    persistPageDraft();
+    const page = currentPage?.id;
+    const action = currentAction?.id;
+    const previous = directoryReturn;
+    directoryReturn = null;
+    currentPage = null;
+    currentAction = null;
+    closeDeleteConfirm({restoreFocus: false});
+    closePageHistory({restoreFocus: false});
+    if (groupShareDialog?.open) groupShareDialog.close();
     setMobileGraph(false);
-    if (document.defaultView?.matchMedia?.('(max-width: 700px)').matches) listPanel.scrollTop = 0;
-    return loadWorkspace();
+    showView(currentView);
+    syncExportButton();
+    syncDirectorySelection();
+    if (previous?.state && previous.state === activeDirectory && ownsDirectoryWindow(previous.state)) {
+      for (const [node, offset] of previous.scroll) node.scrollTop = offset;
+    }
+    const result = currentView === 'actions' && action
+      ? [...(document.getElementById('action-list').querySelectorAll?.('[data-id]') || [])]
+        .find(button => button.dataset.id === action)
+      : currentView === 'overview' ? directoryRow(page) : null;
+    const target = result || (currentView === 'overview' ? searchInput
+      : document.querySelector('.memory-views [aria-current="page"]'));
+    target?.scrollIntoView?.({block: 'nearest', inline: 'nearest'});
+    target?.focus?.({preventScroll: true});
   }
 
   document.getElementById('close-editor').addEventListener('click', returnToList);
   document.getElementById('close-memory-citation-preview')?.addEventListener('click', returnToList);
 
+  const newActionAttempts = new Map();
+  let newActionScope = '';
+
+  function newActionAttempt(scope = actionDraftScope()) {
+    if (!scope) return null;
+    if (!newActionAttempts.has(scope)) {
+      let attempt;
+      try { attempt = decodeNewActionAttempt(document.defaultView.sessionStorage.getItem('openteamily.memory-action-create:' + scope)); } catch {}
+      newActionAttempts.set(scope, attempt || null);
+    }
+    return newActionAttempts.get(scope);
+  }
+
+  function saveNewActionAttempt(scope, attempt) {
+    newActionAttempts.set(scope, attempt);
+    try {
+      const storage = document.defaultView.sessionStorage;
+      const name = 'openteamily.memory-action-create:' + scope;
+      if (attempt) storage.setItem(name, JSON.stringify({key:attempt.key, payload:attempt.payload}));
+      else storage.removeItem(name);
+    } catch {}
+  }
+
+  function newActionPayload() {
+    return {title:newActionFields.title.value.trim(), notes:newActionFields.notes.value,
+      due_at:dueAtFromDate(newActionFields.due.value), memory_page_id:newActionFields.page.value || null};
+  }
+
+  function renderNewActionAttempt(attempt = newActionAttempt()) {
+    const busy = attempt?.busy === true;
+    const retry = attempt && JSON.stringify(attempt.payload) === JSON.stringify(newActionPayload());
+    for (const field of Object.values(newActionFields)) field.disabled = busy;
+    newActionButton.disabled = busy || !actionDraftScope();
+    newActionButton.textContent = busy ? '正在保存…' : retry ? '重试保存' : '新建行动';
+    newActionStatus.textContent = busy ? '正在保存行动。' : retry ? '上次保存尚未确认。重试会核对同一次请求。'
+      : attempt ? '上次保存尚未确认。修改内容后将发起新的保存请求。' : '';
+  }
+
+  function applyNewActionDraft(payload) {
+    newActionFields.title.value = payload?.title ?? '';
+    newActionFields.notes.value = payload?.notes ?? '';
+    newActionFields.due.value = dueDateValue(payload?.due_at);
+    fillPageSelect(newActionFields.page, payload?.memory_page_id ?? '');
+  }
+
+  function syncNewActionWorkspace() {
+    const scope = actionDraftScope();
+    if (scope === newActionScope) return;
+    newActionScope = scope;
+    const attempt = newActionAttempt(scope);
+    applyNewActionDraft(attempt?.payload);
+    newActionForm.dataset.open = String(Boolean(attempt));
+    renderNewActionAttempt(attempt);
+    syncActionComposer();
+  }
+
   const newActionOpen = document.getElementById('new-action-open');
+  newActionForm.addEventListener('input', () => {
+    newActionForm.dataset.open = 'true';
+    renderNewActionAttempt();
+  });
+  newActionForm.addEventListener('change', () => renderNewActionAttempt());
   if (newActionOpen) {
     newActionOpen.addEventListener('click', () => {
-      const form = document.getElementById('new-action-form');
-      if (form) form.dataset.open = 'true';
-      syncActionComposer(false);
+      newActionForm.dataset.open = String(newActionForm.hidden);
+      syncActionComposer();
+      if (!newActionForm.hidden) newActionForm.elements.title.focus();
     });
   }
-  document.getElementById('new-action-form').addEventListener('submit', async (event) => {
+  newActionForm.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const id = workspaceId();
-    if (!id) return;
-    const title = document.getElementById('new-action-title').value.trim();
-    const notes = document.getElementById('new-action-notes').value;
-    const dueAt = dueAtFromDate(document.getElementById('new-action-due').value);
-    const pageId = document.getElementById('new-action-page').value || null;
-    const payload = {title, notes};
-    if (dueAt != null) payload.due_at = dueAt;
-    if (pageId) payload.memory_page_id = pageId;
-    const created = await fetcher(`/v1/workspaces/${id}/memory/actions`, {
-      method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'X-CSRF-Token': csrfCookie(document.cookie),
-        'Idempotency-Key': randomKey(),
-      },
-      credentials: 'same-origin',
-      body: JSON.stringify(payload),
-    });
-    let parsed = {};
-    try { parsed = await created.json(); } catch { parsed = {}; }
-    if (created.status !== 201 && created.status !== 200) {
-      show('error', messageFor(parsed.error, '无法创建下一步行动。'));
+    const workspace = workspaceId(), scope = actionDraftScope(), visible = pageRequest;
+    const previous = newActionAttempt(scope);
+    const payload = newActionPayload();
+    if (!scope || previous?.busy || !payload.title) return;
+    const key = previous && JSON.stringify(previous.payload) === JSON.stringify(payload) ? previous.key : randomKey();
+    const attempt = {key, payload, busy:true};
+    saveNewActionAttempt(scope, attempt);
+    newActionForm.dataset.open = 'true';
+    renderNewActionAttempt(attempt);
+    const result = await request('POST', `/v1/workspaces/${workspace}/memory/actions`, payload, {'Idempotency-Key':key})
+      .catch(() => ({status:0, body:{}}));
+    attempt.busy = false;
+    const row = result.body?.action;
+    const saved = [200,201].includes(result.status) && row?.workspace_id === workspace && MEMORY_ID.test(row.id || '');
+    const definitiveFailure = result.status >= 400 && result.status < 500 && result.status !== 408;
+    if (saved || definitiveFailure) saveNewActionAttempt(scope, null);
+    if (actionDraftScope() !== scope) return;
+    if (!saved) {
+      renderNewActionAttempt();
+      if (definitiveFailure) show('error', messageFor(result.body.error, '无法创建下一步行动。'));
       return;
     }
-    document.getElementById('new-action-title').value = '';
-    document.getElementById('new-action-notes').value = '';
-    document.getElementById('new-action-due').value = '';
-    document.getElementById('new-action-page').value = '';
+    applyNewActionDraft();
+    newActionForm.dataset.open = 'false';
+    renderNewActionAttempt();
+    syncActionComposer();
+    if (pageRequest !== visible || currentView !== 'actions') return;
     show('ok', '已创建下一步行动。');
-    await openAction(parsed.action.id);
+    void loadActions();
+    await openAction(row.id);
   });
 
+  actionEditor.addEventListener('input', storeActionEdit);
+  actionEditor.addEventListener('change', storeActionEdit);
   actionEditor.addEventListener('submit', async (event) => {
     event.preventDefault();
     const id = workspaceId();
     const owner = currentUser;
     const editing = currentAction;
-    if (!id || !editing) return;
-    const saved = await request('POST', `/v1/workspaces/${id}/memory/actions/${editing.id}`, {
-      revision: editing.revision,
-      changes: {
-        title: actionEditor.elements.title.value,
-        notes: actionEditor.elements.notes.value,
-        status: actionEditor.elements.status.value,
-        due_at: dueAtFromDate(actionEditor.elements.due.value),
-        memory_page_id: actionEditor.elements.memory_page_id.value || null,
-      },
-    }).catch(() => ({status:0, body:{}}));
-    if (workspaceId() !== id || currentUser !== owner) return;
-    if (currentAction !== editing) {
-      if (saved.status === 200) void loadActions();
+    const key = actionEditKey(editing, owner);
+    if (!id || !editing || !key || actionEditor.hidden || actionEditConflict || actionEditsSaving.has(key)) return;
+    const base = actionFields(editing), submitted = actionFields();
+    submitted.title = submitted.title.trim();
+    const changes = {};
+    for (const name of ACTION_EDIT_FIELDS) {
+      if (base[name] === submitted[name]) continue;
+      if (name === 'due') changes.due_at = dueAtFromDate(submitted.due);
+      else changes[name] = name === 'memory_page_id' ? (submitted[name] || null) : submitted[name];
+    }
+    if (!Object.keys(changes).length) {
+      fillActionEdit(base);
+      storeActionEdit();
       return;
     }
-    if (saved.status !== 200 || !saved.body.action) {
+    const path = `/v1/workspaces/${id}/memory/actions/${editing.id}`;
+    const pending = {revision:editing.revision, submitted};
+    const isCurrent = () => workspaceId() === id && currentUser?.id === owner.id && actionEditKey() === key && !actionEditor.hidden;
+    actionEditsSaving.add(key);
+    writeActionEdit(key, {base, fields:actionFields(), pending});
+    showActionEdit();
+    const signal = () => globalThis.AbortSignal?.timeout?.(8000);
+    const saved = await request('POST', path, {revision: editing.revision, changes}, undefined, signal())
+      .catch(() => ({status:0, body:{}}));
+    const uncertain = saved.status === 0 || saved.status === 408 || saved.status >= 500;
+    let latest = saved.status === 200 ? saved.body.action : null;
+    if (currentUser?.id === owner.id && (uncertain || saved.status === 409 || (saved.status === 200 && !latest))) {
+      const checked = await request('GET', path, undefined, undefined, signal()).catch(() => ({status:0, body:{}}));
+      latest = checked.status === 200 ? checked.body.action : null;
+    }
+    actionEditsSaving.delete(key);
+    if (currentUser?.id !== owner.id) return;
+    const valid = latest?.id === editing.id && latest.workspace_id === id &&
+      Number.isSafeInteger(latest.revision) && latest.revision >= editing.revision;
+    const confirmed = valid && actionEditCommitted(base, pending, actionFields(latest), latest.revision);
+    const draft = readActionEdit(key);
+    if (valid && workspaceId() === id) void loadActions();
+    if (!isCurrent() || (valid && latest.revision < currentAction.revision)) {
+      if (valid && draft?.pending?.revision === pending.revision) {
+        writeActionEdit(key, advanceActionEdit(draft, actionFields(latest), latest.revision));
+      }
+      if (isCurrent()) showActionEdit();
+      return;
+    }
+    if (!valid) {
+      if (draft && !uncertain && saved.status !== 200 && saved.status !== 409) {
+        writeActionEdit(key, {base:draft.base, fields:draft.fields});
+      }
+      showActionEdit();
       show('error', messageFor(saved.body.error, '无法保存下一步行动。'));
       return;
     }
+    const fields = actionFields();
+    fields.title = fields.title.trim();
     closeDeleteConfirm({restoreFocus: false});
-    currentAction = saved.body.action;
-    document.getElementById('action-editor-meta').textContent =
-      `修订 ${currentAction.revision} · 作者 ${currentAction.created_by} · 最近更新 ${currentAction.updated_by}`;
-    show('ok', '已保存。');
+    currentAction = latest;
+    restoreActionEdit(draft?.pending ? {...draft, fields} : {base:confirmed ? submitted : base, fields});
+    renderActionDetail();
+    if (confirmed) show('ok', '已保存。');
+    else if (latest.revision === editing.revision) show('note', '尚未确认保存，草稿已保留。');
+    else show('note', actionEditConflict ? '此行动已在别处更新，请选择要保留的内容。' : '已载入最新版本，草稿仍可保存。');
   });
 
   document.getElementById('delete-action').addEventListener('click', () => {

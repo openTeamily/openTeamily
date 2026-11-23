@@ -1,15 +1,32 @@
 import { readWorkspaceChoices, servedByDsBot } from '../shell/dsbot-api.mjs';
 import { mountActionMenus } from '../shell/action-menu.mjs';
+import { chatPathId } from '../shell/chat-utils.mjs';
+import { studioDocumentFromSearch, studioDocumentHref } from '../shell/studio-link.mjs';
+import { preloadStudio, sharedWorkCopyToken, studioCopyCandidate, studioScope } from './entry.mjs';
+
+function studioTargetFromSearch(search) {
+  const params = new URLSearchParams(search || '');
+  if (!params.has('studio')) return null;
+  const workspace = params.get('workspace');
+  if (params.size === 2 && params.get('studio') === 'catalog' && /^[0-9a-f]{32}$/.test(workspace || '')) {
+    return {workspace, catalog:true};
+  }
+  return studioDocumentFromSearch(search) || {invalid:true};
+}
+
 // A workspace-only link opens its catalog; a saved-result link also opens the record.
 export function artifactTargetFromSearch(search) {
   const params = new URLSearchParams(search || '');
-  if (!params.has('workspace') && !params.has('artifact')) return null;
+  if (!params.has('workspace') && !params.has('artifact') && !params.has('revision')) return null;
   const id = /^[0-9a-f]{32}$/;
   const workspace = params.get('workspace');
   const artifact = params.get('artifact');
-  if ([...params.keys()].some(key => !['workspace', 'artifact'].includes(key))
+  const revision = params.get('revision');
+  if ([...params.keys()].some(key => !['workspace', 'artifact', 'revision'].includes(key))
     || params.getAll('workspace').length !== 1 || !id.test(workspace || '')
-    || (artifact !== null && (params.getAll('artifact').length !== 1 || !id.test(artifact)))) return {invalid: true};
+    || (artifact !== null && (params.getAll('artifact').length !== 1 || !id.test(artifact)))
+    || (revision !== null && (!artifact || params.getAll('revision').length !== 1 || !/^[1-9][0-9]{0,7}$/.test(revision)))) return {invalid: true};
+  if (revision !== null) return {workspace, artifact, revision:Number(revision)};
   return artifact ? {workspace, artifact} : {workspace};
 }
 
@@ -40,6 +57,10 @@ export function csrfCookie(raw) {
   return '';
 }
 
+const DRAFT_STORAGE_PREFIX = 'ot-space-draft-v1:';
+const DRAFT_MAX_ENTRIES = 16;
+const DRAFT_MAX_AGE = 24 * 60 * 60 * 1000;
+const DRAFT_MAX_BODY = 32_000;
 const CATALOG_PAGE_SIZE = 20;
 const CATALOG_READ_LIMIT = 100;
 const CATALOG_CURSOR = /^[a-f0-9]{32}$/;
@@ -180,6 +201,9 @@ export function visibleArtifacts(items, options = {}) {
   if (scope === 'memory') {
     rows = rows.filter((item) => item.source && item.source.kind === 'agent_task');
   }
+  if (scope === 'automation') {
+    rows = rows.filter((item) => item.source?.kind === 'automation_run');
+  }
   if (kind === 'messages') {
     rows = rows.filter((item) => item.source && item.source.kind === 'agent_message');
   } else if (kind && kind !== 'all') {
@@ -259,6 +283,7 @@ export function viewFromSearch(search) {
   if (value === 'created') return {kind: 'all', scope: 'mine'};
   if (value === 'starred') return {kind: 'all', scope: 'favorites'};
   if (value === 'memory') return {kind: 'all', scope: 'memory'};
+  if (value === 'automation') return {kind: 'all', scope: 'automation'};
   if (value === 'meetings') return {kind: 'meetings', scope: 'all'};
   return {kind: 'all', scope: 'all'};
 }
@@ -268,7 +293,38 @@ export function queryForView(kind, scope) {
   if (scope === 'mine') return '?view=created';
   if (scope === 'favorites') return '?view=starred';
   if (scope === 'memory') return '?view=memory';
+  if (scope === 'automation') return '?view=automation';
   return '';
+}
+
+function workspaceFromFragment(hash) {
+  const matches = new URLSearchParams((hash || '').slice(1)).getAll('workspace');
+  return matches.length === 1 && /^[0-9a-f]{32}$/.test(matches[0]) ? matches[0] : '';
+}
+
+export function artifactOrigin(item, workspace) {
+  if (!item?.source) return null;
+  const source = item.source;
+  const scoped = CATALOG_CURSOR.test(workspace || '') && (!item.workspace_id || item.workspace_id === workspace);
+  if (source.kind === 'automation_run') {
+    const href = scoped && CATALOG_CURSOR.test(source.automation_id || '') && CATALOG_CURSOR.test(source.id || '')
+      ? '/automations?' + new URLSearchParams({workspace, automation: source.automation_id, run: source.id}) : '';
+    return {kind: '自动化运行', title: source.automation_title || '', label: '查看原运行', href};
+  }
+  if (source.kind === 'team_run_step') {
+    const step = source.position;
+    const href = scoped && CATALOG_CURSOR.test(source.id || '') && Number.isInteger(step) && step >= 0 && step < 8
+      ? '/team-runs#' + new URLSearchParams({workspace,run:source.id,step}) : '';
+    return {kind:'团队任务', title:source.run_title || '', label:'查看来源步骤', href};
+  }
+  if (source.kind === 'agent_message') {
+    const {conversation_id: id, agent_id, id: message_id} = source;
+    const href = scoped && chatPathId(id) && chatPathId(message_id) && (!agent_id || CATALOG_CURSOR.test(agent_id))
+      ? conversationChatHref(workspace, {source: agent_id ? 'agent' : 'social', id, agent_id, message_id}) : '';
+    return {kind: '对话消息', title: source.conversation_title || '', label: '查看原消息', href};
+  }
+  if (source.kind === 'agent_task') return {kind: '智能体任务'};
+  return null;
 }
 
 export function artifactDeletePrompt(artifact) {
@@ -281,12 +337,10 @@ export function artifactDeletePrompt(artifact) {
   };
 }
 
-export function savableTaskArtifacts(tasks) {
-  return (Array.isArray(tasks) ? tasks : []).filter((task) => {
-    const result = task && task.result;
-    const text = result && (typeof result.text === 'string' ? result.text : result.echo);
-    return Boolean(task) && task.status === 'succeeded' && typeof text === 'string' && text.trim() !== '';
-  });
+export function savableTaskArtifacts(runs) {
+  return (Array.isArray(runs) ? runs : []).filter(run =>
+    run?.verified === true && /^[a-f0-9]{32}$/.test(run.task?.id || '')
+  ).map(run => run.task);
 }
 
 export function taskArtifactTitle(task) {
@@ -314,39 +368,46 @@ export function applyDirectoryCollapsed(root, collapsed) {
   return next;
 }
 
-function bindMobileCatalogToolbar(document, closePopovers) {
+function bindCatalogToolbar(document, closePopovers) {
   const viewport = document.defaultView?.matchMedia?.('(max-width: 700px)');
   const panel = document.getElementById('main-panel');
   const toolbar = document.getElementById('catalog-quick-actions');
   const title = document.getElementById('space-title');
   const directory = document.getElementById('artifact-dir');
   const catalog = document.getElementById('list-panel');
-  const controls = [
-    document.getElementById('new-menu-button')?.parentElement,
-    document.getElementById('artifact-notify'),
-    document.getElementById('search')?.parentElement,
-    document.getElementById('filter-button')?.parentElement,
-  ];
+  const newMenu = document.getElementById('new-menu-button')?.parentElement;
+  const notify = document.getElementById('artifact-notify');
+  const search = document.getElementById('search')?.parentElement;
+  const filter = document.getElementById('filter-button')?.parentElement;
+  const layout = document.getElementById('layout-toggle');
+  const controls = [layout, newMenu, notify, search, filter];
   if (!viewport || !panel || !toolbar || !title || !directory || !catalog || controls.some(control => !control?.parentElement)) {
     return () => {};
   }
   // Move the original controls so focus order follows their visual order and
   // there is still only one search, workspace context, and set of popovers.
-  const original = controls.map(node => ({node, parent: node.parentElement, next: node.nextElementSibling}));
+  const original = [newMenu, search, filter, layout, notify].map(node => ({
+    node, parent: node.parentElement, next: node.nextElementSibling,
+  }));
   let catalogView = false;
   let compact = false;
+  let active = false;
 
   function sync() {
     const next = catalogView && viewport.matches;
-    if (next === compact) return;
+    if (next === compact && active === catalogView) return;
     compact = next;
+    active = catalogView;
     closePopovers();
     const focus = document.activeElement;
     const restoreFocus = controls.some(node => node.contains(focus));
     if (compact) toolbar.append(...controls);
-    else for (const {node, parent, next} of original.slice().reverse()) parent.insertBefore(node, next);
+    else {
+      for (const {node, parent, next} of original.slice().reverse()) parent.insertBefore(node, next);
+      if (active) toolbar.append(search);
+    }
     panel.classList.toggle('is-compact-catalog', compact);
-    title.classList.toggle('visually-hidden', !compact);
+    title.classList.toggle('visually-hidden', !active);
     directory.hidden = !compact && catalog.classList.contains('dir-collapsed');
     if (restoreFocus && !focus.closest('[hidden]')) focus.focus({preventScroll: true});
   }
@@ -414,7 +475,7 @@ export function conversationLabel(item) {
 }
 
 function agentConversations(directory, {includeArchived = false} = {}) {
-  const agents = new Map((directory.items || []).filter(agent => includeArchived || !agent.archived)
+  const agents = new Map((directory.items || []).filter(agent => includeArchived || (!agent.archived && !agent.native_deleted))
     .map(agent => [agent.id, agent]));
   return (directory.conversations || []).filter(row => agents.has(row.agent_id)).map(row => {
     const agent = agents.get(row.agent_id);
@@ -512,16 +573,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const actionMenus = mountActionMenus(document);
   const newMenuButton = document.getElementById('new-menu-button');
   const newMenu = actionMenus.bind(newMenuButton, document.getElementById('new-menu'));
-  const compactToolbar = bindMobileCatalogToolbar(document, () => {
+  const catalogToolbar = bindCatalogToolbar(document, () => {
     actionMenus.close({focus: true});
     closeFilterPanel({focus: true});
   });
+  const liveBanner = document.getElementById('artifact-live-update');
+  const liveMessage = document.getElementById('artifact-live-message');
+  const liveLoad = document.getElementById('artifact-live-load');
+  const liveCompare = document.getElementById('artifact-live-compare');
   const editorPanels = new Map(['version', 'share', 'discover'].map(name => [name, document.getElementById(name + '-panel')]));
   const discoverSlug = document.getElementById('discover-slug');
   const discoverEditable = document.getElementById('discover-editable-remix');
   const discoverEditableField = document.getElementById('discover-editable-remix-field');
   const discoverEditableNote = document.getElementById('discover-editable-remix-note');
   const discoverPublicLink = document.getElementById('discover-public-link');
+  const discoverRevision = document.getElementById('discover-revision');
+  const shareRevision = document.getElementById('share-revision');
   const publishDiscover = document.getElementById('publish-discover');
   const revokeDiscover = document.getElementById('revoke-discover');
   const mobileMenu = document.getElementById('mobile-editor-menu');
@@ -533,6 +600,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const saveButtons = ['save-artifact', 'document-save', 'sheet-save', 'slides-save', 'mobile-editor-save']
     .map(id => document.getElementById(id)).filter(Boolean);
   const workspaceSelect = document.getElementById('workspace');
+  const workspacePending = document.getElementById('workspace-pending');
+  const createButtons = [newMenuButton, ...[
+    ...Object.values(NEW_KIND_BUTTONS), 'new-media', 'new-agent-website', 'new-save-message',
+    'empty-new-document', 'empty-agent-website', 'empty-save-message', 'empty-starred-save-message',
+    'resume-draft-document', 'resume-draft-website',
+  ].map(id => document.getElementById(id))].filter(Boolean);
   const search = document.getElementById('search');
   const clearSearch = document.getElementById('clear-artifact-search');
   const nativeCatalog = servedByDsBot(document);
@@ -555,7 +628,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const duplicateSubmit = document.getElementById('duplicate-artifact-submit');
   let duplicateState = null;
   let currentUser = null;
+  let workspaceResolved = false;
+  let studioWorkspaces = [];
   let workspaceLoad = 0;
+  let studioPreload = null;
   let current = null;
   let editor = null;
   let catalog = null;
@@ -615,9 +691,143 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     return workspaceSelect.value;
   }
 
+  function canCreateInWorkspace() {
+    return Boolean(currentUser && workspaceResolved && workspaceId());
+  }
+
+  function syncWorkspaceCreation() {
+    const enabled = canCreateInWorkspace();
+    for (const button of createButtons) button.disabled = !enabled;
+    if (!enabled) newMenu.close();
+  }
+
   const notifications = mountArtifactNotifications(document, {
     request: (method, path, body, options = {}) =>
       request(method, path, body, undefined, options.signal, options.keepalive),
+  });
+  const studioButton = document.getElementById('studio-open');
+  const studioDialog = document.getElementById('studio-dialog');
+  const studioCopyButtons = ['studio-copy-open','studio-copy-mobile'].map(id => document.getElementById(id)).filter(Boolean);
+  const studioRequest = (method, path, body, {headers,signal} = {}) => request(method, path, body, headers, signal);
+  const selectedStudioWorkspace = () => nativeCatalog ? studioWorkspaces.find(item => item.id === workspaceId()) : null;
+  const studioOptions = {
+    request: studioRequest,
+    personalWorkspace: () => studioWorkspaces.find(item => item.kind === 'personal' &&
+      (!item.owner_id || item.owner_id === currentUser?.id))?.id,
+    onOpenCatalog(workspace) {
+      const current = studioTargetFromSearch(document.defaultView?.location?.search);
+      if (current?.catalog && current.workspace === workspace) return;
+      writeSpaceAddress(studioCatalogAddress(workspace), {push:true});
+    },
+    onDocument(workspace, id, revision) {
+      const href = studioDocumentHref(workspace, id, revision);
+      if (!href || spaceLocation() === href) return;
+      const current = studioTargetFromSearch(document.defaultView?.location?.search);
+      const studioFromCatalog = current?.catalog === true && current.workspace === workspace;
+      if (studioFromCatalog) writeSpaceAddress(spaceLocation(), {studioFocus:id});
+      writeSpaceAddress(href, {push:studioFromCatalog, studioFromCatalog});
+    },
+    onCatalog(workspace, {back = false} = {}) {
+      const history = document.defaultView?.history;
+      if (back && spaceAddress?.entry.studioFromCatalog && typeof history?.back === 'function') {
+        approvedBack = true;
+        history.back();
+        return true;
+      }
+      writeSpaceAddress(studioCatalogAddress(workspace));
+      return false;
+    },
+    onClose() {
+      if (studioTargetFromSearch(document.defaultView?.location?.search)) syncViewUrl();
+    },
+  };
+  const studio = lazyEditor(async () => {
+    const {mountSharedStudio} = await import('./shared-studio.mjs');
+    const component = mountSharedStudio(document, studioOptions);
+    component?.setWorkspace(selectedStudioWorkspace(), currentUser?.id);
+    return component;
+  });
+  const studioCopySource = () => ({
+    selection: editor, item: current,
+    workspaces: nativeCatalog ? studioWorkspaces : [],
+  });
+  const studioCopyOptions = {
+    source: studioCopySource,
+    ready(selection) {
+      if (!activeEditor(selection) || !selection.account) return '请重新打开文档后再试。';
+      if (selection.saving) return '作品正在保存，请稍候。';
+      if (hasEditorDraft()) return '请先保存修改，再预览要复制的版本。';
+      return '';
+    },
+    request: (selection, id, review) =>
+      request('POST', editorPath(selection, id) + '/studio-copy', review, undefined, selection.controller.signal),
+    show,
+  };
+  const studioCopy = lazyEditor(async () => {
+    const {mountStudioCopy} = await import('./studio-copy.mjs');
+    return mountStudioCopy(document, studioCopyOptions);
+  });
+  const sharedWorkCopyOptions = {
+    request: (method, path, body, signal) => request(method, path, body, undefined, signal),
+    dismissLink: () => syncViewUrl(),
+    openArtifact: (workspace, artifact) => {
+      void openEditor(artifact, {workspace,saved:true,notice:{kind:'ok',text:'已保存到个人空间。'}});
+    },
+  };
+  const sharedWorkCopy = lazyEditor(async () => {
+    const {mountSharedWorkCopy} = await import('./shared-work-copy.mjs');
+    return mountSharedWorkCopy(document, sharedWorkCopyOptions);
+  });
+  const workVersion = lazyEditor(async () => {
+    const {mountWorkVersion} = await import('./version-preview.mjs');
+    return mountWorkVersion(document, {
+      read: (path, signal) => request('GET', path, undefined, undefined, signal),
+      closeAddress: ({workspace, id}) => writeSpaceAddress(worksPath() + '?' + new URLSearchParams({workspace,artifact:id}),
+        {fromCatalog:Boolean(spaceAddress?.entry.fromCatalog)}),
+    });
+  });
+
+  function syncStudioCopy() {
+    const available = Boolean(studioCopyCandidate(studioCopySource()));
+    for (const button of studioCopyButtons) button.hidden = !available;
+  }
+
+  function syncStudioWorkspace() {
+    const team = selectedStudioWorkspace();
+    if (studio.instance) studio.instance.setWorkspace(team, currentUser?.id);
+    else if (studioButton) studioButton.hidden = typeof studioDialog?.showModal !== 'function' || !studioScope(team, currentUser?.id);
+    syncStudioCopy();
+  }
+
+  studioButton?.addEventListener('click', async () => {
+    if (!workspaceResolved || !studioScope(selectedStudioWorkspace(), currentUser?.id)) return;
+    const load = workspaceLoad;
+    studioButton.disabled = true;
+    show('', '正在打开团队协作…');
+    try {
+      await studio.prepare();
+      if (load !== workspaceLoad) return;
+      show('', '');
+      await studio.instance?.open();
+    } catch {
+      if (load === workspaceLoad) show('error', '无法加载团队协作，请重试。');
+    } finally {
+      studioButton.disabled = false;
+    }
+  });
+
+  for (const button of studioCopyButtons) button.addEventListener('click', async () => {
+    const source = studioCopyCandidate(studioCopySource());
+    if (!source) return;
+    button.disabled = true;
+    try {
+      await studioCopy.prepare();
+      if (source.selection === editor && source.item === current) studioCopy.instance?.open();
+    } catch {
+      if (source.selection === editor) show('error', '无法打开团队复制，请重试。');
+    } finally {
+      button.disabled = false;
+    }
   });
 
   async function renderProviders() {
@@ -1063,6 +1273,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     } else {
       meta.textContent = labels[kind] || '新文档';
     }
+    syncSharingRevisions(item?.revision);
   }
 
   function fillEditor(item) {
@@ -1144,23 +1355,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       drawBoard();
     }
     const source = document.getElementById('editor-source');
-    if (item?.source?.kind === 'agent_message' && item.source.conversation_id) {
-      const {conversation_id: id, agent_id, conversation_title} = item.source;
+    const origin = artifactOrigin(item, workspaceId());
+    source.hidden = !origin;
+    source.textContent = origin ? '来源：' + origin.kind : '';
+    if (origin?.title) source.append(' · ' + origin.title);
+    if (origin?.href) {
       const link = document.createElement('a');
-      link.href = conversationChatHref(workspaceId(), {source: agent_id ? 'agent' : 'social', id, agent_id});
-      link.textContent = conversation_title || '打开会话';
-      source.hidden = false;
-      source.textContent = '来源会话：';
-      source.append(link);
-    } else if (item && item.source) {
-      source.hidden = false;
-      const from = item.source.kind === 'agent_message' ? '对话消息'
-        : item.source.kind === 'agent_task' ? '代理任务' : '自动化运行';
-      const name = item.source.automation_title || item.source.task_kind || '';
-      source.textContent = `出处：${from}${name ? ' · ' + name : ''} · ${item.source.id}`;
-    } else {
-      source.hidden = true;
-      source.textContent = '';
+      link.href = origin.href;
+      link.textContent = origin.label;
+      source.append(' ', link);
     }
     setWebsitePreview(item);
     if (editor) editor.cleanDraft = editorDraft();
@@ -1176,7 +1379,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     return trimmed === '/artifacts' ? '/artifacts' : '/space';
   }
 
-  const spaceHistoryId = idempotencyKey();
+  const previousSpaceState = document.defaultView?.history?.state;
+  const previousSpaceEntry = previousSpaceState?.openTeamilySpace;
+  const restoredSpaceEntry = /^[A-Za-z0-9_-]{24}$/.test(previousSpaceEntry?.session || '') &&
+    Number.isSafeInteger(previousSpaceEntry.position) && previousSpaceEntry.position >= 0 ? previousSpaceEntry : null;
+  const spaceHistoryId = restoredSpaceEntry?.session || idempotencyKey();
   let spaceAddress;
   let restoringAddress = false;
   let approvedBack = false;
@@ -1186,12 +1393,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     return location ? location.pathname + (location.search || '') + (location.hash || '') : '';
   }
 
-  function writeSpaceAddress(url, {push = false, fromCatalog = false, catalogView} = {}) {
+  function studioCatalogAddress(workspace) {
+    return worksPath() + '?' + new URLSearchParams({workspace, studio:'catalog'});
+  }
+
+  function writeSpaceAddress(url, {push = false, fromCatalog = false, catalogView, studioFromCatalog = false, studioFocus} = {}) {
     const history = document.defaultView?.history;
     if (!history?.replaceState || (push && !history.pushState)) return;
     const entry = {
       session: spaceHistoryId, position: (spaceAddress?.entry.position ?? 0) + Number(push),
-      fromCatalog, catalogView,
+      fromCatalog, catalogView, studioFromCatalog, studioFocus,
     };
     const state = {...history.state, openTeamilySpace:entry};
     history[push ? 'pushState' : 'replaceState'](state, '', url);
@@ -1212,7 +1423,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   function syncViewUrl() {
     const view = document.defaultView;
     if (!view || !view.history || !view.history.replaceState) return;
-    const fragment = catalogKind === 'meetings' && workspaceId() ? '#workspace=' + encodeURIComponent(workspaceId()) : '';
+    const fragment = /^[0-9a-f]{32}$/.test(workspaceId())
+      ? '#workspace=' + encodeURIComponent(workspaceId()) : '';
     const url = worksPath() + queryForView(catalogKind, catalogScope) + fragment;
     writeSpaceAddress(url);
   }
@@ -1221,7 +1433,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     catalogKind = kind || 'all';
     catalogScope = scope || 'all';
     if (catalogKind === 'meetings') catalogScope = 'all';
-    compactToolbar(catalogKind !== 'meetings');
+    catalogToolbar(catalogKind !== 'meetings');
     const searchLabel = catalogKind === 'meetings' ? '搜索会议' : '搜索作品';
     search.placeholder = searchLabel;
     search.setAttribute('aria-label', searchLabel);
@@ -1501,6 +1713,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       : searchTimer !== null || (sameSelection(catalog) && catalog.state === 'loading' && !catalog.background);
     document.getElementById('artifact-list').setAttribute('aria-busy', String(Boolean(busy)));
     renderPageFooter(items.length);
+    renderDraftResume();
     if (catalogKind === 'meetings') renderMeetings();
     else {
       renderList(items, {preserve});
@@ -1520,6 +1733,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const emptyAll = document.getElementById('empty-all');
     const emptyStarred = document.getElementById('empty-starred');
     const emptyMemory = document.getElementById('empty-memory');
+    const emptyAutomation = document.getElementById('empty-automation');
     const emptyKind = document.getElementById('empty-kind');
     const emptyMatches = document.getElementById('empty-no-match');
     const emptyMeetings = document.getElementById('empty-meetings');
@@ -1528,8 +1742,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const meetingsChrome = document.getElementById('meetings-chrome');
     if (mainPanel) mainPanel.classList.toggle('is-meetings', catalogKind === 'meetings');
     if (meetingsChrome) meetingsChrome.hidden = catalogKind !== 'meetings';
-    const layoutNote = document.getElementById('layout-note');
-    if (layoutNote) layoutNote.hidden = !(items.length && catalogLayout === 'grid');
     if (!empty) return;
     const isEmpty = items.length === 0 && searchTimer === null &&
       (!catalog || (sameSelection(catalog) && catalog.state === 'ready' && !catalog.cursor));
@@ -1540,14 +1752,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const showMeetings = catalogKind === 'meetings' && !noWorkspace;
     const showStarred = catalogScope === 'favorites' && !showMeetings && !noWorkspace && !noMatches;
     const showMemory = catalogScope === 'memory' && !showMeetings && !noWorkspace && !noMatches;
+    const showAutomation = catalogScope === 'automation' && catalogKind === 'all' && !noWorkspace && !noMatches;
     const showAllEmpty = (catalogKind === 'all' && (catalogScope === 'all' || catalogScope === 'mine')
       && !showStarred && !showMemory && !noWorkspace && !noMatches);
     if (emptyAll) emptyAll.hidden = !showAllEmpty;
     if (emptyStarred) emptyStarred.hidden = !showStarred;
     if (emptyMemory) emptyMemory.hidden = !showMemory;
+    if (emptyAutomation) emptyAutomation.hidden = !showAutomation;
     if (emptyMeetings) emptyMeetings.hidden = !showMeetings;
     if (emptyMatches) emptyMatches.hidden = !noMatches;
-    if (emptyKind) emptyKind.hidden = showAllEmpty || showStarred || showMemory || showMeetings || noWorkspace || noMatches;
+    if (emptyKind) emptyKind.hidden = showAllEmpty || showStarred || showMemory || showAutomation || showMeetings || noWorkspace || noMatches;
     if (emptyMessage) emptyMessage.hidden = !noWorkspace;
     if (newWebsite) newWebsite.hidden = !(emptyKind && !emptyKind.hidden && catalogKind === 'website');
     if (emptyKind && !emptyKind.hidden) {
@@ -1567,6 +1781,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const sendLead = document.getElementById('send-to-chat-lead');
   const sendConfirm = document.getElementById('send-to-chat-confirm');
   const sendCancel = document.getElementById('send-to-chat-cancel');
+  const sendNew = document.getElementById('send-to-chat-new');
+  const sendAgent = document.getElementById('send-to-chat-agent');
+  const sendNote = document.getElementById('send-to-chat-note');
   let sendingArtifact = null;
   let artifactSendOrigin = null;
 
@@ -1597,27 +1814,53 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     sendError.hidden = !message;
   }
 
-  function closeSendDialog() {
-    if (!sendDialog || sendingArtifact?.pending) return;
+  const sendCurrent = state => sendingArtifact === state && workspaceId() === state.wid && currentUser?.id === state.owner;
+
+  function closeSendDialog({force = false, restoreFocus = true} = {}) {
+    if (!sendDialog || (!force && sendingArtifact?.pending)) return;
     const trigger = sendingArtifact?.trigger;
     sendDialog.hidden = true;
     sendingArtifact = null;
-    if (trigger?.isConnected) trigger.focus({preventScroll: true});
+    if (restoreFocus && trigger?.isConnected) trigger.focus({preventScroll: true});
   }
+
+  function chooseSendDestination(state, destination, button) {
+    if (!sendCurrent(state) || state.pending) return;
+    state.destination = destination;
+    for (const option of sendList.querySelectorAll('button')) option.setAttribute('aria-pressed', String(option === button));
+    if (button) sendAgent.value = '';
+    sendConfirm.disabled = !destination;
+    sendLead.textContent = state.lead + (destination?.source === 'agent' ? '智能体会读取这份附件。' : '');
+    sendStatus();
+  }
+
+  sendAgent?.addEventListener('change', () => {
+    const state = sendingArtifact;
+    if (!state) return;
+    const agent = state.agents?.get(sendAgent.value);
+    chooseSendDestination(state, agent ? {source:'agent', agent_id:agent.id, label:agent.name} : null);
+  });
 
   async function openSendDialog(item, trigger) {
     if (!sendDialog || !workspaceId() || !canSendArtifactToChat(item)) return;
     const wid = workspaceId();
-    const state = {item: {...item}, wid, trigger, destination: null, pending: false, keys: new Map()};
+    const state = {item:{...item}, owner:currentUser?.id, wid, trigger, destination:null,
+      pending:false, keys:new Map(), threads:new Map()};
     sendingArtifact = state;
     sendDialog.hidden = false;
     sendConfirm.textContent = '确认发送';
     sendConfirm.disabled = true;
+    sendNote.value = '';
+    sendNote.disabled = false;
+    sendNew.hidden = true;
+    sendNew.open = false;
+    sendAgent.disabled = false;
+    sendAgent.replaceChildren();
     if (sendCancel) sendCancel.disabled = false;
     const formats = {document:'Word 文档', website:'网页源码（文本）', whiteboard:'白板数据（JSON）',
       slides:'PowerPoint 文件', dashboard:'Excel 文件', spreadsheet:'Excel 工作簿', media:'媒体文件'};
-    const lead = `「${item.title}」版本 ${item.revision} 将作为${formats[item.kind]}发送。`;
-    sendLead.textContent = lead + '请选择接收会话。';
+    state.lead = `「${item.title}」版本 ${item.revision} 将作为${formats[item.kind]}发送。`;
+    sendLead.textContent = state.lead + '请选择接收会话。';
     sendStatus();
     sendList.replaceChildren();
     sendEmpty.hidden = false;
@@ -1630,18 +1873,37 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       get('/social/conversations?limit=100'),
       native ? get('/agents?limit=100&include=conversations') : null,
     ]);
-    if (sendingArtifact !== state || workspaceId() !== wid) return;
+    if (!sendCurrent(state)) return;
     const socialItems = social.status === 200 ? (social.body.items || [])
       .filter(row => !row.public_agent && row.direct?.open !== false)
       .map(row => ({...row, source: 'social', label: conversationLabel(row)})) : [];
     const privateItems = directory?.status === 200 ? agentConversations(directory.body) : [];
     const items = [...socialItems, ...privateItems].sort((a, b) => (b.updated || 0) - (a.updated || 0));
+    state.agents = new Map((directory?.status === 200 ? directory.body.items || [] : [])
+      .filter(agent => /^[a-f0-9]{32}$/.test(agent.id) && !agent.archived && !agent.native_deleted)
+      .map(agent => [agent.id, agent]));
+    if (state.agents.size) {
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = '请选择智能体';
+      sendAgent.append(placeholder);
+      for (const agent of state.agents.values()) {
+        const option = document.createElement('option');
+        option.value = agent.id;
+        option.textContent = agent.name;
+        sendAgent.append(option);
+      }
+      sendAgent.value = '';
+      sendNew.hidden = false;
+      sendNew.open = !items.length;
+      if (sendNew.open && document.activeElement === sendCancel) sendAgent.focus({preventScroll:true});
+    }
     const incomplete = social.status !== 200 || (native && (directory?.status !== 200 || !Array.isArray(directory.body.conversations)));
     if (artifactSendOrigin?.wid === wid && artifactSendOrigin.item.id === item.id) {
       state.destination = socialItems.find(conversation => conversation.id === artifactSendOrigin.conversation) || null;
       sendConfirm.disabled = !state.destination;
     }
-    sendEmpty.hidden = items.length > 0;
+    sendEmpty.hidden = items.length > 0 || state.agents.size > 0;
     sendEmpty.textContent = incomplete ? '无法读取可发送的会话，请稍后重试。' : '这个工作区还没有可发送的会话。';
     if (items.length && incomplete) sendStatus('部分会话无法加载。');
     for (const conversation of items) {
@@ -1651,14 +1913,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       button.dataset.chatSource = conversation.source;
       button.textContent = conversation.source === 'agent' ? '智能体 · ' + conversation.label : conversation.label;
       button.setAttribute('aria-pressed', String(state.destination === conversation));
-      button.addEventListener('click', () => {
-        if (state.pending) return;
-        state.destination = conversation;
-        for (const option of sendList.querySelectorAll('button')) option.setAttribute('aria-pressed', String(option === button));
-        sendConfirm.disabled = false;
-        sendLead.textContent = lead + (conversation.source === 'agent' ? '智能体会读取这份附件。' : '');
-        sendStatus();
-      });
+      button.addEventListener('click', () => chooseSendDestination(state, conversation, button));
       row.append(button);
       sendList.append(row);
     }
@@ -1666,22 +1921,42 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
 
   sendConfirm?.addEventListener('click', async () => {
     const state = sendingArtifact;
-    if (!state?.destination || state.pending || workspaceId() !== state.wid) return;
+    if (!state?.destination || state.pending || !sendCurrent(state)) return;
     const {wid, item, destination, keys} = state;
     const isAgent = destination.source === 'agent';
     const collection = isAgent ? `agents/${destination.agent_id}/conversations` : 'social/conversations';
-    const path = `/v1/workspaces/${wid}/${collection}/${destination.id}/messages`;
-    const key = keys.get(path) || idempotencyKey();
-    keys.set(path, key);
+    const base = `/v1/workspaces/${wid}/${collection}`;
+    const note = sendNote.value.trim();
+    if (note.length > 2000) { sendStatus('附言不能超过 2000 个字符。'); return; }
+    const requestKey = fingerprint => {
+      if (!keys.has(fingerprint)) keys.set(fingerprint, idempotencyKey());
+      return keys.get(fingerprint);
+    };
     state.pending = true;
     sendConfirm.disabled = true;
     sendConfirm.textContent = '正在发送…';
+    sendAgent.disabled = sendNote.disabled = true;
     if (sendCancel) sendCancel.disabled = true;
     sendStatus();
     try {
-      const result = await request('POST', path,
-        {artifact_id: item.id, artifact_revision: item.revision}, {'Idempotency-Key': key});
-      if (sendingArtifact !== state || workspaceId() !== wid) return;
+      let conversationId = destination.id || state.threads.get(base);
+      if (isAgent && !conversationId) {
+        const opened = await request('POST', base, {title:[...item.title].slice(0, 40).join('')},
+          {'Idempotency-Key':requestKey('new:' + base)});
+        if (!sendCurrent(state)) return;
+        const thread = opened.body.conversation;
+        if (![200, 201].includes(opened.status) || !/^[a-f0-9]{32}$/.test(thread?.id || '') ||
+            thread.workspace_id !== wid || thread.agent_id !== destination.agent_id) {
+          sendStatus(messageFor(opened.body.error, '无法创建智能体对话，请重试。'));
+          return;
+        }
+        conversationId = thread.id;
+        state.threads.set(base, conversationId);
+      }
+      const path = `${base}/${conversationId}/messages`;
+      const result = await request('POST', path, {artifact_id:item.id, artifact_revision:item.revision, ...(note ? {body:note} : {})},
+        {'Idempotency-Key':requestKey(JSON.stringify([path,note]))});
+      if (!sendCurrent(state)) return;
       const accepted = isAgent ? [201, 202].includes(result.status) && result.body?.message?.id
         : [200, 201].includes(result.status);
       if (!accepted) {
@@ -1689,21 +1964,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         return;
       }
       state.pending = false;
-      closeSendDialog();
+      closeSendDialog({restoreFocus:false});
       show('ok', '已发送到「' + destination.label + '」。');
+      const receipt = document.createElement('a');
+      receipt.className = 'send-chat-receipt';
+      receipt.href = conversationChatHref(wid, {...destination,id:conversationId,message_id:result.body.message?.id});
+      receipt.textContent = '在聊天中查看';
+      status.append(receipt);
+      receipt.focus({preventScroll:true});
     } catch {
-      if (sendingArtifact === state && workspaceId() === wid) sendStatus('未能确认发送结果，请选择同一会话重试。');
+      if (sendCurrent(state)) sendStatus('未能确认发送结果，请保留当前附言和接收会话重试。');
     } finally {
       state.pending = false;
       if (sendingArtifact === state || !sendingArtifact) {
         sendConfirm.textContent = '确认发送';
         sendConfirm.disabled = !sendingArtifact?.destination;
+        sendAgent.disabled = sendNote.disabled = false;
         if (sendCancel) sendCancel.disabled = false;
       }
     }
   });
 
-  sendCancel?.addEventListener('click', closeSendDialog);
+  sendCancel?.addEventListener('click', () => closeSendDialog());
   sendDialog?.addEventListener('click', event => {
     if (event.target === sendDialog) closeSendDialog();
   });
@@ -1805,7 +2087,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     else duplicateSubmit.focus();
   });
 
-  function itemMenu(item, onOpen, inScope, path) {
+  function itemMenu(item, onOpen, inScope, path, origin) {
     const wrap = document.createElement('span');
     wrap.className = 'artifact-more-wrap';
     const button = document.createElement('button');
@@ -1869,7 +2151,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       await loadList();
       if (keepFocus && document.activeElement === document.body) newMenuButton?.focus({preventScroll: true});
     });
-    menu.append(send, rename);
+    menu.append(send);
+    if (origin?.href) {
+      const link = document.createElement('a');
+      link.setAttribute('role', 'menuitem');
+      link.className = 'artifact-menu-origin';
+      link.href = origin.href;
+      link.textContent = origin.label;
+      link.addEventListener('click', event => {
+        if (!inScope()) event.preventDefault();
+      });
+      menu.append(link);
+    }
+    menu.append(rename);
     if (canDuplicate(item)) {
       const copy = document.createElement('button');
       copy.type = 'button';
@@ -1965,8 +2259,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       open.addEventListener('click', () => onOpen(item));
       const meta = document.createElement('span');
       meta.className = 'note';
-      const source = item.source && item.source.kind === 'agent_message' ? ' · 消息' : '';
-      meta.textContent = `${kindLabel(item.kind, item.media?.mime)} · ${item.created_by || ''}${source}`;
+      const origin = artifactOrigin(item, workspace);
+      meta.textContent = [kindLabel(item.kind, item.media?.mime), item.created_by, origin?.kind].filter(Boolean).join(' · ');
       row.appendChild(open);
       row.appendChild(meta);
       if (match && !titleMatch) {
@@ -2039,7 +2333,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       const updated = document.createElement('span');
       updated.className = 'artifact-updated';
       updated.textContent = item.updated ? '编辑于 ' + artifactTime(item.updated) : '';
-      row.append(created, updated, itemMenu(item, onOpen, inScope, path));
+      row.append(created, updated, itemMenu(item, onOpen, inScope, path, origin));
       nextRows.push(row);
     }
     if (!preserve) {
@@ -2082,6 +2376,137 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     };
   }
 
+  const recovery = document.getElementById('artifact-draft-recovery');
+  const recoveryMessage = document.getElementById('artifact-draft-message');
+  const recoveryDetails = document.getElementById('artifact-draft-details');
+  const recoveryCopy = document.getElementById('artifact-draft-copy');
+  let draftTimer;
+
+  function draftKey(selection = editor, item = current) {
+    const actor = selection?.account?.id;
+    if (!actor || selection.account !== currentUser || !selection.workspace ||
+        !['document', 'website'].includes(item?.kind)) return '';
+    return DRAFT_STORAGE_PREFIX + JSON.stringify([actor, selection.workspace, item.kind, item.id || null]);
+  }
+
+  function readDraft(key) {
+    if (!key) return null;
+    try {
+      const bin = document.defaultView.sessionStorage;
+      const entry = JSON.parse(bin.getItem(key));
+      if (entry && typeof entry.title === 'string' && entry.title.length <= 80 &&
+          typeof entry.body === 'string' && entry.body.length <= DRAFT_MAX_BODY &&
+          (entry.revision === null || Number.isSafeInteger(entry.revision) && entry.revision > 0) &&
+          Number.isFinite(entry.updated) && Date.now() - entry.updated < DRAFT_MAX_AGE) return entry;
+      if (entry) bin.removeItem(key);
+    } catch {}
+    return null;
+  }
+
+  function removeDraft(key) {
+    if (!key) return;
+    try { document.defaultView.sessionStorage.removeItem(key); } catch {}
+  }
+
+  function renderDraftResume() {
+    const resume = document.getElementById('artifact-draft-resume');
+    if (!resume) return;
+    const scope = {account:currentUser, workspace:workspaceId()};
+    let visible = false;
+    for (const kind of ['document', 'website']) {
+      const button = document.getElementById('resume-draft-' + kind);
+      if (!button) continue;
+      button.hidden = !readDraft(draftKey(scope, {kind}));
+      visible ||= !button.hidden;
+    }
+    resume.hidden = catalogKind === 'meetings' || !visible;
+  }
+
+  function persistDraft() {
+    clearTimeout(draftTimer);
+    const key = draftKey();
+    if (!key || form.hidden || !editor?.cleanDraft) return;
+    const previous = readDraft(key);
+    const revision = current.revision ?? null;
+    // A draft based on an older revision stays available for copying.
+    if (previous && previous.revision !== revision) return;
+    if (!hasEditorDraft()) {
+      removeDraft(key);
+      if (recovery) recovery.hidden = true;
+      return;
+    }
+    const {title, body} = form.elements;
+    if (body.value.length > DRAFT_MAX_BODY || (previous?.title === title.value && previous.body === body.value)) return;
+    try {
+      const bin = document.defaultView.sessionStorage;
+      if (!previous) {
+        const entries = Object.keys(bin).filter(name => name.startsWith(DRAFT_STORAGE_PREFIX))
+          .map(name => ({name, updated:readDraft(name)?.updated})).filter(entry => entry.updated != null)
+          .sort((left, right) => left.updated - right.updated);
+        for (const entry of entries.slice(0, Math.max(0, entries.length - DRAFT_MAX_ENTRIES + 1))) {
+          bin.removeItem(entry.name);
+        }
+      }
+      bin.setItem(key, JSON.stringify({revision, title:title.value, body:body.value, updated:Date.now()}));
+    } catch {}
+  }
+
+  function readEditorRecovery({restore = false} = {}) {
+    if (!recovery) return;
+    recovery.hidden = true;
+    recoveryDetails.hidden = true;
+    recoveryDetails.open = false;
+    recoveryCopy.value = '';
+    const key = draftKey();
+    const entry = readDraft(key);
+    if (!entry) return;
+    if (entry.title === (current.title || '') && entry.body === (current.body || '')) {
+      removeDraft(key);
+      return;
+    }
+    const conflict = entry.revision !== (current.revision ?? null);
+    if (restore && !conflict) {
+      form.elements.title.value = entry.title;
+      form.elements.body.value = entry.body;
+      richDocument.instance?.load(entry.body, current.kind === 'document');
+    }
+    if (!restore && !conflict) return;
+    recoveryMessage.textContent = conflict
+      ? '作品已有新版本。你可以查看并复制先前草稿。'
+      : '已恢复未保存的草稿。保存后会更新这件作品。';
+    recovery.hidden = false;
+    recoveryDetails.hidden = !conflict;
+    if (conflict) recoveryCopy.value = entry.title + '\n\n' + entry.body;
+  }
+
+  function scheduleDraft(event) {
+    if (!draftKey()) return;
+    const target = event.target;
+    if (event.type === 'input' && target !== form.elements.title && target !== form.elements.body &&
+        !target.closest?.('#document-rich, #document-source')) return;
+    if (event.type === 'click' && !target.closest?.('[data-doc-format]')) return;
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(persistDraft, 200);
+  }
+
+  form.addEventListener('input', scheduleDraft);
+  form.addEventListener('click', scheduleDraft);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') persistDraft();
+  });
+  document.defaultView?.addEventListener?.('pagehide', persistDraft);
+  document.getElementById('artifact-draft-discard')?.addEventListener('click', () => {
+    if (!activeEditor(editor) || editor.saving) return;
+    const key = draftKey();
+    const entry = readDraft(key);
+    if (!entry) return;
+    removeDraft(key);
+    if (entry.revision === (current.revision ?? null)) fillEditor(current);
+    else persistDraft();
+    readEditorRecovery();
+    form.elements.title.focus();
+  });
+
   function editorDraftChanged(saved, draft = editorDraft()) {
     return saved && (saved.content !== draft.content || saved.file !== draft.file);
   }
@@ -2097,12 +2522,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     }
     if (!hasEditorDraft()) return true;
     const browser = document.defaultView;
-    return (browser?.confirm || globalThis.confirm)?.call(browser,
+    const discard = (browser?.confirm || globalThis.confirm)?.call(browser,
       '这个作品有未保存的修改。要放弃修改并离开吗？') === true;
+    if (discard) {
+      const key = draftKey();
+      if (readDraft(key)?.revision === (current.revision ?? null)) removeDraft(key);
+      clearTimeout(draftTimer);
+    }
+    return discard;
   }
 
   function warnBeforeLeavingSpace(event) {
     if (!editor?.saving && !hasEditorDraft()) return;
+    persistDraft();
+    const entry = readDraft(draftKey());
+    if (!editor?.saving && entry?.revision === (current.revision ?? null) &&
+        entry.title === form.elements.title.value && entry.body === form.elements.body.value) return;
     event.preventDefault();
     event.returnValue = '';
   }
@@ -2119,15 +2554,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (mobileMarkdown) mobileMarkdown.hidden = !isDocument;
     if (mobileDelete) mobileDelete.hidden = !saved;
     for (const button of mobilePanels.values()) if (button) button.hidden = !saved;
+    syncStudioCopy();
   }
 
   function hideEditor() {
+    workVersion.instance?.close();
     if (pendingDeleteCancel) pendingDeleteCancel();
     closeDuplicateDialog();
+    studioCopy.instance?.close();
     editor?.controller.abort();
     document.defaultView?.removeEventListener?.('beforeunload', warnBeforeLeavingSpace);
     editor = null;
     current = null;
+    clearCreatedShare();
+    clearTimeout(draftTimer);
+    if (recovery) recovery.hidden = true;
+    if (recoveryCopy) recoveryCopy.value = '';
     artifactSendOrigin = null;
     closeSpaceActionDialog();
     if (agentTaskDialog) closeAgentTaskDialog();
@@ -2146,6 +2588,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     form.inert = false;
     editorLoading.hidden = true;
     listPanel.hidden = false;
+    liveLoad.disabled = false;
+    liveCompare.removeAttribute('href');
     if (mobileMenu) mobileMenu.open = false;
     setSaving(false);
   }
@@ -2159,7 +2603,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     for (const id of ['share-once', 'share-empty', 'version-empty', 'revoke-discover', 'artifact-live-update']) {
       document.getElementById(id).hidden = true;
     }
-    for (const id of ['share-once', 'share-list', 'version-list']) document.getElementById(id).textContent = '';
+    for (const id of ['share-list', 'version-list']) document.getElementById(id).textContent = '';
+    clearCreatedShare();
+    document.getElementById('create-share').disabled = false;
+    document.getElementById('share-expires').value = '';
     discoverSlug.value = current?.id ? suggestedDiscoverSlug(current.title) : '';
     if (discoverEditable) discoverEditable.checked = false;
     const canReleaseEditable = nativeCatalog && ['slides','whiteboard'].includes(current?.kind);
@@ -2168,7 +2615,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (editor) {
       editor.discoverSlugEdited = false;
       editor.discoverEditableEdited = false;
+      editor.discoverListing = null;
     }
+    if (publishDiscover) publishDiscover.textContent = '发布到发现页';
+    syncSharingRevisions(current?.revision);
     showDiscoverPublicLink('');
     setDiscoverPending(false);
   }
@@ -2179,7 +2629,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   }
 
   async function openEditor(item, {workspace = workspaceId(), notice, saved = false, focusTitle = false} = {}) {
-    if (!currentUser || !workspace || workspaceId() !== workspace) return;
+    if (!canCreateInWorkspace() || workspaceId() !== workspace) return;
     if (!canLeaveEditor()) return false;
     const target = artifactTargetFromSearch(document.defaultView?.location?.search);
     const catalogView = !listPanel.hidden && !target?.artifact ? {
@@ -2226,6 +2676,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     }
     current = item;
     fillEditor(current);
+    readEditorRecovery({restore:true});
     resetEditorPanels();
     updateMobileActions();
     document.getElementById('remove-artifact').hidden = !current?.id;
@@ -2275,12 +2726,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (discoverEditable) discoverEditable.disabled = pending;
   }
 
+  function syncSharingRevisions(revision) {
+    const saved = Number.isSafeInteger(revision) && revision > 0 ? revision : null;
+    if (shareRevision) shareRevision.textContent = saved ? '将分享当前保存的修订 ' + saved + '。' : '';
+    if (!discoverRevision) return;
+    const listing = editor?.discoverListing;
+    const published = listing?.published_revision;
+    discoverRevision.hidden = !saved;
+    if (!saved) discoverRevision.textContent = '';
+    else if (!listing?.listed) discoverRevision.textContent = '当前保存的修订 ' + saved + '。';
+    else if (!Number.isSafeInteger(published)) discoverRevision.textContent = '当前保存的修订 ' + saved + '。旧发布记录未标注修订。';
+    else discoverRevision.textContent = published === saved ? '发现页公开修订 ' + published + '。'
+      : '发现页公开修订 ' + published + ' · 当前保存的修订 ' + saved;
+  }
+
   function renderDiscoverListing(row, updateSlug = true) {
     const slug = typeof row.slug === 'string' && DISCOVER_SLUG.test(row.slug) ? row.slug : '';
     const listed = row.listed === true && Boolean(slug);
+    if (editor) editor.discoverListing = listed ? row : null;
+    syncSharingRevisions(current?.revision);
     if (updateSlug) discoverSlug.value = slug || suggestedDiscoverSlug(current?.title);
     if (discoverEditable && !editor?.discoverEditableEdited) discoverEditable.checked = listed && row.editable_remix === true;
     if (revokeDiscover) revokeDiscover.hidden = !listed;
+    if (publishDiscover) publishDiscover.textContent = listed ? '更新公开版本' : '发布到发现页';
     const path = '/w/' + slug;
     showDiscoverPublicLink(listed ? (row.path === '/social' + path ? row.path : path) : '');
     panelStatus('discover', listed ? (row.editable_remix === true ? '已公开并允许复制可编辑版本。' : '已公开到发现页。') : '尚未公开到发现页。');
@@ -2312,9 +2780,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     setDiscoverPending(true);
     panelStatus('discover', publish ? '正在发布作品…' : '正在撤回作品…');
     const path = editorPath(selection) + (publish ? '/discover' : '/discover/revoke');
-    const payload = publish ? {slug} : {};
+    const payload = publish ? {slug,revision:current.revision} : {};
     if (publish && discoverEditableField && !discoverEditableField.hidden) {
-      payload.revision = current.revision;
       payload.allow_editable_remix = discoverEditable.checked;
     }
     const result = await request('POST', path, payload, undefined, selection.controller.signal)
@@ -2338,8 +2805,113 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       attachment_type_blocked: '这个文件格式无法公开发布。',
     };
     const code = typeof error === 'string' ? error : error?.code;
+    if (publish && code === 'artifact_changed') displayEditorUpdate({dirty:hasEditorDraft()});
     const fallback = publish ? '无法发布到发现页，请重试。' : '无法从发现页撤回，请重试。';
     panelStatus('discover', messageFor(error, publish && Object.hasOwn(messages, code) ? messages[code] : fallback));
+  }
+
+  function clearCreatedShare() {
+    const once = document.getElementById('share-once');
+    once.hidden = true;
+    delete once.dataset.shareId;
+    document.getElementById('share-url').value = '';
+    document.getElementById('open-share').removeAttribute('href');
+    document.getElementById('share-copy-status').textContent = '';
+  }
+
+  function showShareLink(share) {
+    if (!/^\/share\/[A-Za-z0-9_-]{43}$/.test(share?.path)) return false;
+    const value = new URL(share.path, document.defaultView.location.origin).href;
+    const once = document.getElementById('share-once');
+    document.getElementById('share-url').value = value;
+    document.getElementById('open-share').href = value;
+    document.getElementById('share-copy-status').textContent = '';
+    once.dataset.shareId = share.id;
+    once.hidden = false;
+    return true;
+  }
+
+  async function copyShareLink() {
+    const field = document.getElementById('share-url');
+    const status = document.getElementById('share-copy-status');
+    const value = field.value;
+    if (!value) return;
+    try {
+      await document.defaultView.navigator.clipboard.writeText(value);
+      if (field.value === value) status.textContent = '已复制链接。';
+    } catch {
+      if (field.value !== value) return;
+      field.focus({preventScroll: true});
+      field.select();
+      status.textContent = '已选中链接，请手动复制。';
+    }
+  }
+
+  async function recoverShareLink(selection, path, item, button) {
+    if (!activeEditor(selection) || selection.shareWrite) return;
+    selection.shareWrite = button.disabled = true;
+    panelStatus('share', '正在读取分享链接…');
+    try {
+      const result = await request('POST', path + '/link', {}, undefined, selection.controller.signal)
+        .catch(() => ({status:0,body:{}}));
+      if (!activeEditor(selection)) return;
+      const share = result.body?.share;
+      if (result.status === 200 && share?.id === item.id && showShareLink(share)) {
+        panelStatus('share', '');
+        await copyShareLink();
+      } else {
+        if (result.status === 404 && document.getElementById('share-once').dataset.shareId === item.id) clearCreatedShare();
+        panelStatus('share', messageFor(result.body?.error, '暂时无法读取分享链接，请重试。'));
+      }
+    } finally {
+      selection.shareWrite = false;
+      if (activeEditor(selection)) button.disabled = false;
+    }
+  }
+
+  async function changeShare(selection, path, {create = false, item, button}) {
+    if (!activeEditor(selection) || selection.shareWrite) return;
+    const restoreFocus = document.activeElement === button;
+    selection.shareWrite = true;
+    button.disabled = true;
+    if (!create && document.getElementById('share-once').dataset.shareId === item.id) clearCreatedShare();
+    const expires = Number(document.getElementById('share-expires').value);
+    const payload = create ? {revision:current.revision,...(expires ? {expires_in:expires} : {})} : {};
+    panelStatus('share', create ? '正在创建分享链接…' : '正在撤销分享链接…');
+    try {
+      const result = await request('POST', path, payload,
+        undefined, selection.controller.signal).catch(() => ({status: 0, body: {}}));
+      if (!activeEditor(selection)) return;
+      const share = result.body?.share;
+      if (create && result.body?.error?.code === 'artifact_changed') {
+        displayEditorUpdate({dirty:hasEditorDraft()});
+        panelStatus('share', '已保存的作品版本已更新，请查看后再创建分享链接。');
+        return;
+      }
+      if (create && result.status === 201 && showShareLink(share)) {
+        document.getElementById('copy-share').focus({preventScroll: true});
+        await loadShares();
+        return;
+      }
+      if (!create && result.status === 200 && share?.revoked === true) {
+        await loadShares();
+        if (activeEditor(selection)) panelStatus('share', '分享链接已撤销。');
+        return;
+      }
+      await loadShares();
+      if (activeEditor(selection)) panelStatus('share', create
+        ? '暂未确认创建结果。若列表已有有效分享，可直接复制链接。'
+        : '撤销尚未确认，链接可能仍可访问。请重试撤销。');
+    } finally {
+      selection.shareWrite = false;
+      if (activeEditor(selection)) {
+        button.disabled = false;
+        if (!create && restoreFocus && document.activeElement === document.body) {
+          const row = [...document.getElementById('share-list').children].find(node => node.dataset.shareId === item.id);
+          (row?.querySelector('button') || document.getElementById('create-share')).focus({preventScroll: true});
+        }
+      }
+    }
   }
 
   async function loadShares() {
@@ -2358,28 +2930,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     empty.hidden = items.length > 0;
     for (const item of items) {
       const row = document.createElement('li');
+      row.dataset.shareId = item.id;
       const meta = document.createElement('span');
       meta.className = 'note';
-      meta.textContent = item.revoked ? `已撤销 · ${item.prefix}…` : `有效 · ${item.prefix}…`;
+      const expired = item.expired === true;
+      const state = item.revoked ? '已撤销' : expired ? '已过期' : item.revocation_pending ? '撤销待确认' : '有效';
+      const expiry = item.expires ? ` · 到期 ${artifactTime(item.expires)}` : '';
+      const revision = Number.isSafeInteger(item.revision) ? ` · 修订 ${item.revision}` : '';
+      meta.textContent = `${state} · ${item.prefix}…${revision}${expiry}`;
       row.appendChild(meta);
-      if (!item.revoked) {
+      const path = editorPath(selection, artifact.id) + '/shares/' + item.id;
+      if (item.recoverable && !item.revoked && !expired && !item.revocation_pending) {
+        const copy = document.createElement('button');
+        copy.type = 'button';
+        copy.textContent = '复制链接';
+        copy.addEventListener('click', () => recoverShareLink(selection, path, item, copy));
+        row.appendChild(copy);
+      }
+      if (!item.revoked && !expired) {
         const revoke = document.createElement('button');
         revoke.type = 'button';
-        revoke.textContent = '撤销';
-        revoke.addEventListener('click', async () => {
-          if (!activeEditor(selection)) return;
-          const result = await request('POST', editorPath(selection, artifact.id) + `/shares/${item.id}/revoke`, {})
-            .catch(() => ({status: 0, body: {}}));
-          if (!activeEditor(selection)) return;
-          if (result.status !== 200) {
-            show('error', messageFor(result.body.error, '撤销失败。'));
-            return;
-          }
-          document.getElementById('share-once').hidden = true;
-          document.getElementById('share-once').textContent = '';
-          show('ok', '分享链接已撤销。');
-          await loadShares();
-        });
+        revoke.textContent = item.revocation_pending ? '重试撤销' : '撤销';
+        revoke.addEventListener('click', () => changeShare(selection, path + '/revoke', {item, button: revoke}));
         row.appendChild(revoke);
       }
       list.appendChild(row);
@@ -2391,6 +2963,94 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if(revision)return `${base}/versions/${revision}/export`;
     const format=document.getElementById('export-format')?.value;
     return `${base}/export`+(format && format!=='original'?'?format='+encodeURIComponent(format):'');
+  }
+
+  async function openWorkVersion(selection, artifact, revision, trigger) {
+    const currentSelection = () => activeEditor(selection) && current?.id === artifact.id;
+    if (!currentSelection() || !Number.isSafeInteger(revision) || revision < 1 || revision > 99_999_999) return;
+    try {
+      await workVersion.prepare();
+    } catch {
+      if (currentSelection()) show('error', '无法加载版本预览，请重试。');
+      return;
+    }
+    if (!currentSelection() || !workVersion.instance) return;
+    const workspace = selection.workspace;
+    const href = worksPath() + '?' + new URLSearchParams({workspace, artifact:artifact.id, revision:String(revision)});
+    writeSpaceAddress(href, {fromCatalog:Boolean(spaceAddress?.entry.fromCatalog)});
+    const canRestore = () => nativeCatalog && currentSelection() && current.revision !== revision;
+    workVersion.instance.open({current:currentSelection, id:artifact.id, workspace, revision, title:artifact.title, href, trigger,
+      path:editorPath(selection,artifact.id) + '/versions/' + revision,
+      canRestore,
+      reviewRestore: () => restoreReviewMessage(selection) || {revision:current.revision, key:idempotencyKey()},
+      submitRestore: review => restoreWorkVersion(selection, artifact.id, revision, review),
+    });
+  }
+
+  function restoreReviewMessage(selection) {
+    if (selection.saving || form.inert) return '作品正在保存，请稍候。';
+    if (hasEditorDraft()) return '请先保存当前草稿，再恢复历史版本。';
+    return '';
+  }
+
+  async function restoreWorkVersion(selection, id, to, {revision, key}) {
+    const ownsSelection = () => activeEditor(selection) && current?.id === id;
+    const changed = {conflict:true, message:'当前修订已更新。关闭预览后查看最新版本，再确认恢复。'};
+    if (!ownsSelection() || current.revision !== revision) return changed;
+    const blocked = restoreReviewMessage(selection);
+    if (blocked) return {message:blocked};
+    selection.saving = true;
+    form.inert = true;
+    setSaving(true);
+    try {
+      const path = editorPath(selection, id) + '/restore';
+      const send = () => request('POST', path, {revision,to}, {'Idempotency-Key':key},
+        AbortSignal.any([selection.controller.signal, AbortSignal.timeout(8000)]))
+        .catch(() => ({status:0,body:{}}));
+      const receipt = result => {
+        const {artifact,restore} = result.body || {};
+        return result.status === 200 && artifact?.id === id && artifact.workspace_id === selection.workspace
+          && restore?.base_revision === revision && restore.source_revision === to
+          && [revision, revision+1].includes(restore.result_revision)
+          && Number.isSafeInteger(artifact.revision) && artifact.revision >= restore.result_revision;
+      };
+      const uncertain = result => !result.status || result.status >= 500 || (result.status === 200 && !receipt(result));
+      let result = await send();
+      if (!ownsSelection()) return changed;
+      if (uncertain(result)) result = await send();
+      if (!ownsSelection()) return changed;
+      if (revealRevisionConflict(result)) return changed;
+      if (uncertain(result)) return {uncertain:true, message:'暂未确认服务器是否已恢复。重试会核对同一次请求。'};
+      if (!receipt(result)) return {message:messageFor(result.body?.error, '无法恢复此版本，请重试。')};
+      const next = result.body.artifact;
+      const tools = editorTools(next);
+      if (tools && !tools.instance) {
+        try { await tools.prepare(); }
+        catch {
+          if (ownsSelection()) displayEditorUpdate({failed:true});
+          return {message:'服务器已确认恢复。关闭预览后重新打开作品以查看最新内容。'};
+        }
+      }
+      if (!ownsSelection()) return changed;
+      if (next.revision > current.revision) {
+        current = next;
+        catalog = null;
+        fillEditor(current);
+        readEditorRecovery();
+        liveBanner.hidden = true;
+      }
+      const applied = result.body.restore.result_revision;
+      show('ok', current.revision > applied ? `已恢复为修订 ${applied}。当前为修订 ${current.revision}。`
+        : applied === revision ? `当前修订 ${revision} 已包含所选版本的内容。` : `已恢复为修订 ${applied}。`);
+      if (editorPanels.get('version')?.open) void loadVersions();
+      return {saved:true};
+    } finally {
+      selection.saving = false;
+      if (ownsSelection()) {
+        form.inert = false;
+        setSaving(false);
+      }
+    }
   }
 
   async function loadVersions() {
@@ -2410,9 +3070,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     for (const item of items) {
       const row = document.createElement('li');
       const meta = document.createElement('span');
+      row.dataset.revision = String(item.revision);
       meta.className = 'note';
       meta.textContent = `修订 ${item.revision} · ${item.title || ''} · ${item.created_by || ''}`;
+      if (Number.isSafeInteger(item.restored_from)) meta.textContent += ' · 恢复自修订 ' + item.restored_from;
       row.appendChild(meta);
+      if (typeof document.getElementById('work-version-dialog')?.showModal === 'function') {
+        const preview = document.createElement('button');
+        preview.type = 'button';
+        preview.textContent = '查看';
+        preview.setAttribute('aria-haspopup','dialog');
+        preview.setAttribute('aria-label','查看修订 ' + item.revision);
+        preview.addEventListener('click',()=>{ void openWorkVersion(selection,artifact,item.revision,preview); });
+        row.appendChild(preview);
+      }
       const download = document.createElement('a');
       download.href = exportHref(item.revision);
       download.textContent = '导出';
@@ -2426,28 +3097,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
           if (activeEditor(selection) && current.id === artifact.id) openDuplicateDialog(copySource,copy);
         });
         row.appendChild(copy);
-      }
-      if (item.revision !== current.revision) {
-        const restore = document.createElement('button');
-        restore.type = 'button';
-        restore.textContent = '恢复为新修订';
-        restore.addEventListener('click', async () => {
-          if (!activeEditor(selection) || current.id !== artifact.id) return;
-          const revision = current.revision;
-          const result = await request('POST', editorPath(selection, artifact.id) + '/restore', {revision, to: item.revision})
-            .catch(() => ({status: 0, body: {}}));
-          if (!activeEditor(selection) || current.revision !== revision) return;
-          if (result.status !== 200) {
-            show('error', messageFor(result.body.error, '恢复失败。'));
-            return;
-          }
-          current = result.body.artifact;
-          catalog = null;
-          fillEditor(current);
-          show('ok', `已恢复为修订 ${current.revision}。`);
-          await loadVersions();
-        });
-        row.appendChild(restore);
       }
       list.appendChild(row);
     }
@@ -2496,51 +3145,128 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         return loadList({background: true, signal});
       }
       if (catalog?.state === 'ready' && catalog.activityVersion !== snapshot.version) catalog.state = 'stale';
-      if (!activeEditor(snapshot.selection) || snapshot.artifact !== current?.id || snapshot.selection.saving) return snapshot.version;
-      const banner = document.getElementById('artifact-live-update');
-      const message = document.getElementById('artifact-live-message');
-      const readLatest = document.getElementById('artifact-live-load');
-      const missing = snapshot.revision === null;
-      banner.hidden = !missing && snapshot.revision === current.revision;
-      if (readLatest) readLatest.hidden = missing;
-      const text = missing ? '这件作品已无法访问。此处仍保留你的草稿。' : '作品有新版本。你可以继续编辑，或读取服务器版本。';
-      if (message && message.textContent !== text) message.textContent = text;
+      const selection = snapshot.selection;
+      if (!activeEditor(selection) || snapshot.artifact !== current?.id || selection.saving || selection.loadingRevision) {
+        return snapshot.version;
+      }
+      if (snapshot.revision === null) displayEditorUpdate({missing: true});
+      else if (snapshot.revision === current.revision) liveBanner.hidden = true;
+      else if (snapshot.revision > current.revision) {
+        const dirty = hasEditorDraft();
+        if (dirty || !canRefreshEditor()) displayEditorUpdate({dirty});
+        else {
+          const outcome = await loadEditorRevision(selection, {revision: snapshot.revision, signal});
+          if (outcome === 'failed') return false;
+        }
+      }
       return snapshot.version;
     },
   });
   document.addEventListener?.('visibilitychange', activity.resume);
   activityRetry?.addEventListener('click', activity.check);
 
-  document.getElementById('artifact-live-load')?.addEventListener('click', async () => {
-    const selection = editor;
-    const artifact = current?.id;
-    if (!activeEditor(selection) || !artifact || selection.saving ||
-        !globalThis.confirm?.('读取服务器版本将覆盖编辑器内未保存的草稿。请先复制草稿。继续？')) return;
-    const button = document.getElementById('artifact-live-load');
-    if (button.disabled) return;
-    button.disabled = true;
-    form.inert = true;
-    try {
-      const signal = AbortSignal.any([selection.controller.signal, AbortSignal.timeout(6000)]);
-      const result = await request('GET', editorPath(selection), undefined, undefined, signal)
-        .catch(() => ({status: 0, body: {}}));
-      if (!activeEditor(selection) || current?.id !== artifact) return;
-      if (result.status !== 200 || result.body.artifact?.id !== artifact ||
-          (result.body.artifact.workspace_id && result.body.artifact.workspace_id !== selection.workspace)) {
-        show('error', '服务器作品暂不可读取，已保留你的草稿。');
+  function canRefreshEditor() {
+    // Replacing the editor can move the caret, interrupt a stroke or reset media.
+    return !form.inert && !drawing && !websiteInteractive && current.kind !== 'media' &&
+      !document.activeElement?.closest?.('#editor-form :is(input,textarea,select,[contenteditable="true"])');
+  }
+
+  function displayEditorUpdate({missing = false, dirty = false, failed = false} = {}) {
+    const message = missing ? '这件作品已无法访问，当前内容仍保留在此页。'
+      : failed ? '暂未读取到服务器版本，请重试。'
+      : dirty ? '服务器有新版本，当前草稿仍保留。'
+      : '服务器有新版本。';
+    if (liveMessage.textContent !== message) liveMessage.textContent = message;
+    liveLoad.hidden = missing || Boolean(dirty && !draftKey());
+    liveCompare.hidden = missing;
+    if (!missing) liveCompare.href = worksPath() + '?workspace=' + editor.workspace + '&artifact=' + current.id;
+    liveBanner.hidden = false;
+  }
+
+  async function loadEditorRevision(selection, {revision, signal, manual = false} = {}) {
+    if (!activeEditor(selection) || !current?.id || selection.saving || selection.loadingRevision || form.inert) return;
+    const prior = current;
+    const isCurrent = () => activeEditor(selection) && current === prior && !selection.saving;
+    // A separate tab remains available when the current draft cannot be recovered here.
+    if (manual && hasEditorDraft()) {
+      persistDraft();
+      const entry = readDraft(draftKey());
+      if (entry?.revision !== prior.revision ||
+          entry.title !== form.elements.title.value || entry.body !== form.elements.body.value) {
+        displayEditorUpdate({dirty: true});
+        liveLoad.hidden = true;
+        liveCompare.focus();
         return;
       }
-      current = result.body.artifact;
+      if (!document.defaultView?.confirm?.('切换后，可以在草稿恢复区查看并复制当前草稿。继续？')) return;
+    }
+    selection.loadingRevision = true;
+    if (manual) {
+      liveLoad.disabled = true;
+      form.inert = true;
+    }
+    try {
+      const signals = [selection.controller.signal, AbortSignal.timeout(6000)];
+      if (signal) signals.push(signal);
+      const result = await request('GET', editorPath(selection), undefined, undefined, AbortSignal.any(signals))
+        .catch(() => ({status: 0, body: {}}));
+      if (!isCurrent() || signal?.aborted) return;
+      if (result.status === 404) {
+        displayEditorUpdate({missing: true});
+        return;
+      }
+      const latest = result.body.artifact;
+      if (result.status !== 200 || latest?.id !== prior.id || latest.workspace_id !== selection.workspace ||
+          !Number.isSafeInteger(latest.revision) || latest.revision < (revision ?? prior.revision + 1)) {
+        displayEditorUpdate({dirty: hasEditorDraft(), failed: true});
+        return 'failed';
+      }
+      const tools = editorTools(latest);
+      if (tools && !tools.instance) await tools.prepare();
+      if (!isCurrent() || signal?.aborted) return;
+      if (!manual) {
+        const dirty = hasEditorDraft();
+        if (dirty || !canRefreshEditor()) {
+          displayEditorUpdate({dirty});
+          return;
+        }
+      }
+      current = latest;
       fillEditor(current);
-      document.getElementById('artifact-live-update').hidden = true;
+      readEditorRecovery();
+      liveBanner.hidden = true;
+      if (manual) {
+        form.inert = false;
+        form.elements.title.focus({preventScroll: true});
+        show('ok', '已切换到服务器版本。');
+      }
       for (const [name, panel] of editorPanels) {
         if (panel.open) void panelLoads[name]();
       }
+    } catch {
+      if (!isCurrent() || signal?.aborted) return;
+      displayEditorUpdate({dirty: hasEditorDraft(), failed: true});
+      return 'failed';
     } finally {
-      if (activeEditor(selection)) form.inert = false;
-      button.disabled = false;
+      selection.loadingRevision = false;
+      if (manual && activeEditor(selection)) {
+        form.inert = false;
+        liveLoad.disabled = false;
+      }
     }
-  });
+  }
+
+  liveLoad.addEventListener('click', () => void loadEditorRevision(editor, {manual: true}));
+
+  function revealRevisionConflict(result) {
+    const latest = result.body.error?.current;
+    if (result.status !== 409 || !current?.id || latest?.id !== current.id ||
+        latest.workspace_id !== editor.workspace || !Number.isSafeInteger(latest.revision) ||
+        latest.revision <= current.revision) return false;
+    persistDraft();
+    displayEditorUpdate({dirty: hasEditorDraft()});
+    return true;
+  }
 
   function listStatus(text = '', retry = false) {
     document.getElementById('artifact-list-status').hidden = !text;
@@ -2757,7 +3483,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     return loading.activityVersion;
   }
 
-  function fillWorkspaces(items, selected) {
+  function fillWorkspaces(items, selected, {exact = false} = {}) {
     workspaceSelect.textContent = '';
     for (const item of items) {
       const option = document.createElement('option');
@@ -2766,29 +3492,54 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       workspaceSelect.appendChild(option);
     }
     if (items.some(item => item.id === selected)) workspaceSelect.value = selected;
+    else if (exact) workspaceSelect.value = '';
+    workspaceResolved = true;
+    workspacePending.hidden = true;
+    syncWorkspaceCreation();
     notifications.setWorkspace(workspaceId());
+    studioWorkspaces = items;
+    syncStudioWorkspace();
+  }
+
+  function cancelStudioPreload() {
+    studioPreload?.controller.abort();
+    studioPreload = null;
+  }
+
+  function nextWorkspaceLoad() {
+    cancelStudioPreload();
+    return ++workspaceLoad;
   }
 
   async function load() {
-    const seq = ++workspaceLoad;
+    const seq = nextWorkspaceLoad();
+    workspaceResolved = false;
+    workspacePending.hidden = false;
+    syncWorkspaceCreation();
     activity.setScope('');
     notifications.setWorkspace('');
     const location = document.defaultView?.location;
-    const requested = artifactTargetFromSearch(location?.search);
+    const sharedWork = !location?.search && sharedWorkCopyToken(location?.hash);
+    const linkedStudio = studioTargetFromSearch(location?.search);
+    const requested = linkedStudio ? null : artifactTargetFromSearch(location?.search);
     const fragment = new URLSearchParams((location?.hash || '').slice(1));
     const newKind = newKindFromSearch(location?.search);
-    const linkedWorkspace = requested?.workspace || (catalogKind === 'meetings' || newKind ? fragment.get('workspace') : '');
+    const linkedWorkspace = linkedStudio?.workspace || requested?.workspace || workspaceFromFragment(location?.hash);
     const sessionRequest = request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
+    const studioCode = nativeCatalog && linkedStudio?.workspace ? studio.prepare().then(() => true, () => false) : null;
+    const sharedCopyCode = sharedWork ? sharedWorkCopy.prepare().then(() => true, () => false) : null;
     const initialCatalog = nativeCatalog && catalogKind !== 'meetings' && !newKind &&
-      !requested?.artifact && !requested?.invalid && !catalogQuery()
+      !linkedStudio && !requested?.artifact && !requested?.invalid && !catalogQuery()
       ? request('GET', '/v1/workspaces?scope=personal&include=artifacts&order=recent' +
           (linkedWorkspace ? '&workspace=' + linkedWorkspace : '')).catch(() => null)
       : null;
     const session = await sessionRequest;
     if (seq !== workspaceLoad) return;
     if (session.status === 401) {
+      workspacePending.hidden = true;
       hideEditor();
       currentUser = null;
+      syncStudioWorkspace();
       catalog = null;
       facets = null;
       clearFilters();
@@ -2801,6 +3552,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       return;
     }
     if (session.status !== 200) {
+      workspacePending.hidden = true;
       show('error', messageFor(session.body.error, '无法读取会话。'));
       return;
     }
@@ -2810,6 +3562,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const whoami = document.getElementById('whoami');
     whoami.dataset.username = currentUser.username;
     whoami.textContent = currentUser.username;
+    // The native Studio GET checks team membership itself. Start it alongside
+    // the workspace directory, and use it only for the verified selected team.
+    const namedStudio = nativeCatalog && linkedStudio?.workspace;
+    const prepared = namedStudio ? preloadStudio(studioRequest, namedStudio, linkedStudio.id, currentUser.id) : null;
+    if (prepared) studioPreload = prepared;
     const personalRequest = initialCatalog?.then(result => {
       const items = result?.body?.items;
       if (result?.status !== 200 || !Array.isArray(items) || items.length !== 1) return null;
@@ -2819,7 +3576,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
           (viewer && viewer !== session.body.user.username)) return null;
       return result;
     });
-    let {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100', personalRequest);
+    const sharedPath = '/v1/workspaces?limit=100';
+    let {initial: space, supplemental} = namedStudio
+      ? {initial:await request('GET', sharedPath).catch(() => ({status:0, body:{}})), supplemental:null}
+      : await readWorkspaceChoices(request, sharedPath, personalRequest);
     if (linkedWorkspace && !space.body.items?.some(item => item.id === linkedWorkspace) && supplemental) {
       const shared = await supplemental;
       if (shared.status === 200) space = shared;
@@ -2827,15 +3587,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     }
     if (seq !== workspaceLoad) return;
     if (space.status !== 200) {
+      cancelStudioPreload();
+      workspacePending.hidden = true;
       show('error', '无法读取工作区。');
       return;
     }
     const workspaces = space.body.items || [];
-    fillWorkspaces(workspaces, linkedWorkspace || workspaceId());
+    const personal = sharedWork && workspaces.find(item => item.kind === 'personal');
+    fillWorkspaces(workspaces, personal?.id || linkedWorkspace || workspaceId(), {exact: Boolean(linkedWorkspace)});
     void supplemental?.then(shared => {
       if (seq === workspaceLoad && shared.status === 200) fillWorkspaces(shared.body.items, workspaceId());
     });
     if (!workspaces.length) {
+      cancelStudioPreload();
       hideEditor();
       catalog = null;
       allItems = [];
@@ -2844,23 +3608,58 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       const emptyMessage = document.getElementById('list-empty-message');
       if (emptyMessage) emptyMessage.textContent = '还没有工作区。';
       renderCatalog();
-      if (requested) show('error', '文档链接无效，或你没有访问该工作区的权限。');
+      if (requested || linkedStudio) show('error', '文档链接无效，或你没有访问该工作区的权限。');
       return;
     }
     const emptyMessage = document.getElementById('list-empty-message');
     if (emptyMessage) emptyMessage.textContent = '这个工作区还没有作品。';
     hideEditor();
-    if (catalogKind === 'meetings' && linkedWorkspace && !workspaces.some(item => item.id === linkedWorkspace)) {
-      workspaceSelect.value = '';
-      notifications.setWorkspace('');
-      meetingError = '无法打开此工作区的会议资料。请选择其他工作区。';
-      renderCatalog();
+    if (sharedWork) {
+      void loadList();
+      const ready = await sharedCopyCode;
+      if (seq !== workspaceLoad) return;
+      if (ready && personal && personal.id === workspaceId() && sharedWorkCopy.instance) {
+        sharedWorkCopy.instance.open(personal.id, sharedWork);
+      }
+      else show('error', '无法打开个人空间，请重试。');
       return;
     }
-    if (newKind && linkedWorkspace && !workspaces.some(item => item.id === linkedWorkspace)) {
-      workspaceSelect.value = '';
-      notifications.setWorkspace('');
-      show('error', '你没有访问此工作区的权限。请选择可以访问的工作区。');
+    if (linkedStudio) {
+      if (linkedStudio.invalid || workspaceId() !== linkedStudio.workspace) {
+        cancelStudioPreload();
+        void loadList();
+        show('error', '团队文档链接无效，或你没有访问权限。');
+        return;
+      }
+      void loadList();
+      const codeReady = await studioCode;
+      if (seq !== workspaceLoad) return;
+      if (!codeReady) {
+        cancelStudioPreload();
+        show('error', '无法加载团队协作，请刷新页面重试。');
+        return;
+      }
+      const opening = studio.instance?.open(linkedStudio.id, linkedStudio.revision,
+        linkedStudio.catalog ? spaceAddress?.entry.studioFocus : undefined, prepared);
+      studioPreload = null;
+      if (!await opening) {
+        prepared?.controller.abort();
+        if (seq === workspaceLoad) show('error', '团队文档链接无效，或你没有访问权限。');
+      }
+      return;
+    }
+    if (linkedWorkspace && workspaceId() !== linkedWorkspace && !requested?.artifact) {
+      catalog?.controller?.abort();
+      catalog?.more?.abort();
+      catalog = null;
+      allItems = [];
+      meetingItems = [];
+      meetingError = catalogKind === 'meetings' ? '无法打开此工作区的会议资料。请选择其他工作区。' : '';
+      listStatus();
+      showCatalog();
+      if (!meetingError) show('error', newKind || catalogScope === 'automation'
+        ? '你没有访问此工作区的权限。请选择可以访问的工作区。'
+        : '无法访问此工作区。请选择其他工作区。');
       return;
     }
     if (requested) {
@@ -2872,7 +3671,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       if (requested.artifact) {
         const opening = openEditor({id: requested.artifact}, {workspace: requested.workspace});
         void loadList();
-        await opening;
+        if (await opening && requested.revision) await openWorkVersion(editor,current,requested.revision);
         return;
       }
     }
@@ -2914,8 +3713,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       if (editor) workspaceSelect.value = editor.workspace;
       return;
     }
-    workspaceLoad += 1;
+    nextWorkspaceLoad();
+    syncWorkspaceCreation();
+    closeSendDialog({force:true,restoreFocus:false});
     notifications.setWorkspace(workspaceId());
+    syncStudioWorkspace();
     hideEditor();
     show('', '');
     meetingLoadedFor = '';
@@ -2927,7 +3729,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     filterCreators = [];
     filterSessions = [];
     renderFilterControls();
-    if (catalogKind === 'meetings' || artifactTargetFromSearch(document.defaultView?.location?.search)) syncViewUrl();
+    syncViewUrl();
     void loadList();
   });
   function cancelScheduledSearch() {
@@ -3022,7 +3824,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
 
   function bindCreate(id, start) {
     const button = document.getElementById(id);
-    if (button) button.addEventListener('click', start);
+    button?.addEventListener('click', event => {
+      if (canCreateInWorkspace()) start(event);
+    });
   }
 
   for (const [id, kind] of [
@@ -3037,6 +3841,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     draftKind = 'document';
     openEditor({kind: 'document'});
   });
+
+  for (const kind of ['document', 'website']) {
+    bindCreate('resume-draft-' + kind, () => document.getElementById(newKindButtonId(kind))?.click());
+  }
 
   bindCreate('empty-agent-website', () => { closeNewMenu(); openWebsiteBriefDialog(); });
   bindCreate('new-agent-website', () => { closeNewMenu(); openWebsiteBriefDialog(); });
@@ -3053,7 +3861,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       if (editor && !canLeaveEditor()) return;
       if (editor) hideEditor();
       const kind = button.getAttribute('data-kind') || 'all';
-      const scope = kind === 'meetings' ? 'all' : (catalogScope === 'favorites' || catalogScope === 'memory' || catalogScope === 'mine' ? catalogScope : 'all');
+      const scope = kind === 'meetings' ? 'all' : catalogScope;
       applyView(kind, scope);
       await loadList({reuse: true});
     });
@@ -3228,7 +4036,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   form.addEventListener('submit', async event => {
     event.preventDefault();
     const selection = editor;
-    if (!activeEditor(selection) || !current || form.hidden || selection.saving) return;
+    if (!activeEditor(selection) || !current || form.hidden || selection.saving || form.inert) return;
     if (websiteInteractive) renderWebsitePreview();
     selection.saving = true;
     setSaving(true);
@@ -3343,8 +4151,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       }
     }
     if (!activeEditor(selection)) return;
-    if (result.status === 409) {
-      show('error', '文档已在别处更新，或标题已被占用，请重新打开后再保存。');
+    if (revealRevisionConflict(result)) {
+      show('error', '保存遇到新版本，请先查看服务器版本。');
+      return;
+    }
+    if (result.body.error?.code === 'title_conflict' ||
+        result.body.error?.message === 'A document with this title already exists') {
+      show('error', '这个工作区已有同名作品，请修改标题后保存。');
+      form.inert = false;
+      form.elements.title.focus();
       return;
     }
     if (result.status !== 200 && result.status !== 201) {
@@ -3352,6 +4167,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       return;
     }
     const isNew = !current?.id;
+    const recoveryKey = draftKey();
+    if (readDraft(recoveryKey)?.revision === (current.revision ?? null)) removeDraft(recoveryKey);
     if (artifactSendOrigin?.item === current) artifactSendOrigin.item = result.body.artifact;
     current = result.body.artifact;
     draftKind = current.kind || draftKind;
@@ -3363,6 +4180,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       if (kind === 'media') document.getElementById('media-file').value = '';
       fillEditor(current);
     }
+    if (newerDraft) persistDraft();
+    readEditorRecovery();
     if (isNew) recordEditorAddress(selection, current);
     document.getElementById('artifact-live-update').hidden = true;
     updateMobileActions();
@@ -3739,7 +4558,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const failed = () => ({status: 0, body: {}});
     if (typeof close.focus === 'function') close.focus();
 
-    const listed = await request('GET', '/v1/runtime/tasks').catch(failed);
+    const listed = await request('GET', '/v1/skills/runs').catch(failed);
     if (!active()) return;
     if (listed.status !== 200) {
       note.hidden = false;
@@ -3763,7 +4582,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         if (!active()) return;
         save.disabled = true;
         note.hidden = true;
-        const saved = await request('POST', `/v1/runtime/tasks/${task.id}/artifact`, {workspace_id: workspace}).catch(failed);
+        const saved = await request('POST', `/v1/skills/runs/${task.id}/artifact`, {workspace_id: workspace}).catch(failed);
         if (!active()) return;
         if (saved.status === 200 || saved.status === 201) {
           closeAgentTaskDialog();
@@ -3885,27 +4704,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   publishDiscover?.addEventListener('click', () => changeDiscoverListing(true));
   revokeDiscover?.addEventListener('click', () => changeDiscoverListing(false));
 
-  document.getElementById('create-share').addEventListener('click', async () => {
+  const createShareButton = document.getElementById('create-share');
+  createShareButton.addEventListener('click', () => {
     if (!current || !current.id || !workspaceId()) {
       show('error', '请先保存作品，再创建分享链接。');
       return;
     }
-    const selection = editor;
-    if (!activeEditor(selection)) return;
-    const result = await request('POST', editorPath(selection) + '/shares', {})
-      .catch(() => ({status: 0, body: {}}));
-    if (!activeEditor(selection)) return;
-    if (result.status !== 201) {
-      show('error', messageFor(result.body.error, '无法创建分享链接。'));
-      return;
-    }
-    const share = result.body.share || {};
-    const once = document.getElementById('share-once');
-    once.hidden = false;
-    once.textContent = share.path ? ('链接只显示一次：' + share.path) : '链接已创建，请立即复制。';
-    show('ok', '已创建只读分享链接，完整地址只显示这一次。');
-    await loadShares();
+    if (!activeEditor(editor)) return;
+    void changeShare(editor, editorPath(editor) + '/shares', {create: true, button: createShareButton});
   });
+  document.getElementById('copy-share').addEventListener('click', copyShareLink);
 
   document.getElementById('export-artifact').addEventListener('click', () => {
     if (!current || !current.id || !workspaceId()) {
@@ -3927,9 +4735,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       show('error', messageFor(result.body.error, '退出失败。'));
       return;
     }
-    workspaceLoad += 1;
+    nextWorkspaceLoad();
     hideEditor();
     currentUser = null;
+    syncStudioWorkspace();
     workspaceSelect.textContent = '';
     catalog = null;
     facets = null;
@@ -3948,7 +4757,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   renderFilterControls();
   applyView(initial.kind, initial.scope, {sync: false});
   if (view) {
-    writeSpaceAddress(spaceLocation());
+    if (restoredSpaceEntry) spaceAddress = {url:spaceLocation(), state:previousSpaceState, entry:restoredSpaceEntry};
+    else writeSpaceAddress(spaceLocation());
     view.addEventListener('popstate', async event => {
       if (restoringAddress) {
         restoringAddress = false;
@@ -3958,7 +4768,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       const tracked = next?.session === spaceHistoryId;
       const approved = approvedBack;
       approvedBack = false;
-      if (!approved && !canLeaveEditor()) {
+      if (!approved && (!canLeaveEditor() || studio.instance?.canLeave() === false)) {
         if (spaceAddress) {
           const delta = tracked ? spaceAddress.entry.position - next.position : 0;
           if (delta && typeof view.history?.go === 'function') {
@@ -3971,19 +4781,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       if (tracked) spaceAddress = {url:spaceLocation(), state:event.state, entry:next};
       else writeSpaceAddress(spaceLocation());
       const address = spaceAddress;
-      workspaceLoad += 1;
+      nextWorkspaceLoad();
       hideEditor();
+      sharedWorkCopy.instance?.close();
+      studio.instance?.leaveForNavigation();
       show('', '');
       const catalogView = tracked ? next.catalogView : null;
       const {kind, scope} = catalogView || viewFromSearch(view.location.search);
       applyView(kind, scope, {sync: false});
-      if (artifactTargetFromSearch(view.location.search) || newKindFromSearch(view.location.search)) {
+      const studioTarget = studioTargetFromSearch(view.location.search);
+      if (studio.instance && studioTarget && !studioTarget.invalid && workspaceResolved && workspaceId() === studioTarget.workspace) {
+        void studio.instance.open(studioTarget.id, studioTarget.revision, studioTarget.catalog ? address?.entry.studioFocus : undefined);
+        return;
+      }
+      if (studioTarget || artifactTargetFromSearch(view.location.search) ||
+          newKindFromSearch(view.location.search) || sharedWorkCopyToken(view.location.hash)) {
         void load();
         return;
       }
-      if (catalogView?.workspace && [...workspaceSelect.options].some(option => option.value === catalogView.workspace)) {
-        workspaceSelect.value = catalogView.workspace;
+      const targetWorkspace = catalogView?.workspace || workspaceFromFragment(view.location.hash);
+      if (targetWorkspace && ![...workspaceSelect.options].some(option => option.value === targetWorkspace)) {
+        void load();
+        return;
+      }
+      if (targetWorkspace && workspaceId() !== targetWorkspace) {
+        workspaceSelect.value = targetWorkspace;
         notifications.setWorkspace(workspaceId());
+        syncStudioWorkspace();
       }
       await loadList({reuse: true});
       if (catalogView && main && spaceAddress === address && !listPanel.hidden) {

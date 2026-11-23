@@ -82,6 +82,19 @@ async function applyToBot(rt, botId, items, boundName) {
   }
 }
 
+function hasCurrentSkills(rt, botId, items, boundName) {
+  const bot = rt.botOf(botId)
+  if (!bot) return false
+  const attached = new Set((bot.capabilities ?? []).filter(managed))
+  const wanted = new Map(items.map(item => [boundName(item.id), item]))
+  if (attached.size !== wanted.size) return false
+  const saved = rt.state?.capabilities?.items
+  for (const [name, item] of wanted) {
+    if (!attached.has(name) || !matches(saved?.[name], item)) return false
+  }
+  return true
+}
+
 // Reconcile the existing native roster without selecting a provider or creating a bot.
 export async function reconcileStartupSkills(rt, dataDir, boundName) {
   await rt.load()
@@ -101,7 +114,7 @@ export async function reconcileStartupSkills(rt, dataDir, boundName) {
 
 export function skillLibrary(host, { boundName }) {
   const {store, serial} = libraryEntry(host.featureDir())
-  importJsonBundles({ dataDir: host.dataDir, feature: { name:'skills', importTables:{ imported_skill_heads:[], imported_skill_versions:[], skill_bindings:[], skill_installs:[] } }, store,
+  importJsonBundles({ host, feature: { name:'skills', importTables:{ imported_skill_heads:[], imported_skill_versions:[], skill_bindings:[], skill_installs:[] } }, store,
     apply(d,t) {
       for (const h of t.imported_skill_heads || []) {
         if (d.packages[h.skill_id]) continue
@@ -210,6 +223,15 @@ export function skillLibrary(host, { boundName }) {
   ]
   return { v1:compatHandler(routes), materialForScope: async (payload, call) => {
     if (!call?.internal) throw new Fault(404, 'skills/not-found', 'Internal skill operation')
-    return serial(async () => ({items:await sync(payload?.scope || 'account', payload?.bot_id)}))
+    const scope = payload?.scope || 'account'
+    const nativeBotId = payload?.bot_id
+    if (nativeBotId !== undefined) {
+      const {rt, botId} = await target(scope, nativeBotId)
+      const items = approved(scope, store.read())
+      // Read the committed consent and current roster together. A turn with
+      // no changes needed can proceed while another scope checks access.
+      if (hasCurrentSkills(rt, botId, items, boundName)) return {items}
+    }
+    return serial(async () => ({items:await sync(scope, nativeBotId)}))
   }}
 }

@@ -6,7 +6,7 @@ from pathlib import Path
 import sqlite3
 import stat
 
-from . import custom_mcp, agent_runtime, agents, artifacts, automations, bot_social, composio, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, retired_task_schema, settings, skill_secrets, social, team_directory, teams, skill_installs
+from . import custom_mcp, agents, artifacts, automations, bot_social, composio, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, retired_task_schema, settings, skill_secrets, social, team_directory, teams, skill_installs
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS users (
@@ -53,7 +53,7 @@ class Store:
             if version == 0 and db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchone():
                 raise ValueError('Unrecognized non-empty database; refusing initialization')
             db.execute('PRAGMA journal_mode=WAL')
-            db.executescript('BEGIN IMMEDIATE;\n' + SCHEMA + settings.SCHEMA + members.SCHEMA + automations.SCHEMA + invites.SCHEMA + model_api.SCHEMA + oidc.SCHEMA + skill_installs.SCHEMA + skill_secrets.SCHEMA + teams.SCHEMA + retired_task_schema.SCHEMA + bot_social.SCHEMA + artifacts.SCHEMA + memory.SCHEMA + agents.SCHEMA + conversations.SCHEMA + agent_runtime.SCHEMA + social.SCHEMA + notifications.SCHEMA + discover.SCHEMA + profiles.SCHEMA + onboarding.SCHEMA + personal.SCHEMA + meetings.SCHEMA + gateway.SCHEMA + team_directory.SCHEMA + composio.SCHEMA + custom_mcp.SCHEMA + message_utilities.SCHEMA + skill_packages.SCHEMA + '\nPRAGMA user_version=1;\nCOMMIT;')
+            db.executescript('BEGIN IMMEDIATE;\n' + SCHEMA + settings.SCHEMA + members.SCHEMA + automations.SCHEMA + invites.SCHEMA + model_api.SCHEMA + oidc.SCHEMA + skill_installs.SCHEMA + skill_secrets.SCHEMA + teams.SCHEMA + retired_task_schema.SCHEMA + bot_social.SCHEMA + artifacts.SCHEMA + memory.SCHEMA + agents.SCHEMA + conversations.SCHEMA + social.SCHEMA + notifications.SCHEMA + discover.SCHEMA + profiles.SCHEMA + onboarding.SCHEMA + personal.SCHEMA + meetings.SCHEMA + gateway.SCHEMA + team_directory.SCHEMA + composio.SCHEMA + custom_mcp.SCHEMA + message_utilities.SCHEMA + skill_packages.SCHEMA + '\nPRAGMA user_version=1;\nCOMMIT;')
 
     @contextmanager
     def connect(self):

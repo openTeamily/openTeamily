@@ -12,9 +12,12 @@ export default function messenger(host) {
   let replier
   const agentReplier = () => (replier ??= createAgentReplier({ bs: bs(), host, stateFile: defaultStateFile(host), log: host.log ?? (() => {}) }))
   const automaticReplies = typeof host.runtime === 'function' && process.env.OPENTEAMILY_SOCIAL_AGENTS !== '0'
+  // Native users can create a shared group before opening the OpenTeamily page.
+  if (host.currentRuntime?.()) bs()
+  else if (typeof host.runtime === 'function') void host.runtime().then(() => bs(), () => {})
   if (automaticReplies) agentReplier().start()
   const wakeReplies = () => {
-    if (automaticReplies) void agentReplier().once().catch(error => host.log?.(`agent inbox: ${error?.code ?? 'error'}`))
+    if (automaticReplies) agentReplier().wake()
   }
   return {
     pages: ['messenger'],

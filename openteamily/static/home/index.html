@@ -7,29 +7,35 @@
   <title>首页 · OpenTeamily</title>
   <link rel="stylesheet" href="/shell/app.css">
   <link rel="stylesheet" href="/home/app.css">
-  <link rel="stylesheet" href="/look/app.css">
+  <link rel="stylesheet" href="/home/auth.css">
+  <link rel="modulepreload" href="/shell/dsbot-api.mjs">
+  <link rel="modulepreload" href="/shell/meeting-link.mjs">
+  <link rel="modulepreload" href="/shell/thumb.mjs">
+  <link rel="modulepreload" href="/home/runtime-readiness.mjs">
   <script type="module" src="/shell/app.mjs"></script>
   <script type="module" src="/home/app.mjs"></script>
 </head>
-<body class="app-workspace">
+<body class="app-workspace home-page">
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
     <a class="brand-mark" href="/" title="OpenTeamily 首页" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
-    <a href="/" title="首页" aria-label="首页"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z"/></svg><span class="rail-label">首页</span></a>
-    <a href="/chat" title="聊天" aria-label="聊天"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H9l-5 4V4Z"/></svg><span class="rail-label">聊天</span></a>
-    <a href="/agents" title="智能体" aria-label="智能体"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14v12H5z M9 3h6 M12 3v4 M8 12h1 M15 12h1 M9 16h6"/></svg><span class="rail-label">智能体</span></a>
-    <a href="/skills" title="技能" aria-label="技能"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Z M8.5 10.5h7 M8.5 14h4.5"/></svg><span class="rail-label">技能</span></a>
-    <a href="/automations" title="自动化" aria-label="自动化"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg><span class="rail-label">自动化</span></a>
-    <a href="/memory" title="记忆" aria-label="记忆"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4a4 4 0 0 0-4 4v8a4 4 0 0 0 4 4 M16 4a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4 M8 8h8 M8 12h8 M8 16h8 M12 4v16"/></svg><span class="rail-label">记忆</span></a>
-    <a href="/space" title="作品" aria-label="作品"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg><span class="rail-label">作品</span></a>
-    <a href="/meetings" title="会议" aria-label="会议"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v14H4z M8 3v4 M16 3v4 M4 10h16"/></svg><span class="rail-label">会议</span></a>
-    <a href="/discover" title="发现" aria-label="发现"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg><span class="rail-label">发现</span></a>
-    <span class="rail-spacer"></span>
-    <a href="/profile" class="rail-signed-in" hidden title="我的资料" aria-label="我"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7a4 4 0 1 0 8 0 4 4 0 0 0-8 0 M4 21v-2a8 8 0 0 1 16 0v2"/></svg><span class="rail-label">我</span></a>
+    <div class="rail-actions">
+      <a href="/" title="首页" aria-label="首页"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z"/></svg><span class="rail-label">首页</span></a>
+      <a href="/chat" title="聊天" aria-label="聊天"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H9l-5 4V4Z"/></svg><span class="rail-label">聊天</span></a>
+      <a href="/agents" title="智能体" aria-label="智能体"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14v12H5z M9 3h6 M12 3v4 M8 12h1 M15 12h1 M9 16h6"/></svg><span class="rail-label">智能体</span></a>
+      <a href="/skills" title="技能" aria-label="技能"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Z M8.5 10.5h7 M8.5 14h4.5"/></svg><span class="rail-label">技能</span></a>
+      <a href="/automations" title="自动化" aria-label="自动化"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg><span class="rail-label">自动化</span></a>
+      <a href="/memory" title="记忆" aria-label="记忆"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4a4 4 0 0 0-4 4v8a4 4 0 0 0 4 4 M16 4a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4 M8 8h8 M8 12h8 M8 16h8 M12 4v16"/></svg><span class="rail-label">记忆</span></a>
+      <a href="/space" title="作品" aria-label="作品"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg><span class="rail-label">作品</span></a>
+      <a href="/meetings" title="会议" aria-label="会议"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v14H4z M8 3v4 M16 3v4 M4 10h16"/></svg><span class="rail-label">会议</span></a>
+      <a href="/discover" title="发现" aria-label="发现"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg><span class="rail-label">发现</span></a>
+      <a href="/download" title="下载" aria-label="下载"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12 m-5-5 5 5 5-5 M4 16v5h16v-5"/></svg><span class="rail-label">下载</span></a>
+    </div>
     <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换浅色或深色。会写入已有外观设置；按钮在深色下显示「深色」。点击后的标签变化未经 Teamily 核实。">浅色</button>
-    <a href="/download" title="下载" aria-label="下载"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12 m-5-5 5 5 5-5 M4 16v5h16v-5"/></svg><span class="rail-label">下载</span></a>
     <div class="account-slot" hidden>
-      <button type="button" id="account-menu-button" class="account-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="账户菜单">账户</button>
+      <button type="button" id="account-menu-button" class="account-trigger" data-account-icon aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" aria-label="账户菜单" title="账户菜单">
+        <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7a4 4 0 1 0 8 0 4 4 0 0 0-8 0 M4 21v-2a8 8 0 0 1 16 0v2"/></svg>
+      </button>
       <div id="account-menu" class="account-menu" role="menu" hidden>
         <p id="account-identity" class="account-identity"></p>
         <a href="/profile" role="menuitem" aria-label="查看我的资料">查看我的资料</a>
@@ -53,24 +59,43 @@
       </div>
     </div>
   </nav>
+  <header class="auth-header">
+    <a class="auth-brand" href="/">
+      <svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg>
+      OpenTeamily
+    </a>
+    <a href="/discover">发现</a>
+  </header>
   <p id="status" role="status"></p>
   <main id="main">
-  <section id="login-panel" hidden>
-    <h2>登录</h2>
-    <form id="login-form" method="post" action="/v1/auth/login">
-      <label>用户名 <input type="text" id="username" name="username" required autocomplete="username" maxlength="64"></label>
-      <label>密码 <input id="password" name="password" type="password" required autocomplete="current-password" minlength="12" maxlength="256"></label>
-      <button type="submit">登录</button>
+  <section id="login-panel" class="auth-content" aria-labelledby="login-title" hidden>
+    <h1 id="login-title">登录或创建账户</h1>
+    <div class="auth-card">
+    <nav class="auth-switch" aria-label="账户入口">
+      <span aria-current="page">登录</span>
+      <a class="login-register-button" href="/register">注册新账户</a>
+    </nav>
+    <form id="login-form" class="auth-form" method="post" action="/v1/auth/login">
+      <div class="auth-field">
+        <label for="username">用户名</label>
+        <input type="text" id="username" name="username" required autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="64">
+      </div>
+      <div class="auth-field">
+        <label for="password">密码</label>
+        <input id="password" name="password" type="password" required autocomplete="current-password" minlength="12" maxlength="256">
+      </div>
+      <p id="login-feedback" class="auth-feedback" role="status"></p>
+      <button class="auth-submit" type="submit">登录</button>
     </form>
-    <a id="login-return-discover" href="/discover" hidden>返回发现</a>
-    <p><a class="login-register-button" href="/register">注册新账户</a> · 需要管理员开放本实例注册；普通账号不会成为平台管理员。</p>
+    </div>
+    <a id="login-return-discover" class="auth-back" href="/discover" hidden>返回发现</a>
+    <footer class="auth-legal"><a href="/terms">服务条款</a><a href="/privacy">隐私政策</a></footer>
   </section>
   <section id="main-panel" hidden>
+    <span id="whoami" hidden></span>
     <header class="home-hero-head">
       <div>
-        <p class="home-kicker">OpenTeamily 工作台</p>
         <h1 id="home-greeting">欢迎回来</h1>
-        <p class="note">这里汇总你最近的对话、作品和会议；所有数字都来自本实例的真实记录，不生成推荐内容。</p>
       </div>
       <label class="home-workspace">工作区
         <select id="home-workspace" disabled></select>
@@ -92,37 +117,39 @@
     </section>
 
     <p id="home-onboarding" class="note home-banner" hidden>继续设置工作背景和自动化偏好。<a href="/onboarding">打开新手引导</a></p>
-    <a id="home-notifications" class="home-banner home-notifications" href="/chat" hidden></a>
+    <a id="home-notifications" class="home-banner home-notifications" href="/chat" data-home-workspace-path="/chat" hidden></a>
     <section id="home-stats" class="home-stats" aria-label="工作区概览" hidden></section>
 
     <nav id="home-actions" class="home-actions" aria-label="快捷操作">
-      <a href="/chat"><strong>新对话</strong><span>和智能体或成员聊天</span></a>
-      <a href="/agents"><strong>智能体</strong><span>查看工作区目录</span></a>
-      <a href="/automations"><strong>自动化</strong><span>管理模板和运行</span></a>
-      <a href="/space"><strong>作品</strong><span>文档、幻灯片和看板</span></a>
-      <a href="/meetings"><strong>会议</strong><span>纪要和行动项</span></a>
+      <a href="/chat" data-home-workspace-path="/chat"><strong>新对话</strong><span>和智能体或成员聊天</span></a>
+      <a href="/agents" data-home-workspace-path="/agents"><strong>智能体</strong><span>查看工作区目录</span></a>
+      <a href="/automations" data-home-workspace-path="/automations"><strong>自动化</strong><span>管理模板和运行</span></a>
+      <a href="/space" data-home-workspace-path="/space"><strong>作品</strong><span>文档、幻灯片和看板</span></a>
+      <a href="/meetings" data-home-workspace-path="/meetings"><strong>会议</strong><span>纪要和行动项</span></a>
+      <a href="/memory"><strong>记忆</strong><span>笔记和待办</span></a>
       <a href="/skills"><strong>技能</strong><span>浏览技能库</span></a>
       <a href="/discover"><strong>发现</strong><span>浏览公开目录</span></a>
     </nav>
 
     <div class="home-columns">
       <section class="home-card" aria-labelledby="home-conversations-title">
-        <header class="home-card-head"><h2 id="home-conversations-title">最近对话</h2><a href="/chat">打开聊天</a></header>
+        <header class="home-card-head"><h2 id="home-conversations-title">最近对话</h2><a href="/chat" data-home-workspace-path="/chat">打开聊天</a></header>
         <ul id="home-conversations" class="home-list"></ul>
         <p id="home-conversations-empty" class="note" hidden>还没有对话。打开聊天开始吧。</p>
       </section>
       <section class="home-card" aria-labelledby="home-artifacts-title">
-        <header class="home-card-head"><h2 id="home-artifacts-title">最近作品</h2><a href="/space">打开作品库</a></header>
+        <header class="home-card-head"><h2 id="home-artifacts-title">最近作品</h2><a href="/space" data-home-workspace-path="/space">打开作品库</a></header>
         <ul id="home-artifacts" class="home-list"></ul>
         <p id="home-artifacts-empty" class="note" hidden>还没有作品。去作品库新建一个吧。</p>
       </section>
       <section class="home-card" aria-labelledby="home-meetings-title">
-        <header class="home-card-head"><h2 id="home-meetings-title">最近会议</h2><a href="/meetings">打开会议</a></header>
+        <header class="home-card-head"><h2 id="home-meetings-title">最近会议</h2><a href="/meetings" data-home-workspace-path="/meetings">打开会议</a></header>
         <ul id="home-meetings" class="home-list"></ul>
         <p id="home-meetings-empty" class="note" hidden>还没有会议纪要。</p>
       </section>
     </div>
   </section>
   </main>
+  <nav class="mobile-primary-nav" aria-label="主导航"></nav>
 </body>
 </html>

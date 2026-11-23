@@ -3,13 +3,13 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createServer } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
 import { EventEmitter, once } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { setTimeout as delay } from 'node:timers/promises'
 import {
   createBridge, createBridgeServer, forwardModel, runTurn, startBridge, MODEL_ID,
-  userModelOverride, MODEL_OVERRIDE,
+  userModelOverride, MODEL_OVERRIDE, prepareNativeChat, textOnlyCompletion,
 } from '../runtime/flybot-image/ds-bot-bridge.mjs'
 
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)))
@@ -196,6 +196,209 @@ test('a provisioned DS-Bot starts its native proxy and runs a turn without polli
   assert.deepEqual(origins, [])
 })
 
+test('sending to a live mapped part selects its route without changing the foreground or touching other parts', async () => {
+  const foreground = 'foreground'
+  const target = 'open-21'
+  const parts = Array.from({length: 22}, (_, index) => ({sessionId:'open-' + index, segments:[]}))
+  const bot = {id:'bot', sessionId:foreground, openParts:parts, appliedEffort:'high'}
+  const operations = []
+  const ctx = new EventEmitter()
+  const session = {id:target}
+  const rt = {
+    botOf: id => id === bot.id ? bot : undefined,
+    chatOf: () => bot.sessionId,
+    chatOwners: new Map([[foreground,bot.id], ...parts.map(part => [part.sessionId,bot.id]), ['someone-else','other']]),
+    pastOwners: new Map(),
+    async switchPart() { assert.fail('an open part does not require switching') },
+    async applyModel(subject, options) {
+      assert.equal(subject,bot)
+      assert.notEqual(options?.force,true)
+      operations.push('check model')
+      return 'openteamily/openteamily-model'
+    },
+    async selectSessionModel(id, route) {
+      assert.equal(id,target)
+      assert.deepEqual(route,{provider:'openteamily',model:'openteamily-model',reasoningEffort:'high'})
+      operations.push('select target')
+    },
+    async applyPermission(subject, id) {
+      assert.equal(subject,bot)
+      assert.equal(id,target)
+      operations.push('apply target permission')
+    },
+    async sendUser({sessionId,requestId}) {
+      assert.equal(sessionId,target)
+      operations.push('send to target')
+      ctx.emit('session/event', session, {type:'turn/start',data:{turn:1}})
+      ctx.emit('session/event', session, {type:'user/message',data:{source:{rpcId:requestId}}})
+      ctx.emit('session/event', session, {type:'assistant/message',data:{text:'selected part reply'}})
+      ctx.emit('session/event', session, {type:'turn/end',data:{turn:1}})
+    },
+    displayItems: (id, events) => {
+      assert.equal(id,target)
+      return events.filter(event => event.type==='assistant/message').map(event=>({kind:'bot',text:event.data.text}))
+    },
+  }
+  await assert.rejects(prepareNativeChat(rt,bot.id,'someone-else'),/no longer belongs/)
+  await prepareNativeChat(rt,bot.id,target)
+  const reply = await runTurn(rt,ctx,bot.id,'one test prompt','target-request',500,[],{sessionId:target})
+  assert.deepEqual(operations,['check model','select target','apply target permission','send to target'])
+  assert.equal(bot.sessionId,foreground)
+  assert.equal(reply.text,'selected part reply')
+  assert.equal(reply.sessionId,target)
+  rt.chatOwners.set(target,'other')
+  await assert.rejects(runTurn(rt,ctx,bot.id,'one test prompt','stale-target',500,[],{sessionId:target}),/no longer active/)
+  assert.equal(operations.length,4)
+})
+
+test('the model proxy aborts the upstream request when DS-Bot disconnects before any response bytes', {timeout:3000}, async t => {
+  const arrived = Promise.withResolvers(), disconnected = Promise.withResolvers()
+  const upstream = createServer((req,res) => {
+    req.resume()
+    res.once('close', disconnected.resolve)
+    arrived.resolve()
+  })
+  const upstreamPort = await listen(upstream)
+  t.after(() => { upstream.closeAllConnections(); return close(upstream) })
+  const log = []
+  const model = {base_url:'https://cancel-provider.example/v1',model:'test',api_key:'synthetic'}
+  const proxy = createBridgeServer({token:'local-only',startupModel:() => model}, {
+    log:line => log.push(line), forward: (api,raw,res) => forwardModel(api,raw,res,{
+      httpsRequester: (url, options, callback) => httpRequest(`http://127.0.0.1:${upstreamPort}${url.pathname}`,options,callback),
+    }),
+  })
+  const port = await listen(proxy)
+  t.after(() => { proxy.closeAllConnections(); return close(proxy) })
+  const controller = new AbortController()
+  const result = assert.rejects(fetch(`http://127.0.0.1:${port}/v1/chat/completions`,{method:'POST',body:'{}',
+    headers:{authorization:'Bearer local-only'},signal:controller.signal}),{name:'AbortError'})
+  await arrived.promise
+  controller.abort()
+  await result
+  await disconnected.promise
+  assert.deepEqual(log,[])
+})
+
+test('aborting a mapped text turn waits for its exact request echo and native settlement', async () => {
+  const ctx = new EventEmitter()
+  const listen = ctx.on.bind(ctx)
+  ctx.on = (type, listener) => { listen(type, listener); return () => ctx.off(type, listener) }
+  const bot = {id:'bot',sessionId:'foreground',openParts:[{sessionId:'target'}]}
+  const session = {id:'target'}, foreground = {id:'foreground'}
+  const stopped = Promise.withResolvers(), children = Promise.withResolvers()
+  const calls = []
+  const rt = {
+    botOf: () => bot,
+    chatOf: () => bot.sessionId,
+    chatOwners:new Map([[session.id,bot.id],[foreground.id,bot.id]]),
+    pastOwners:new Map(), live:new Map(),
+    sendUser({sessionId,requestId}) { calls.push(['send',sessionId,requestId]) },
+    async resolveAgent(id) {
+      assert.equal(id,session.id)
+      return {session,cancel(reason) { calls.push(['cancel',reason]); stopped.resolve() }}
+    },
+    stopSubagents(id) { calls.push(['children',id]); return children.promise },
+    displayItems: () => [],
+  }
+  const already = AbortSignal.abort()
+  await assert.rejects(runTurn(rt,ctx,bot.id,'Never send','pre-aborted',1000,[],{sessionId:session.id,signal:already}),{name:'AbortError'})
+  const controller = new AbortController()
+  const turn = runTurn(rt,ctx,bot.id,'Stop this one','current-request',1000,[],{sessionId:session.id,signal:controller.signal})
+  let completed = false
+  const final = assert.rejects(turn,{name:'AbortError'}).then(() => { completed = true })
+  const event = (source,type,data) => ctx.emit('session/event',source,{type,data})
+  controller.abort()
+  event(foreground,'turn/start',{turn:41})
+  event(foreground,'user/message',{source:{rpcId:'current-request'}})
+  rt.live.set(session.id,{turn:2})
+  event(session,'turn/start',{turn:2})
+  event(session,'user/message',{source:{rpcId:'unrelated-prior-turn'}})
+  await delay(0)
+  assert.deepEqual(calls,[['send',session.id,'current-request']])
+  event(session,'turn/end',{turn:2})
+  rt.live.set(session.id,{turn:3})
+  event(session,'turn/start',{turn:3})
+  event(session,'user/message',{source:{rpcId:'current-request'}})
+  await stopped.promise
+  assert.deepEqual(calls,[['send',session.id,'current-request'],['children',session.id],['cancel',{kind:'user'}]])
+  assert.equal(completed,false)
+  event(session,'turn/end',{turn:3})
+  await delay(0)
+  assert.equal(completed,false)
+  children.resolve()
+  await final
+  assert.equal(ctx.listenerCount('session/event'),0)
+})
+
+test('a delayed abort lookup cannot cancel a newer turn on the same Session', async () => {
+  const ctx = new EventEmitter()
+  const session = {id:'target'}
+  const lookup = Promise.withResolvers(), resolveCalled = Promise.withResolvers()
+  const controller = new AbortController()
+  const rt = {
+    chatOf: () => session.id,
+    botOf: () => ({id:'bot',sessionId:session.id}),
+    chatOwners:new Map([[session.id,'bot']]), pastOwners:new Map(), live:new Map([[session.id,{turn:1}]]),
+    sendUser({requestId}) {
+      ctx.emit('session/event',session,{type:'turn/start',data:{turn:1}})
+      ctx.emit('session/event',session,{type:'user/message',data:{source:{rpcId:requestId}}})
+    },
+    resolveAgent() { resolveCalled.resolve(); return lookup.promise },
+    stopSubagents() { assert.fail('a newer turn must be left running') },
+    displayItems: () => [],
+  }
+  const result = assert.rejects(runTurn(rt,ctx,'bot','Original','current-request',1000,[],{signal:controller.signal}), {name:'AbortError'})
+  controller.abort()
+  await resolveCalled.promise
+  rt.live.set(session.id,{turn:2})
+  ctx.emit('session/event',session,{type:'turn/end',data:{turn:1}})
+  lookup.resolve({session,cancel() { assert.fail('a newer turn must be left running') }})
+  await result
+})
+
+test('an owned historical segment can still be opened using the native runtime', async () => {
+  const bot = {id:'bot', sessionId:'current', segments:[{sessionId:'previous'}]}
+  const rt = {
+    botOf: () => bot,
+    chatOf: () => bot.sessionId,
+    chatOwners: new Map([['current','bot']]),
+    pastOwners: new Map([['previous',{botId:'bot'}]]),
+    async switchPart(id, sessionId) {
+      assert.equal(id,'bot')
+      assert.equal(sessionId,'previous')
+      bot.sessionId = sessionId
+      rt.chatOwners.set(sessionId,id)
+      rt.pastOwners.delete(sessionId)
+    },
+    applyModel: async()=>'openteamily/openteamily-model',
+    selectSessionModel: async id=>assert.equal(id,'previous'),
+  }
+  await prepareNativeChat(rt,'bot','previous')
+  assert.equal(bot.sessionId,'previous')
+})
+
+test('the managed group turn hands off promptly when its exact native agent is disposed', async t => {
+  for (const terminal of ['disposed event', 'aborted end']) {
+    await t.test(terminal, async () => {
+      const {rt, ctx} = fakeRuntime()
+      const session = {id:'chat1'}
+      rt.sendUser = async () => {}
+      const result = runTurn(rt, ctx, 'bot1', 'group reply', 'group-request', 1000, [],
+        {managedGroup:true, onProgress:() => {}})
+      const completion = assert.rejects(result, {code:'agents/empty-reply'})
+      const event = (type, data) => ctx.emit('session/event', session, {type,data})
+      event('turn/start', {turn:7})
+      event('user/message', {turn:7, source:{rpcId:'group-request'}})
+      ctx.emit('agent/disposed', {agent:{id:session.id, session:{id:session.id}}})
+      assert.equal(ctx.listenerCount('session/event'), 1)
+      if (terminal === 'disposed event') ctx.emit('agent/disposed', {agent:{id:session.id, session}})
+      else event('turn/end', {turn:7, reason:{kind:'aborted',reason:{kind:'disposed'}}})
+      assert.equal(ctx.listenerCount('session/event'), 0)
+      await completion
+    })
+  }
+})
+
 test('native reply progress matches the admitted request, session, turn and attempt', async () => {
   const {rt, ctx, log} = fakeRuntime()
   const session = {id:'chat1'}
@@ -376,4 +579,121 @@ test('B4: the account model override from @openteamily/web wins, failures fall b
   assert.equal(userModelOverride(scope), null)
   scope[MODEL_OVERRIDE] = () => null
   assert.equal(userModelOverride(scope), null)
+})
+
+test('a held native turn does not delay another Bot, and keeps its own part protected', {timeout: 2000}, async () => {
+  const {rt, ctx, log} = fakeRuntime()
+  const bridge = createBridge(rt, {port:1})
+  const started = Promise.withResolvers()
+  const slowReply = Promise.withResolvers()
+  rt.chatOf = botId => botId === 'main-bot' ? 'automation-session' : 'private-session'
+  rt.sendUser = async ({sessionId, requestId}) => {
+    log.push(requestId)
+    const session = {id:sessionId}
+    ctx.emit('session/event', session, {type:'turn/start', data:{turn:1}})
+    ctx.emit('session/event', session, {type:'user/message', data:{source:{rpcId:requestId}}})
+    if (requestId === 'automation-run') {
+      started.resolve()
+      await slowReply.promise
+    }
+    ctx.emit('session/event', session, {type:'assistant/message', data:{text:'reply for ' + sessionId}})
+    ctx.emit('session/event', session, {type:'turn/end', data:{turn:1}})
+  }
+  const turn = (botId, requestId) => bridge.exclusive(() => runTurn(rt, ctx, botId, 'controlled input', requestId, 500), botId)
+  const automation = turn('main-bot','automation-run')
+  try {
+    await started.promise
+    const previousPart = turn('main-bot','main-bot-followup')
+    const privateChat = await turn('personal-bot','private-send')
+    assert.equal(privateChat.text,'reply for private-session')
+    assert.deepEqual(log,['automation-run','private-send'])
+    slowReply.resolve()
+    assert.equal((await automation).text,'reply for automation-session')
+    assert.equal((await previousPart).text,'reply for automation-session')
+    assert.deepEqual(log,['automation-run','private-send','main-bot-followup'])
+  } finally {
+    slowReply.resolve()
+  }
+})
+
+test('a roster-wide change fences current and later Bot work even if a turn fails', {timeout: 2000}, async () => {
+  const bridge = createBridge(fakeRuntime().rt, {port:1})
+  const running = Promise.withResolvers()
+  const turn = Promise.withResolvers()
+  const adopt = Promise.withResolvers()
+  const started = Promise.withResolvers()
+  const first = bridge.exclusive(() => { running.resolve(); return turn.promise },'main-bot')
+  await running.promise
+  const failed = assert.rejects(first, /fixture failure/)
+  const migration = bridge.exclusive(() => { started.resolve(); return adopt.promise })
+  let otherStarted = false
+  const later = bridge.exclusive(() => { otherStarted = true },'personal-bot')
+  try {
+    await delay(0)
+    assert.equal(otherStarted,false)
+    turn.reject(new Error('fixture failure'))
+    await failed
+    await started.promise
+    await delay(0)
+    assert.equal(otherStarted,false)
+    adopt.resolve()
+    await migration
+    await later
+    assert.equal(otherStarted,true)
+  } finally {
+    turn.resolve()
+    adopt.resolve()
+  }
+})
+
+test('parallel native preparations apply a changed provider capability once', async () => {
+  const fake = fakeRuntime()
+  const bridge = createBridge(fake.rt, {port:1})
+  fake.bind(bridge.state)
+  let model = 'text-only'
+  bridge.state.startupModel = () => ({model})
+  const updates = []
+  fake.rt.saveProviderModels = async ({models}) => { updates.push(models[0].input) }
+  await bridge.prepareModel()
+  model = 'DeepSeek-V4.1-Flash-1017'
+  await Promise.all([bridge.prepareModel(), bridge.prepareModel()])
+  assert.deepEqual(updates,[['text','image']])
+})
+
+test('isolated text-only requests stream answer text without tools, history, or reasoning', async () => {
+  const seen = []
+  const server = createBridgeServer(
+    {token:'synthetic', startupModel:() => ({model:'fixture'})},
+    {forward:async (_model, raw, response) => {
+      const request = JSON.parse(String(raw))
+      seen.push(request)
+      if (!request.stream) {
+        response.writeHead(200, {'content-type':'application/json'})
+        response.end(JSON.stringify({choices:[{message:{content:'JSON result'}}]}))
+        return
+      }
+      response.writeHead(200, {'content-type':'text/event-stream'})
+      response.write(': comment\r\ndata: {"choices":[{"delta":{"reasoning_content":"private thought"}}]}\r\n\r\n')
+      const bytes = Buffer.from('data: {"choices":[{"delta":{"content":"🌿 Plan"}}]}\r\n\r\n')
+      const pivot = bytes.indexOf(0xf0) + 2
+      response.write(bytes.subarray(0,pivot))
+      await delay(5)
+      response.write(bytes.subarray(pivot))
+      if (request.messages.at(-1).content === 'incomplete') { response.end(); return }
+      response.end('data: {"choices":[{"delta":{"content":" approved"}}]}\n\n' +
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n')
+    }},
+  )
+  const port = await listen(server)
+  const bridge = {baseURL:'http://127.0.0.1:'+port+'/v1',state:{token:'synthetic'},async setup() {}}
+  try {
+    const snapshots = []
+    assert.equal(await textOnlyCompletion(bridge,'file excerpt',{system:'Member agent',onProgress:text=>snapshots.push(text)}),'🌿 Plan approved')
+    assert.deepEqual(snapshots,['🌿 Plan','🌿 Plan approved'])
+    assert.deepEqual(seen[0],{model:MODEL_ID,stream:true,messages:[
+      {role:'system',content:'Member agent'},{role:'user',content:'file excerpt'},
+    ]})
+    assert.equal(await textOnlyCompletion(bridge,'summary'),'JSON result')
+    await assert.rejects(textOnlyCompletion(bridge,'incomplete',{onProgress() {}}),/ended early/)
+  } finally { await close(server) }
 })

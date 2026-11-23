@@ -19,7 +19,7 @@ class Element {
 }
 
 const document = {createElement: (tag) => new Element(tag)};
-const LOOK = {color: '天空蓝', expression: '微笑', headwear: '耳机', glasses: '无', hand: '咖啡杯'};
+const LOOK = {color: '天空蓝', expression: '微笑', headwear: '耳机', glasses: '圆框眼镜', hand: '笔记本'};
 
 test('validLook accepts only one value per look field', () => {
   assert.equal(validLook(LOOK), true);
@@ -37,8 +37,7 @@ test('createLookAvatar renders data attributes and decorative parts', () => {
   assert.equal(avatar.attributes['aria-hidden'], 'true');
   assert.deepEqual({...avatar.dataset}, LOOK);
   assert.deepEqual(avatar.children.map((node) => node.className), [
-    'look-head', 'look-eye eye-left', 'look-eye eye-right', 'look-mouth',
-    'look-hat', 'look-glasses', 'look-hand',
+    'look-portrait', 'look-glasses', 'look-hand',
   ]);
   assert.equal(avatar.textContent, '');
   assert.equal(createLookAvatar(null, document), null);
