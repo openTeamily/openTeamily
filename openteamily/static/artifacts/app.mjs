@@ -596,6 +596,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   ].map(id => document.getElementById(id))].filter(Boolean);
   const search = document.getElementById('search');
   const clearSearch = document.getElementById('clear-artifact-search');
+  const resetArtifactSearch = document.getElementById('reset-artifact-search');
   const nativeCatalog = servedByDsBot(document);
   const pageMore = document.getElementById('more-artifacts');
   const pageFooter = document.getElementById('artifact-pagination');
@@ -1771,6 +1772,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (emptyAutomation) emptyAutomation.hidden = !showAutomation;
     if (emptyMeetings) emptyMeetings.hidden = !showMeetings;
     if (emptyMatches) emptyMatches.hidden = !noMatches;
+    if (resetArtifactSearch && noMatches) {
+      resetArtifactSearch.textContent = search.value.trim()
+        ? appliedFilters() ? '清除搜索和筛选' : '清除搜索'
+        : '清除筛选';
+    }
     if (emptyKind) emptyKind.hidden = showAllEmpty || showStarred || showMemory || showAutomation || showMeetings || noWorkspace || noMatches;
     if (emptyMessage) emptyMessage.hidden = !noWorkspace;
     if (newWebsite) newWebsite.hidden = !(emptyKind && !emptyKind.hidden && catalogKind === 'website');
@@ -2238,7 +2244,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         head = document.createElement('li');
         head.className = 'artifact-list-head';
         head.setAttribute('aria-hidden', 'true');
-        for (const label of ['名称', '来源', '创建时间', '最近动态']) {
+        for (const label of ['标题', '来源', '创建时间', '最近动态', '操作']) {
           const cell = document.createElement('span');
           cell.textContent = label;
           head.append(cell);
@@ -2287,6 +2293,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       const cover = document.createElement('span');
       cover.className = 'artifact-cover';
       cover.setAttribute('aria-hidden', 'true');
+      cover.addEventListener('click', () => {
+        // The title remains the single keyboard target for opening this work.
+        open.focus({preventScroll: true});
+        open.click();
+      });
       const mime = item.media && item.media.mime ? String(item.media.mime) : '';
       const thumb = item.preview ? renderThumb(document, item.preview) : null;
       if (thumb) {
@@ -3822,6 +3833,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     return updateSearch(true);
   }
   clearSearch?.addEventListener('click', resetSearch);
+  resetArtifactSearch?.addEventListener('click', () => {
+    clearFilters();
+    return resetSearch();
+  });
   search.addEventListener('keydown', event => {
     if (event.isComposing || event.keyCode === 229) return;
     if (event.key === 'Escape' && search.value) {
@@ -3937,17 +3952,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       renderCatalog();
     });
   }
-  for (const button of document.querySelectorAll('#layout-toggle [data-layout]')) {
-    button.addEventListener('click', () => {
-      catalogLayout = button.getAttribute('data-layout') || 'grid';
-      for (const item of document.querySelectorAll('#layout-toggle [data-layout]')) {
-        const selected = item.getAttribute('data-layout') === catalogLayout;
-        item.setAttribute('aria-selected', selected ? 'true' : 'false');
-        item.setAttribute('aria-pressed', selected ? 'true' : 'false');
-      }
-      renderCatalog();
-    });
+  const layoutTabs = [...document.querySelectorAll('#layout-toggle [data-layout]')];
+  function selectLayout(button) {
+    catalogLayout = applyArtifactLayout(document.getElementById('artifact-list'), button.dataset.layout);
+    for (const tab of layoutTabs) {
+      const selected = tab === button;
+      tab.setAttribute('aria-selected', String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+    }
   }
+  layoutTabs.forEach((button, index) => {
+    button.addEventListener('click', () => selectLayout(button));
+    button.addEventListener('keydown', event => {
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      const last = layoutTabs.length - 1;
+      let next;
+      switch (event.key) {
+        case 'Home': next = 0; break;
+        case 'End': next = last; break;
+        case 'ArrowLeft': next = index === 0 ? last : index - 1; break;
+        case 'ArrowRight': next = index === last ? 0 : index + 1; break;
+        default: return;
+      }
+      event.preventDefault();
+      selectLayout(layoutTabs[next]);
+      layoutTabs[next].focus();
+    });
+  });
   const collapseButton = document.getElementById('dir-collapse');
   const expandButton = document.getElementById('dir-expand');
   if (collapseButton) {

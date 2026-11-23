@@ -168,6 +168,43 @@ class AutoProvisionPollTests(unittest.TestCase):
         self.assertEqual(sorted(started), sorted(assigned))
         self.assertEqual([row['instance_id'] for row in result['results']], sorted(assigned))
 
+    def test_new_signup_uses_the_spare_worker_of_an_active_poll(self):
+        client = self.start_http()
+        _, cold = self.auto_instance()
+        self.cfg['auto_instances'] = {'image': base.IMAGE, 'healthcheck': None}
+        self.cfg['instances'] = {}
+        self.cfgpath.write_text(json.dumps(self.cfg))
+        entered, release, late_started = Event(), Event(), Event()
+
+        def hold_start(_worker, iid):
+            claim = client.claim(iid)
+            if iid == cold:
+                entered.set()
+                self.assertTrue(release.wait(6))
+            job = claim['job']
+            client.leased_call(iid, claim, 'observe', observed='running', process_ref='c' * 32)
+            if iid != cold:
+                late_started.set()
+            return {'status': 'observed', 'instance_id': iid, 'observed': 'running'}
+
+        with patch.object(ManagerWorker, 'run_once', new=hold_start), ThreadPoolExecutor(max_workers=1) as poller:
+            future = poller.submit(self.poll)
+            try:
+                self.assertTrue(entered.wait(2))
+                _, late = self.auto_instance('dana', '127.0.0.10')
+                self.assertTrue(late_started.wait(3), 'the new signup waited for another owner')
+                self.assertFalse(future.done())
+            finally:
+                release.set()
+            code, result = future.result(timeout=5)
+
+        self.assertEqual(code, 0, result)
+        self.assertEqual([row['instance_id'] for row in result['results']], [cold, late])
+        with self.store.connect() as db:
+            self.assertEqual([(row['instance_id'], row['status']) for row in db.execute(
+                'SELECT instance_id,status FROM runtime_jobs WHERE instance_id IN (?,?) ORDER BY instance_id',
+                (cold, late))], [(iid, 'succeeded') for iid in sorted((cold, late))])
+
     def test_route_repair_for_a_running_owner_proceeds_during_another_owners_start(self):
         client = self.start_http()
         _, cold = self.auto_instance()

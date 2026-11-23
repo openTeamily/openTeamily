@@ -3342,6 +3342,26 @@ body.app-workspace .mobile-inbox-heading h1 {
   border-start-start-radius: .375rem;
   box-shadow: var(--ot-shadow-sm);
 }
+#message-list > li[data-reply-progress]:has(> .reply-preview[hidden]) {
+  width: max-content;
+  max-width: 100%;
+  padding: .125rem .375rem;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+#message-list > li[data-reply-progress]:has(> .reply-preview[hidden]) > .role { display: none; }
+#message-list > li[data-reply-progress]:has(> .reply-preview[hidden]) > .reply-state {
+  display: block;
+  margin: 0;
+  overflow: hidden;
+  color: var(--ot-muted);
+  font-size: .8125rem;
+  font-weight: 500;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 #message-list > li > .role:not(.visually-hidden) {
   margin: 0 0 .25rem;
   color: var(--ot-accent-hover);

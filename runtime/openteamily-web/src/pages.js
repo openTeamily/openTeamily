@@ -38,6 +38,7 @@ const PAGE_PACKAGE_ROOTS = [
 const PAGE_MANIFEST = '.chat-assets-v1.json'
 const PAGE_PACKAGE_PATH = /^\/chat\/assets\/([a-f0-9]{32})(\/[^?#]+)$/
 const PAGE_ENTRY_RESOURCE = /((?:src|href)=")(\/[a-z][a-z-]*\/[A-Za-z0-9._-]+\.(?:css|mjs|js))"/g
+const CHAT_STARTUP_ENTRY = '<script type="module" src="/chat/startup.mjs" async fetchpriority="high"></script>'
 
 function matchesValidator(request, etag) {
   return (request.headers.get('if-none-match')?.split(',') ?? []).some(value => {
@@ -47,6 +48,15 @@ function matchesValidator(request, etag) {
 }
 
 const digestOf = data => createHash('sha256').update(data).digest('hex')
+
+async function loadChatStartup(root) {
+  const file = join(root, 'chat', 'startup.mjs')
+  if (await realpath(file) !== file) return null
+  const source = (await readFile(file, 'utf8')).replace(/\r\n?/g, '\n')
+  if (/<\/script[\s/>]/i.test(source)) return null
+  const hash = createHash('sha256').update(source).digest('base64')
+  return {source, policy: `script-src 'self' 'sha256-${hash}'`}
+}
 
 async function scanPageAssets(root) {
   const hashes = []
@@ -154,7 +164,7 @@ function markShellAppearance(html, values) {
 }
 
 export function createPageHandler({ pagesDir, identity, getSystemLanguage, getShellSettings }) {
-  let root, localeModule, chatMessages, pagePackage
+  let root, localeModule, chatMessages, pagePackage, chatStartup
   const packageFor = pageRoot => pagePackage ??= loadPagePackage(pageRoot).catch(() => {
     pagePackage = undefined
     return null
@@ -208,10 +218,18 @@ export function createPageHandler({ pagesDir, identity, getSystemLanguage, getSh
         const indexPage = parts.length === 2 && parts[1] === 'index.html'
         const shell = getShellSettings && indexPage
           ? await Promise.resolve().then(getShellSettings).catch(() => null) : null
-        if (indexPage && PAGE_PACKAGE_ROOTS.includes(parts[0])) {
-          const current = await packageFor(pageRoot)
-          if (current) html = html.replace(PAGE_ENTRY_RESOURCE, (literal, prefix, asset) =>
-            current.assets.has(asset) ? prefix + current.base + asset + '"' : literal)
+        const earlyChat = parts[0] === 'chat' && indexPage && html.includes(CHAT_STARTUP_ENTRY)
+          ? (chatStartup ??= loadChatStartup(pageRoot).catch(() => null)) : null
+        const [current, startup] = await Promise.all([
+          indexPage && PAGE_PACKAGE_ROOTS.includes(parts[0]) ? packageFor(pageRoot) : null, earlyChat,
+        ])
+        if (current) html = html.replace(PAGE_ENTRY_RESOURCE, (literal, prefix, asset) =>
+          (startup && asset === '/chat/startup.mjs') || !current.assets.has(asset)
+            ? literal : prefix + current.base + asset + '"')
+        if (startup) {
+          // Start the initial signed reads before the shell's module graph loads.
+          html = html.replace(CHAT_STARTUP_ENTRY, () => `<script type="module" async>${startup.source}</script>`)
+          headers['content-security-policy'] = startup.policy
         }
         if ((shell || getSystemLanguage) && indexPage && ['chat', 'settings'].includes(parts[0])) {
           localeModule ??= import(pathToFileURL(join(pageRoot, 'shell', 'system-locale.mjs')).href).catch(() => null)

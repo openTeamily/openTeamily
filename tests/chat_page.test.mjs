@@ -1124,41 +1124,59 @@ test('a native reply streams as plain text without rebuilding history or changin
   } finally { restore(); }
 });
 
-test('an already running native reply resumes in its existing bubble and loads the final history once', async t => {
+test('a running native reply preserves its partial text during reconnect and loads the final history once', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
   const key = 'msg-reloaded-reply';
   const user = {id: 'saved-user', role: 'user', body: '等待中的问题', client_key: key};
   const reply = {id: 'saved-reply', role: 'assistant', status: 'running', client_key: key};
   let historyReads = 0;
   let polls = 0;
+  const snapshots = [
+    {state:'running', revision:1, phase:'thinking', text:''},
+    {state:'running', revision:2, phase:'writing', text:'正在继续回复'},
+    null,
+    null,
+    {state:'running', revision:3, phase:'writing', text:'正在继续回复，连接已恢复'},
+    {state:'succeeded'},
+  ];
   const {doc, el, restore, fetcher} = nativeReplyChat((path, _opts, scope) => {
     if (path === '?limit=50') {
       historyReads += 1;
-      const current = polls < 3 ? reply : {...reply, status: 'succeeded', body: '已保存的答复'};
+      const current = polls < snapshots.length ? reply : {...reply, status: 'succeeded', body: '已保存的答复'};
       return json(200, {...scope, items: [user, current]});
     }
-    assert.equal(path, '/reply-progress?key=' + key + '&after=' + polls);
-    polls += 1;
-    return json(200, polls === 1 ? {state:'running', revision:1, phase:'thinking', text:''}
-      : polls === 2 ? {state:'running', revision:2, phase:'writing', text:'正在继续回复'} : {state:'succeeded'});
+    assert.equal(path, '/reply-progress?key=' + key + '&after=' + [0,1,2,2,2,3][polls]);
+    const snapshot = snapshots[polls++];
+    return snapshot ? json(200, snapshot) : json(502, {});
   });
   try {
     await mount(doc, {fetcher});
     const list = el('message-list');
     const pending = list.children.at(-1);
+    const heading = pending.children.find(node => node.className === 'reply-state');
     assert.equal(pending.dataset.messageId, reply.id);
     t.mock.timers.tick(400); await settle();
     assert.equal(list.children.at(-1), pending);
-    assert.equal(pending.children.find(node => node.className === 'reply-state').textContent, '正在思考');
+    assert.equal(heading.textContent, '助手 正在思考…');
     t.mock.timers.tick(50); await settle();
     assert.equal(pending.children.at(-1).textContent, '正在继续回复');
+    t.mock.timers.tick(50); await settle();
+    assert.equal(heading.textContent, '正在生成回复');
+    t.mock.timers.tick(400); await settle();
+    assert.equal(heading.textContent, '正在重新连接回复…');
+    assert.equal(pending.children.at(-1).textContent, '正在继续回复');
+    assert.equal(list.children.at(-1), pending);
+    assert.equal(historyReads, 1);
+    t.mock.timers.tick(400); await settle();
+    assert.equal(heading.textContent, '正在生成回复');
+    assert.equal(pending.children.at(-1).textContent, '正在继续回复，连接已恢复');
     t.mock.timers.tick(50); await settle();
     assert.deepEqual(list.children.map(node => node.dataset.messageId), [user.id, reply.id]);
     assert.equal(list.children.at(-1).dataset.replyProgress, undefined);
     assert.ok(descendants(list.children.at(-1)).some(node => node.textContent === '已保存的答复'));
     t.mock.timers.tick(3000); await settle();
     assert.equal(historyReads, 2);
-    assert.equal(polls, 3);
+    assert.equal(polls, snapshots.length);
   } finally { restore(); }
 });
 
@@ -4382,6 +4400,62 @@ test('an interrupted group send checks for its exact receipt and retries the ori
     assert.equal(el('chat-body').value,newer);
     assert.equal(fixture.messages().filter(id => id === saved.id).length,1);
   } finally {
+    restore();
+  }
+});
+
+test('a native group send releases the next message only after activity confirms its own exact receipt', async t => {
+  t.mock.timers.enable({apis:['setTimeout']});
+  const fixture = linkedChatFixture(`#workspace=${linkTeam}&social=${linkSocial}`);
+  const {doc, el, calls, routes, restore} = fixture;
+  const base = linkBase(linkTeam);
+  const activity = base + '/social/conversations?view=activity';
+  const path = base + linkSocialPath + '/messages';
+  const receiptPath = path + '?limit=50';
+  const heldResponse = Promise.withResolvers();
+  const keys = [];
+  const first = {id:'otm_' + 'B'.repeat(26), workspace_id:linkTeam, conversation_id:linkSocial,
+    body:'第一条已保存的群消息', seq:10, created:10};
+  const second = {id:'otm_' + 'C'.repeat(26), workspace_id:linkTeam, conversation_id:linkSocial,
+    body:'第二条群消息', seq:11, created:11};
+  const snapshot = (version, last_seq) => json(200, {
+    version, items:[{id:linkSocial, last_seq, activity_version:version}],
+  });
+  routes.set(activity, () => snapshot('other-message', 9));
+  routes.set(activity + '&since=other-message', () => snapshot('own-message', 10));
+  routes.set(receiptPath, () => json(200, {
+    items:[{...first, client_key:keys[0], user_id:calls.filter(call => call.path === receiptPath).length === 1 ? bob : alice}],
+  }));
+  const fetcher = async (url, options = {}) => {
+    if (url !== path || options.method !== 'POST') return fixture.fetcher(url, options);
+    const key = options.headers['Idempotency-Key'];
+    keys.push(key);
+    if (JSON.parse(options.body).body === first.body) return heldResponse.promise;
+    return json(201, {message:{...second, client_key:key, user_id:alice}});
+  };
+  const send = async body => {
+    el('chat-body').value = body;
+    await fire(el('chat-form'),'submit',{preventDefault() {}});
+    assert.equal(el('chat-body').value,'');
+  };
+  try {
+    await mount(doc,{fetcher});
+    await send(first.body);
+    await send(second.body);
+    assert.equal(keys.length, 1);
+    t.mock.timers.tick(2000); await settle();
+    assert.equal(keys.length, 1, 'another sender cannot confirm an active send');
+    assert.equal(fixture.messages().includes(first.id), false);
+    t.mock.timers.tick(2000); await settle();
+    assert.equal(keys.length, 2);
+    assert.notEqual(keys[0],keys[1]);
+    assert.deepEqual(fixture.messages(), [linkSocialLatest,first.id,second.id]);
+    heldResponse.resolve(json(502,{}));
+    await settle();
+    assert.deepEqual(fixture.messages(), [linkSocialLatest,first.id,second.id]);
+    assert.equal(calls.filter(call => call.path === receiptPath).length, 2);
+  } finally {
+    heldResponse.resolve(json(502,{}));
     restore();
   }
 });
