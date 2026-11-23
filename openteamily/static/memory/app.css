@@ -999,28 +999,35 @@ body.app-workspace #overview-panel .graph-stage,
 }
 .page-history-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
 .page-history-head h2 { margin: 0; font-size: 0.95rem; }
-.page-history-head button {
-  height: 1.7rem; padding: 0 0.55rem; border-radius: 999px;
+.page-history-head button, .page-history-secondary {
+  min-height: 2.25rem; padding: 0.35rem 0.65rem; border-radius: 999px;
   border: 1px solid var(--ot-line); background: var(--ot-surface);
-  color: var(--ot-muted); font-size: 0.72rem;
+  color: var(--ot-ink); font-size: 0.78rem;
 }
-#page-history-list { list-style: none; margin: 0.5rem 0; padding: 0; display: grid; gap: 0.25rem; }
+#page-history-list { list-style: none; margin: 0.75rem 0; padding: 0; display: grid; gap: 0.3rem; }
 .page-history-item {
-  width: 100%; padding: 0.4rem 0.5rem; border-radius: 0.4rem; border: 1px solid transparent;
+  display: grid; gap: 0.2rem; width: 100%; padding: 0.55rem 0.65rem;
+  border-radius: 0.5rem; border: 1px solid transparent;
   background: var(--ot-bg-accent); color: var(--ot-ink);
-  font-size: 0.78rem; text-align: left; line-height: 1.35;
+  font-size: 0.82rem; text-align: left; line-height: 1.35; overflow-wrap: anywhere;
 }
 .page-history-item:hover, .page-history-item:focus-visible { border-color: var(--ot-line); }
-.page-history-preview { margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px dashed var(--ot-line); }
-.page-history-preview h3 { margin: 0 0 0.35rem; font-size: 0.8rem; color: var(--ot-muted); }
+.page-history-item span { color: var(--ot-muted); }
+.page-history-preview { margin-top: 0.65rem; padding-top: 0.65rem; border-top: 1px solid var(--ot-line); }
+.page-history-preview h3 { margin: 0.75rem 0 0.4rem; font-size: 0.9rem; overflow-wrap: anywhere; }
 .page-history-preview pre {
-  margin: 0 0 0.5rem; max-height: 12rem; overflow: auto; white-space: pre-wrap;
-  font: inherit; font-size: 0.8rem; color: var(--ot-ink);
+  margin: 0 0 0.65rem; max-height: min(42vh, 24rem); overflow: auto; white-space: pre-wrap;
+  padding: 0.7rem; border-radius: 0.5rem; background: var(--ot-bg-accent);
+  font: inherit; font-size: 0.85rem; color: var(--ot-ink); overflow-wrap: anywhere;
 }
+#page-history-list-status:empty, #page-history-status:empty, .page-history-preview pre:empty { display: none; }
 #page-history-restore {
-  height: 1.9rem; padding: 0 0.75rem; border-radius: 999px;
+  min-height: 2.5rem; padding: 0.45rem 0.85rem; border-radius: 999px;
   border: 0; background: var(--ot-accent); color: var(--ot-on-accent);
   font-size: 0.78rem; font-weight: 650;
+}
+@media (max-width: 700px) {
+  .page-history-head button, .page-history-secondary, #page-history-restore { min-height: 2.75rem; }
 }
 .editor-export-status { margin: 0; align-self: center; font-size: 0.7rem; color: var(--ot-muted); }
 .editor-toolbar {

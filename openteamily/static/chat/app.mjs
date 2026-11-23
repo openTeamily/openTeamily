@@ -2655,6 +2655,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function resumeOpenSession(target) {
     if (target.source !== currentSource || target.cid !== currentConversation?.id ||
         (target.source === 'agent' && target.agent !== currentAgent?.id)) return false;
+    const returningFromList = narrowScreen() && document.body.classList.contains('sessions-open');
     if (sessionTransition?.pending) socialOpen += 1;
     clearSessionTransition();
     setSessionsOpen(false);
@@ -2664,6 +2665,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!pollTimer && !socialHistory?.readingHistory) scheduleSocialPoll(currentConversation);
     } else if (!syncReplyProgress() && lastAgentItems.some(waitingAgentReply) && !pollTimer) schedulePoll();
     if (narrowScreen()) document.getElementById('chat-title').focus({preventScroll:true});
+    if (returningFromList && currentSource === 'agent') refreshForegroundPrivate();
     return true;
   }
 

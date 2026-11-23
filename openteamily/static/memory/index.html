@@ -291,7 +291,7 @@
         <div class="editor-top-actions">
           <button type="button" id="dream-page" title="找出这一页可以合并的重复段落；不接受不会改动原文">做梦</button>
           <button type="button" id="memory-share-group" aria-haspopup="dialog" hidden>分享到来源群</button>
-          <button type="button" id="page-history-open" title="查看此页的历史版本">历史</button>
+          <button type="button" id="page-history-open" aria-controls="page-history" aria-expanded="false" title="查看此页的历史版本">历史</button>
           <button type="button" id="page-export" disabled title="打开一页记忆后才能导出为 Markdown。">导出</button>
           <p id="page-export-status" class="note editor-export-status" hidden></p>
         </div>
@@ -306,19 +306,26 @@
       </section>
       <p id="memory-page-chat-source" class="note" hidden><a id="memory-page-chat-link">查看来源消息</a></p>
       <section id="page-history" class="page-history" aria-labelledby="page-history-title" hidden>
-        <header class="page-history-head">
-          <h2 id="page-history-title">历史</h2>
+        <div class="page-history-head">
+          <h2 id="page-history-title" tabindex="-1">版本历史</h2>
           <button type="button" id="page-history-close">关闭</button>
-        </header>
-        <p class="note">回滚会把那一版的内容写成新版本，旧版本不会被删除。</p>
-        <ul id="page-history-list"></ul>
-        <p id="page-history-empty" class="note" hidden>还没有历史版本。保存一次后，之前的版本会出现在这里。</p>
-        <section id="page-history-preview" class="page-history-preview" aria-live="polite" hidden>
-          <h3 id="page-history-preview-title"></h3>
+        </div>
+        <div id="page-history-browse">
+          <ul id="page-history-list" aria-busy="false"></ul>
+          <p id="page-history-empty" class="note" hidden>保存后的旧版本会出现在这里。</p>
+          <button type="button" id="page-history-more" class="page-history-secondary" hidden>加载更早版本</button>
+          <button type="button" id="page-history-retry" class="page-history-secondary" hidden>重试读取历史</button>
+          <p id="page-history-list-status" class="note" role="status"></p>
+        </div>
+        <section id="page-history-preview" class="page-history-preview" aria-labelledby="page-history-preview-title" hidden>
+          <button type="button" id="page-history-preview-back" class="page-history-secondary">返回版本列表</button>
+          <h3 id="page-history-preview-title" tabindex="-1"></h3>
           <pre id="page-history-preview-body"></pre>
-          <button type="button" id="page-history-restore">回滚到此版本</button>
+          <p id="page-history-status" class="note" role="status"></p>
+          <button type="button" id="page-history-preview-retry" class="page-history-secondary" hidden>重试读取此版本</button>
+          <button type="button" id="page-history-restore" aria-describedby="page-history-restore-note" hidden>恢复此版本</button>
+          <p id="page-history-restore-note" class="note" hidden>恢复会生成一个新的版本。</p>
         </section>
-        <p id="page-history-status" role="status"></p>
       </section>
       <section id="dream-panel" class="memory-dream" aria-label="整理建议" hidden>
         <p id="dream-summary" class="note"></p>

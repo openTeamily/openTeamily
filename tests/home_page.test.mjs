@@ -192,6 +192,59 @@ test('runtime startup uses the ready result of setup without polling again and r
   assert.equal(pendingSignupSession(view), null);
 });
 
+test('capacity is a signed-in Chat state and rechecking does not provision until there is room', async () => {
+  const {document, read, view} = homeFixture('/chat');
+  document.cookie = 'ot_dev_csrf=expected-csrf';
+  rememberSignupSession(view, alice);
+  const requests = [];
+  const reply = (body, status = 200) => ({status, json: async () => body});
+  let retry;
+  let state = 'capacity';
+  let reloaded = false;
+  read('runtime-retry').addEventListener = (type, handler) => { if (type === 'click') retry = handler; };
+  view.location.reload = () => { reloaded = true; };
+  await mountRuntimeStarting(document, {fetcher: async (path, opts) => {
+    const method = opts.method || 'GET';
+    requests.push([method, path]);
+    if (path === '/v1/auth/runtime-readiness') return reply({state, user_id:alice});
+    assert.equal(path, '/v1/personal-agent');
+    assert.equal(opts.headers['X-CSRF-Token'], 'expected-csrf');
+    return reply({personal_agent:{runtime_provisioning:{readiness:'ready'}}}, 201);
+  }});
+  assert.equal(read('runtime-title').textContent, '专属智能体名额已满');
+  assert.match(read('runtime-status').textContent, /账户已登录.*联系管理员/);
+  assert.equal(read('runtime-progress').hidden, true);
+  assert.equal(read('runtime-retry').textContent, '重新检查');
+  await retry();
+  assert.deepEqual(requests, [
+    ['GET','/v1/auth/runtime-readiness'], ['GET','/v1/auth/runtime-readiness'],
+  ]);
+  assert.equal(pendingSignupSession(view), alice);
+  state = 'setup';
+  await retry();
+  assert.deepEqual(requests.slice(2), [['GET','/v1/auth/runtime-readiness'], ['POST','/v1/personal-agent']]);
+  assert.equal(reloaded, true);
+});
+
+test('Home shows the capacity reason without another provisioning attempt after signup', async () => {
+  const {document, read, view} = homeFixture();
+  rememberSignupSession(view, alice);
+  const calls = [];
+  let retry;
+  read('status').append = element => { retry = element; };
+  mount(document, {fetcher: async (path,{method}) => {
+    calls.push([method,path]);
+    return {status: 200,json: async () => ({user:{id:alice,username:'alice'},home:{runtime_state:'capacity'}})};
+  }});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls, [['GET','/v1/auth/session?include=home']]);
+  assert.equal(read('login-panel').hidden, true);
+  assert.equal(read('main-panel').hidden, true);
+  assert.match(read('status').textContent, /名额已满.*账户已登录.*联系管理员/);
+  assert.equal(retry.textContent, '重新检查');
+  assert.equal(takeSignupSession(view), null);
+});
+
 test('a ready personal chat becomes clickable while the workspace list and onboarding are still pending', async () => {
   const {document, read, view} = homeFixture();
   rememberSignupSession(view, alice);

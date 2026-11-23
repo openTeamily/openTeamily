@@ -1,7 +1,7 @@
 import '../shell/dsbot-api.mjs';
 import { meetingCodeFromHash, meetingHref } from '../shell/meeting-link.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
-import { confirmSignupSession, csrfCookie, signupSessionError, waitForRuntime, workspaceLoginHash, workspaceLoginTarget, workspacePageTarget } from './runtime-readiness.mjs';
+import { confirmSignupSession, csrfCookie, runtimeCapacityNotice, signupSessionError, waitForRuntime, workspaceLoginHash, workspaceLoginTarget, workspacePageTarget } from './runtime-readiness.mjs';
 
 export const KIND_LABELS = {
   document: '文档', website: '网站', slides: '幻灯片', dashboard: '看板',
@@ -363,6 +363,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     status.append(retry, back);
   }
 
+  function showPersonalRuntimeRetry(state) {
+    loginPanel.hidden = true;
+    mainPanel.hidden = true;
+    const capacity = state === 'capacity';
+    const message = capacity ? runtimeCapacityNotice.title + '。' + runtimeCapacityNotice.detail
+      : state === 'timeout' ? '你的专属智能体仍在启动，请稍后再试。'
+        : '暂时无法打开你的工作区，请重试。';
+    show(document, capacity ? '' : 'error', message);
+    const retry = element('button', 'public-agent-action', capacity ? runtimeCapacityNotice.retry : '重试');
+    retry.type = 'button';
+    retry.id = 'runtime-startup-retry';
+    retry.addEventListener('click', () => void load());
+    document.getElementById('status')?.append(retry);
+  }
+
   async function initializePersonalAgent(resumePath = '/runtime-starting#home=1') {
     const result = await request('POST', '/v1/personal-agent').catch(() => null);
     const agent = result?.body?.personal_agent;
@@ -385,16 +400,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       view.location.replace(resumePath);
       return null;
     }
-    const message = provisioning?.state === 'capacity'
-      ? '当前运行容量已满，请稍后重试。'
-      : state === 'timeout' ? '你的专属智能体仍在启动，请稍后再试。'
-        : '暂时无法打开你的工作区，请重试。';
-    show(document, 'error', message);
-    const retry = element('button', 'public-agent-action', '重试');
-    retry.type = 'button';
-    retry.id = 'runtime-startup-retry';
-    retry.addEventListener('click', () => void load());
-    document.getElementById('status')?.append(retry);
+    showPersonalRuntimeRetry(provisioning?.state === 'capacity' || provisioning?.readiness === 'capacity' ? 'capacity' : state);
     return null;
   }
 
@@ -492,6 +498,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       document.body?.classList.add('home-signed-in', 'app-primary');
       loginPanel.hidden = true;
       const startup = session.body.home;
+      if (startup?.runtime_state === 'capacity') {
+        showPersonalRuntimeRetry('capacity');
+        return;
+      }
       const ready = ['ready', 'unmanaged'].includes(startup?.runtime_state);
       personal = (ready && startup.personal_agent) || await initializePersonalAgent();
       if (!personal) return;

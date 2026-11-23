@@ -1,4 +1,4 @@
-import {csrfCookie, pendingSignupSession, personalDraftScope, readChatDrafts, rememberColdDraftHandoff, signupDraftScope, waitForRuntime, workspaceLoginHash, workspacePageTarget, writeChatDrafts} from './runtime-readiness.mjs';
+import {csrfCookie, pendingSignupSession, personalDraftScope, readChatDrafts, rememberColdDraftHandoff, runtimeCapacityNotice, signupDraftScope, waitForRuntime, workspaceLoginHash, workspacePageTarget, writeChatDrafts} from './runtime-readiness.mjs';
 
 export function mountRuntimeStarting(document, {
   view = document.defaultView ?? globalThis, fetcher = globalThis.fetch.bind(globalThis),
@@ -120,7 +120,9 @@ export function mountRuntimeStarting(document, {
         .catch(() => null);
       if (result?.status === 401) state = 'signed-out';
       else if (result?.status === 200 || result?.status === 201) {
-        state = result.body?.personal_agent?.runtime_provisioning?.readiness === 'ready' ? 'ready' : await check();
+        const provisioning = result.body?.personal_agent?.runtime_provisioning;
+        state = provisioning?.state === 'capacity' || provisioning?.readiness === 'capacity' ? 'capacity'
+          : provisioning?.readiness === 'ready' ? 'ready' : await check();
       } else state = 'unavailable';
     }
     if (state === 'signed-out' || state === 'signup-mismatch') {
@@ -140,13 +142,15 @@ export function mountRuntimeStarting(document, {
       return;
     }
     canStart = state === 'stopped';
-    title.textContent = canStart ? '你的专属智能体已停止' : '专属智能体暂未就绪';
+    const capacity = state === 'capacity';
+    title.textContent = capacity ? runtimeCapacityNotice.title : canStart ? '你的专属智能体已停止' : '专属智能体暂未就绪';
     status.textContent = canStart
       ? (chatTarget ? '启动后会自动打开聊天。' : '启动后会自动返回当前页面。')
-      : state === 'timeout' ? '你的专属智能体仍在启动。点击重试即可继续检查。'
+      : capacity ? runtimeCapacityNotice.detail
+        : state === 'timeout' ? '你的专属智能体仍在启动。点击重试即可继续检查。'
         : '暂时无法连接到你的专属智能体。请重试。';
     if (progress) progress.hidden = true;
-    retry.textContent = canStart ? '启动我的智能体' : '重试';
+    retry.textContent = canStart ? '启动我的智能体' : capacity ? runtimeCapacityNotice.retry : '重试';
     retry.hidden = false;
     checking = false;
   }

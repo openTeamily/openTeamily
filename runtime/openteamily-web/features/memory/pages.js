@@ -258,11 +258,18 @@ async function versions(req, workspaceId, pageId, revision, restoring) {
   const number = revision ? Number(revision) : null
   const user = usernames(req.store)
   const loadVersion = (n) => req.store.get('SELECT * FROM memory_page_versions WHERE workspace_id=? AND page_id=? AND revision=?', workspaceId, pageId, n)
-  if (req.method === 'GET' && !restoring && !req.queryString) {
+  if (req.method === 'GET' && !restoring) {
     if (number === null) {
-      const rows = req.store.all('SELECT * FROM memory_page_versions WHERE workspace_id=? AND page_id=? AND revision<? ORDER BY revision DESC LIMIT ?', workspaceId, pageId, row.revision, 20)
-      return { body: { current: row.revision, items: rows.map((item) => versionView(item, user)) } }
+      const cursor = req.query.get('cursor')
+      if ([...req.query.keys()].some((name) => name !== 'cursor') || req.query.getAll('cursor').length > 1 ||
+          (cursor !== null && !/^[1-9]\d{0,7}$/.test(cursor))) refuse(400, 'invalid', 'Invalid version history cursor')
+      const before = cursor === null ? row.revision : Math.min(Number(cursor), row.revision)
+      const size = 20
+      const rows = req.store.all('SELECT * FROM memory_page_versions WHERE workspace_id=? AND page_id=? AND revision<? ORDER BY revision DESC LIMIT ?', workspaceId, pageId, before, size + 1)
+      return { body: { current: row.revision, items: rows.slice(0, size).map((item) => versionView(item, user)),
+        cursor: rows.length > size ? rows[size - 1].revision : null } }
     }
+    if (req.queryString) refuse(400, 'invalid', 'Invalid version request')
     const seen = loadVersion(number) ?? (number === row.revision
       ? {...row, created:row.updated, created_by:row.updated_by} : null)
     if (!seen) refuse(404, 'not_found', 'Version not found')

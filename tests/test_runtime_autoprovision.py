@@ -3,6 +3,7 @@
 In-process WSGI with SQLite and the simulation lifecycle only; synthetic data,
 loopback peers, no Docker, no vendor or model calls.
 """
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -235,20 +236,40 @@ class AutoProvisionTests(unittest.TestCase):
 
     def test_global_cap_refuses_cleanly_with_actionable_chat_state(self):
         self.make_app(max_instances=1)
+        with self.store.transaction() as db:
+            ensure_schema(db)
         alice, bob = self.user('alice', '127.0.0.1'), self.user('bob', '127.0.0.2')
         self.assertEqual(self.ensure(alice)['runtime_provisioning']['state'], 'provisioned')
+        path = '/v1/auth/runtime-readiness'
+        bob_id = bob.call('GET', '/v1/auth/session')['body']['user']['id']
+        # A readiness check cannot create a personal workspace or instance.
+        with self.store.transaction():
+            self.assertEqual(bob.call('GET', path)['body'], {'state': 'capacity', 'user_id': bob_id})
+            self.assertEqual(bob.call('GET', '/v1/auth/session?include=home')['body']['home'],
+                             {'runtime_state': 'capacity', 'personal_agent': None})
+        self.assertEqual(self.count('SELECT COUNT(*) FROM personal_agents'), 1)
+        self.assertEqual(alice.call('GET', path)['body']['state'], 'starting')
         bob_personal = self.ensure(bob)
         self.assertEqual(bob_personal['runtime_provisioning']['state'], 'capacity')
+        self.assertEqual(bob_personal['runtime_provisioning']['readiness'], 'capacity')
         self.assertEqual(bob_personal['runtime_provisioning']['error_code'], 'runtime_capacity')
         self.assertEqual(self.count('SELECT COUNT(*) FROM instances'), 1)
         self.assertIsNone(bob_personal['runtime_provisioning']['instance_id'])
         self.assert_chat_execution_stays_in_dsbot(bob, bob_personal)
+        self.app.auto_provision = replace(self.app.auto_provision, max_instances=2)
+        self.assertEqual(bob.call('GET', path)['body'], {'state': 'setup', 'user_id': bob_id})
+        self.assertEqual(self.count('SELECT COUNT(*) FROM instances'), 1)
+        self.assertEqual(self.ensure(bob)['runtime_provisioning']['state'], 'provisioned')
+        self.assertEqual(self.count('SELECT COUNT(*) FROM instances'), 2)
 
     def test_lifecycle_capacity_maps_to_capacity(self):
         self.make_app()
+        with self.store.transaction() as db:
+            ensure_schema(db)
         self.runtime.policy = RuntimePolicy(max_instances=1)
         alice, bob = self.user('alice', '127.0.0.1'), self.user('bob', '127.0.0.2')
         self.ensure(alice)
+        self.assertEqual(bob.call('GET', '/v1/auth/runtime-readiness')['body']['state'], 'capacity')
         self.assertEqual(self.ensure(bob)['runtime_provisioning']['state'], 'capacity')
 
     def test_operator_enrolled_owner_runtime_is_respected_not_duplicated(self):
