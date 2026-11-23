@@ -99,6 +99,18 @@ function requestItem(row, workspaceId) {
   }
 }
 
+function conversationAgents(row) {
+  return (row.agents || []).map(a => ({id:a.agent_ref, name:a.name, auto_reply:!!a.auto_reply,
+    mine:a.mine === true, owner_id:a.owner?.owner_id || '', owner_name:a.owner?.display_name || a.owner?.handle || '',
+    owner_handle:a.owner?.handle || ''}))
+}
+
+function agentRosterItem(row, workspaceId) {
+  if (!row?.id || !Array.isArray(row.agents) || typeof row.activity_version !== 'string') return undefined
+  return {id:row.id, workspace_id:workspaceId, activity_version:row.activity_version,
+    agent_members:conversationAgents(row), group_agent_routing:row.group_agent_routing ?? null}
+}
+
 function conversationItem(row, me, env, workspaceId) {
   const management = row.kind === 'group' && !row.public_agent ? row.group_management : null
   const members = (row.members || []).map((m) => ({
@@ -129,9 +141,7 @@ function conversationItem(row, me, env, workspaceId) {
     ...(row.group_agent_requests === true ? {group_agent_requests: true} : {}),
     ...(row.group_agent_routing ? {group_agent_routing: row.group_agent_routing} : {}),
     ...(row.kind === 'dm' && row.direct_agent_requests === true ? {direct_agent_requests:true} : {}),
-    agent_members: (row.agents || []).map((a) => ({ id: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply,
-      mine: a.mine === true, owner_id: a.owner?.owner_id || '', owner_name: a.owner?.display_name || a.owner?.handle || '',
-      owner_handle: a.owner?.handle || '' })),
+    agent_members: conversationAgents(row),
   }
 }
 
@@ -1355,6 +1365,9 @@ function messengerExtraRoutes(host, wakeReplies) {
           const bs = client(host)
           const scope = await messengerScope(host, bs, match[1], match[2])
           const conversation = scope.conversation || await bs.get(conv(match[2]))
+          if (!scope.personal && conversation.kind === 'group' && conversation.team_id !== scope.team.id) {
+            throw new Fault(404,'not_found','该群聊不在当前工作区。')
+          }
           const ids = Array.isArray(body?.agent_ids) ? body.agent_ids.slice(0, 10) : []
           if (!ids.length) throw new Fault(400, 'invalid', 'Provide agent_ids')
           let workspace = match[1]
@@ -1364,16 +1377,18 @@ function messengerExtraRoutes(host, wakeReplies) {
             workspace = (await host.call('agents/personal-binding', {}))?.workspace_id
             if (!workspace) throw new Fault(503,'unavailable','无法加载个人智能体。')
           }
+          let saved
           for (const id of ids) {
             const { agent } = await host.call('agents/get', { id, workspace_id:workspace })
             if (direct && (agent.archived || agent.native_deleted)) throw new Fault(404,'not_found','该个人智能体不可用。')
-            await bs.put(`${conv(match[2])}/agents/${seg(agent.id, 'agent_ref')}`,
+            saved = await bs.put(`${conv(match[2])}/agents/${seg(agent.id, 'agent_ref')}`,
               {
                 name:String(agent.name).slice(0,40), ...(!direct ? {auto_reply:false} : {}),
                 ...(direct && !scope.personal ? {workspace:match[1]} : {}),
               })
           }
-          return [201, { added: ids.length }]
+          const roster = agentRosterItem(saved, match[1])
+          return [201, {added:ids.length, ...(roster ? {roster} : {})}]
         })
       },
     },
@@ -1395,6 +1410,9 @@ function messengerExtraRoutes(host, wakeReplies) {
           const bs = client(host)
           const scope = await messengerScope(host, bs, match[1], match[2])
           const conversation = scope.conversation || await bs.get(conv(match[2]))
+          if (!scope.personal && conversation.kind === 'group' && conversation.team_id !== scope.team.id) {
+            throw new Fault(404,'not_found','该群聊不在当前工作区。')
+          }
           let owner = ''
           if (conversation.kind === 'dm') {
             if (conversation.direct_agent_requests !== true) throw new Fault(404,'not_found','此私聊无法移除智能体。')
@@ -1403,8 +1421,9 @@ function messengerExtraRoutes(host, wakeReplies) {
             }
             owner = qs({owner_id:body.owner_id, ...(!scope.personal ? {workspace:match[1]} : {})})
           }
-          await bs.del(`${conv(match[2])}/agents/${seg(match[3], 'agent_ref')}${owner}`)
-          return [200, { removed: true }]
+          const saved = await bs.del(`${conv(match[2])}/agents/${seg(match[3], 'agent_ref')}${owner}`)
+          const roster = agentRosterItem(saved, match[1])
+          return [200, {removed:true, ...(roster ? {roster} : {})}]
         })
       },
     },

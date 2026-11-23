@@ -31,3 +31,20 @@ export function createLookAvatar(look, document) {
   }
   return root;
 }
+
+export const AGENT_PORTRAITS = Object.freeze([
+  {id:'sky', label:'天空蓝', color:'天空蓝', expression:'微笑', headwear:'无'},
+  {id:'mint', label:'薄荷绿', color:'薄荷绿', expression:'专注', headwear:'耳机'},
+  {id:'violet', label:'葡萄紫', color:'葡萄紫', expression:'好奇', headwear:'贝雷帽'},
+  {id:'coral', label:'珊瑚橙', color:'珊瑚橙', expression:'微笑', headwear:'棒球帽'},
+  {id:'amber', label:'柠檬黄', color:'柠檬黄', expression:'好奇', headwear:'无'},
+  {id:'graphite', label:'石墨灰', color:'石墨灰', expression:'酷', headwear:'耳机'},
+]);
+
+export function agentPortraitLook(id, selected, personalLook) {
+  const chosen = AGENT_PORTRAITS.find(preset => preset.id === selected);
+  if (!chosen && validLook(personalLook)) return personalLook;
+  if (!chosen && (typeof id !== 'string' || !/^[0-9a-f]{32}$/.test(id))) return null;
+  const preset = chosen || AGENT_PORTRAITS[Number.parseInt(id.slice(-2),16) % AGENT_PORTRAITS.length];
+  return {color:preset.color, expression:preset.expression, headwear:preset.headwear, glasses:'无', hand:'无'};
+}

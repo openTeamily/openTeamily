@@ -290,6 +290,11 @@ a.catalog-create[hidden] { display: none; }
 }
 .work-share-dialog .catalog-dialog-actions { flex-wrap: wrap; }
 .work-share-dialog button { min-height: 2.625rem; }
+#work-chat-share-panel { margin-top: .75rem; border-top: 1px solid var(--ot-line); padding-top: .75rem; }
+#work-chat-share-panel summary { width: fit-content; cursor: pointer; }
+#work-chat-share-form { display: grid; gap: .6rem; margin-top: .75rem; }
+#work-chat-share-form select { display: block; width: 100%; min-width: 0; }
+#work-chat-share-status { min-height: 1.25rem; margin: 0; color: var(--ot-muted); }
 .work-remix-dialog .catalog-dialog-actions { flex-wrap: wrap; align-items: center; }
 .work-remix-dialog :is(button, a) { min-height: 2.625rem; }
 .work-remix-dialog a:not([hidden]) { display: inline-flex; align-items: center; padding-inline: .75rem; }

@@ -359,6 +359,15 @@
         <button type="button" data-rich="hr" title="分隔线" aria-label="分隔线"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16"/></svg></button>
         <button type="button" data-rich="link" title="链接" aria-label="链接"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1 M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg></button>
         <button type="button" data-rich="table" title="插入表格" aria-label="插入表格"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 10h16 M12 10v9"/></svg></button>
+        <details id="editor-table-actions" class="editor-table-actions" hidden>
+          <summary>表格操作</summary>
+          <div class="editor-table-menu">
+            <button type="button" data-table-edit="add-row">下方插入行</button>
+            <button type="button" data-table-edit="add-column">右侧插入列</button>
+            <button type="button" data-table-edit="remove-row">删除当前行</button>
+            <button type="button" data-table-edit="remove-column">删除当前列</button>
+          </div>
+        </details>
         <button type="button" id="editor-source-toggle" class="editor-source-toggle" aria-pressed="false" title="切换 Markdown 源码；保存的正文始终是 Markdown">Markdown</button>
       </div>
       <div id="editor-rich" class="editor-rich" contenteditable="true" role="textbox" aria-multiline="true" aria-label="正文" data-placeholder="开始写作…" spellcheck="true"></div>

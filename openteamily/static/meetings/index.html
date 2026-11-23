@@ -146,6 +146,7 @@
             <ul id="shared-meeting-actions"></ul>
             <p id="shared-meeting-no-actions" class="note" hidden>没有行动项。</p>
           </section>
+          <button type="button" id="print-shared-meeting" class="secondary" aria-haspopup="dialog" hidden>打印纪要</button>
           <div class="meeting-actions" id="shared-meeting-discussion-entry" hidden>
             <button type="button" id="shared-meeting-discussion" class="secondary" aria-haspopup="dialog">与个人智能体讨论</button>
           </div>
@@ -222,6 +223,7 @@
             <button type="button" id="save-meeting-artifact" class="secondary" aria-describedby="meeting-artifact-description" title="按已保存的摘要和行动项生成纪要" hidden>保存到资料空间</button>
             <button type="button" id="save-meeting-memory" class="secondary" aria-describedby="meeting-artifact-description" hidden>存入记忆</button>
             <a id="export-meeting" class="secondary" download hidden>导出 Markdown</a>
+            <button type="button" id="print-meeting" class="secondary" aria-haspopup="dialog" hidden>打印纪要</button>
             <button type="button" id="remove-meeting" class="secondary" hidden>删除</button>
           </div>
           <div class="meeting-artifact-result">
@@ -235,6 +237,19 @@
       </section>
     </div>
   </section>
+  <dialog id="meeting-print-dialog" aria-labelledby="meeting-print-heading" aria-describedby="meeting-print-description">
+    <div class="meeting-print-controls">
+      <div>
+        <h2 id="meeting-print-heading">打印预览</h2>
+        <p id="meeting-print-description" class="note">仅包含所选版本的摘要和行动项。</p>
+      </div>
+      <div class="meeting-actions">
+        <button type="button" id="meeting-print-close" class="secondary" autofocus>关闭</button>
+        <button type="button" id="meeting-print-confirm">打印或保存为 PDF</button>
+      </div>
+    </div>
+    <article id="meeting-print-preview"></article>
+  </dialog>
   <dialog id="meeting-conflict-dialog" aria-labelledby="meeting-conflict-title" aria-describedby="meeting-conflict-description">
     <h2 id="meeting-conflict-title">核对纪要修改</h2>
     <p id="meeting-conflict-description" class="note"></p>
@@ -318,6 +333,7 @@
     </form>
   </dialog>
   </main>
+  <article id="meeting-print-paper" hidden></article>
   <nav class="mobile-primary-nav" aria-label="主导航" data-ui-label="shell.nav.mobile"></nav>
 </body>
 </html>

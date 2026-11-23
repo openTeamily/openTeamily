@@ -391,6 +391,37 @@ export function createAutomations({ db, turn, runtimeReady = () => true, clock =
     return row ? detail(row) : null
   }
 
+  async function meetingActionReply(workspaceId, reference) {
+    try { return await readMeetingAction?.(workspaceId, reference) } catch { return null }
+  }
+
+  function checkedMeetingAction(result, workspaceId, reference) {
+    const {meeting, action} = result?.body ?? {}
+    const {meeting_id, revision, action_index} = reference
+    if ([401, 403, 404, 409].includes(result?.status)) {
+      refuse(result.status, 'meeting_source_unavailable', '行动项已更新、已完成或不可访问。请返回会议重新选择。')
+    }
+    if (result?.status !== 200 || meeting?.id !== meeting_id || meeting.workspace_id !== workspaceId || meeting.revision !== revision
+        || typeof meeting.title !== 'string' || !meeting.title.trim() || action?.done !== false ||
+        typeof action.text !== 'string' || !action.text.trim()) {
+      refuse(503, 'meeting_source_unavailable', '暂时无法读取会议行动项，请重试。')
+    }
+    return {
+      meeting: {id:meeting_id, workspace_id:workspaceId, revision, title:meeting.title},
+      action: {index:action_index, text:action.text, owner:typeof action.owner === 'string' ? action.owner : '', done:false},
+    }
+  }
+
+  async function meetingFollowup(payload) {
+    const workspaceId = workspaceOf(payload)
+    const reference = meetingReference(payload)
+    const existing = existingFollowup(workspaceId, reference)
+    if (existing) return {automation:existing}
+    const result = await meetingActionReply(workspaceId, reference)
+    const automation = existingFollowup(workspaceId, reference)
+    return automation ? {automation} : {automation:null, ...checkedMeetingAction(result, workspaceId, reference)}
+  }
+
   function memoryActionReference({action_id, revision} = {}) {
     if (typeof action_id !== 'string' || !HEX32.test(action_id) || !Number.isSafeInteger(revision) || revision < 1) {
       refuse(400, 'invalid', '请选择已保存的记忆行动项。')
@@ -696,17 +727,12 @@ export function createAutomations({ db, turn, runtimeReady = () => true, clock =
     if (!IDEM.test(String(payload.idempotency_key ?? ''))) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
     const prior = existingFollowup(workspaceId, ref)
     if (prior) return {status: 200, automation: prior}
-    const result = await readMeetingAction?.(workspaceId, ref)
+    const result = await meetingActionReply(workspaceId, ref)
     return tx(db, () => {
       const existing = existingFollowup(workspaceId, ref)
       if (existing) return {status: 200, automation: existing}
-      const {meeting, action} = result?.body ?? {}
-      if ([403, 404, 409].includes(result?.status)) refuse(result.status, 'meeting_source_unavailable', '行动项已更新、已完成或不可访问。请返回会议重新选择。')
-      if (result?.status !== 200 || meeting?.id !== ref.meeting_id || meeting.workspace_id !== workspaceId || meeting.revision !== ref.revision
-        || typeof meeting.title !== 'string' || !meeting.title.trim() || action?.done !== false || typeof action.text !== 'string' || !action.text.trim()) {
-        refuse(503, 'meeting_source_unavailable', '暂时无法读取会议行动项，请重试。')
-      }
-      const source = { ...ref, title: meeting.title, text: action.text, owner: typeof action.owner === 'string' ? action.owner : '' }
+      const {meeting, action} = checkedMeetingAction(result, workspaceId, ref)
+      const source = {...ref, title:meeting.title, text:action.text, owner:action.owner}
       return createInTransaction({ ...payload, enabled: false }, source)
     })
   }
@@ -1072,7 +1098,7 @@ export function createAutomations({ db, turn, runtimeReady = () => true, clock =
     'automations/templates': () => ({ items: Object.values(TEMPLATES).map((t) => ({ ...t })) }),
     'automations/list': list,
     'automations/get': (p) => ({ automation: detail(load(workspaceOf(p), p?.id)) }),
-    'automations/meetingFollowup': (p) => ({ automation: existingFollowup(workspaceOf(p), meetingReference(p)) }),
+    'automations/meetingFollowup': meetingFollowup,
     'automations/memoryFollowup': memoryFollowup,
     'automations/create': create,
     'automations/createOnboarding': createOnboarding,
@@ -1130,7 +1156,9 @@ export default async function automations(host) {
   if (!imported.some(item => item.status === 'rejected') && process.env.OPENTEAMILY_AUTOMATIONS_CLOCK !== '0') feature.start()
   const ops = {}
   for (const [name, handler] of Object.entries(feature.ops)) {
-    if (!['createOnboarding', 'memoryFollowup', 'memoryFollowupsForAction'].includes(name)) ops[name] = async (payload) => handler(payload ?? {})
+    if (!['createOnboarding', 'meetingFollowup', 'memoryFollowup', 'memoryFollowupsForAction'].includes(name)) {
+      ops[name] = async (payload) => handler(payload ?? {})
+    }
   }
   ops.memoryFollowupsForAction = async (payload, call) => {
     if (!call?.internal) refuse(404, 'not_found', 'Internal endpoint')

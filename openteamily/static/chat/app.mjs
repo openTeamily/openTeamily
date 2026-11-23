@@ -22,7 +22,7 @@ const loadRichContent = deferModule('./rich-content.mjs');
 let richContent;
 import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, memberChoices, validMessage,
   agentDirectoryHref, chatPathId, socialMessageHref, socialMessageFromHash, directAgentAccessFromHash } from '../shell/chat-utils.mjs';
-import { createLookAvatar } from '../look/app.mjs';
+import { agentPortraitLook, createLookAvatar } from '../look/app.mjs';
 import { dsbotServed } from './dsbot.mjs';
 import { agentSavePath, artifactKindLabel, artifactVersionLabel, defaultSaveTitle, saveableAgentMessage, saveableSocialMessage, socialSavePath, spaceHref } from '../shell/thumb.mjs';
 
@@ -2158,6 +2158,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   const agentRosterCurrent = view => agentRosterView === view && view?.scope === sendScope() && !sendClosed();
 
+  function rosterActivityRevision(version) {
+    // Bot Social places the monotonic activity revision after the message sequence.
+    return typeof version === 'string' ? Number(/^\d+\.(\d+)\.[01]\.\d+$/.exec(version)?.[1] ?? -1) : -1;
+  }
+
+  function rosterAfterRead(conversation) {
+    const saved = agentRosterView?.scope === sendScope() ? agentRosterView.roster : null;
+    if (!saved || conversation?.id !== saved.id || conversation.workspace_id !== saved.workspace_id) return conversation;
+    const revision = rosterActivityRevision(conversation.activity_version);
+    return revision < rosterActivityRevision(saved.activity_version)
+      ? {...conversation, agent_members:saved.agent_members, group_agent_routing:saved.group_agent_routing}
+      : conversation;
+  }
+
   function directAgentStatus(text) {
     const node = document.getElementById('direct-agent-status');
     node.textContent = text;
@@ -2206,6 +2220,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       agentRosterSheet.open = false;
       agentRosterView = {scope, direct};
     }
+    agentRosterView.requests = requests;
     const label = direct ? uiLabel('私聊智能体', 'Chat agents') : uiLabel('群内智能体', 'Group agents');
     document.getElementById('conversation-agents-text').textContent = label;
     document.getElementById('conversation-agents-heading').textContent = label;
@@ -2817,6 +2832,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       readAll.disabled = markingConversationsRead;
     }
     const items = [];
+    const portraits = new Map(agents.map(agent => [agent.id,agent.portrait]));
     let lastGroup = '';
     const now = Date.now();
     for (const session of groupSessionsForDisplay(visible)) {
@@ -2832,7 +2848,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (currentConversation && currentConversation.id === session.id && currentSource === session.source) {
         button.setAttribute('aria-current', 'true');
       }
-      const lookAvatar = session.agent_id === personalAgentId ? createLookAvatar(personalLook, document) : null;
+      const lookAvatar = session.source === 'agent' && createLookAvatar(agentPortraitLook(session.agent_id,
+        portraits.get(session.agent_id), session.agent_id === personalAgentId ? personalLook : null), document);
       const avatar = lookAvatar || document.createElement('span');
       if (!lookAvatar) {
         avatar.className = 'avatar';
@@ -3666,6 +3683,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderSocialMessages(lastSocialItems, {anchor});
   }
 
+  function showSocialMessageChange(scope, message) {
+    const prior = lastSocialItems.find(item => item.id === message.id);
+    if (!prior || prior.revision > message.revision) return;
+    const anchor = chatHistoryAnchor();
+    const draft = replyDrafts.get(scope);
+    if (draft?.message_id === message.id) {
+      setReplyDraft(scope, message.retracted ? {message_id:message.id, state:'missing', available:false}
+        : composerReply(message, draft.author));
+    }
+    if (pinnedIds.has(message.id)) {
+      const pin = Array.from(document.getElementById('pinned-message-list').children)
+        .find(row => row.dataset.pinnedMessage === message.id);
+      if (message.retracted) {
+        pin?.remove();
+        pinnedIds.delete(message.id);
+        document.getElementById('pinned-messages').hidden = !pinnedIds.size;
+      } else {
+        const button = pin?.querySelector('button');
+        if (button) button.textContent = message.body.replace(/\s+/g, ' ').slice(0, 100);
+      }
+    }
+    renderSocialMessages(lastSocialItems.map(item => item.id === message.id ? message : item), {anchor});
+  }
+
   function messageTools(item, row) {
     const tools = document.createElement('span');
     tools.className = 'message-tools';
@@ -4361,7 +4402,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (state?.restoring) return state.restoring;
     const unread = state?.unread;
     const preserveUnread = Boolean(unread && unread.committed < unread.latest);
-    const opened = openSocialConversation(currentConversation.id, {acknowledge: !preserveUnread, preserveUnread});
+    const opened = openSocialConversation(currentConversation.id, {
+      acknowledge: !preserveUnread, preserveUnread, requireVisible: true, signal: AbortSignal.timeout(10000),
+    });
     if (!state) return opened;
     state.restoring = opened.finally(() => {
       if (socialHistory === state) {
@@ -4956,6 +4999,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
     }
     const previousGroupViews = sameReplyScope ? new Map(groupReplyViews) : new Map();
+    if (sameReplyScope && items) {
+      const previous = new Map(lastSocialItems.filter(item => item.edited || item.retracted).map(item => [item.id, item]));
+      if (previous.size) items = items.map(item => {
+        const changed = previous.get(item.id);
+        return changed?.revision > item.revision ? changed : item;
+      });
+    }
     if (sameReplyScope && items?.some(item => item.reply_jobs?.length)) {
       // An earlier history read can settle after the retry receipt. Keep the
       // acknowledged attempt until the transcript catches up.
@@ -4965,6 +5015,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         : item);
     }
     lastSocialItems = items || [];
+    const editedSources = new Map(lastSocialItems.filter(item => item.retracted || item.edited).map(item => [item.id, item]));
     const queue = pendingSends.get(scope);
     if (servedByDsbot && queue?.social) {
       for (const job of queue.jobs) {
@@ -5043,7 +5094,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       time.className = 'time';
       time.textContent = formatTime(item.created);
       li.append(role);
-      if (!item.retracted && item.reply_preview) li.append(quoteBlock(item.reply_preview, true));
+      if (!item.retracted && item.reply_preview) {
+        const original = editedSources.get(item.reply_preview.message_id);
+        const reply = original?.retracted ? {message_id:original.id, available:false}
+          : original && item.reply_preview.available ? {...item.reply_preview, excerpt:original.body.replace(/\s+/g, ' ').trim().slice(0,120)}
+          : item.reply_preview;
+        li.append(quoteBlock(reply, true));
+      }
       li.append(body, time);
       if (!item.retracted && item.group_memory_refs?.length) li.insertBefore(renderGroupMemoryRefs(item.group_memory_refs), time);
       const studioReference = !item.retracted && showsStudioReferences && studioRevisionReference(item.studio_reference);
@@ -5101,17 +5158,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         retract.type = 'button'; retract.textContent = '撤回'; retract.hidden = true;
         const controls = document.createElement('span');
         controls.className = 'message-edit-controls';
-        const change = async (operation, text) => {
+        let changing = false;
+        const change = async (operation, confirm, cancel, text) => {
+          if (scope !== sendScope() || changing) return;
+          changing = cancel.disabled = true;
+          confirm.setAttribute('aria-busy', 'true');
           const payload = {revision: item.revision || 1};
           if (operation === 'edit') payload.body = text;
-          const wid = workspaceId(), cid = currentConversation.id;
-          const result = await request('POST', `${socialBase()}/${cid}/messages/${item.id}/${operation}`, payload);
-          if (workspaceId() !== wid || !currentConversation || currentConversation.id !== cid) return;
-          if (result.status !== 200) { show('error', messageFor(result.body.error, '消息未更新，请重新打开后重试。')); return; }
-          await loadSessions();
-          await openSocialConversation(cid);
+          const owner = currentUser, wid = workspaceId(), cid = currentConversation.id;
+          const result = await request('POST', `${socialBase()}/${cid}/messages/${item.id}/${operation}`, payload, undefined,
+            AbortSignal.timeout(10000)).catch(() => ({status:0, body:{}}));
+          changing = cancel.disabled = false;
+          confirm.removeAttribute('aria-busy');
+          if (currentUser !== owner || workspaceId() !== wid) return;
+          const message = result.body?.message;
+          if (result.status !== 200 || message?.id !== item.id || message.user_id !== owner.id ||
+              message.workspace_id !== wid || message.conversation_id !== cid || !Number.isSafeInteger(message.revision) ||
+              message.revision <= payload.revision || message.retracted !== (operation === 'retract')) {
+            if (scope === sendScope()) {
+              show('error', messageFor(result.body?.error, '消息未更新，请重试。'));
+              if (!sessionTransition?.pending) confirm.focus({preventScroll:true});
+            }
+            return;
+          }
+          if (scope === sendScope()) {
+            const restoreFocus = document.activeElement === confirm && !sessionTransition?.pending;
+            showSocialMessageChange(scope, message);
+            if (restoreFocus) {
+              const row = Array.from(list.children).find(node => node.dataset.messageId === item.id);
+              if (row) { row.tabIndex = -1; row.focus({preventScroll:true}); }
+            }
+          }
+          void loadSessions();
         };
         edit.addEventListener('click', () => {
+          if (changing) return;
           controls.replaceChildren();
           const input = document.createElement('textarea'); input.value = item.body || '';
           input.setAttribute('aria-label', '编辑消息'); input.maxLength = 4000;
@@ -5124,22 +5205,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             note.className = 'message-edit-note';
             note.textContent = '保存后，这条已发出的消息会被新内容替换，其他人看到的是修改后的版本。';
             const confirm = document.createElement('button'); confirm.type = 'button'; confirm.textContent = '确认修改';
-            confirm.addEventListener('click', () => change('edit', draft));
             const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '取消';
             cancel.addEventListener('click', () => controls.replaceChildren());
+            confirm.addEventListener('click', () => change('edit', confirm, cancel, draft));
             controls.replaceChildren(note, confirm, cancel);
+            confirm.focus({preventScroll:true});
           });
           const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '取消';
           cancel.addEventListener('click', () => controls.replaceChildren());
           controls.append(input, save, cancel);
+          input.focus({preventScroll:true});
         });
         retract.addEventListener('click', () => {
+          if (changing) return;
           controls.replaceChildren();
           const confirm = document.createElement('button'); confirm.type = 'button'; confirm.textContent = '确认撤回';
-          confirm.addEventListener('click', () => change('retract'));
           const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '取消';
           cancel.addEventListener('click', () => controls.replaceChildren());
+          confirm.addEventListener('click', () => change('retract', confirm, cancel));
           controls.append(confirm, cancel);
+          confirm.focus({preventScroll:true});
         });
         li.append(edit, retract, controls);
       }
@@ -5270,9 +5355,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!currentNotificationScope(scope) || !notificationSnapshot) return;
     notificationSeq += 1;
     const body = notificationSnapshot.body;
+    const wasUnread = (body.items || []).some(item => item.id === id && !item.read);
     notificationSnapshot.body = {
       ...body,
-      unread_count: result.body?.unread_count ?? body.unread_count,
+      // Individual acknowledgements can arrive in a different order from the writes.
+      unread_count: id ? Math.max(0, Number(body.unread_count || 0) - Number(wasUnread))
+        : result.body?.unread_count ?? body.unread_count,
       items: (body.items || []).map(item => !id || item.id === id ? {...item, read: true} : item),
     };
     renderNotifications(notificationSnapshot.body, scope);
@@ -5294,8 +5382,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     list.replaceChildren(...items.map(item => {
       const li = document.createElement('li');
       const target = notificationTarget(item, scope.workspace);
+      const conversation = !target && chatPathId(item.conversation_id) &&
+        (!item.workspace_id || item.workspace_id === scope.workspace) ? item.conversation_id : '';
       const button = document.createElement(target ? 'a' : 'button');
-      const invalidLink = LINKED_NOTIFICATION_KINDS.has(item.kind) && !target;
+      const invalidLink = !target && (LINKED_NOTIFICATION_KINDS.has(item.kind) || (item.conversation_id && !conversation));
       if (target) button.href = target;
       else {
         button.type = 'button';
@@ -5316,24 +5406,37 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       button.append(time);
       button.addEventListener('click', async event => {
         if (target) event.preventDefault();
-        if (invalidLink || !currentNotificationScope(scope) || notificationReads.has(readKey)) return;
+        if (invalidLink || !currentNotificationScope(scope) || (!conversation && notificationReads.has(readKey))) return;
         setNotificationStatus();
-        if (!item.read) {
+        let read;
+        if (!item.read && !notificationReads.has(readKey)) {
           notificationReads.add(readKey);
           button.setAttribute('aria-busy', 'true');
-          const read = request('POST', `/v1/workspaces/${scope.workspace}/notifications/read`,
+          read = request('POST', `/v1/workspaces/${scope.workspace}/notifications/read`,
             {notification_id: item.id}, undefined, AbortSignal.timeout(5000), {keepalive: Boolean(target)})
             .catch(() => ({status: 0, body: {}}))
             .then(result => {
               notificationReads.delete(readKey);
               button.removeAttribute('aria-busy');
+              if (!currentNotificationScope(scope)) return result;
               if (result.status === 200) applyNotificationRead(scope, result, item.id);
+              else if (conversation && !document.getElementById('notifications-panel').hidden) {
+                setNotificationStatus(uiLabel('无法标记这条通知为已读，请重试。', 'Could not mark this notification as read. Try again.'));
+                if (notificationSnapshot) renderNotifications(notificationSnapshot.body, scope);
+              }
               return result;
             });
+        }
+        if (conversation) {
+          setNotificationsOpen(false);
+          await openSessionTarget({source:'social', cid:conversation, message:item.message_id,
+            title:item.title || uiLabel('会话', 'conversation')});
+          return;
+        }
+        if (read) {
           const result = target ? await waitForLinkedNotificationRead(read) : await read;
           if (!currentNotificationScope(scope)) return;
-          if (result && result.status !== 200
-            && ((result.status !== 0 && result.status < 500) || (!target && !item.conversation_id))) {
+          if (result && result.status !== 200 && (!target || (result.status !== 0 && result.status < 500))) {
             setNotificationStatus('无法标记这条通知为已读，请重新打开通知后重试。');
             if (notificationSnapshot) renderNotifications(notificationSnapshot.body, scope);
             return;
@@ -5341,10 +5444,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         }
         setNotificationsOpen(false);
         if (target) { globalThis.location.assign(target); return; }
-        if (item.conversation_id) {
-          await openSessionTarget({source:'social', cid:item.conversation_id, message:item.message_id,
-            title:item.title || uiLabel('会话', 'conversation')});
-        }
         await loadNotifications();
       });
       li.append(button);
@@ -5696,6 +5795,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function reportGroupChange(conversation, target) {
     if (!groupWorkspaceMatches(target) || conversation.id !== target.conversationId ||
         conversation.workspace_id !== target.workspace || !Number.isSafeInteger(conversation.group_management?.revision)) return;
+    conversation = rosterAfterRead(conversation);
     const key = groupReceiptKey(target.owner,target.workspace,conversation.id);
     const fields = Object.fromEntries(['title','members','agent_members','group_management','group_agent_routing','updated']
       .filter(name => Object.hasOwn(conversation, name)).map(name => [name,conversation[name]]));
@@ -6341,7 +6441,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('social-agent-members').hidden = true;
     document.getElementById('pin-conversation').hidden = true;
     setDirectoryLink({source:'agent'});
-    applyChatIdentity(document, agent.name, null, agent.id === personalAgentId ? personalLook : null);
+    applyChatIdentity(document, agent.name, null, agentPortraitLook(agent.id, agent.portrait, agent.id === personalAgentId ? personalLook : null));
     writeHash({workspace:workspaceId(), agent:agentId});
     setSessionsOpen(false);
     renderAgentMessages([]);
@@ -6498,7 +6598,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('social-agent-members').hidden = true;
     setDirectoryLink({source: 'agent'});
     syncPlusState();
-    applyChatIdentity(document, agent.name, null, agent.id === personalAgentId ? personalLook : null);
+    applyChatIdentity(document, agent.name, null, agentPortraitLook(agent.id, agent.portrait, agent.id === personalAgentId ? personalLook : null));
     if (currentConversation?.id !== conversation.id) {
       const autoReplyNotice = document.getElementById('group-agent-auto-reply-status');
       if (autoReplyNotice) autoReplyNotice.hidden = true;
@@ -6540,7 +6640,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openSocialConversation(conversationId, {acknowledge = true, startUnread = false, preserveUnread = false,
-    refresh = false, publicStartCurrent, link, transition, quiet = false, initialRead, signal, finishing, position, message} = {}) {
+    refresh = false, publicStartCurrent, link, transition, quiet = false, initialRead, signal, finishing, position, message, requireVisible = false} = {}) {
     if (sessionTransition?.pending && transition !== sessionTransition) return false;
     if (refresh && (openingStartupLink() || currentSource !== 'social'
       || currentConversation?.id !== conversationId)) return false;
@@ -6552,7 +6652,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const owner = currentUser;
     stopPolling();
     const sameScope = () => open === socialOpen && workspaceId() === wid && currentUser === owner;
-    const stillOpen = () => sameScope() && (!link || link.current());
+    const stillOpen = () => sameScope() && (!link || link.current()) && (!requireVisible || viewingSocialMessages());
     const readPinReceipt = pinReceipt;
     const unreadEntry = servedByDsbot && acknowledge && startUnread && !refresh;
     if (!chatPathId(position?.id)) position = null;
@@ -6585,7 +6685,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (currentSource === 'social') { syncGroupReplyProgress(); scheduleSocialPoll(currentConversation); }
       return false;
     }
-    const updated = mergeGroupRead(mergePinRead(result.body.conversation, owner?.id, wid, readPinReceipt), owner?.id, wid);
+    const updated = rosterAfterRead(mergeGroupRead(mergePinRead(result.body.conversation, owner?.id, wid, readPinReceipt), owner?.id, wid));
     if (updated?.id !== conversationId || ((link || initialRead || message) && updated.workspace_id && updated.workspace_id !== wid)) {
       if (link) show('error', '无法打开会话。');
       return false;
@@ -7606,7 +7706,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           personalLook = settings.look;
           renderSessions();
           if (currentSource === 'agent' && currentAgent?.id === personalAgentId) {
-            applyChatIdentity(document, currentAgent.name, null, personalLook);
+            applyChatIdentity(document, currentAgent.name, null, agentPortraitLook(currentAgent.id, currentAgent.portrait, personalLook));
           }
         }
         const presentationChanged = values && (values.auto_translate === true
@@ -7755,7 +7855,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         if (workspaceId() === personalWorkspaceId) {
           renderSessions();
           if (currentSource === 'agent' && currentAgent?.id === personalAgentId) {
-            applyChatIdentity(document, currentAgent.name, null, personalLook);
+            applyChatIdentity(document, currentAgent.name, null, agentPortraitLook(currentAgent.id, currentAgent.portrait, personalLook));
           }
         }
       });
@@ -9062,6 +9162,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function writeAgentRoster(view, suffix, body, adding, notify = (kind, text) => show(kind, text)) {
     if (!agentRosterCurrent(view) || view.busy) return false;
     const cid = currentConversation.id;
+    const wid = workspaceId();
     const failure = adding ? uiLabel('无法添加智能体。', 'Could not add the agent.')
       : uiLabel('无法移除智能体。', 'Could not remove the agent.');
     view.busy = true;
@@ -9079,7 +9180,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         else notify('error', text, result.status);
         return false;
       }
-      const refreshed = await openSocialConversation(cid, {acknowledge:false});
+      const roster = result.body.roster;
+      const revision = rosterActivityRevision(roster?.activity_version);
+      const receivedRoster = roster?.id === cid && roster.workspace_id === wid && Array.isArray(roster.agent_members) && revision >= 0;
+      let refreshed = true;
+      if (receivedRoster) {
+        const shownRevision = Math.max(rosterActivityRevision(view.roster?.activity_version),
+          rosterActivityRevision(currentConversation.activity_version));
+        if (revision >= shownRevision) {
+          view.roster = roster;
+          currentConversation.agent_members = roster.agent_members;
+          currentConversation.group_agent_routing = roster.group_agent_routing;
+          setGroupInfo(currentConversation);
+          if (!view.direct) {
+            applyChatAvatarStack(document, currentConversation);
+            setChatSubtitle(groupHeaderSubtitle(currentConversation));
+          }
+          renderGroupReplyAction(view.requests);
+          agentMentions.refresh();
+          renderGroupComposerRouting();
+        }
+      } else refreshed = await openSocialConversation(cid, {acknowledge:false});
       if (!agentRosterCurrent(view)) return false;
       const text = refreshed ? (adding ? uiLabel('已添加智能体。', 'Agent added.') : uiLabel('已移除智能体。', 'Agent removed.'))
         : uiLabel('变更已保存，重新打开对话可查看最新成员。', 'Change saved. Reopen the conversation to see the current members.');
@@ -9633,12 +9754,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
               show(notice.kind, notice.text, notice);
             }
           };
-          const restoring = !queue.social && isCurrent() && privateHistory?.restoring;
-          if (restoring) {
+          const socialReceipt = queue.social && result.body.message;
+          const tail = lastSocialItems.at(-1)?.seq;
+          const pastSocialWindow = servedByDsbot && isCurrent() && viewingSocialMessages() && socialHistory?.readingHistory &&
+            !sessionTransition?.pending && ownSocialReceipt(socialReceipt, queue, job.key) &&
+            Number.isSafeInteger(socialReceipt.seq) && socialReceipt.seq > (tail ?? 0) + 1;
+          if (pastSocialWindow) {
+            // Keep the delivered message visible while reopening the latest window.
+            // The history read can confirm it without adding it to an older page.
             job.accepted = true;
             feedback(uiLabel('已发送。', 'Sent.'));
-            void restoring.then(finish, () => finish());
-          } else finish();
+            void openSocialLatest().then(opened => {
+              if (!queue.jobs.includes(job)) return;
+              if (!isCurrent()) removeSendJob(queue, job);
+              else if (opened) finish(true);
+              else if (job.storedText) {
+                savePendingChatText(document.defaultView, queue.scope, job.key);
+                job.storedText = false;
+              }
+            });
+          } else {
+            const restoring = !queue.social && isCurrent() && privateHistory?.restoring;
+            if (restoring) {
+              job.accepted = true;
+              feedback(uiLabel('已发送。', 'Sent.'));
+              void restoring.then(finish, () => finish());
+            } else finish();
+          }
           if ((!queue.social || !isCurrent()) && queue.owner === currentUser?.id) void loadSessions();
         } catch (error) {
           job.failed = true;

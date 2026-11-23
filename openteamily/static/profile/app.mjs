@@ -1,5 +1,6 @@
 import '../shell/dsbot-api.mjs';
 import { mountProfileSocial } from './social.mjs';
+import { agentPortraitLook, createLookAvatar } from '../look/app.mjs';
 export { FOLLOW_WORK_EMPTY, followWorkNotice, followWorkSwitchLabel } from './social.mjs';
 
 function csrfCookie(source) {
@@ -277,14 +278,17 @@ function mount() {
     const list = document.querySelector && document.querySelector('#profile-agent-list');
     const empty = document.querySelector && document.querySelector('#profile-agents-empty');
     if (!list) return;
+    const viewer = currentUsername;
     list.replaceChildren();
     try {
-      const workspaces = await request('GET', '/v1/workspaces?scope=personal');
+      const workspaces = await request('GET', '/v1/workspaces?scope=personal&include=personal-agent');
+      if (viewer !== currentUsername) return;
       if (workspaces.status !== 200) throw new Error('workspaces');
       const items = workspaces.body.items || workspaces.body.workspaces || [];
       const first = items[0];
       if (!first || !first.id) throw new Error('empty');
       const listed = await request('GET', `/v1/workspaces/${first.id}/agents?limit=100`);
+      if (viewer !== currentUsername) return;
       if (listed.status !== 200) throw new Error('agents');
       const agents = (listed.body.items || []).filter(item => item?.id && item.name && !item.archived && !item.native_deleted).slice(0, 5);
       if (!agents.length) throw new Error('empty');
@@ -292,10 +296,15 @@ function mount() {
         const row = document.createElement('li');
         const link = document.createElement('a');
         link.href = '/chat#' + new URLSearchParams({workspace: first.id, agent: agent.id});
-        const face = document.createElement('span');
-        face.className = 'avatar';
-        face.dataset.tone = avatarTone(agent.name);
-        face.textContent = monogram(agent.name);
+        const ownLook = workspaces.body.viewer_username === viewer && workspaces.body.personal_agent_id === agent.id
+          ? workspaces.body.personal_look : null;
+        const portrait = createLookAvatar(agentPortraitLook(agent.id,agent.portrait,ownLook),document);
+        const face = portrait || document.createElement('span');
+        if (!portrait) {
+          face.className = 'avatar';
+          face.dataset.tone = avatarTone(agent.name);
+          face.textContent = monogram(agent.name);
+        }
         const label = document.createElement('span');
         label.textContent = agent.name;
         link.append(face, label);
@@ -304,7 +313,7 @@ function mount() {
       }
       if (empty) empty.hidden = true;
     } catch {
-      if (empty) empty.hidden = false;
+      if (empty && viewer === currentUsername) empty.hidden = false;
     }
   }
 

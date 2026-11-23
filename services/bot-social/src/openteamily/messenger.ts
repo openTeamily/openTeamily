@@ -1780,7 +1780,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         assert(directAgentPeer(ot, conv, me.ownerId), 404, "conversation_not_found", "no such direct conversation");
         requireDirectReach(ot, conv, me.ownerId);
         grantDirectAgent(ot,conv.id,me.ownerId,ref,name);
-        return conversationView(ot, conv, me.ownerId);
+        return conversationView(ot, memberOf(ot,conv.id,me.ownerId), me.ownerId);
       });
     }
     assert(conv.kind === "group", 400, "invalid_request", "agents join groups only");
@@ -1790,7 +1790,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         auto_reply_after_seq=CASE WHEN ot_conversation_agents.auto_reply=0 AND excluded.auto_reply=1
           THEN excluded.auto_reply_after_seq ELSE ot_conversation_agents.auto_reply_after_seq END`,
     conv.id, ref, me.ownerId, name, b.auto_reply === true ? 1 : 0, conv.last_seq, ot.now());
-    return conversationView(ot, conv, me.ownerId);
+    return conversationView(ot, memberOf(ot,conv.id,me.ownerId), me.ownerId);
   });
   app.patch("/v1/ot/conversations/:id/agents/:agent", async (req) => {
     const me = ot.me(req);
@@ -1820,11 +1820,11 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       return ot.tx(() => {
         if (input.workspace !== undefined) workspaceConversation(ot, text(input.workspace,"workspace",{min:32,max:32}), conv.id, me.ownerId);
         removeDirectAgent(ot,conv.id,owner,params(req).agent);
-        return conversationView(ot, conv, me.ownerId);
+        return conversationView(ot, memberOf(ot,conv.id,me.ownerId), me.ownerId);
       });
     }
     ot.run("DELETE FROM ot_conversation_agents WHERE conversation_id = ? AND agent_ref = ? AND owner_id = ?", conv.id, params(req).agent, me.ownerId);
-    return conversationView(ot, conv, me.ownerId);
+    return conversationView(ot, memberOf(ot,conv.id,me.ownerId), me.ownerId);
   });
   app.post("/v1/ot/conversations/:id/messages/:message/agent-retry", async req => {
     const me = ot.me(req);

@@ -48,6 +48,29 @@ export function documentTree(store, workspaceId) {
     ORDER BY a.updated DESC, a.id`, workspaceId)
 }
 
+export function moveDocument(store, workspaceId, id, parentId, expectedParentId) {
+  return store.transaction(() => {
+    const documents = new Map(documentTree(store, workspaceId).map(row => [row.id, row]))
+    const document = documents.get(id)
+    const parent = documents.get(parentId)
+    if (!document || (parentId !== null && !parent)) refuse(404, 'not_found', '找不到文档或目标位置。')
+    if (document.parent_id !== expectedParentId && document.parent_id !== parentId) {
+      refuse(409, 'document_tree_changed', '文档位置已变化，请刷新后再试。')
+    }
+    const visited = new Set([id])
+    for (let ancestor = parent; ancestor; ancestor = documents.get(ancestor.parent_id)) {
+      if (visited.has(ancestor.id)) refuse(409, 'document_tree_cycle', '不能移动到文档自身或其子文档下。')
+      visited.add(ancestor.id)
+    }
+    if (document.parent_id !== parentId) {
+      if (parentId === null) store.run('DELETE FROM artifact_document_parents WHERE artifact_id=?', id)
+      else store.run(`INSERT INTO artifact_document_parents VALUES(?,?)
+        ON CONFLICT(artifact_id) DO UPDATE SET parent_id=excluded.parent_id`, id, parentId)
+    }
+    return {id, parent: parent ? {id: parent.id, title: parent.title} : null}
+  })
+}
+
 export function detailView(store, row) {
   const artifact = view(row)
   if (artifact.kind !== 'document') return artifact

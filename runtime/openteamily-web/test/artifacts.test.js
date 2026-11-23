@@ -54,6 +54,40 @@ test('document trees keep retry receipts, descendants and parent links inside th
   assert.equal((await call('GET', tree)).body.items.find(row=>row.id===id).parent_id, null)
 })
 
+test('moving an existing document preserves its descendants, content revision and account scope', async () => {
+  let bot = await boot()
+  const call = (...args) => bot.call('artifacts', ...args)
+  const create = async (title, workspace = WS, parentId = null) => (await call('POST', base('', workspace), {
+    title, body: '移入项目的现有内容', ...(parentId && {parent_id: parentId}),
+  }, key())).body.artifact
+  const tree = base('/document-tree')
+  const move = (id, parent, expected) => call('POST', tree, {artifact_id:id,parent_id:parent,expected_parent_id:expected})
+  const project = await create('项目')
+  const other = await create('另一个项目')
+  const existing = await create('现有文档')
+  const child = await create('现有文档的子文档', WS, existing.id)
+  const foreign = await create('其他工作区', 'b'.repeat(32))
+
+  assert.equal((await move(existing.id, existing.id, null)).body.error.code,'document_tree_cycle')
+  assert.equal((await move(existing.id, child.id, null)).body.error.code,'document_tree_cycle')
+  assert.equal((await move(existing.id, foreign.id, null)).status,404)
+  assert.equal((await move(foreign.id, project.id, null)).status,404)
+  assert.equal((await call('POST', tree, {artifact_id:existing.id,parent_id:project.id})).status,400)
+  assert.deepEqual((await move(existing.id, project.id, null)).body,{id:existing.id,parent:{id:project.id,title:project.title}})
+  assert.equal((await move(existing.id, other.id, null)).body.error.code,'document_tree_changed')
+  assert.equal((await move(existing.id, project.id, null)).status,200)
+  bot = await boot(bot.vol)
+  assert.deepEqual((await call('GET', base('/' + existing.id))).body.artifact,
+    {...existing,parent:{id:project.id,title:project.title}})
+  assert.equal((await call('GET', base('/' + child.id))).body.artifact.parent.id,existing.id)
+  const outsider = await boot()
+  assert.equal((await outsider.call('artifacts','POST',tree,
+    {artifact_id:existing.id,parent_id:null,expected_parent_id:project.id})).status,404)
+  assert.deepEqual((await move(existing.id, null, project.id)).body,{id:existing.id,parent:null})
+  assert.equal((await call('GET', base('/' + existing.id))).body.artifact.parent,undefined)
+  assert.equal((await call('GET', base('/' + child.id))).body.artifact.parent.id,existing.id)
+})
+
 test('restoring a reviewed version preserves history and replays an exact native receipt after restart', async () => {
   let bot = await boot()
   const call = (...args) => bot.call('artifacts', ...args)
