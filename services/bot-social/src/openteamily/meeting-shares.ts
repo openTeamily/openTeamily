@@ -173,10 +173,10 @@ function recipients(ot: OtContext, scope: Scope, target: ReturnType<typeof audie
     ORDER BY p.display_name COLLATE NOCASE,p.owner_id`, ...bindings);
 }
 
-function recipientAccess(ot: OtContext, { workspace, owner }: Scope) {
+function recipientAccess(ot: OtContext, { workspace, owner }: Scope, includeActions = false) {
   if (workspace) workspaceTeam(ot, workspace, owner);
   return {
-    from: `${MEETING_RECIPIENT_FROM}
+    from: `${MEETING_RECIPIENT_FROM}${includeActions ? " CROSS JOIN json_each(s.action_items) a" : ""}
       WHERE addressed.recipient_id=? AND s.workspace_id IS ? AND ${MEETING_RECIPIENT_VISIBLE}`,
     bindings: [owner, workspace],
   };
@@ -190,12 +190,37 @@ function detail(row: Share) {
   return { ...header(row), summary: row.summary, action_items: JSON.parse(row.action_items) };
 }
 
+function assignedActions(ot: OtContext, scope: Scope, owner: string, cursor: string, limit: number) {
+  const anchor = cursor ? /^([0-9a-f]{32})\.([0-9]|[1-4][0-9])$/.exec(cursor) : null;
+  assert(!cursor || anchor, 400, "invalid_request", "Invalid action cursor");
+  const access = recipientAccess(ot, scope, true);
+  const before = anchor ? ot.get<{ seq: number }>(`SELECT s.seq FROM ot_meeting_share_recipients r
+    JOIN ot_meeting_shares s ON s.id=r.share_id WHERE r.recipient_id=? AND s.workspace_id IS ? AND s.id=?`,
+  scope.owner, scope.workspace, anchor[1]) : null;
+  if (anchor && !before) return { items: [], cursor: null };
+  const rows = ot.all<{ share_id: string; action_index: number }>(`SELECT s.id AS share_id,s.title AS meeting_title,
+    s.revision,s.organizer,CAST(a.key AS INTEGER) AS action_index,json_extract(a.value,'$.text') AS text,
+    json_extract(a.value,'$.due_date') AS due_date,json_extract(a.value,'$.owner') AS owner ${access.from}
+    AND COALESCE(json_extract(a.value,'$.done'),0)=0 AND json_extract(a.value,'$.owner')=? COLLATE NOCASE
+    ${before ? "AND (s.seq<? OR (s.seq=? AND CAST(a.key AS INTEGER)>?))" : ""}
+    ORDER BY s.seq DESC,action_index LIMIT ?`,
+  ...access.bindings, owner, ...(before && anchor ? [before.seq, before.seq, Number(anchor[2])] : []), limit + 1);
+  const last = rows[limit - 1];
+  return { items: rows.slice(0, limit), cursor: rows.length > limit ? `${last.share_id}.${last.action_index}` : null };
+}
+
 function list(ot: OtContext, req: FastifyRequest, scope: Scope) {
-  const q = object(query(req), ["source_id", "sent", "cursor", "limit"]);
+  const q = object(query(req), ["source_id", "sent", "cursor", "limit", "view", "owner"]);
   const rawLimit = one(q.limit, "limit") ?? "20";
   const limit = Number(rawLimit);
   assert(/^[0-9]{1,3}$/.test(rawLimit) && limit >= 1 && limit <= 100, 400, "invalid_request", "Invalid limit");
-  const cursor = one(q.cursor, "cursor") || null;
+  const cursor = one(q.cursor, "cursor") || "";
+  if (q.view !== undefined) {
+    assert(q.view === "actions" && q.source_id === undefined && q.sent === undefined,
+      400, "invalid_request", "Invalid assigned actions filter");
+    return assignedActions(ot, scope, identifier(q.owner, SOCIAL_ID, "owner"), cursor, limit);
+  }
+  assert(q.owner === undefined, 400, "invalid_request", "Owner requires the assigned actions view");
   if (cursor) identifier(cursor, HEX, "cursor");
   const source = q.source_id === undefined ? null : identifier(q.source_id, HEX, "source_id");
   const history = one(q.sent, "sent");

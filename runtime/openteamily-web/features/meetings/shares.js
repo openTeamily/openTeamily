@@ -35,6 +35,17 @@ async function recipients(req, workspace) {
 
 async function shared(req, workspace) {
   if (req.method !== 'GET') refuse(405, 'method', 'Only GET is supported')
+  if (req.query.has('view')) {
+    const limit = req.query.get('limit') ?? '20'
+    const cursor = req.query.get('cursor')
+    if (!req.ownerUsername || req.query.get('view') !== 'actions' ||
+        [...req.query.keys()].some(key => !['view','limit','cursor'].includes(key) || req.query.getAll(key).length !== 1) ||
+        !/^(?:[1-9]|[1-4][0-9]|50)$/.test(limit) || (cursor !== null && !/^[0-9a-f]{32}\.(?:[0-9]|[1-4][0-9])$/.test(cursor))) {
+      refuse(400, 'invalid', '无效的收到行动项查询。')
+    }
+    const data = await social(req, workspace, 'GET', '/meeting-shares' + qs({view:'actions', owner:req.ownerUsername, limit, cursor}))
+    return {body:{...data, workspace_id:workspace, viewer_username:req.ownerUsername}}
+  }
   const { limit, cursor } = pagination(req.query, ['sent'])
   const sent = req.query.get('sent') ?? undefined
   if (sent !== undefined && sent !== '1') refuse(400, 'invalid', '无效的分享记录查询。')

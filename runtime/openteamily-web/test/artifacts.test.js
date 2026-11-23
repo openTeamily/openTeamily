@@ -18,6 +18,42 @@ test('artifacts feature loads in this DS-Bot and keeps its data in its own featu
   assert.ok(existsSync(join(bot.vol.data, 'openteamily', 'features', 'artifacts', 'artifacts.sqlite3')))
 })
 
+test('document trees keep retry receipts, descendants and parent links inside the same workspace', async () => {
+  let bot = await boot()
+  const call = (...args) => bot.call('artifacts', ...args)
+  const create = (title, parent_id, workspace = WS, receipt = key()) => call('POST', base('', workspace),
+    {title, body:'文档内容', ...(parent_id ? {parent_id} : {})}, receipt)
+  const parent = (await create('父文档')).body.artifact
+  const otherWorkspace = 'b'.repeat(32)
+  const unrelated = (await create('其他工作区文档', null, otherWorkspace)).body.artifact
+  assert.equal((await create('越过工作区', unrelated.id)).status, 404)
+  const receipt = key()
+  const child = await create('子文档', parent.id, WS, receipt)
+  assert.equal(child.status, 201)
+  const id = child.body.artifact.id
+  assert.deepEqual(child.body.artifact.parent, {id:parent.id,title:parent.title})
+  assert.equal((await create('子文档', parent.id, WS, receipt)).body.artifact.id, id)
+  assert.equal((await create('子文档', null, WS, receipt)).status, 409)
+  const nested = (await create('孙文档', id)).body.artifact
+  const site = await call('POST', base(), {title:'网站作品',kind:'website',body:'<h1>Hello</h1>'}, key())
+  assert.equal((await create('网页下的子文档', site.body.artifact.id)).status, 404)
+
+  bot = await boot(bot.vol)
+  const tree = base('/document-tree')
+  const items = (await call('GET', tree)).body.items
+  assert.deepEqual(new Map(items.map(row => [row.id,row.parent_id])), new Map([[parent.id,null],[id,parent.id],[nested.id,id]]))
+  assert.ok(items.every(row => !Object.hasOwn(row,'body')))
+  assert.deepEqual((await call('GET', base('/document-tree',otherWorkspace))).body.items.map(row=>row.id), [unrelated.id])
+  const outsider = await boot()
+  assert.deepEqual((await outsider.call('artifacts','GET',tree)).body.items, [])
+  const update = await call('POST', base('/'+id), {revision:1,changes:{body:'文档内容'}})
+  assert.equal(update.body.artifact.parent.id, parent.id)
+  await call('POST', base('/'+parent.id+'/remove'), {})
+  assert.equal((await call('GET', base('/'+id))).body.artifact.parent, undefined)
+  assert.equal((await call('GET', base('/'+nested.id))).body.artifact.parent.id, id)
+  assert.equal((await call('GET', tree)).body.items.find(row=>row.id===id).parent_id, null)
+})
+
 test('restoring a reviewed version preserves history and replays an exact native receipt after restart', async () => {
   let bot = await boot()
   const call = (...args) => bot.call('artifacts', ...args)

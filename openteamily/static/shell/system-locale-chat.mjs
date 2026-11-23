@@ -297,6 +297,7 @@ export const CHAT_MESSAGES = Object.freeze({
   "chat.compose.add_create": ["添加与创建", "Add and create"],
   "chat.compose.common": ["常用操作", "Common actions"],
   "chat.files.send": ["发送文件", "Send files"],
+  "chat.files.drop": ["松开鼠标，将文件添加到当前消息", "Drop files to attach them to this message"],
   "chat.files.choose_photos": ["选择照片", "Choose photos"],
   "chat.files.choose_videos": ["选择视频", "Choose videos"],
   "chat.videos": ["视频", "Videos"],

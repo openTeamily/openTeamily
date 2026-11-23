@@ -81,6 +81,12 @@
         <button type="button" id="meeting-inbox-close" class="secondary">返回会议</button>
       </header>
       <div class="meeting-inbox-filters">
+        <label><span id="meeting-inbox-source-label">来源</span>
+          <select id="meeting-inbox-source" aria-labelledby="meeting-inbox-source-label">
+            <option value="owned">工作区纪要</option>
+            <option value="received">收到的纪要</option>
+          </select>
+        </label>
         <label>状态
           <select id="meeting-inbox-state">
             <option value="open">待完成</option>
@@ -125,6 +131,7 @@
       <section class="meeting-editor-pane" id="meeting-editor-pane" aria-label="会议详情" tabindex="-1">
         <p id="meeting-empty" class="note">选择一份会议记录，或新建会议。</p>
         <article id="shared-meeting-detail" hidden aria-labelledby="shared-meeting-title">
+          <button type="button" id="shared-meeting-inbox-return" class="secondary" hidden>‹ 会议行动项</button>
           <header>
             <p class="shared-meeting-badge">共享纪要</p>
             <h2 id="shared-meeting-title" tabindex="-1"></h2>

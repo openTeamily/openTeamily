@@ -3,7 +3,7 @@ import { sharedBotSocial } from '../../lib/c/bot-social.js'
 // shim turns the works-library page's existing fetches into artifacts/v1.
 import { digest, FeatureError, nowSeconds, pagination, refuse, requireBodyKeys, validLongText } from '../../featurekit/http.js'
 import {
-  canEdit, catalogFacets, content, createArtifact, createMedia, createShare, duplicateArtifact, exportResult, HEX32, listShares, listing,
+  canEdit, catalogFacets, content, createArtifact, createMedia, createShare, detailView, documentTree, duplicateArtifact, exportResult, HEX32, listShares, listing,
   load, mediaDigests, parseExportFormat, recordVersion, recoverShareToken, replaceMedia, restoreArtifact, revokeShare, shareView,
   uniqueTitle, unlinkMedia, updateArtifact, usernames, view, versionView,
 } from './library.js'
@@ -109,7 +109,7 @@ export async function dispatch(req, workspaceId, artifactId, action) {
       const source = requireBodyKeys(duplicate_from,['artifact_id','revision'])
       return duplicateArtifact(context,workspaceId,{...source,title},req.headers.get('idempotency-key'))
     }
-    const body = requireBodyKeys(raw, ['title', 'body', 'kind', 'board', 'slides', 'dashboard', 'spreadsheet', 'source'])
+    const body = requireBodyKeys(raw, ['title', 'body', 'kind', 'board', 'slides', 'dashboard', 'spreadsheet', 'source', 'parent_id'])
     return createArtifact(context, workspaceId, body, req.headers.get('idempotency-key'))
   }
   if (!artifactId) refuse(400, 'invalid', 'Invalid artifact request')
@@ -169,7 +169,7 @@ export async function dispatch(req, workspaceId, artifactId, action) {
     return restoreArtifact(context, mustLoad(req, workspaceId, artifactId), body.revision, body.to, req.headers.get('idempotency-key'))
   }
   if (action) refuse(400, 'invalid', 'Invalid artifact request')
-  if (req.method === 'GET' && !req.queryString) return { body: { artifact: view(row) } }
+  if (req.method === 'GET' && !req.queryString) return { body: { artifact: detailView(req.store, row) } }
   if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid artifact request')
   if (!canEdit('owner', req.owner, row)) refuse(403, 'forbidden', 'Not allowed to change this document')
   const limit = publicKind(row) === 'spreadsheet' ? 1024 * 1024 : 70000
@@ -502,6 +502,10 @@ async function artifactDraft(req, workspaceId, kind) {
 }
 
 export const routes = [
+  { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/document-tree$/, handle(req, workspace) {
+    if (req.method !== 'GET' || req.queryString) refuse(400, 'invalid', '无效的文档树请求。')
+    return {body: {items: documentTree(req.store, workspace)}}
+  } },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/studio-personal-copy$/, handle: copyStudioToPersonal },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/shared-copy$/, handle: copySharedText },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/activity$/, handle: activity },

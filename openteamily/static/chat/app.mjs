@@ -8728,17 +8728,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     void loadSessions();
   }
 
+  function attachmentContext() {
+    if (!servedByDsbot || !currentUser || sendClosed()) return null;
+    if (currentSource === 'agent' && currentAgent) return {scope:sendScope(), private:true, owner:currentUser.id};
+    if (currentSource !== 'social' || !currentConversation || currentConversation.public_agent) return null;
+    const wid = workspaceId(), cid = currentConversation.id;
+    const scope = sendScope();
+    return {scope, wid, conversationId:cid, owner:currentUser.id, reply:replyDrafts.get(scope),
+      blocked:quoteBlocksSend(scope),
+      path:`/v1/workspaces/${wid}/social/conversations/${cid}/messages`};
+  }
+
   attachmentSender = mountChatFiles(document, {
-    context: () => {
-      if (!servedByDsbot || !currentUser) return null;
-      if (currentSource === 'agent' && currentAgent) return {scope:sendScope(), private:true, owner:currentUser.id};
-      if (currentSource !== 'social' || !currentConversation || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
-      const wid = workspaceId(), cid = currentConversation.id;
-      const scope = sendScope();
-      return {scope, wid, conversationId:cid, owner:currentUser.id, reply:replyDrafts.get(scope),
-        blocked:quoteBlocksSend(scope),
-        path:`/v1/workspaces/${wid}/social/conversations/${cid}/messages`};
-    },
+    context: attachmentContext,
+    uiLabel,
     ownerId: () => currentUser?.id,
     csrfToken: () => csrfCookie(document.cookie),
     createKey: () => idempotencyKey('chat-file-'),
@@ -9851,7 +9854,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       link.href = '/space?new=' + link.dataset.createArtifact + (workspace ? '#' + scope : '');
     }
     const agent = currentSource === 'agent' && Boolean(currentAgent);
-    const available = servedByDsbot && (shareable || agent) && !quoteBlocksSend(sendScope());
+    const attachment = attachmentContext();
+    const available = Boolean(attachment && !attachment.blocked);
     for (const button of document.querySelectorAll('[data-plus-attach]')) {
       button.disabled = !available;
       if (button.dataset.plusAttach === 'video') button.hidden = agent;

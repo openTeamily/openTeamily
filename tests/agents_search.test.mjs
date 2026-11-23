@@ -381,25 +381,76 @@ test('only a workspace manager can open the archived list or restore its agents'
   }
 });
 
-test('create form retains its element after DOM dispatch clears currentTarget during await', async () => {
-  const {doc,el}=fakeDocument();const requests=[],agents=[];let release,reset=0;
-  const ordinary=directoryFetcher(requests,{agents,conversations:[]});
-  const fetcher=async(path,options={})=>{
-    if(path==='/v1/workspaces/ws-1/agents'&&options.method==='POST'){
-      const agent={id:'new-agent',...JSON.parse(options.body),revision:1};
-      agents.push(agent);return await new Promise(resolve=>{release=()=>resolve(json(201,{agent}));});
+test('an uncertain agent create replays the same payload and key after reload', async () => {
+  const user = {id:'a'.repeat(32), username:'alice'};
+  const space = {id:'b'.repeat(32), name:'Desk', role:'owner'};
+  const base = '/v1/workspaces/' + space.id;
+  const storage = new Map();
+  const writes = [];
+  const received = Promise.withResolvers();
+  const replay = Promise.withResolvers();
+  let listReads = 0;
+  const fetcher = async (path, options) => {
+    if (path === '/v1/auth/session') return json(200, {user});
+    if (path === '/v1/workspaces?limit=100') return json(200, {items:[space]});
+    if (path === base + '/members') return json(200, {items:[{user_id:user.id, role:'owner'}]});
+    if (path === base + '/agents?limit=100') {
+      listReads += 1;
+      return json(200, {items:[]});
     }
-    return ordinary(path,options);
+    if (path === base + '/agents' && options.method === 'POST') {
+      writes.push({key:options.headers['Idempotency-Key'], body:JSON.parse(options.body)});
+      return writes.length === 1 ? received.promise : replay.promise;
+    }
+    return json(404, {});
   };
-  mount(doc,{fetcher});await tick();
-  const form=el('create-form');form.elements.name.value='Actually persisted';form.reset=()=>{reset++;};
-  const saved=globalThis.FormData;
-  globalThis.FormData=class{constructor(form){this.form=form}get(name){return this.form.elements[name]?.value||''}};
-  try{
-    const event={currentTarget:form,preventDefault(){}};
-    const pending=form.handlers.submit(event);assert.equal(typeof release,'function');
-    event.currentTarget=null;release();await pending;await tick();
-    assert.equal(reset,1);assert.equal(el('agent-list').children.length,1);
-    assert.equal(el('agents-count').textContent,'显示 1 个智能体');
-  }finally{globalThis.FormData=saved;}
+  async function openPage() {
+    const {doc, el} = fakeDocument();
+    doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+    doc.defaultView = {sessionStorage:{
+      getItem:key => storage.get(key) ?? null,
+      setItem:(key, value) => storage.set(key, value),
+      removeItem:key => storage.delete(key),
+    }};
+    const form = el('create-form');
+    form.reset = () => {
+      for (const field of Object.values(form.elements)) field.value = '';
+    };
+    await mount(doc, {fetcher});
+    return {el, form};
+  }
+  const saved = globalThis.FormData;
+  globalThis.FormData = class {
+    constructor(form) { this.form = form; }
+    get(name) { return this.form.elements[name]?.value ?? null; }
+  };
+  try {
+    const initial = await openPage();
+    initial.el('open-create').handlers.click();
+    initial.form.elements.name.value = 'Actually persisted';
+    initial.form.elements.instructions.value = 'Use the original configuration';
+    const first = initial.form.handlers.submit({currentTarget:initial.form, preventDefault() {}});
+    await initial.form.handlers.submit({currentTarget:initial.form, preventDefault() {}});
+    assert.equal(writes.length, 1);
+    assert.equal(initial.form.querySelector('button[type="submit"]').disabled, true);
+    received.reject(new Error('Response interrupted'));
+    await first;
+    assert.equal(storage.size, 1);
+
+    const returned = await openPage();
+    assert.equal(writes.length, 1, 'loading the page cannot create an agent');
+    returned.el('open-create').handlers.click();
+    assert.equal(returned.form.elements.name.value, 'Actually persisted');
+    assert.equal(returned.form.elements.name.disabled, true);
+    const event = {currentTarget:returned.form, preventDefault() {}};
+    const checked = returned.form.handlers.submit(event);
+    event.currentTarget = null;
+    assert.deepEqual(writes[1], writes[0]);
+    replay.resolve(json(200, {agent:{id:'c'.repeat(32), workspace_id:space.id, revision:1, ...writes[0].body}}));
+    await checked;
+    assert.equal(storage.size, 0);
+    assert.equal(listReads, 2, 'the confirmed receipt opens without a new directory read');
+    assert.equal(returned.el('edit-form').elements.name.value, 'Actually persisted');
+    assert.equal(returned.el('agents-count').textContent, '显示 1 个智能体');
+  } finally { globalThis.FormData = saved; }
 });

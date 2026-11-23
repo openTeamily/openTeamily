@@ -632,6 +632,101 @@ test('choosing a group attachment only creates a preview and removing it sends n
   assert.equal(el('agent-file-draft').hidden, true);
 });
 
+test('pasting files stages a scoped attachment and leaves normal caption paste to the textarea', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  doc.defaultView = {
+    XMLHttpRequest: class { constructor() { assert.fail('clipboard paste made an upload request'); } },
+    URL:{createObjectURL: () => 'blob:screenshot', revokeObjectURL() {}},
+  };
+  let destination = {scope:'group', private:false};
+  const files = mountChatFiles(doc, {context:() => destination});
+  const field = el('chat-body');
+  field.value = '已有草稿';
+  const photo = new File(['fixture'], 'screenshot.png', {type:'image/png'});
+  let prevented = false;
+  const paste = (picked, text = '') => fire(field, 'paste', {
+    clipboardData:{files:picked, getData:() => text}, preventDefault() { prevented = true; },
+  });
+
+  await paste([], '正常文本');
+  assert.equal(prevented, false);
+  await paste([photo], '图片说明');
+  assert.equal(prevented, false);
+  assert.equal(field.value, '已有草稿');
+  assert.deepEqual(files.draftFiles('group'), [photo]);
+
+  destination = {scope:'private', private:true};
+  files.render();
+  assert.equal(el('agent-file-draft').hidden, true);
+  await paste([photo]);
+  assert.equal(prevented, true);
+  assert.deepEqual(files.draftFiles('private'), [photo]);
+  destination = {scope:'blocked', blocked:true};
+  await paste([photo]);
+  assert.deepEqual(files.draftFiles('blocked'), []);
+});
+
+test('file drop checks its original conversation and reports partial attachment limits', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  doc.defaultView = {XMLHttpRequest: class { constructor() { assert.fail('file drop made an upload request'); } }};
+  const original = {scope:'origin', private:true};
+  let destination = original;
+  const files = mountChatFiles(doc, {context:() => destination});
+  const target = el('chat-form');
+  const hint = el('composer-file-drop');
+  let prevented = false;
+  const drag = {dataTransfer:{types:['Files'], files:[new File(['valid'], 'notes.txt')]},
+    preventDefault() { prevented = true; }};
+  await fire(target,'dragenter',{dataTransfer:{types:['text/plain']}, preventDefault:() => assert.fail('blocked text drag')});
+  assert.equal(hint.hidden,true);
+  await fire(target,'dragenter',drag);
+  await fire(target,'dragenter',drag);
+  await fire(target,'dragleave');
+  assert.equal(hint.hidden,false, 'moving between child controls must keep the drop affordance');
+  destination = {scope:'different'};
+  files.render();
+  await fire(target,'dragover',drag);
+  assert.equal(drag.dataTransfer.dropEffect,'none');
+  await fire(target,'drop',drag);
+  assert.equal(prevented,true);
+  assert.equal(hint.hidden,true);
+  assert.deepEqual(files.draftFiles('different'),[]);
+
+  destination = original;
+  drag.dataTransfer.files = [
+    new File([], 'empty.txt'), new File(['not allowed'], 'archive.zip'),
+    ...Array.from({length:5}, (_, index) => new File(['valid'], `${index}.txt`)),
+  ];
+  await fire(target,'dragenter',drag);
+  await fire(target,'dragover',drag);
+  assert.equal(drag.dataTransfer.dropEffect,'copy');
+  await fire(target,'drop',drag);
+  assert.equal(hint.hidden,true);
+  assert.deepEqual(files.draftFiles('origin').map(file => file.name), ['0.txt','1.txt','2.txt','3.txt']);
+  const feedback = el('chat-upload-error').textContent;
+  assert.match(feedback, /空文件/);
+  assert.match(feedback, /私聊支持图片/);
+  assert.match(feedback, /最多 4 个附件/);
+  destination = {scope:'other'};
+  files.render();
+  assert.equal(el('chat-upload-error').textContent,'');
+  assert.equal(el('agent-file-draft').hidden,true);
+});
+
+test('clipboard files that fit can still be staged after skipping one over the private aggregate limit', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  doc.defaultView = {};
+  const files = mountChatFiles(doc, {context:() => ({scope:'private', private:true})});
+  const first = new File([new Uint8Array(6 * 1024 * 1024)], 'first.txt');
+  const tooLarge = new File([new Uint8Array(3 * 1024 * 1024)], 'skip.txt');
+  const last = new File(['small'], 'last.txt');
+  await fire(el('chat-body'),'paste',{
+    clipboardData:{files:[first,tooLarge,last],getData:() => ''}, preventDefault() {},
+  });
+  assert.deepEqual(files.draftFiles('private'),[first,last]);
+  assert.match(el('chat-upload-error').textContent,/合计 8 MB/);
+});
+
 test('message search pages by cursor through a 加载更多 control instead of stopping at 20', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher, requests} = chatFetcher();
