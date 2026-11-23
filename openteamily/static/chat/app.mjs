@@ -6629,8 +6629,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         after:snapshot.has_newer ? lastSeq : null, seen:new Set()}
       : preserveUnread && Number.isSafeInteger(lastSeq) && updated.unread_count > 0
         ? {committed:0, latest:lastSeq, seen:new Set()} : null;
+    const followsLiveLink = link && message && around === message && result.body.has_newer === false;
     setSocialHistory({wid, cid: conversationId, owner: owner?.id, cursor: result.body.cursor ?? null,
-      readingHistory: Boolean(around || unread?.firstId), unread,
+      readingHistory: Boolean((around && !followsLiveLink) || unread?.firstId), unread,
       after: around && result.body.has_newer && Number.isSafeInteger(lastSeq) && lastSeq > 0 ? lastSeq : null});
     if (snapshot?.first === null && Number.isSafeInteger(snapshot.last_seq)) applyOpenedRead('social', updated, 0, link, snapshot.last_seq);
     chatCalls.sync();
@@ -7514,13 +7515,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     show('loading', '正在打开对话…');
     const message = start.social
       ? (chatPathId(start.message) ? start.message : '')
-      : (/^[0-9a-f]{32}$/.test(start.message) ? start.message : '');
+      : (PRIVATE_THREAD_ID.test(start.message) ? start.message : '');
+    const directMessage = servedByDsbot ? message : '';
     const position = !start.message && !start.directAccess && readingPositions.get(start.social
       ? readingPositionKey('social', workspace, start.social)
       : readingPositionKey('agent', workspace, start.conversation, start.agent));
     const opened = start.social
-      ? openSocialConversation(start.social, {acknowledge: !start.message, startUnread: !start.message, link, position})
-      : openAgentConversation(start.agent, start.conversation, {acknowledge: !message, link, startupSnapshot, position});
+      ? openSocialConversation(start.social, {
+        acknowledge: !start.message, startUnread: !start.message, link, position, message: directMessage,
+      })
+      : openAgentConversation(start.agent, start.conversation, {
+        acknowledge: !message, link, startupSnapshot, position, message: directMessage,
+      });
     link.open = socialOpen;
     if (parallelDirectory) link.directory = loadSessions(link, {nativeDirectory});
     try {
@@ -7529,9 +7535,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const openingHistory = privateHistory;
         const latestReply = lastAgentItems.at(-1);
         const latestUser = lastAgentItems.at(-2);
-        const followsReply = !start.social && openingHistory?.readingHistory &&
+        const followsReply = !start.social && openingHistory?.readingHistory && !openingHistory.after &&
           latestUser?.role === 'user' && latestUser.id === message && latestReply && waitingAgentReply(latestReply);
-        const moved = await jumpToMessage(message, null, link.current);
+        const moved = await jumpToMessage(message, null, link.current, {readWindow: !directMessage});
         if (!link.current()) return;
         if (!moved) {
           show('error', '找不到这条来源消息。');

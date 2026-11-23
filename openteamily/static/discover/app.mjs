@@ -845,6 +845,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   function closeWorkDetail({restore = true} = {}) {
     if (!activeWork) return;
+    activeWork.controller.abort();
     disposeWorkPreview();
     workComments.close();
     if (share.dialog.open) share.dialog.close();
@@ -922,11 +923,12 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       syncLoginLink();
     }
 
+    existing?.controller.abort();
     disposeWorkPreview();
     workComments.close();
     if (share.dialog.open) share.dialog.close();
     closeWorkRemix();
-    const entry = {slug: intent.slug, item: null, intent, scope: sessionRequest, outcome: 'loading'};
+    const entry = {slug: intent.slug, item: null, intent, scope: sessionRequest, outcome: 'loading', controller: new AbortController()};
     activeWork = entry;
     setWorkView(true);
     initialView.scrollTop = 0;
@@ -946,6 +948,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
     const checkingSession = sessionPending;
     const publicRead = !currentUser ? loadPublicWork(entry) : null;
+    const path = '/v1/discover/works/' + intent.slug + workDetailQuery(feedState);
+    const readScopedWork = () => request('GET', path, undefined, {}, entry.controller.signal).catch(() => ({status: 0}));
+    const earlyScoped = nativeCatalog && checkingSession ? readScopedWork() : null;
     if (checkingSession) await checkingSession;
     if (!activeWorkEntry(entry)) return;
     const viewer = currentUser;
@@ -957,14 +962,14 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
     showWorkRemixRecovery(entry);
 
-    const path = '/v1/discover/works/' + intent.slug + workDetailQuery(feedState);
-    const readScopedWork = () => request('GET', path).catch(() => ({status: 0}));
     const wrongViewer = result => nativeCatalog && result.status === 200 &&
       !matchesNativeViewer(result.body?.viewer_username, viewer);
-    let result = await readScopedWork();
+    let result = await (earlyScoped || readScopedWork());
     if (!activeWorkEntry(entry) || currentUser !== viewer) return;
-    // The scoped request can have used a different account while the session was changing.
-    if (wrongViewer(result)) result = await readScopedWork();
+    // Only reuse a speculative read if it identifies this work and the verified viewer.
+    if (wrongViewer(result) || (earlyScoped && (result.status !== 200 || result.body?.work?.slug !== entry.slug))) {
+      result = await readScopedWork();
+    }
     if (!activeWorkEntry(entry) || currentUser !== viewer) return;
     if (result.status === 404) return failWorkDetail(entry, 404);
     if (result.status !== 200 || result.body?.work?.slug !== entry.slug || wrongViewer(result)) {
@@ -985,7 +990,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     parameters.set('view', 'preview');
     if (useNeighbors) parameters.set('nav', 'latest');
     const path = '/w/' + entry.slug + '?' + parameters;
-    const result = await request('GET', path).catch(() => ({status: 0}));
+    const result = await request('GET', path, undefined, {}, entry.controller.signal).catch(() => ({status: 0}));
     if (!activeWorkEntry(entry) || entry.outcome === 'confirmed' || entry.outcome === 'denied') return result;
     const work = result.body;
     if (result.status !== 200 || work?.slug !== entry.slug ||

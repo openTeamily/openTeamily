@@ -4272,7 +4272,7 @@ const linkSocialDirectory = '/social/conversations?limit=100';
 const linkPersonalIdentity = '/v1/workspaces?scope=personal&include=personal-agent';
 const linkPersonalDefault = '/v1/workspaces?scope=personal&include=chat';
 const linkPersonalStartup = linkPersonalDefault + '&workspace=';
-const linkPersonalSocial = workspace => linkPersonalStartup + workspace + '&directory=0';
+const linkPersonalScopeOnly = workspace => linkPersonalStartup + workspace + '&directory=0';
 const linkPersonalEntry = linkPersonalStartup + linkWork + '&entry_agent=' + linkAgent;
 const linkPersonalThreadEntry = linkPersonalEntry + '&entry_conversation=' + linkThread + '&directory=0';
 const linkBase = workspace => '/v1/workspaces/' + workspace;
@@ -4317,7 +4317,7 @@ function linkedChatFixture(hash, {visibility = 'visible', narrow = false} = {}) 
     const call = {path, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : undefined};
     calls.push(call);
     const compatiblePath = path === linkPersonalEntry || path === linkPersonalThreadEntry ? linkPersonalStartup + linkWork
-      : [linkWork, linkTeam].some(workspace => path === linkPersonalSocial(workspace)) ? path.slice(0, -'&directory=0'.length)
+      : [linkWork, linkTeam].some(workspace => path === linkPersonalScopeOnly(workspace)) ? path.slice(0, -'&directory=0'.length)
       : path.endsWith(linkSocialPath + '?start=unread') ? path.slice(0, -'?start=unread'.length) : path;
     const override = routes.get(path) || routes.get(compatiblePath);
     if (override) return override(call, options);
@@ -4336,6 +4336,9 @@ function linkedChatFixture(hash, {visibility = 'visible', narrow = false} = {}) 
         workspace === linkWork ? {items: [agent], conversations: [nativeThread]} : {items: [], conversations: []});
       if (path === base + linkSocialDirectory) return json(200, {items: [socialThread(workspace)]});
       if (compatiblePath === base + linkSocialPath) return json(200, {conversation: socialThread(workspace), items: socialRows, cursor: 8});
+      if (path === base + linkSocialPath + '?around=' + linkSocialOlder) {
+        return json(200, {conversation: socialThread(workspace), items: [socialOlder], cursor: null, has_newer: true});
+      }
       if (path.startsWith(base + linkSocialPath + '/messages?around=')) {
         return json(200, {items: [socialOlder], cursor: null, has_newer: true});
       }
@@ -5025,7 +5028,7 @@ test('an exact shared chat and its group sidebar are usable while the personal s
     assert.equal(selected(), linkSocial);
     assert.deepEqual(messages(), [linkSocialLatest]);
     assert.equal(el('chat-body').disabled, false);
-    assert.ok(calls.some(call => call.path === linkPersonalSocial(linkTeam)));
+    assert.ok(calls.some(call => call.path === linkPersonalScopeOnly(linkTeam)));
     assert.ok(calls.some(call => call.path === scope + linkNativeDirectory));
     assert.ok(calls.some(call => call.path === scope + linkSocialDirectory));
 
@@ -5050,7 +5053,7 @@ test('an authorized personal group opens while the personal snapshot and native 
   const personal = Promise.withResolvers();
   const agents = Promise.withResolvers();
   const scope = linkBase(linkWork);
-  routes.set(linkPersonalSocial(linkWork), () => personal.promise);
+  routes.set(linkPersonalScopeOnly(linkWork), () => personal.promise);
   routes.set(scope + linkNativeDirectory, () => agents.promise);
   const loading = mount(doc, {fetcher:fixture.fetcher});
   try {
@@ -5060,7 +5063,7 @@ test('an authorized personal group opens while the personal snapshot and native 
     assert.deepEqual(messages(), [linkSocialLatest]);
     assert.equal(el('chat-body').disabled, false);
     assert.equal(calls.filter(call => call.path.startsWith(scope + linkSocialPath + '?')).length, 1);
-    assert.ok(calls.some(call => call.path === linkPersonalSocial(linkWork)));
+    assert.ok(calls.some(call => call.path === linkPersonalScopeOnly(linkWork)));
   } finally {
     personal.resolve(linkedChatSnapshot(fixture));
     agents.resolve(json(200, {items:[fixture.agent], conversations:[fixture.nativeThread]}));
@@ -6063,6 +6066,8 @@ test('a link to the latest native send highlights it and keeps its pending reply
   const {agent,nativeThread,nativeRows,routes,restore} = fixture;
   const key = 'artifact-receipt-reply';
   let items = [nativeRows[0],{...nativeRows[1],body:'',status:'running',client_key:key}];
+  const linked = `${scope}${linkNativeLatest}&around=${linkAgentOlder}`;
+  routes.set(linked,()=>json(200,{agent,conversation:nativeThread,items}));
   routes.set(scope + linkNativeLatest,()=>json(200,{agent,conversation:nativeThread,items}));
   const progress = scope + linkNativePath + '/reply-progress?key=' + key + '&after=0';
   routes.set(progress,()=> {
@@ -6074,10 +6079,30 @@ test('a link to the latest native send highlights it and keeps its pending reply
     assert.deepEqual(fixture.messages(),[linkAgentOlder,linkAgentLatest]);
     assert.equal(fixture.el('message-list').children[0].dataset.searchJump,'true');
     assert.equal(fixture.el('message-scroller').dataset.readingHistory,undefined);
+    assert.equal(fixture.calls.some(call=>call.path === linked),true);
+    assert.equal(fixture.calls.some(call=>call.path === scope + linkNativeLatest),false);
     t.mock.timers.tick(400);
     await settle();
     assert.ok(fixture.calls.some(call=>call.path === progress));
     assert.match(fixture.el('message-list').children[1].children[1].textContent,/Live reply from the receipt/);
+  } finally { restore(); }
+});
+
+test('a historical private message link with an unfinished reply stays in its history window', async t => {
+  t.mock.timers.enable({apis:['setTimeout']});
+  const scope = linkBase(linkWork);
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}&message=${linkAgentOlder}`);
+  const {agent,nativeThread,nativeRows,routes,restore} = fixture;
+  const linked = `${scope}${linkNativeLatest}&around=${linkAgentOlder}`;
+  const items = [nativeRows[0],{...nativeRows[1],body:'',status:'running',client_key:'old-pending-reply'}];
+  routes.set(linked,()=>json(200,{agent,conversation:nativeThread,items,has_newer:true}));
+  try {
+    await mount(fixture.doc,{fetcher:fixture.fetcher});
+    assert.equal(fixture.el('chat-load-newer').hidden,false);
+    assert.equal(fixture.el('message-list').children[0].dataset.searchJump,'true');
+    t.mock.timers.tick(1200);
+    await settle();
+    assert.deepEqual(fixture.calls.filter(call=>call.path.startsWith(scope + linkNativePath)).map(call=>call.path),[linked]);
   } finally { restore(); }
 });
 
@@ -6089,7 +6114,7 @@ test('a linked native history and message jump render while settings and the Soc
   const directory = Promise.withResolvers();
   const onboarding = Promise.withResolvers();
   const settings = Promise.withResolvers();
-  const around = `${scope}${linkNativePath}?around=${linkAgentOlder}&limit=50`;
+  const around = `${scope}${linkNativeLatest}&around=${linkAgentOlder}`;
   fixture.routes.set(scope + linkSocialDirectory, () => directory.promise);
   fixture.routes.set(scope + linkNativeLatest, () => json(200, {agent: fixture.agent, conversation: fixture.nativeThread,
     items: [fixture.nativeRows[1]], cursor: linkAgentLatest}));
@@ -6105,8 +6130,10 @@ test('a linked native history and message jump render while settings and the Soc
     assert.ok(fixture.calls.some(call => call.path === scope + linkSocialDirectory), 'the Social directory really is pending');
     const personal = fixture.calls.findIndex(call => call.path === linkPersonalIdentity && call.method === 'GET');
     const workspaces = fixture.calls.findIndex(call => call.path === '/v1/workspaces?limit=100');
-    const detail = fixture.calls.findIndex(call => call.path === scope + linkNativeLatest);
+    const detail = fixture.calls.findIndex(call => call.path === around);
     assert.ok(personal >= 0 && workspaces >= 0 && personal < detail && workspaces < detail, 'workspace authorization precedes detail');
+    assert.ok(fixture.calls.some(call => call.path === linkPersonalScopeOnly(linkWork)));
+    assert.equal(fixture.calls.some(call => call.path.includes('entry_conversation=')), false);
     assert.equal(fixture.calls.some(call => call.path === '/v1/personal-agent' && call.method === 'POST'), false,
       'a running DS-Bot with an existing personal binding does not need to provision again');
     assert.deepEqual(fixture.messages(), [linkAgentOlder]);
@@ -6124,7 +6151,7 @@ test('a linked native history and message jump render while settings and the Soc
     await loading;
     await settle();
     assert.equal(fixture.selected(), linkThread);
-    assert.equal(fixture.calls.filter(call => call.path === scope + linkNativeLatest).length, 1);
+    assert.equal(fixture.calls.filter(call => call.path === scope + linkNativeLatest).length, 0);
     assert.deepEqual(fixture.messages(), [linkAgentOlder]);
     assert.equal(fixture.el('onboarding-banner').hidden, true);
     onboarding.resolve(json(200, {onboarding: {completed: false}}));
@@ -6355,7 +6382,7 @@ test('paging forward from a native permalink preserves drafts while an explicit 
   const query = id => `${path}?after=${id}&limit=50`;
   let attempts = 0;
   routes.set(path + '?limit=50', () => page([latest]));
-  routes.set(`${path}?around=${older.id}&limit=50`, () => page([older],true));
+  routes.set(`${path}?limit=50&around=${older.id}`, () => page([older],true));
   routes.set(query(older.id), () => ++attempts === 1 ? json(503,{}) : page([middle],true));
   routes.set(query(middle.id), () => pending.promise);
   try {
@@ -6396,9 +6423,8 @@ test('sending from native history clears drafts immediately and keeps sending wh
   const sentAgain = Promise.withResolvers();
   const scope = {agent: fixture.agent, conversation: fixture.nativeThread};
   let latestCalls = 0;
-  fixture.routes.set(path + '?limit=50', () => ++latestCalls === 1
-    ? json(200, {...scope, items: [fixture.nativeRows[1]], cursor: linkAgentLatest}) : latest.promise);
-  fixture.routes.set(`${path}?around=${linkAgentOlder}&limit=50`, () => json(200, {...scope, items: [fixture.nativeRows[0]]}));
+  fixture.routes.set(path + '?limit=50', () => { latestCalls += 1; return latest.promise; });
+  fixture.routes.set(`${path}?limit=50&around=${linkAgentOlder}`, () => json(200, {...scope, items: [fixture.nativeRows[0]]}));
   fixture.routes.set(path + '/messages', call => call.body.body === 'Send while reading' ? sent.promise : sentAgain.promise);
   try {
     await mount(fixture.doc, {fetcher: fixture.fetcher});
@@ -6427,7 +6453,7 @@ test('sending from native history clears drafts immediately and keeps sending wh
     assert.equal(field.value, 'Next draft');
     assert.deepEqual(fixture.messages(), [linkAgentLatest, message.id, reply.id, second.id, secondReply.id]);
     assert.equal(fixture.el('chat-back-to-latest').hidden, true);
-    assert.equal(latestCalls, 2);
+    assert.equal(latestCalls, 1);
     assert.equal(fixture.calls.filter(call => call.path === path + '/messages').length, 2);
   } finally {
     sent.resolve(json(404, {}));
@@ -6453,19 +6479,44 @@ test('a linked Social history reaches its older target without waiting for the n
     assert.equal(fixture.el('message-list').children[0].dataset.searchJump, 'true');
     assert.deepEqual(fixture.scrolls.map(row => row.id), [linkSocialOlder]);
     assert.equal(globalThis.location.hash, hash);
-    assert.equal(fixture.calls.filter(call => call.path === scope + linkSocialPath + '/messages?around=' + linkSocialOlder + '&limit=50').length, 1);
+    assert.equal(fixture.calls.filter(call => call.path === scope + linkSocialPath + '?around=' + linkSocialOlder).length, 1);
+    assert.equal(fixture.calls.some(call => call.path.startsWith(scope + linkSocialPath + '/messages?around=')), false);
     assert.equal(fixture.calls.some(call => call.path.endsWith('/read')), false);
     directory.resolve(json(200, {items: [], conversations: []}));
     await loading;
     await settle();
     assert.equal(fixture.selected(), linkSocial);
-    assert.equal(fixture.calls.filter(call => call.path === scope + linkSocialPath).length, 1);
+    assert.equal(fixture.calls.filter(call => call.path === scope + linkSocialPath).length, 0);
     assert.equal(fixture.calls.some(call => call.path.endsWith('/read')), false);
     assert.deepEqual(fixture.messages(), [linkSocialOlder]);
   } finally {
     directory.resolve(json(200, {items: [], conversations: []}));
     fixture.restore();
   }
+});
+
+test('a Social message link that reaches the latest window follows the group reply already in progress', async t => {
+  t.mock.timers.enable({apis:['setTimeout']});
+  const path = linkBase(linkWork) + linkSocialPath;
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&social=${linkSocial}&message=${linkSocialLatest}`);
+  const conversation = {id:linkSocial, workspace_id:linkWork, kind:'group', title:'Linked group', members:[linkMember]};
+  const source = {id:linkSocialLatest, conversation_id:linkSocial, user_id:bob, body:'Group reply source', seq:8,
+    reply_jobs:[{id:'group-receipt-job',attempt:1,status:'running',agent_name:'Group assistant'}]};
+  const linkRead = `${path}?around=${source.id}`;
+  const progressRead = `${path}/reply-progress`;
+  fixture.routes.set(linkRead,()=>json(200,{conversation,items:[source],has_newer:false}));
+  fixture.routes.set(progressRead,()=>json(200,{items:[{id:'group-receipt-job',message_id:source.id,attempt:1,text:'Live group reply'}]}));
+  try {
+    await mount(fixture.doc,{fetcher:fixture.fetcher});
+    assert.equal(fixture.el('message-list').children[0].dataset.searchJump,'true');
+    assert.equal(fixture.el('chat-back-to-latest').hidden,true);
+    t.mock.timers.tick(500);
+    await settle();
+    const preview = descendants(fixture.el('message-list')).find(node=>node.classList.contains('group-reply-preview'));
+    assert.equal(preview.textContent,'Live group reply');
+    assert.equal(fixture.calls.filter(call=>call.path===progressRead).length,1);
+    assert.equal(fixture.calls.some(call=>call.path===path || call.path===path+'/read'),false);
+  } finally { fixture.restore(); }
 });
 
 for (const newer of [false, true]) {

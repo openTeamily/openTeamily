@@ -88,6 +88,20 @@
       <div id="team-run-list-panels">
         <section id="team-runs-list-view" aria-labelledby="team-runs-list-heading">
           <h2 id="team-runs-list-heading" tabindex="-1">我的任务</h2>
+          <form id="team-run-filters" class="team-run-filters" role="search" aria-label="查找我的团队任务" hidden>
+            <label>搜索任务 <input id="team-run-search" type="search" maxlength="80" placeholder="任务名称或目标"></label>
+            <label>状态
+              <select id="team-run-filter-status">
+                <option value="">全部状态</option>
+                <option value="running">运行中</option>
+                <option value="succeeded">已完成</option>
+                <option value="failed">失败</option>
+                <option value="cancelled">已取消</option>
+              </select>
+            </label>
+            <button type="button" id="team-run-clear-filters" class="secondary" hidden>清除筛选</button>
+          </form>
+          <p id="team-run-filter-count" class="note team-run-filter-count" role="status" hidden></p>
           <ul id="team-run-list" class="team-run-list"></ul>
           <p id="team-runs-empty" class="empty-state" hidden>还没有任务。新建任务后，可以在这里跟踪进度。</p>
         </section>

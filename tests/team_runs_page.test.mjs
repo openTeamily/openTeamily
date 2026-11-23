@@ -89,6 +89,7 @@ function fixture(hash = '', storage = new Map()) {
       this.textContent = '';
     }
     get childElementCount() { return this.children.length; }
+    get firstElementChild() { return this.children[0] || null; }
     addEventListener(type, handler) { this.events[type] = handler; }
     removeAttribute(name) { delete this[name]; }
     append(...items) { this.children.push(...items); }
@@ -109,7 +110,8 @@ function fixture(hash = '', storage = new Map()) {
       getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value),
       removeItem: key => storage.delete(key),
     },
-    addEventListener() {},
+    events: {},
+    addEventListener(type, handler) { this.events[type] = handler; },
     history: {pushState(_state, _title, next) { location.hash = next; }},
   };
   return {document, node};
@@ -280,6 +282,71 @@ test('a delayed exact result cannot replace the list after switching workspaces'
   assert.equal(node('team-run-list-panels').hidden, false);
   assert.equal(node('team-run-results').children.length, 0);
   assert.equal(document.defaultView.location.hash, '#workspace=' + OTHER_WS);
+});
+
+test('task history filters authorized results without requests and keeps the list position in its account and workspace', async () => {
+  const storage = new Map();
+  const first = fixture(`#workspace=${WS}`, storage);
+  const finished = {...run, title:'交接验收', goal:'找出跨团队 CJK 的准备事项', status:'succeeded'};
+  const other = {...run, id:OTHER_AGENT, title:'后续检查', goal:'找出未完成的准备事项'};
+  const requests = [];
+  let listResponse;
+  let refused = false;
+  const fetcher = async path => {
+    requests.push(path);
+    if (path === BASE) return listResponse || (refused ? ok({},403) : ok({items:[finished,other]}));
+    if (path === BASE + '/' + RUN) return ok({run:finished});
+    if (path === `/v1/workspaces/${OTHER_WS}/team-runs`) return ok({items:[]});
+    return baseRead(path);
+  };
+  const rows = instance => instance.node('team-run-list').children.map(row => row.firstElementChild);
+  const search = instance => instance.node('team-run-search');
+  const status = instance => instance.node('team-run-filter-status');
+  await mountTeamRuns(first.document, fetcher);
+  const beforeFiltering = requests.length;
+  input(search(first),'跨团队 ＣＪＫ');
+  assert.deepEqual(rows(first).map(button => button.dataset.runId),[RUN]);
+  input(status(first),'failed','change');
+  assert.equal(first.node('team-runs-empty').textContent,'没有符合条件的任务。');
+  assert.equal(first.node('team-run-filter-count').textContent,'显示 0 / 2 个任务');
+  input(status(first),'succeeded','change');
+  assert.equal(requests.length,beforeFiltering);
+  assert.equal(first.document.defaultView.location.hash,'#workspace=' + WS);
+  await rows(first)[0].events.click();
+  const pendingList = Promise.withResolvers();
+  listResponse = pendingList.promise;
+  const view = first.document.defaultView;
+  view.location.hash = '#workspace=' + WS;
+  const returned = view.events.hashchange();
+  assert.deepEqual(rows(first).map(button => button.dataset.runId),[RUN]);
+  assert.equal(first.document.activeElement,rows(first)[0]);
+  pendingList.resolve(ok({items:[finished,other]}));
+  await returned;
+  listResponse = undefined;
+
+  const restored = fixture('#workspace=' + WS,storage);
+  await mountTeamRuns(restored.document, fetcher);
+  assert.equal(search(restored).value,'跨团队 ＣＪＫ');
+  assert.equal(status(restored).value,'succeeded');
+  assert.equal(restored.document.activeElement,rows(restored)[0]);
+
+  const differentUser = fixture('#workspace=' + WS,storage);
+  await mountTeamRuns(differentUser.document, path => path === '/v1/auth/session'
+    ? ok({user:{id:OTHER_WS,username:'peer'}}) : fetcher(path));
+  assert.equal(search(differentUser).value,'');
+  assert.equal(status(differentUser).value,'');
+
+  input(restored.node('team-runs-workspace'),OTHER_WS,'change');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(search(restored).value,'');
+  input(restored.node('team-runs-workspace'),WS,'change');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(search(restored).value,'跨团队 ＣＪＫ');
+  refused = true;
+  await restored.node('team-runs-refresh').events.click();
+  assert.equal(restored.node('team-run-filters').hidden,true);
+  assert.equal(search(restored).value,'');
+  assert.equal(rows(restored).length,0);
 });
 
 test('transient read errors keep visible results, but permission loss clears task output and actions', async () => {
