@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {mountAutomationCreation, mountOnboarding, personalChatPath} from '../openteamily/static/onboarding/app.mjs';
+import {readFileSync} from 'node:fs';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 class FakeElement {
   constructor(tag = 'div', id = '') {
@@ -362,4 +367,22 @@ test('automation creation reports errors without advancing onboarding', async ()
   await button.handlers.click[0]();
   assert.equal(button.disabled, false);
   assert.match(doc.getElementById('onboarding-automation-status').textContent, /结果尚不确定/);
+});
+
+test('the onboarding wizard is a focused full-page flow without the app rail', () => {
+  const html = readFileSync(path.join(root, 'openteamily/static/onboarding/index.html'), 'utf8');
+  const css = readFileSync(path.join(root, 'openteamily/static/onboarding/app.css'), 'utf8');
+  assert.match(html, /<body class="app-workspace app-primary onboarding-focus">/);
+  assert.match(html, /<header class="onboarding-brand">/);
+  assert.match(html, /<nav class="app-rail" aria-label="应用导航">/);
+  assert.match(html, /id="account-menu"/);
+  assert.match(
+    css,
+    /body\.app-workspace\.onboarding-focus\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/,
+  );
+  assert.match(
+    css,
+    /body\.app-workspace\.onboarding-focus\s*>\s*\.app-rail\s*\{[^}]*display:\s*none/,
+  );
+  assert.match(css, /body\.app-workspace\.onboarding-focus\s*>\s*\.onboarding-brand/);
 });
