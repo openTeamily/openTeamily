@@ -3,7 +3,7 @@
 // reads; writes use the roster API and all turns target this Bot, never Chief.
 import { adoptThread, importHistory } from './history.js'
 import { createHash } from 'node:crypto'
-import { startOpenPart } from '../../../ds-bot-upstream/ds-bot/src/host/threads.js'
+import { addPrivateChat, livePrivateChat } from '../../lib/native-chat.js'
 
 export function nativeAgents({ host, db }) {
   db.exec(`CREATE TABLE IF NOT EXISTS native_agent_objects (
@@ -38,10 +38,9 @@ export function nativeAgents({ host, db }) {
       const mapping = mappedSession(row, key)
       if (!mapping) return
       const { rt, ctx } = await host.runtime()
-      const bot = rt.botOf(mapping.native_bot_id)
-      if (!bot || (rt.chatOwners?.has(mapping.native_session_id)
-          && rt.chatOwners.get(mapping.native_session_id) !== bot.id)) return
-      const target = await rt.resolveAgent(mapping.native_session_id)
+      const sessionId = livePrivateChat(rt, mapping.native_bot_id, mapping.native_session_id)
+      if (!sessionId) return
+      const target = await rt.resolveAgent(sessionId)
       await ctx.sessionTitle.rename(target.session, title)
       run('DELETE FROM native_agent_pending_titles WHERE conversation_id=? AND title=?', id, title)
     }).catch(() => host.log?.('Native session title will be retried after the session is available.'))
@@ -134,7 +133,7 @@ export function nativeAgents({ host, db }) {
       const recovered = bot.openteamily.sessionKeys[key]
       const sessionId = recovered || adopted[0] || await rt.createSession(title || row.name, { dir: rt.workDirOf({ botId: bot.id }) })
       const fresh = !recovered && !adopted.length
-      if (fresh) { startOpenPart(bot, sessionId); rt.chatOwners.set(sessionId, bot.id) }
+      if (fresh) addPrivateChat(rt, bot, {sessionId, segments: [], startedAt: Date.now()})
       bot.openteamily.sessionKeys[key] = sessionId
       await prepareSession(sessionId, fresh)
       await rt.save()

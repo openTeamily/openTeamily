@@ -1,7 +1,7 @@
 # 已交付修订的来源与许可清单
 
 审计日期：2026-11-16（Asia/Shanghai）。  
-NOTICE 钉扎于 2026-11-23（Asia/Shanghai）随上游 v0.3.9 更新，本次核对文件哈希和新增归属。
+NOTICE 的文件内容和哈希与 v0.3.9 一致。
 
 对照提交：`openTeamily/openTeamily` `origin/main` `e67e712f9f8389f842c33d204e6c6e6a0014df73`，外加本目录本次新增的清单与根 `NOTICE`。  
 本文件是对**当前仓库实际交付内容**和**运行时镜像配方会安装的组件**的书面清单，不是法律意见，也不构成再分发授权。根 MIT **不**覆盖导入树，也**不**覆盖镜像配方在构建时从 npm / Debian 拉入的第三方包。相关跟踪仍保持开放：issue 1、issue 3、issue 5。在下文「发布前的阻塞项」解决之前，**不得**把本仓镜像配方宣称为已审计的可再分发公开发行物。
@@ -17,7 +17,7 @@ NOTICE 钉扎于 2026-11-23（Asia/Shanghai）随上游 v0.3.9 更新，本次�
 | [`LICENSE`](../../LICENSE)（仅覆盖新撰写的 OpenTeamily 材料） | MIT，Copyright (c) 2026 OpenTeamily contributors | `096841e8f7eceada5cbb435b01e60cedc2b458717c2065131ad64e1d7bebad6a` | 1081 |
 | [`NOTICE`](../../NOTICE)（根说明，指向下列树与镜像义务） | 说明文件 | 以仓库当前文件为准 | — |
 | [`runtime/flybot/LICENSE`](../../runtime/flybot/LICENSE) + [`NOTICE`](../../runtime/flybot/NOTICE) | Apache-2.0 + NOTICE | LICENSE `c71d239d…0ab4`（11357）；NOTICE `94f05bc4…27ca`（3835） | 与 #18 ThinkFlowLab/FlyBot `@e26895e7` 记录一致 |
-| [`runtime/ds-bot-upstream/LICENSE`](../../runtime/ds-bot-upstream/LICENSE) + [`NOTICE`](../../runtime/ds-bot-upstream/NOTICE) | Apache-2.0 + NOTICE；未修改的 Fei2411/DS-Bot v0.3.9（`881b57b54046fb355095e9c11f7918bd62b8bf1e`） | LICENSE 与上项相同；NOTICE `7183b18ec5bd153cb7b207c0c0d8c9c8d83dc5f0add15c116f13027b5dd95050`（15883） | 相对 v0.3.8 补充 DSH FishLogo 归属，并修订远程连接密钥函数的归属说明。 |
+| [`runtime/ds-bot-upstream/LICENSE`](../../runtime/ds-bot-upstream/LICENSE) + [`NOTICE`](../../runtime/ds-bot-upstream/NOTICE) | Apache-2.0 + NOTICE；未修改的 Fei2411/DS-Bot v0.3.10（`d104d9ca18d69a35460f14e15dff4d553181433a`） | LICENSE 与上项相同；NOTICE `7183b18ec5bd153cb7b207c0c0d8c9c8d83dc5f0add15c116f13027b5dd95050`（15883） | 与 v0.3.9 使用同一 NOTICE 文件。 |
 | [`services/bot-social/LICENSE`](../../services/bot-social/LICENSE) | MIT，Copyright (c) 2026 Birfy | `6f5b168b7397507ec7854d3787079ae4185826ea0a9ade831a269fabe3e737c3` | 1062 |
 
 新撰写且声明 MIT 的运行时包：`runtime/flybot-image`、`runtime/flybot-image/plugin`、`runtime/flybot-social-host`、`runtime/flybot-web-slots`、`runtime/flybot-web-slots/social-web`（均 `license: MIT`）。`manager/compose-planner/package.json` 没有 `license` 字段，按根 MIT 覆盖的新撰写材料处理，除非日后证明另有来源。`ORIGIN.md` / `OPENTEAMILY.md` / `UPSTREAM.md` 是 OpenTeamily 文档覆层，适用根 MIT，不改变相邻上游文件的许可。

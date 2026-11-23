@@ -17,7 +17,7 @@ test('a conversation rename is retried on its original native Session and newer 
       if (!available) throw new Error('runtime unavailable')
       return {
         rt: {
-          botOf: id => ({ id }),
+          botOf: id => ({ id, sessionId: 'session-a' }),
           chatOwners: new Map([['session-a', owner]]),
           resolveAgent: async id => ({ session: { id } }),
         },

@@ -10,7 +10,7 @@ Imported and vendored trees keep their own LICENSE and NOTICE files:
 
   runtime/flybot/              Apache License 2.0 and NOTICE
   runtime/ds-bot-upstream/     Apache License 2.0 and NOTICE
-                               (unmodified Fei2411/DS-Bot v0.3.9)
+                               (unmodified Fei2411/DS-Bot v0.3.10)
   services/bot-social/         MIT, Copyright (c) 2026 Birfy
 
 Redistributors must retain those texts, copyright notices, and attribution

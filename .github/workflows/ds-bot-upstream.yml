@@ -76,6 +76,9 @@ jobs:
             exit 1
           fi
           npm run harness -- --no-save "@deepseek-ai/dsh@${DSH_VERSION}" "@deepseek-ai/dsh-agent-loop-testkit@${DSH_VERSION}"
+      - name: Check managed private histories with the native DSH host
+        working-directory: .
+        run: node --test runtime/flybot-image/test/native-open-parts.test.mjs
       # Upstream's annotation test owns its mock clock. The restart fixture's
       # cleanup waits for pending writes before removing its temporary directory.
       # Every assertion and vendor byte stays intact; source hashes fail closed.

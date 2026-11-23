@@ -6,7 +6,7 @@
 import {createHash} from 'node:crypto';
 export const target=new URL('../runtime/ds-bot-upstream/ds-bot/test/rounds.test.js',import.meta.url).href;
 export const marker="test('a group whose state was not saved after its last line goes on numbering after the book', async (t) => {";
-const expected='bda5d434d459dde98f8ca0ef9a2f87216faa28ba6bd3a4dbf2d198a40cf38f1f';
+const expected='dbf624f0f5659b6ff8d8233db7a07e85b8e581609d9e9cd15aa6428a600e2d5b';
 export const replacements=[
  ["  t.after(() => rmSync(home, { recursive: true, force: true, maxRetries: 5 }))",
   "  let stopRestarted\n  t.after(async () => {\n    if (stopRestarted) await stopRestarted()\n    rmSync(home, { recursive: true, force: true, maxRetries: 5 })\n  })"],

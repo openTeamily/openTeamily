@@ -8,7 +8,7 @@ PRs keep merging.
 
 ## 1. Target in one paragraph
 
-Every account owns exactly one isolated **DS-Bot** (upstream DS-Bot v0.3.9 on DSH 0.2.2-rc.1, pinned in
+Every account owns exactly one isolated **DS-Bot** (upstream DS-Bot v0.3.10 on DSH 0.2.2-rc.1, pinned in
 `runtime/ds-bot-upstream.pin.json`, one container + one volume per user, provisioned by the compose
 manager). The OpenTeamily product — pages, APIs and **all execution** (chat, skills, Composio/MCP tools,
 automations and schedules, exports, memory, artifacts, meetings, group replies) — is an **OpenTeamily DSH

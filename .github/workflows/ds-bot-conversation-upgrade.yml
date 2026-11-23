@@ -1,0 +1,68 @@
+name: DS-Bot conversation upgrade
+on:
+  pull_request:
+    paths:
+      - .github/workflows/ds-bot-conversation-upgrade.yml
+      - runtime/ds-bot-upstream.pin.json
+      - runtime/flybot-image/Dockerfile
+      - runtime/flybot-image/native-ds-bot*
+      - runtime/flybot-image/ds-bot-bridge.mjs
+      - runtime/flybot-image/plugin/**
+      - runtime/flybot-image/test/upgrade/**
+      - runtime/openteamily-web/features/agents/**
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  upgrade:
+    name: Upgrade two private-chat volumes in Chromium
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      BASELINE: 3389c421ac3d567e84cee0d30f6507c9591dc4cf
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+      - name: Build the v0.3.9 and candidate runtime images
+        shell: bash
+        run: |
+          set -eu
+          baseline="$RUNNER_TEMP/ot-upgrade-baseline"
+          git fetch --depth=1 --no-tags origin "$BASELINE"
+          git worktree add --detach "$baseline" "$BASELINE"
+          build_runtime() {
+            local source=$1 image=$2 dsh
+            dsh=$(node -p 'require(process.argv[1]).dsh' "$source/runtime/ds-bot-upstream.pin.json")
+            [[ "$dsh" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+)*$ ]]
+            docker build -f "$source/runtime/flybot-image/Dockerfile" \
+              --build-arg "DSH_VERSION=$dsh" \
+              --build-context "openteamily-static=$source/openteamily/static" \
+              -t "$image" "$source/runtime"
+          }
+          build_runtime "$baseline" openteamily-flybot:upgrade-baseline
+          build_runtime "$GITHUB_WORKSPACE" openteamily-flybot:upgrade-candidate
+      - name: Install Chromium on the runner
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/ot-playwright"
+          npm install --prefix "$RUNNER_TEMP/ot-playwright" --no-audit --no-fund playwright@1.56.1
+          "$RUNNER_TEMP/ot-playwright/node_modules/.bin/playwright" install chromium --with-deps
+      - name: Verify private history and replies after upgrade and restart
+        run: |
+          OT_UPGRADE_PLAYWRIGHT="$RUNNER_TEMP/ot-playwright/node_modules/playwright/index.mjs" \
+            OT_UPGRADE_SHOTS="$RUNNER_TEMP/ot-upgrade-shots" \
+            python3 runtime/flybot-image/test/upgrade/check.py --repo . \
+            --baseline openteamily-flybot:upgrade-baseline \
+            --candidate openteamily-flybot:upgrade-candidate
+      - name: Upload browser evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ds-bot-conversation-upgrade-browser
+          path: ${{ runner.temp }}/ot-upgrade-shots
+          if-no-files-found: ignore
+          retention-days: 7

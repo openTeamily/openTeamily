@@ -2,16 +2,16 @@
   "repo": "Fei2411/DS-Bot",
   "url": "https://github.com/Fei2411/DS-Bot",
   "license": "Apache-2.0",
-  "tag": "v0.3.9",
-  "commit": "881b57b54046fb355095e9c11f7918bd62b8bf1e",
-  "committed": "2026-11-21T19:00:16+08:00",
-  "version": "0.3.9",
+  "tag": "v0.3.10",
+  "commit": "d104d9ca18d69a35460f14e15dff4d553181433a",
+  "committed": "2026-11-22T18:25:36+08:00",
+  "version": "0.3.10",
   "dsh": "0.2.2-rc.1",
   "note": "runtime/ds-bot-upstream/<path> is byte-identical to upstream <commit>:<path> (git object ids below). Never edit it; OpenTeamily changes live outside it (see runtime/ds-bot-upstream/UPSTREAM.md). Update with: node scripts/ds-bot-upstream.mjs sync <tag>",
   "paths": {
     "ds-bot": {
       "type": "tree",
-      "id": "4b11407e17f1340c3219312a19dd388da9264a55",
+      "id": "ef97b8b191631f100cbfc2426dc97d19f1dc61e6",
       "mode": "040000"
     },
     "link": {
@@ -21,12 +21,12 @@
     },
     "app/package.json": {
       "type": "blob",
-      "id": "b3e8e96a978c858c359aa0232e7faf44a2b0b324",
+      "id": "38b90037c04eb7cb81f460fa60c96a78071c7023",
       "mode": "100644"
     },
     "app/ui/src": {
       "type": "tree",
-      "id": "ede19500824dc95a434feac0ef82b4e7accc4853",
+      "id": "f814feec0cfcb2b12c816f10897a036138817a89",
       "mode": "040000"
     },
     "mobile/src/team/gated.ts": {

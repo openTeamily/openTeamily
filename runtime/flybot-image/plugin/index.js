@@ -54,20 +54,20 @@ export function apply(ctx, config = {}) {
       const botId = await bridge.setup()
       return bridge.exclusive(async () => {
         await bridge.prepareModel()
-        await bridge.selectConversation(key)
+        const sessionId = await bridge.selectConversation(key)
         bridge.requireModel(botId)
-        return runTurn(rt, ctx, botId, text, requestId)
+        return runTurn(rt, ctx, botId, text, requestId, undefined, [], {sessionId})
       }, botId)
     }
     const mainBot = async () => { await bridge.setup(); return bridge.botId }
     const prepareMappedChat = async (botId, sessionId) => {
       await bridge.prepareModel()
-      await prepareNativeChat(rt, botId, sessionId)
+      return prepareNativeChat(rt, botId, sessionId)
     }
     const attachmentStore = () => ctx.get?.('attachments')
-    const nativeTurn = (botId, sessionId, text, requestId, options = {}) => bridge.exclusive(async () => {
+    const nativeTurn = (botId, savedSessionId, text, requestId, options = {}) => bridge.exclusive(async () => {
       options.signal?.throwIfAborted()
-      await prepareMappedChat(botId, sessionId)
+      const sessionId = await prepareMappedChat(botId, savedSessionId)
       const parts = [], stored = []
       const uploads = ctx.get?.('fileUploads')
       for (const file of options.files || []) {

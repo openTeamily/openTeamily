@@ -10,8 +10,8 @@ const sourceDir = fileURLToPath(new URL('../ds-bot-upstream/ds-bot/', import.met
 const patch = fileURLToPath(new URL('./native-ds-bot.patch', import.meta.url))
 const files = {
   'client.js': [
-    '2527e2a9bc6dcae9d4b08973e6b677db7e515cadb3d0843c7474bffbdff56034',
-    '34d617b7c6472695a2139ceed94879d1ef8c5ebd049d597b18f7e14346df9999',
+    '98713d86c6cbf85adab1d0a2d303140778d9ed85fb2220abdadfab377a5f539f',
+    '3d2fc1487229b3a17b31c07e9a7c361c4735e703cb48a4a89422bd7250ab5209',
   ],
   'src/client/at-menu.js': [
     'a0feee8fdb684324e7160f422c7930ec4ae032ef214d5d4651a7f6ede3c82124',
@@ -22,24 +22,40 @@ const files = {
     'bc23ba5a3fa351d83c1714441055a022fb1d4f813479908777519b0b191b240b',
   ],
   'src/client/i18n.js': [
-    'b4532d9f3df3570690ce67ca16f6bf31b4daad7a37be0a8800bedcbcbd77f606',
-    '424ee582bfca9ab5b46e604b54d74de7cf1b75b521bf0250669a3aae982a72f6',
+    '6b9e5157267f10cf8cdb554a770c3672ae5dcfef722d4a3730c65ea8a18ab83c',
+    '97bb88c1cf06681066c81c2a8d2ede4bee59ad7c9956b1602cd25bea27da2d97',
   ],
   'src/client/new-chat.js': [
     '3f98f6db4cf84f6a9ad9aaef9228a6332970e0ce5bfa1533cda100faf570bf06',
     'cc44ddde3947c8ca20c6c0a8806366f57a4b2f6b86f22ef21dde63cc97d8d6c9',
   ],
   'src/client/team-actions.js': [
-    'd827f54bbcd41e2572ba6fd02879b182f596cd7cc48e03f5ad1bdcb5ab036008',
-    '37217792866074e48a6ed890615db2633f9dd4e817c23e18570c174c5f046419',
+    '90f2dd67f80cea35d08c0a8553891b03e44cab5929130d364bbff87c9a1389dd',
+    'c09d6d8de803d46a8ca1346cc16f866561d13acb8e2fb67bfb9809618dc4f066',
   ],
   'src/host/capabilities.js': [
-    'c9f9a62de52275fa93a289b49894fcbaa8bd01c4d5f37e932cdedc8afd65738a',
-    'f23fc96ac541c79a0fdd58fb0872421a1ddc9903dc9c460480fab176a8328b9b',
+    '656fcc0b0fb7fd597dfd0f62bd49522d92becd4ed1c77dd53ba016f045614c89',
+    '321be0845446f49d8e0a8a2c6fc6acc95e178042b33a5c37e93aa7f2e6c079ca',
   ],
   'src/host/channel.js': [
-    'ac73e8f9b1d14eb9aae4672f7c1e5c33d4b803362db7f5bd34efefb3a748c51f',
-    '91d8d69a6dfcfb0308fedb0e03881e0f9edf8a584fff40296ac64f9e0630b796',
+    '34b2a23af48a7c90984cca4050d3187816a9873fd513005cfb4663a6b8a33cb8',
+    'a24c9c2421c93aaacb5f50b58bbf3733883976908b8ee64866d9ef4e3f32cd0f',
+  ],
+  'src/host/bot-tasks.js': [
+    '07701ae804298f68aa54f6fb8d69c7b98b4b99afd059d81d107d320bdc593e7e',
+    '16c61d88dd2e9d3a5257fe12d818e830c9392d72b5f1db24a52f012481f87243',
+  ],
+  'src/host/parts.js': [
+    'd0c762e46a00d053220eda242efaf503d24e15dbcff65ea6ac39c42f3d5234a6',
+    'ea7ca0a5bd1b60db291c4a555dc0694d089b4a3a4fb04a916b63ee0c480af924',
+  ],
+  'src/host/store.js': [
+    '6494f21fe71c208d246d56947680fdcbe55b77546c12bdf1da240854e0d5a504',
+    '76fbe8fe334567c266ef740335fa8ef6cdf9d5f8fa7be37296b9fcd511e85972',
+  ],
+  'src/host/threads.js': [
+    'e93710eacf98a2e86c74bd768f55590f1ac9af98748e4dc74148e5bc5b6e90e0',
+    'e3d1421905a6b1bbbeb9ce12bd94b2cc997cd6ba95cd90558a00fd5f2b0d1118',
   ],
 }
 

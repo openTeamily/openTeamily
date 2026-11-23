@@ -239,9 +239,11 @@ test('sending to a live mapped part selects its route without changing the foreg
       return events.filter(event => event.type==='assistant/message').map(event=>({kind:'bot',text:event.data.text}))
     },
   }
-  await assert.rejects(prepareNativeChat(rt,bot.id,'someone-else'),/no longer belongs/)
-  await prepareNativeChat(rt,bot.id,target)
-  const reply = await runTurn(rt,ctx,bot.id,'one test prompt','target-request',500,[],{sessionId:target})
+  await assert.rejects(prepareNativeChat(rt,bot.id,'someone-else'),/no longer active/)
+  assert.deepEqual(operations,[])
+  const sessionId = await prepareNativeChat(rt,bot.id,target)
+  assert.equal(sessionId,target)
+  const reply = await runTurn(rt,ctx,bot.id,'one test prompt','target-request',500,[],{sessionId})
   assert.deepEqual(operations,['check model','select target','apply target permission','send to target'])
   assert.equal(bot.sessionId,foreground)
   assert.equal(reply.text,'selected part reply')
@@ -356,25 +358,26 @@ test('a delayed abort lookup cannot cancel a newer turn on the same Session', as
   await result
 })
 
-test('an owned historical segment can still be opened using the native runtime', async () => {
-  const bot = {id:'bot', sessionId:'current', segments:[{sessionId:'previous'}]}
+test('an owned historical segment resumes at its own live head without switching the foreground', async () => {
+  const bot = {id:'bot', sessionId:'foreground', openParts:[
+    {sessionId:'current', segments:[{sessionId:'previous'}]},
+  ]}
   const rt = {
     botOf: () => bot,
     chatOf: () => bot.sessionId,
-    chatOwners: new Map([['current','bot']]),
+    chatOwners: new Map([['foreground','bot'],['current','bot']]),
     pastOwners: new Map([['previous',{botId:'bot'}]]),
-    async switchPart(id, sessionId) {
-      assert.equal(id,'bot')
-      assert.equal(sessionId,'previous')
-      bot.sessionId = sessionId
-      rt.chatOwners.set(sessionId,id)
-      rt.pastOwners.delete(sessionId)
-    },
+    async switchPart() { assert.fail('history lookup must not change the foreground') },
     applyModel: async()=>'openteamily/openteamily-model',
-    selectSessionModel: async id=>assert.equal(id,'previous'),
+    selectSessionModel: async id=>assert.equal(id,'current'),
+    applyPermission: async (subject,id)=>{
+      assert.equal(subject,bot)
+      assert.equal(id,'current')
+    },
   }
-  await prepareNativeChat(rt,'bot','previous')
-  assert.equal(bot.sessionId,'previous')
+  assert.equal(await prepareNativeChat(rt,'bot','previous'),'current')
+  assert.equal(bot.sessionId,'foreground')
+  assert.deepEqual(rt.pastOwners.get('previous'),{botId:'bot'})
 })
 
 test('the managed group turn hands off promptly when its exact native agent is disposed', async t => {
@@ -550,22 +553,23 @@ test('separate conversations use separate native DS-Bot threads and reuse persis
   fake.rt.save = async () => {}
   fake.rt.applyModel = async () => {}
   fake.rt.applyPermission = async () => {}
-  fake.rt.switchPart = async (_id, sid) => { bot.sessionId = sid }
+  fake.rt.switchPart = async () => { assert.fail('selecting a private chat must not switch the foreground') }
   const bridge = createBridge(fake.rt, { env: { DSH_HOME: home }, port: 1 })
   fake.bind(bridge.state)
   try {
     await bridge.setup()
-    await bridge.selectConversation('conv-a')
-    const a = fake.rt.chatOf('bot1')
-    await bridge.selectConversation('conv-b')
-    assert.notEqual(fake.rt.chatOf('bot1'), a)
-    await bridge.selectConversation('conv-a')
-    assert.equal(fake.rt.chatOf('bot1'), a)
+    const foreground = fake.rt.chatOf('bot1')
+    const a = await bridge.selectConversation('conv-a')
+    const b = await bridge.selectConversation('conv-b')
+    assert.notEqual(a,b)
+    assert.equal(await bridge.selectConversation('conv-a'),a)
+    assert.deepEqual(bot.openParts.map(part=>part.sessionId),[a,b])
     const restarted = createBridge(fake.rt, { env: { DSH_HOME: home }, port: 1 })
     fake.bind(restarted.state)
     await restarted.setup()
-    await restarted.selectConversation('conv-a')
-    assert.equal(fake.rt.chatOf('bot1'), a)
+    assert.equal(await restarted.selectConversation('conv-a'),a)
+    assert.equal(await restarted.selectConversation('conv-b'),b)
+    assert.equal(fake.rt.chatOf('bot1'),foreground)
     assert.equal(created, 2)
   } finally { rmSync(home, { recursive: true, force: true }) }
 })

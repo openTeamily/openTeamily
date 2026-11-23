@@ -1037,6 +1037,9 @@ export function createAgents({ db, host }) {
       const observed = mapped ? observeAgent({...current, native_bot_id: mapping.native_bot_id, native_name},
         rt?.botOf?.(mapping.native_bot_id), typeof rt?.botOf === 'function') : current
       if (snapshot && observed.archived) fail('snapshot-unavailable', 'Open this conversation to load its history', 409)
+      if (snapshot && mapped && historyProjection.requiresEarlierRecovery(runtime,mapped,row.id)) {
+        fail('snapshot-unavailable', 'Open this conversation to load its earlier history', 409)
+      }
       const memory = memorySetting(await conversationMemoryMode(row, agent))
       if (!snapshot && !anchors.length && mapped && row.archived_at === null && !observed.archived) {
         await historyProjection.catchUp(runtime,mapped,row.id)

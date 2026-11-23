@@ -2,28 +2,30 @@
 // actual Session events. No model call, no replay or outgoing message.
 import {createRequire} from 'node:module'
 import {pathToFileURL} from 'node:url'
-import { currentSession, threadOfPart, startOpenPart } from '../../../ds-bot-upstream/ds-bot/src/host/threads.js'
+import { addPrivateChat, livePrivateChat, ownsPrivateChatPart, privateChatThread } from '../../lib/native-chat.js'
 
 export const NATIVE_EVENT_LEDGER = `CREATE TABLE IF NOT EXISTS native_agent_events(
   message_id TEXT PRIMARY KEY,session_id TEXT NOT NULL,event_seq INTEGER,source TEXT NOT NULL);
   CREATE INDEX IF NOT EXISTS native_agent_event_lookup ON native_agent_events(session_id,event_seq);`
 
 export async function adoptThread({ rt, source, target, sessionId }) {
-  if (!sessionId || source.id === target.id) return sessionId
-  const existing = threadOfPart(target, sessionId)
-  if (existing) return existing.thread === 'current' ? currentSession(target) : target.openParts[existing.index].sessionId
-  const thread = threadOfPart(source, sessionId)
-  if (!thread) throw Object.assign(new Error('Legacy agent Session has no native owner thread'), { code: 'agents/legacy-session-unowned', status: 409 })
-  const part = thread.thread === 'current' ? { sessionId: currentSession(source), segments: source.segments || [] } : source.openParts[thread.index]
-  const ids = [part.sessionId, ...(part.segments || []).map(s => s.sessionId)]
+  if (!sessionId) return sessionId
+  const existing = privateChatThread(target, sessionId)
+  if (existing && livePrivateChat(rt, target.id, sessionId)) return existing.sessionId
+  const thread = privateChatThread(source, sessionId)
+  const unowned = () => Object.assign(new Error('Legacy agent Session has no native owner thread'), { code: 'agents/legacy-session-unowned', status: 409 })
+  if (existing || !thread || !livePrivateChat(rt, source.id, sessionId)) throw unowned()
+  const ids = [thread.sessionId, ...thread.segments.map(segment => segment.sessionId)]
+  if (ids.some(id => !ownsPrivateChatPart(rt, source.id, id) || privateChatThread(target, id))) throw unowned()
   if (ids.some(id => rt.live.get(id)?.turn !== undefined)) throw Object.assign(new Error('Agent history is busy; retry migration'), { code:'agents/history-busy', status:409 })
-  if (thread.thread === 'current') {
+  const part = {...source.openParts?.[thread.index], sessionId: thread.sessionId, segments: thread.segments}
+  if (thread.index === undefined) {
     const replacement = await rt.createSession(source.name, { dir: rt.workDirOf({ botId: source.id }) })
     source.sessionId = replacement; source.segments = []; rt.chatOwners.set(replacement, source.id)
   } else source.openParts.splice(thread.index, 1)
-  target.openParts ??= []
-  target.openParts.push(part)
-  for (const id of ids) rt.chatOwners.set(id, target.id)
+  rt.chatOwners.delete(part.sessionId)
+  rt.pastOwners?.delete(part.sessionId)
+  addPrivateChat(rt, target, part)
   return part.sessionId
 }
 
@@ -38,8 +40,9 @@ export async function importHistory({ db, rt, ctx, bot, conversationId, sessionI
   if (!rows.length) return { imported:0, matched:0 }
   const scan = new Set()
   for (const sid of [sessionId, ...secondarySessionIds].filter(Boolean)) {
-    const thread = threadOfPart(bot, sid)
+    const thread = privateChatThread(bot, sid)
     for (const part of thread?.segments || []) scan.add(part.sessionId)
+    if (thread) scan.add(thread.sessionId)
     scan.add(sid)
   }
   const events = []
@@ -57,7 +60,8 @@ export async function importHistory({ db, rt, ctx, bot, conversationId, sessionI
   }
   events.sort((a,b)=>a.time-b.time || a.seq-b.seq)
   const used = new Set(events.flatMap((e,i)=>db.prepare('SELECT 1 FROM native_agent_events WHERE session_id=? AND event_seq=?').get(e.id,e.seq) ? [i] : [])), put = db.prepare('INSERT OR IGNORE INTO native_agent_events VALUES(?,?,?,?)')
-  const agent = await rt.resolveAgent(sessionId)
+  const writeSessionId = privateChatThread(bot, sessionId)?.sessionId ?? sessionId
+  const agent = await rt.resolveAgent(writeSessionId)
   let imported=0,matched=0
   // A native system head must precede the first surface message. This is an
   // EMPTY current initialization, not a historical prompt or model response.
@@ -102,7 +106,7 @@ export async function importHistory({ db, rt, ctx, bot, conversationId, sessionI
     }
     // Flush BEFORE mapping: a crash between these is recovered by event source id.
     await ctx.sessions.flush(agent.session)
-    put.run(row.id,sessionId,event.seq,'imported'); imported++
+    put.run(row.id,writeSessionId,event.seq,'imported'); imported++
   }
   return { imported,matched }
 }

@@ -241,6 +241,35 @@ test('recovery refuses an archived conversation and keeps history on the same th
   assert.equal(f.db.prepare('SELECT count(*) AS n FROM native_agent_history_checkpoints').get().n,2)
 })
 
+test('opening a managed private chat restores native-only turns in its older parts', async t => {
+  const f = fixture(t,{recovery:true})
+  await f.seed({listen:false})
+  const {local} = f.bots
+  local.sessionId = 'foreground'
+  local.openParts = [{sessionId:'part-1',segments:[{sessionId:'older'},{sessionId:'stale-part'}]}]
+  local.tasks = [{sessionId:'settled-task'}]
+  f.rt.chatOwners.set('foreground','local')
+  f.rt.pastOwners.set('older',{botId:'local'})
+  f.rt.pastOwners.set('stale-part',{botId:'local'})
+  f.rt.chatOwners.set('stale-part','other')
+  f.rt.pastOwners.set('settled-task',{botId:'local'})
+  f.session('older').turn([input('Saved earlier native input'),output('Saved earlier answer')])
+  f.session('part-1').turn([input('Saved private head',{kind:'user',rpcId:'own-head'}),output('Saved head answer')],
+    {time:1_800_000_001_000})
+  f.session('settled-task').turn([input('Unrelated task'),output('Other task answer')])
+  f.session('stale-part').turn([input('Stale foreign claim'),output('Other owner answer')])
+  const snapshot = () => f.endpoints.v1({method:'GET',
+    path:`/v1/workspaces/${workspace}/agents/${agentId}/conversations/${conversationId}?limit=50&snapshot=1`})
+  assert.equal((await snapshot()).status,409)
+  assert.equal(f.lookups(),0)
+  const {conversation,items} = await f.endpoints.openConversation(args)
+  assert.equal(conversation.native_session_id,'part-1')
+  assert.deepEqual(items.map(item=>item.text),['Saved earlier native input','Saved earlier answer','Saved private head','Saved head answer'])
+  assert.deepEqual((await snapshot()).body.items.map(item=>item.id),items.map(item=>item.id))
+  assert.deepEqual((await f.endpoints.openConversation(args)).items.map(item=>item.id),items.map(item=>item.id))
+  assert.equal(f.lookups(),4)
+})
+
 test('cold history uses only the exact stored part and avoids reading it again at the known persisted cursor', async t => {
   const f = fixture(t,{recovery:true})
   await f.seed({listen:false})

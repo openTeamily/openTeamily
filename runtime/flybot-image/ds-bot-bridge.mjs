@@ -6,8 +6,8 @@ import { randomBytes } from 'node:crypto'
 import { createServer, request as httpRequest } from 'node:http'
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
-import { startOpenPart, threadOf, threadOfPart } from '../ds-bot-upstream/ds-bot/src/host/threads.js'
 import { splitRef } from '../ds-bot-upstream/ds-bot/src/host/text.js'
+import { addPrivateChat, livePrivateChat } from '../openteamily-web/lib/native-chat.js'
 import { request as httpsRequest } from 'node:https'
 import { STREAM_LIMIT, streamHttpTask, validateModelEndpoint } from './model-http-policy.mjs'
 import { loadModelApi, redact } from './model-api.js'
@@ -228,17 +228,13 @@ function turnProgress(onProgress) {
 }
 
 function ownsLiveChat(rt, botId, sessionId) {
-  return threadOf(rt.botOf(botId), sessionId) !== undefined
-    && rt.chatOwners?.get(sessionId) === botId && !rt.pastOwners?.has(sessionId)
+  return livePrivateChat(rt, botId, sessionId) === sessionId
 }
 
-export async function prepareNativeChat(rt, botId, sessionId) {
+export async function prepareNativeChat(rt, botId, savedSessionId) {
   const bot = rt.botOf(botId)
-  if (!threadOfPart(bot, sessionId)) throw new Error('Mapped native chat no longer belongs to this Bot')
-  // Live background parts accept messages directly. Reopening them via
-  // switchPart would reselect the model for every part of the Bot.
-  if (!ownsLiveChat(rt, botId, sessionId)) await rt.switchPart(botId, sessionId)
-  if (!ownsLiveChat(rt, botId, sessionId)) throw new Error('Mapped native chat is no longer active')
+  const sessionId = livePrivateChat(rt, botId, savedSessionId)
+  if (!sessionId) throw new Error('Mapped native chat is no longer active')
   const ref = await rt.applyModel(bot)
   const route = splitRef(ref)
   if (route) {
@@ -248,6 +244,7 @@ export async function prepareNativeChat(rt, botId, sessionId) {
     await rt.selectSessionModel(sessionId, {...route, ...(effort === undefined ? {} : {reasoningEffort:effort})})
   }
   if (rt.chatOf(botId) !== sessionId) await rt.applyPermission(bot, sessionId, undefined)
+  return sessionId
 }
 
 // Join progress to the native request echo and durable turn. The settled display
@@ -425,21 +422,37 @@ export function createBridge(rt, { env = process.env, port } = {}) {
     try { chats = JSON.parse(readFileSync(chatsPath, 'utf8')) } catch (error) { if (error.code !== 'ENOENT') throw error; chats = {} }
     return chats
   }
+  async function protectLegacyForeground(bot) {
+    // Older automation and skill bridge chats were tracked outside the roster.
+    // Bind the one foreground chain, if owned, before native task handoff.
+    let legacy
+    try { legacy = loadChats() } catch { return }
+    if (!legacy || typeof legacy !== 'object' || Array.isArray(legacy)) return
+    const foreground = rt.chatOf(bot.id)
+    if (!foreground) return
+    const keys = bot.openteamily?.sessionKeys ?? {}
+    const additions = Object.entries(legacy).filter(([key, id]) =>
+      typeof id === 'string' && !Object.hasOwn(keys, key) && livePrivateChat(rt, bot.id, id) === foreground)
+    if (!additions.length) return
+    bot.openteamily ??= {}
+    bot.openteamily.managedOpenParts = true
+    bot.openteamily.sessionKeys = {...keys, ...Object.fromEntries(additions)}
+    await rt.save()
+  }
   async function selectConversation(id) {
     if (!id) return
     const map = loadChats()
-    if (map[id]) { await rt.switchPart(botId, map[id]); return }
+    if (Object.hasOwn(map, id)) return prepareNativeChat(rt, botId, map[id])
     // Each OpenTeamily conversation gets a separate native DS-Bot chat/session.
     const bot = rt.botOf(botId)
     const freshId = await rt.createSession(bot.name, { dir: rt.workDirOf({ botId }) })
-    startOpenPart(bot, freshId)
-    rt.chatOwners.set(freshId, botId)
+    addPrivateChat(rt, bot, {sessionId: freshId, segments: [], startedAt: Date.now()})
     await rt.save()
-    await rt.applyModel(bot, { force: true })
-    await rt.applyPermission(bot, freshId, undefined)
-    map[id] = freshId
-    writeFileSync(chatsPath + '.tmp', JSON.stringify(map), { mode: 0o600 })
+    const next = {...map, [id]: freshId}
+    writeFileSync(chatsPath + '.tmp', JSON.stringify(next), { mode: 0o600 })
     renameSync(chatsPath + '.tmp', chatsPath)
+    chats = next
+    return prepareNativeChat(rt, botId, freshId)
   }
 
   function effectiveInput() {
@@ -473,6 +486,7 @@ export function createBridge(rt, { env = process.env, port } = {}) {
       await rt.capabilityDelete('ot-tools', { ui: true })
     }
     const bot = rt.botOf(botId)
+    await protectLegacyForeground(bot)
     if (!String(bot.model || '').endsWith('/' + MODEL_ID) && bot.model !== MODEL_ID) await rt.updateBot(botId, { model: MODEL_ID })
     return botId
   }
@@ -498,8 +512,8 @@ export function createBridge(rt, { env = process.env, port } = {}) {
     }
   }
 
-  // Switching parts can only affect turns for the same Bot. Operations that
-  // move a thread between Bots still wait for the whole roster to be idle.
+  // Turns and model configuration share a Bot. Operations that move a
+  // thread between Bots still wait for the whole roster to be idle.
   const botTurns = new Map()
   let rosterWork = Promise.resolve()
   function exclusive(fn, botId) {

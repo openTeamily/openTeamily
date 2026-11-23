@@ -1,8 +1,8 @@
 diff --git a/client.js b/client.js
-index 909d73f..35d9605 100644
+index 30e9d8f..12fc1bd 100644
 --- a/client.js
 +++ b/client.js
-@@ -13749,6 +13749,43 @@ var ZH = {
+@@ -14126,6 +14126,43 @@ var ZH = {
    "{name} leads this group: it can call members with @Name, change the group, and post here.": "{name} 主持这个群：可以用 @名字 点名成员、修改群设置、在群里发言。",
    "No admin yet. An admin can call members with @Name, change the group, and post here.": "还没有管理员。管理员可以用 @名字 点名成员、修改群设置、在群里发言。",
    "Who answers": "谁来回答",
@@ -46,7 +46,7 @@ index 909d73f..35d9605 100644
    "Choose an admin first": "先选一个管理员",
    "@mentions always pick who answers.": "@提及总是指定由谁回答。",
    Notice: "群公告",
-@@ -16016,6 +16053,10 @@ function teamActions({ call: call2, after, partFor, roster, ui, live, cards, hel
+@@ -16472,6 +16509,10 @@ function teamActions({ call: call2, after, partFor, roster, ui, live, cards, hel
      importAvatars: (items) => call2("avatar-import", { items }),
      deleteAvatar: (id) => call2("avatar-delete", { id }),
      createRoom: (members, options = {}) => after(call2("create-room", { members, ...options })),
@@ -57,7 +57,83 @@ index 909d73f..35d9605 100644
      updateBot: (id, patch) => after(call2("update-bot", { id, ...patch })),
      // Give up one wait the Bot has on a hand-off that will not come back.
      abandonWork: (id) => after(call2("abandon-work", { id })),
-@@ -33865,9 +33906,139 @@ var ROOM_MODES = [
+@@ -22016,7 +22057,7 @@ var COMPUTER_CSS = `
+ .bt-cstep-shot-open img{max-height:280px;max-width:480px}
+ `;
+
+-// node_modules/deep-view/src/react/ui.js
++// ../../../../node_modules/deep-view/src/react/ui.js
+ var import_react13 = require("react");
+ var FallbackMarkdown = ({ text }) => (0, import_react13.createElement)("span", null, String(text ?? ""));
+ var ViewUi = (0, import_react13.createContext)({ t: (key) => key, Markdown: FallbackMarkdown });
+@@ -22083,7 +22124,7 @@ function useOptionKeys2(count, onPick, ownRef) {
+   return count > 0 && listening <= 1;
+ }
+
+-// node_modules/deep-view/src/core/formula.js
++// ../../../../node_modules/deep-view/src/core/formula.js
+ var FUNCTIONS = {
+   min: { args: [1, Infinity], run: (...values) => Math.min(...values.map(num)) },
+   max: { args: [1, Infinity], run: (...values) => Math.max(...values.map(num)) },
+@@ -22364,7 +22405,7 @@ function evaluate(tree, lookup) {
+   }
+ }
+
+-// node_modules/deep-view/src/core/views.js
++// ../../../../node_modules/deep-view/src/core/views.js
+ var LAYOUT = ["stack", "row"];
+ var DISPLAY = ["text", "metric", "table", "chart", "progress", "callout", "sources", "html"];
+ var INPUT_TYPES = ["slider", "choice", "toggle", "number"];
+@@ -22996,7 +23037,7 @@ function validateForm(node, values) {
+   return { fields };
+ }
+
+-// node_modules/deep-view/src/react/chart.js
++// ../../../../node_modules/deep-view/src/react/chart.js
+ var import_react14 = require("react");
+ var PALETTE = ["var(--dv-accent)", "var(--dv-ink-tangerine)", "var(--dv-ink-green)", "var(--dv-ink-violet)", "var(--dv-ink-sky)", "var(--dv-ink-rose)", "var(--dv-ink-yellow)", "var(--dv-ink-cyan)", "var(--dv-ink-magenta)"];
+ var colorAt = (index) => PALETTE[index % PALETTE.length];
+@@ -23435,7 +23476,7 @@ var CHART_CSS = `
+ @media (prefers-reduced-motion:reduce){.dv-chart-mark,.dv-chart-dot{transition:none}.dv-chart-tip{animation:none}}
+ `;
+
+-// node_modules/deep-view/src/react/frame.js
++// ../../../../node_modules/deep-view/src/react/frame.js
+ var import_react15 = require("react");
+ var THEME_VARS = [
+   ["--view-ink", "--bt-ink", "--dv-ink"],
+@@ -23517,7 +23558,7 @@ var HTML_CSS = `
+ .dv-view-frame-stopped{margin:0;font-size:13px;line-height:18px;color:var(--dv-ink-2)}
+ `;
+
+-// node_modules/deep-view/src/react/card.js
++// ../../../../node_modules/deep-view/src/react/card.js
+ var import_react16 = require("react");
+ var mdLabels2 = (ui) => ({ code: { copyLabel: ui.t("Copy"), copiedLabel: ui.t("Copied") }, footnotes: ui.t("Footnotes") });
+ var TONES2 = ["good", "warn", "bad"];
+@@ -24259,7 +24300,7 @@ ${CHART_CSS}
+ ${HTML_CSS}
+ `;
+
+-// node_modules/deep-view/src/react/styles.js
++// ../../../../node_modules/deep-view/src/react/styles.js
+ var THEME_CSS = `
+ body{
+ --dv-ink:var(--dsw-alias-label-primary);
+@@ -24357,10 +24398,10 @@ button.dv-q-opt:active{background:var(--dv-active)}
+ @media (prefers-reduced-motion:reduce){.dv-q,.dv-view-bare,.dv-q-submit,.dv-menu,.dv-q-check{animation:none}}
+ `;
+
+-// node_modules/deep-view/src/react/index.js
++// ../../../../node_modules/deep-view/src/react/index.js
+ var DEEP_VIEW_CSS = THEME_CSS + QUESTION_CSS + WIDGET_CSS;
+
+-// node_modules/deep-view/src/core/reply.js
++// ../../../../node_modules/deep-view/src/core/reply.js
+ var REPLY_KIND = "user-question-reply";
+ var REPLY_SOURCE_KIND = "deep-view-reply";
+ function viewCardText(args) {
+@@ -34705,9 +34746,139 @@ var ROOM_MODES = [
    ["everyone", "Everyone", "Every member answers in turn, admin first."]
  ];
  var shownMode = (room2, roster) => roster.byId[room2.admin] ? room2.mode : "everyone";
@@ -81,11 +157,11 @@ index 909d73f..35d9605 100644
 +  return [count, admin ? t("Admin {name}", { name: admin.name }) : t("No admin")].join(" · ");
 +}
 +function SharedReplyPolicy({ policy, update }) {
-+  const [mode, setMode] = (0, import_react39.useState)(policy?.mode ?? "default");
++  const [mode, setMode] = (0, import_react38.useState)(policy?.mode ?? "default");
 +  const savedLead = replyPairKey(policy?.lead);
-+  const [lead, setLead] = (0, import_react39.useState)(savedLead);
-+  const [busy, setBusy] = (0, import_react39.useState)(false);
-+  const [failed, setFailed] = (0, import_react39.useState)(false);
++  const [lead, setLead] = (0, import_react38.useState)(savedLead);
++  const [busy, setBusy] = (0, import_react38.useState)(false);
++  const [failed, setFailed] = (0, import_react38.useState)(false);
 +  const target = policy?.targets.find((item) => replyPairKey(item) === lead);
 +  const editable = policy?.can_edit === true && Number.isSafeInteger(policy.revision);
 +  const needsRefresh = !policy || policy.can_edit && !editable || failed;
@@ -100,7 +176,7 @@ index 909d73f..35d9605 100644
 +      setBusy(false);
 +    }
 +  };
-+  (0, import_react39.useEffect)(() => {
++  (0, import_react38.useEffect)(() => {
 +    if (policy && !(policy.can_edit && !Number.isSafeInteger(policy.revision))) return;
 +    let current2 = true;
 +    setBusy(true);
@@ -118,25 +194,25 @@ index 909d73f..35d9605 100644
 +    revision: policy.revision,
 +    ...mode === "lead" ? { lead: { owner_id: target.owner_id, agent_id: target.agent_id } } : {}
 +  });
-+  return (0, import_react39.createElement)(
++  return (0, import_react38.createElement)(
 +    Card2,
 +    { title: t("Who answers") },
-+    policy ? (0, import_react39.createElement)(
++    policy ? (0, import_react38.createElement)(
 +      Row,
 +      { label: t("Current reply policy"), hint: policy.lead_unavailable ? t("The saved lead is unavailable. Other available group agents decide whether to reply.") : t(policy.mode === "everyone" ? "All group agents decide whether to respond." : policy.mode === "lead" ? "The selected lead decides whether to respond." : "@mentions always pick who answers."), stack: true },
-+      (0, import_react39.createElement)(
++      (0, import_react38.createElement)(
 +        "span",
 +        { className: "bt-set-hint", "data-ot-shared-reply-current": true },
 +        currentLead ? t("Lead {name}", { name: currentLead.name }) : t(policy.lead_unavailable ? "Lead unavailable" : replyModeLabel(policy.mode))
 +      )
 +    ) : null,
-+    editable ? (0, import_react39.createElement)(
++    editable ? (0, import_react38.createElement)(
 +      "div",
 +      { "data-ot-shared-reply-controls": true },
-+      (0, import_react39.createElement)(
++      (0, import_react38.createElement)(
 +        Row,
 +        { label: t("Reply policy") },
-+        (0, import_react39.createElement)(
++        (0, import_react38.createElement)(
 +          "select",
 +          {
 +            className: "bt-bs-input",
@@ -145,17 +221,17 @@ index 909d73f..35d9605 100644
 +            disabled: busy,
 +            onChange: (event) => setMode(event.target.value)
 +          },
-+          SHARED_REPLY_MODES.map(([value, label]) => (0, import_react39.createElement)("option", {
++          SHARED_REPLY_MODES.map(([value, label]) => (0, import_react38.createElement)("option", {
 +            key: value,
 +            value,
 +            disabled: value === "lead" && !policy.targets.length && policy.mode !== "lead"
 +          }, t(label)))
 +        )
 +      ),
-+      mode === "lead" ? (0, import_react39.createElement)(
++      mode === "lead" ? (0, import_react38.createElement)(
 +        Row,
 +        { label: t("Lead agent") },
-+        (0, import_react39.createElement)(
++        (0, import_react38.createElement)(
 +          "select",
 +          {
 +            className: "bt-bs-input",
@@ -164,17 +240,17 @@ index 909d73f..35d9605 100644
 +            disabled: busy,
 +            onChange: (event) => setLead(event.target.value)
 +          },
-+          (0, import_react39.createElement)("option", { value: "", disabled: true }, t("Choose a lead agent")),
++          (0, import_react38.createElement)("option", { value: "", disabled: true }, t("Choose a lead agent")),
 +          policy.targets.map((item) => {
 +            const key = replyPairKey(item);
-+            return (0, import_react39.createElement)("option", { key, value: key }, [item.name, item.owner_name].filter(Boolean).join(" · "));
++            return (0, import_react38.createElement)("option", { key, value: key }, [item.name, item.owner_name].filter(Boolean).join(" · "));
 +          })
 +        )
 +      ) : null,
-+      (0, import_react39.createElement)(
++      (0, import_react38.createElement)(
 +        "div",
 +        { className: "bt-set-row bt-task-foot" },
-+        (0, import_react39.createElement)("button", {
++        (0, import_react38.createElement)("button", {
 +          type: "button",
 +          className: "bt-soft bt-soft-sm",
 +          disabled: busy || !canSave,
@@ -182,11 +258,11 @@ index 909d73f..35d9605 100644
 +          onClick: () => void save()
 +        }, t("Save"))
 +      )
-+    ) : policy && !policy.can_edit ? (0, import_react39.createElement)(Row, { label: t("Read only") }) : null,
-+    needsRefresh ? (0, import_react39.createElement)(
++    ) : policy && !policy.can_edit ? (0, import_react38.createElement)(Row, { label: t("Read only") }) : null,
++    needsRefresh ? (0, import_react38.createElement)(
 +      "div",
 +      { className: "bt-set-row bt-task-foot" },
-+      (0, import_react39.createElement)("button", {
++      (0, import_react38.createElement)("button", {
 +        type: "button",
 +        className: "bt-soft bt-soft-sm",
 +        disabled: busy,
@@ -198,7 +274,7 @@ index 909d73f..35d9605 100644
  }
  function GroupPermission({ room: room2, catalog, update }) {
    if (!catalog?.options?.length) return null;
-@@ -33941,6 +34112,8 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
+@@ -34781,6 +34952,8 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
      const timer = setTimeout(() => setConfirming(false), 4e3);
      return () => clearTimeout(timer);
    }, [confirming]);
@@ -207,7 +283,7 @@ index 909d73f..35d9605 100644
    const members = room2.members.map((id) => roster.byId[id]).filter(Boolean);
    const outside = roster.bots.filter((bot) => !room2.members.includes(bot.id));
    const admin = roster.byId[room2.admin];
-@@ -33988,7 +34161,21 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
+@@ -34828,7 +35001,21 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
          (0, import_react39.createElement)(InlineText, { label: t("Group notice"), value: room2.notice, multiline: true, maxLength: 2e3, placeholder: t("Shared instructions every member reads before speaking…"), onSave: (notice) => update({ notice }) })
        )
      ),
@@ -230,7 +306,7 @@ index 909d73f..35d9605 100644
        Card2,
        { title: t("Who answers") },
        (0, import_react39.createElement)(
-@@ -34022,7 +34209,7 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
+@@ -34862,7 +35049,7 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
        Card2,
        { title: t("Members · {count}", { count: members.length }) },
        members.map((member) => {
@@ -239,7 +315,7 @@ index 909d73f..35d9605 100644
          return (0, import_react39.createElement)(
            "div",
            { key: member.id, className: "bt-set-row bt-bs-row bt-gs-member" },
-@@ -34033,7 +34220,7 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
+@@ -34873,7 +35060,7 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
              (0, import_react39.createElement)("span", { className: "bt-row-title" }, member.name),
              leads ? (0, import_react39.createElement)("span", { className: "bt-tag" }, t("Admin")) : null
            ),
@@ -248,7 +324,7 @@ index 909d73f..35d9605 100644
            members.length > 2 ? (0, import_react39.createElement)("button", { type: "button", className: "bt-x", "aria-label": t("Remove {name} from the group", { name: member.name }), title: t("Remove from group"), onClick: () => update({ remove: [member.id] }) }, "×") : null
          );
        }),
-@@ -34050,7 +34237,7 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
+@@ -34890,7 +35077,7 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
          )),
          (0, import_react39.createElement)("button", { key: "cancel", type: "button", className: "bt-set-row bt-bs-row bt-gs-add", onClick: () => setAdding(false) }, t("Cancel"))
        ] : outside.length > 0 ? (0, import_react39.createElement)("button", { type: "button", className: "bt-set-row bt-bs-row bt-gs-add", onClick: () => setAdding(true) }, (0, import_react39.createElement)(PlusIcon), t("Add member")) : null,
@@ -257,7 +333,16 @@ index 909d73f..35d9605 100644
          "span",
          { className: "bt-set-hint" },
          // The host checks for two members on every change, even a rename.
-@@ -42757,6 +42944,28 @@ var BOTS_SOURCE = "ds-bot";
+@@ -36595,7 +36782,7 @@ var CONNECTORS_PAGE_CSS = `
+ @media (prefers-reduced-motion:reduce){.bt-app[data-fresh]::after,.bt-app[data-fresh] .bt-app-icon,.bt-app[data-fresh] .bt-app-btn-done{animation:none}}
+ `;
+
+-// node_modules/qrcode-generator/dist/qrcode.mjs
++// ../../../../node_modules/qrcode-generator/dist/qrcode.mjs
+ var qrcode = function(typeNumber, errorCorrectionLevel) {
+   const PAD0 = 236;
+   const PAD1 = 17;
+@@ -45145,6 +45332,28 @@ var BOTS_SOURCE = "ds-bot";
  var CHATS_SOURCE = "ds-bot-chats";
  var ROOM_ALL = ["all", "everyone", "所有人", "全体"];
  var OTHER_CHATS_MAX = 8;
@@ -286,7 +371,7 @@ index 909d73f..35d9605 100644
  var conversationOf = (roster, sessionId) => {
    if (!roster.ready) return null;
    const room2 = roster.roomsById[sessionId];
-@@ -42767,8 +42976,9 @@ var conversationOf = (roster, sessionId) => {
+@@ -45155,8 +45364,9 @@ var conversationOf = (roster, sessionId) => {
  function mentionRows(roster, sessionId, query = "") {
    const here = conversationOf(roster, sessionId);
    if (here === null) return null;
@@ -297,7 +382,7 @@ index 909d73f..35d9605 100644
    const rows2 = bots.filter((bot) => bot.name.toLowerCase().includes(needle)).map((bot) => ({ bot, text: `@${bot.name} ` }));
    const everyone = t("Everyone");
    if (here.room && bots.length > 1 && [everyone, ...ROOM_ALL].some((word) => word.toLowerCase().startsWith(needle))) {
-@@ -42807,13 +43017,20 @@ function atSources({ roster, sessions, launched, iconFor }) {
+@@ -45195,13 +45405,20 @@ function atSources({ roster, sessions, launched, iconFor }) {
        return (mentionRows(roster.getSnapshot(), session.sessionId, query) ?? []).map((row) => ({
          name: row.bot ? row.bot.name : t("Everyone"),
          ...row.bot?.role ? { description: row.bot.role } : {},
@@ -321,31 +406,31 @@ index 909d73f..35d9605 100644
    };
    const chats = {
      trigger: "@",
-@@ -44362,10 +44579,278 @@ var PASTE_CSS = `
+@@ -46750,10 +46967,278 @@ var PASTE_CSS = `
 
  // src/client/new-chat.js
- var import_react67 = require("react");
+ var import_react71 = require("react");
 +function SharedGroupForm({ roster, actions, back, onCreated }) {
-+  const [workspaces, setWorkspaces] = (0, import_react67.useState)(null);
-+  const [workspace, setWorkspace] = (0, import_react67.useState)("");
-+  const [title, setTitle] = (0, import_react67.useState)("");
-+  const [picked, setPicked] = (0, import_react67.useState)([]);
-+  const [handles, setHandles] = (0, import_react67.useState)("");
-+  const [loadVersion, setLoadVersion] = (0, import_react67.useState)(0);
-+  const [busy, setBusy] = (0, import_react67.useState)(false);
-+  const [loadFailed, setLoadFailed] = (0, import_react67.useState)(false);
-+  const [created, setCreated] = (0, import_react67.useState)(false);
-+  const [error, setError] = (0, import_react67.useState)("");
-+  const request = (0, import_react67.useRef)(null);
-+  const mounted = (0, import_react67.useRef)(false);
-+  const workspaceField = (0, import_react67.useRef)(null);
-+  (0, import_react67.useEffect)(() => {
++  const [workspaces, setWorkspaces] = (0, import_react71.useState)(null);
++  const [workspace, setWorkspace] = (0, import_react71.useState)("");
++  const [title, setTitle] = (0, import_react71.useState)("");
++  const [picked, setPicked] = (0, import_react71.useState)([]);
++  const [handles, setHandles] = (0, import_react71.useState)("");
++  const [loadVersion, setLoadVersion] = (0, import_react71.useState)(0);
++  const [busy, setBusy] = (0, import_react71.useState)(false);
++  const [loadFailed, setLoadFailed] = (0, import_react71.useState)(false);
++  const [created, setCreated] = (0, import_react71.useState)(false);
++  const [error, setError] = (0, import_react71.useState)("");
++  const request = (0, import_react71.useRef)(null);
++  const mounted = (0, import_react71.useRef)(false);
++  const workspaceField = (0, import_react71.useRef)(null);
++  (0, import_react71.useEffect)(() => {
 +    mounted.current = true;
 +    return () => {
 +      mounted.current = false;
 +    };
 +  }, []);
-+  (0, import_react67.useEffect)(() => {
++  (0, import_react71.useEffect)(() => {
 +    let current2 = true;
 +    setLoadFailed(false);
 +    void actions.sharedGroupWorkspaces().then((result) => {
@@ -395,31 +480,31 @@ index 909d73f..35d9605 100644
 +      if (mounted.current) setBusy(false);
 +    }
 +  };
-+  const field = (label, control) => (0, import_react67.createElement)(
++  const field = (label, control) => (0, import_react71.createElement)(
 +    "label",
 +    { key: label, className: "bt-field" },
-+    (0, import_react67.createElement)("span", { className: "bt-field-label" }, t(label)),
++    (0, import_react71.createElement)("span", { className: "bt-field-label" }, t(label)),
 +    control
 +  );
-+  return (0, import_react67.createElement)(
++  return (0, import_react71.createElement)(
 +    "div",
 +    { className: "bt-newchat", role: "dialog", "aria-label": t("Create OpenTeamily group") },
-+    (0, import_react67.createElement)(
++    (0, import_react71.createElement)(
 +      "div",
 +      { className: "bt-to" },
-+      (0, import_react67.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: back, disabled: busy }, t("Back")),
-+      (0, import_react67.createElement)("strong", null, t("Create OpenTeamily group"))
++      (0, import_react71.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: back, disabled: busy }, t("Back")),
++      (0, import_react71.createElement)("strong", null, t("Create OpenTeamily group"))
 +    ),
-+    (0, import_react67.createElement)(
++    (0, import_react71.createElement)(
 +      "form",
 +      { className: "bt-drawer-body", style: { width: "min(100%, 550px)", boxSizing: "border-box", marginInline: "auto" }, onSubmit: submit },
-+      loadFailed ? (0, import_react67.createElement)(
++      loadFailed ? (0, import_react71.createElement)(
 +        "div",
 +        { className: "bt-field" },
-+        (0, import_react67.createElement)("p", { role: "alert", className: "bt-error" }, t("Could not load OpenTeamily workspaces.")),
-+        (0, import_react67.createElement)("div", { className: "bt-actions" }, (0, import_react67.createElement)("button", { type: "button", className: "bt-soft", onClick: () => setLoadVersion((value) => value + 1) }, t("Retry")))
-+      ) : workspaces === null ? (0, import_react67.createElement)("p", { role: "status", className: "bt-note" }, t("Loading workspaces…")) : workspaces.length === 0 ? (0, import_react67.createElement)("p", { role: "status", className: "bt-note" }, t("No OpenTeamily workspaces are available.")) : [
-+        field("Workspace", (0, import_react67.createElement)(
++        (0, import_react71.createElement)("p", { role: "alert", className: "bt-error" }, t("Could not load OpenTeamily workspaces.")),
++        (0, import_react71.createElement)("div", { className: "bt-actions" }, (0, import_react71.createElement)("button", { type: "button", className: "bt-soft", onClick: () => setLoadVersion((value) => value + 1) }, t("Retry")))
++      ) : workspaces === null ? (0, import_react71.createElement)("p", { role: "status", className: "bt-note" }, t("Loading workspaces…")) : workspaces.length === 0 ? (0, import_react71.createElement)("p", { role: "status", className: "bt-note" }, t("No OpenTeamily workspaces are available.")) : [
++        field("Workspace", (0, import_react71.createElement)(
 +          "select",
 +          {
 +            ref: workspaceField,
@@ -434,31 +519,31 @@ index 909d73f..35d9605 100644
 +              setError("");
 +            }
 +          },
-+          (0, import_react67.createElement)("option", { value: "" }, t("Choose a workspace")),
-+          workspaces.map((row) => (0, import_react67.createElement)("option", { key: row.workspace_id, value: row.workspace_id }, row.kind === "personal" ? t("Personal workspace") : row.name))
++          (0, import_react71.createElement)("option", { value: "" }, t("Choose a workspace")),
++          workspaces.map((row) => (0, import_react71.createElement)("option", { key: row.workspace_id, value: row.workspace_id }, row.kind === "personal" ? t("Personal workspace") : row.name))
 +        )),
-+        field("Group name", (0, import_react67.createElement)("input", { className: "bt-input", value: title, disabled, required: true, maxLength: 80, onChange: (event) => setTitle(event.target.value) })),
-+        selectedWorkspace ? (0, import_react67.createElement)(
++        field("Group name", (0, import_react71.createElement)("input", { className: "bt-input", value: title, disabled, required: true, maxLength: 80, onChange: (event) => setTitle(event.target.value) })),
++        selectedWorkspace ? (0, import_react71.createElement)(
 +          "fieldset",
 +          { key: "bots", disabled, style: { margin: 0, padding: 0, border: 0, minWidth: 0 } },
-+          (0, import_react67.createElement)("legend", { className: "bt-field-label" }, t("Bots in this workspace")),
-+          bots.length === 0 ? (0, import_react67.createElement)("p", { className: "bt-note" }, t("There are no available Bots in this workspace.")) : bots.map((bot) => {
++          (0, import_react71.createElement)("legend", { className: "bt-field-label" }, t("Bots in this workspace")),
++          bots.length === 0 ? (0, import_react71.createElement)("p", { className: "bt-note" }, t("There are no available Bots in this workspace.")) : bots.map((bot) => {
 +            const checked = picked.includes(bot.id);
-+            return (0, import_react67.createElement)(
++            return (0, import_react71.createElement)(
 +              "label",
 +              { key: bot.id, className: "bt-option" },
-+              (0, import_react67.createElement)("input", {
++              (0, import_react71.createElement)("input", {
 +                type: "checkbox",
 +                checked,
 +                disabled: disabled || !checked && picked.length >= 10,
 +                onChange: () => setPicked((current2) => checked ? current2.filter((id) => id !== bot.id) : [...current2, bot.id])
 +              }),
-+              (0, import_react67.createElement)(BotMark, { bot, size: 22 }),
-+              (0, import_react67.createElement)("span", { className: "bt-option-label" }, bot.name)
++              (0, import_react71.createElement)(BotMark, { bot, size: 22 }),
++              (0, import_react71.createElement)("span", { className: "bt-option-label" }, bot.name)
 +            );
 +          })
 +        ) : null,
-+        selectedWorkspace ? field("Member handles (optional)", (0, import_react67.createElement)("input", {
++        selectedWorkspace ? field("Member handles (optional)", (0, import_react71.createElement)("input", {
 +          className: "bt-input",
 +          value: handles,
 +          disabled,
@@ -466,10 +551,10 @@ index 909d73f..35d9605 100644
 +          placeholder: t("Separate handles with commas"),
 +          onChange: (event) => setHandles(event.target.value)
 +        })) : null,
-+        selectedWorkspace && (participants === 0 || people.length > 49) ? (0, import_react67.createElement)("p", { key: "participants", className: "bt-note" }, t(participants === 0 ? "Choose at least one Bot or member." : "Enter no more than 49 member handles.")) : null,
-+        created ? (0, import_react67.createElement)("p", { key: "created", role: "status", className: "bt-note" }, t("Group created. Retry opening it here.")) : null,
-+        error ? (0, import_react67.createElement)("p", { key: "error", role: "alert", className: "bt-error" }, error) : null,
-+        (0, import_react67.createElement)("div", { key: "submit", className: "bt-actions" }, (0, import_react67.createElement)(
++        selectedWorkspace && (participants === 0 || people.length > 49) ? (0, import_react71.createElement)("p", { key: "participants", className: "bt-note" }, t(participants === 0 ? "Choose at least one Bot or member." : "Enter no more than 49 member handles.")) : null,
++        created ? (0, import_react71.createElement)("p", { key: "created", role: "status", className: "bt-note" }, t("Group created. Retry opening it here.")) : null,
++        error ? (0, import_react71.createElement)("p", { key: "error", role: "alert", className: "bt-error" }, error) : null,
++        (0, import_react71.createElement)("div", { key: "submit", className: "bt-actions" }, (0, import_react71.createElement)(
 +          "button",
 +          { type: "submit", className: "bt-send", disabled: busy || !valid },
 +          busy ? t("Opening group…") : created ? t("Open created group") : t("Create group chat")
@@ -479,9 +564,9 @@ index 909d73f..35d9605 100644
 +  );
 +}
 +function SharedGroupDirectory({ actions, back, onOpened }) {
-+  const [directory, setDirectory] = (0, import_react67.useState)({ items: [], cursor: null, error: "", busy: true });
-+  const operation = (0, import_react67.useRef)(null);
-+  const first = (0, import_react67.useRef)(null);
++  const [directory, setDirectory] = (0, import_react71.useState)({ items: [], cursor: null, error: "", busy: true });
++  const operation = (0, import_react71.useRef)(null);
++  const first = (0, import_react71.useRef)(null);
 +  const load = async (cursor) => {
 +    if (operation.current) return;
 +    const pending = {};
@@ -508,7 +593,7 @@ index 909d73f..35d9605 100644
 +      if (operation.current === pending) operation.current = null;
 +    }
 +  };
-+  (0, import_react67.useEffect)(() => {
++  (0, import_react71.useEffect)(() => {
 +    first.current?.focus();
 +    void load(null);
 +    return () => {
@@ -533,25 +618,25 @@ index 909d73f..35d9605 100644
 +      if (operation.current === pending) operation.current = null;
 +    }
 +  };
-+  return (0, import_react67.createElement)(
++  return (0, import_react71.createElement)(
 +    "div",
 +    { className: "bt-newchat", role: "dialog", "aria-label": t("OpenTeamily groups") },
-+    (0, import_react67.createElement)(
++    (0, import_react71.createElement)(
 +      "div",
 +      { className: "bt-to" },
-+      (0, import_react67.createElement)("button", { ref: first, type: "button", className: "bt-soft bt-soft-sm", onClick: back }, t("Back")),
-+      (0, import_react67.createElement)("strong", null, t("OpenTeamily groups"))
++      (0, import_react71.createElement)("button", { ref: first, type: "button", className: "bt-soft bt-soft-sm", onClick: back }, t("Back")),
++      (0, import_react71.createElement)("strong", null, t("OpenTeamily groups"))
 +    ),
-+    (0, import_react67.createElement)(
++    (0, import_react71.createElement)(
 +      "div",
 +      { className: "bt-drawer-body", style: { width: "min(100%, 550px)", boxSizing: "border-box", marginInline: "auto" } },
-+      (0, import_react67.createElement)(
++      (0, import_react71.createElement)(
 +        "ul",
 +        { style: { margin: 0, padding: 0, listStyle: "none" } },
-+        directory.items.map((row) => (0, import_react67.createElement)(
++        directory.items.map((row) => (0, import_react71.createElement)(
 +          "li",
 +          { key: row.conversation_id },
-+          (0, import_react67.createElement)(
++          (0, import_react71.createElement)(
 +            "button",
 +            {
 +              type: "button",
@@ -559,30 +644,30 @@ index 909d73f..35d9605 100644
 +              disabled: directory.busy,
 +              onClick: () => open(row.conversation_id)
 +            },
-+            (0, import_react67.createElement)("span", { className: "bt-option-icon", "aria-hidden": true }, (0, import_react67.createElement)(PeopleIcon)),
-+            (0, import_react67.createElement)(
++            (0, import_react71.createElement)("span", { className: "bt-option-icon", "aria-hidden": true }, (0, import_react71.createElement)(PeopleIcon)),
++            (0, import_react71.createElement)(
 +              "span",
 +              { style: { minWidth: 0, flex: 1, display: "grid" } },
-+              (0, import_react67.createElement)("span", { className: "bt-option-label" }, row.title),
-+              (0, import_react67.createElement)("span", { className: "bt-note" }, row.kind === "personal" ? t("Personal workspace") : row.workspace_name)
++              (0, import_react71.createElement)("span", { className: "bt-option-label" }, row.title),
++              (0, import_react71.createElement)("span", { className: "bt-note" }, row.kind === "personal" ? t("Personal workspace") : row.workspace_name)
 +            ),
-+            directory.opening === row.conversation_id ? (0, import_react67.createElement)("span", { role: "status", className: "bt-note" }, t("Opening group…")) : null
++            directory.opening === row.conversation_id ? (0, import_react71.createElement)("span", { role: "status", className: "bt-note" }, t("Opening group…")) : null
 +          )
 +        ))
 +      ),
-+      directory.error ? (0, import_react67.createElement)("p", { role: "alert", className: "bt-error" }, directory.error) : null,
-+      directory.busy && !directory.opening ? (0, import_react67.createElement)("p", { role: "status", className: "bt-note" }, t("Loading shared groups…")) : null,
-+      !directory.busy && !directory.error && !directory.items.length ? (0, import_react67.createElement)("p", { className: "bt-note" }, t("You haven’t joined any shared groups.")) : null,
-+      directory.error || directory.cursor ? (0, import_react67.createElement)(
++      directory.error ? (0, import_react71.createElement)("p", { role: "alert", className: "bt-error" }, directory.error) : null,
++      directory.busy && !directory.opening ? (0, import_react71.createElement)("p", { role: "status", className: "bt-note" }, t("Loading shared groups…")) : null,
++      !directory.busy && !directory.error && !directory.items.length ? (0, import_react71.createElement)("p", { className: "bt-note" }, t("You haven’t joined any shared groups.")) : null,
++      directory.error || directory.cursor ? (0, import_react71.createElement)(
 +        "div",
 +        { className: "bt-actions" },
-+        directory.error ? (0, import_react67.createElement)("button", {
++        directory.error ? (0, import_react71.createElement)("button", {
 +          type: "button",
 +          className: "bt-soft",
 +          disabled: directory.busy,
 +          onClick: () => load(null)
 +        }, t("Refresh shared groups")) : null,
-+        directory.cursor ? (0, import_react67.createElement)("button", {
++        directory.cursor ? (0, import_react71.createElement)("button", {
 +          type: "button",
 +          className: "bt-soft",
 +          disabled: directory.busy,
@@ -593,27 +678,27 @@ index 909d73f..35d9605 100644
 +  );
 +}
  function NewChat({ mode, sectionId = null, paneLeft, roster, actions }) {
-   const [query, setQuery] = (0, import_react67.useState)("");
-   const [picked, setPicked] = (0, import_react67.useState)([]);
-   const [group, setGroup] = (0, import_react67.useState)(mode === "group");
-+  const [shared2, setShared] = (0, import_react67.useState)(null);
-   const [admin, setAdmin] = (0, import_react67.useState)(null);
-   const [message, setMessage] = (0, import_react67.useState)("");
-   const [pasted, setPasted] = (0, import_react67.useState)(null);
-@@ -44476,6 +44961,12 @@ function NewChat({ mode, sectionId = null, paneLeft, roster, actions }) {
+   const [query, setQuery] = (0, import_react71.useState)("");
+   const [picked, setPicked] = (0, import_react71.useState)([]);
+   const [group, setGroup] = (0, import_react71.useState)(mode === "group");
++  const [shared2, setShared] = (0, import_react71.useState)(null);
+   const [admin, setAdmin] = (0, import_react71.useState)(null);
+   const [message, setMessage] = (0, import_react71.useState)("");
+   const [pasted, setPasted] = (0, import_react71.useState)(null);
+@@ -46864,6 +47349,12 @@ function NewChat({ mode, sectionId = null, paneLeft, roster, actions }) {
        }) });
      }
    }
 +  if (mode !== "search" && wanted === "" && !picked.length && admin === null && actions.sharedGroupWorkspaces) {
-+    options.push({ key: "shared-group", icon: (0, import_react67.createElement)(PeopleIcon), label: t("Create OpenTeamily group"), run: () => setShared("create") });
++    options.push({ key: "shared-group", icon: (0, import_react71.createElement)(PeopleIcon), label: t("Create OpenTeamily group"), run: () => setShared("create") });
 +  }
 +  if (wanted === "" && !picked.length && admin === null && actions.sharedGroupDirectory) {
-+    options.push({ key: "shared-directory", icon: (0, import_react67.createElement)(PeopleIcon), label: t("OpenTeamily groups"), run: () => setShared("directory") });
++    options.push({ key: "shared-directory", icon: (0, import_react71.createElement)(PeopleIcon), label: t("OpenTeamily groups"), run: () => setShared("directory") });
 +  }
-   for (const bot of matches2) {
+   for (const bot of matches3) {
      options.push({ key: bot.id, bot, label: bot.name, hint: choosingAdmin ? t("Make admin") : group || picked.length > 0 ? t("Add to group chat") : void 0, run: () => openBot(bot) });
    }
-@@ -44505,6 +44996,21 @@ ${listed}`, { axis: "y", ...QUICK_EDGES });
+@@ -46893,6 +47384,21 @@ ${listed}`, { axis: "y", ...QUICK_EDGES });
        })
      );
    }
@@ -626,10 +711,10 @@ index 909d73f..35d9605 100644
 +      actions.openSession(room2.id);
 +      close();
 +    };
-+    return (0, import_react67.createElement)(
++    return (0, import_react71.createElement)(
 +      "div",
 +      { className: "bt-pane", style: { left: paneLeft } },
-+      shared2 === "create" ? (0, import_react67.createElement)(SharedGroupForm, { roster, actions, back, onCreated: opened }) : (0, import_react67.createElement)(SharedGroupDirectory, { actions, back, onOpened: opened })
++      shared2 === "create" ? (0, import_react71.createElement)(SharedGroupForm, { roster, actions, back, onCreated: opened }) : (0, import_react71.createElement)(SharedGroupDirectory, { actions, back, onOpened: opened })
 +    );
 +  }
    const adminBot = admin === null ? void 0 : roster.byId[admin];
@@ -848,10 +933,10 @@ index fce5203..0ad7724 100644
          members.length < 2 ? t('Add a Bot first: a group chat needs at least two.')
            : admin ? t('{name} leads this group: it can call members with @Name, change the group, and post here.', { name: admin.name })
 diff --git a/src/client/i18n.js b/src/client/i18n.js
-index aa27676..adbf241 100644
+index 0c5908c..d6a181b 100644
 --- a/src/client/i18n.js
 +++ b/src/client/i18n.js
-@@ -454,6 +454,43 @@ const ZH = {
+@@ -456,6 +456,43 @@ const ZH = {
    '{name} leads this group: it can call members with @Name, change the group, and post here.': '{name} 主持这个群：可以用 @名字 点名成员、修改群设置、在群里发言。',
    'No admin yet. An admin can call members with @Name, change the group, and post here.': '还没有管理员。管理员可以用 @名字 点名成员、修改群设置、在群里发言。',
    'Who answers': '谁来回答',
@@ -1126,10 +1211,10 @@ index c9203b3..33627e3 100644
    const recipients = adminBot ? [adminBot, ...pickedBots] : pickedBots
    const placeholder = recipients.length > 0 ? t('Message {name}', { name: recipients.map(bot => bot.name).join(t(' and ')) }) : t('Message Bot')
 diff --git a/src/client/team-actions.js b/src/client/team-actions.js
-index b95da72..dff88c5 100644
+index 3c1d1f7..103df32 100644
 --- a/src/client/team-actions.js
 +++ b/src/client/team-actions.js
-@@ -167,6 +167,10 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
+@@ -169,6 +169,10 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
      importAvatars: items => call('avatar-import', { items }),
      deleteAvatar: id => call('avatar-delete', { id }),
      createRoom: (members, options = {}) => after(call('create-room', { members, ...options })),
@@ -1141,25 +1226,25 @@ index b95da72..dff88c5 100644
      // Give up one wait the Bot has on a hand-off that will not come back.
      abandonWork: id => after(call('abandon-work', { id })),
 diff --git a/src/host/capabilities.js b/src/host/capabilities.js
-index f685cc8..f6fe6c8 100644
+index efe6323..85c65df 100644
 --- a/src/host/capabilities.js
 +++ b/src/host/capabilities.js
-@@ -353,7 +353,9 @@ export function install(rt) {
+@@ -397,7 +397,9 @@ export function install(rt) {
    }
-   const reconcileAgent = async (agent, bot) => {
+   const desiredFor = (agent, bot) => {
      const sessionId = agent.session.id
 -    const desired = bot ? expandCapabilityNames(bot.capabilities, library()) : new Set()
 +    const names = bot ? expandCapabilityNames(bot.capabilities, library()) : new Set()
 +    const desired = bot && rt.config?.filterNativeCapabilities
 +      ? rt.config.filterNativeCapabilities(bot, names, library()) : names
-     const agentMounts = mounts.get(agent) ?? new Map()
-     if (desired.size > 0) mounts.set(agent, agentMounts)
-     if (bot) {
+     const entries = loaded.get(sessionId)
+     if (agent.status !== 'running') {
+       for (const root of entries?.keys() ?? []) {
 diff --git a/src/host/channel.js b/src/host/channel.js
-index f851496..0037118 100644
+index c911d2b..0d13f30 100644
 --- a/src/host/channel.js
 +++ b/src/host/channel.js
-@@ -202,6 +202,7 @@ export function install(rt) {
+@@ -184,6 +184,7 @@ export function install(rt) {
    // What a host that only reads the team may still answer.
    // Updates change the dsh profile, not the team, so a reading host may run them too.
    const READS = new Set(['secret-store', 'secret-unlock', 'state', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'agent-chat', 'bot-task-read', 'run-stats', 'room-progress', 'group-rows', 'group-relay-replies', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'avatar-library', 'computer-system-status', 'computer-shot', 'local-agents', 'local-agent-models', 'browser-frame', 'hello', 'notices', 'avatar', 'room-chat', 'usage-summary', 'image', 'markdown-image', 'file-download', 'changes-check', 'deepseek-services', 'deepseek-synthesize'])
@@ -1167,7 +1252,7 @@ index f851496..0037118 100644
 
    async function setPrefs(body) {
      if (body.theme !== undefined) {
-@@ -459,6 +460,8 @@ export function install(rt) {
+@@ -441,6 +442,8 @@ export function install(rt) {
            await rt.load()
            const { room, changes } = await rt.updateRoom(body.id, {
              name: body.name,
@@ -1176,7 +1261,7 @@ index f851496..0037118 100644
              notice: body.notice,
              mode: body.mode,
              admin: body.admin,
-@@ -687,6 +690,10 @@ export function install(rt) {
+@@ -669,6 +672,10 @@ export function install(rt) {
          case 'markdown-image':
          case 'usage-summary':
          case 'memory-edit':
@@ -1187,3 +1272,247 @@ index f851496..0037118 100644
          case 'memory-add':
            await rt.load()
            return ok(await rt.mobileEndpoint(endpoint, body))
+diff --git a/src/host/bot-tasks.js b/src/host/bot-tasks.js
+--- a/src/host/bot-tasks.js
++++ b/src/host/bot-tasks.js
+@@ -14,7 +14,7 @@
+ import { within } from './folders.js'
+ import { absoluteLinks } from './links.js'
+ import { textOf } from './text.js'
+-import { activeTasksOf, isActiveTask, threadCurrentOfPart, threadOfPart } from './threads.js'
++import { activeTasksOf, isActiveTask, isOpenTeamilyForeground, threadCurrentOfPart, threadOfPart } from './threads.js'
+ import { output } from './tools.js'
+ import { answerSender, cutOffText, turnFailure } from './turns.js'
+
+@@ -702,7 +702,7 @@
+   // a fast mid-model steer cut. Disabled for local CLI agents in v1.
+   function shouldMoveForeground(bot, sessionId) {
+     if (bot === undefined || sessionId === undefined || rt.readOnly?.() !== undefined) return false
+-    if (sessionId !== rt.chatOf(bot.id)) return false
++    if (sessionId !== rt.chatOf(bot.id) || isOpenTeamilyForeground(bot, sessionId)) return false
+     if (rt.groupOwners.has(sessionId) || rt.taskOwners?.has(sessionId)) return false
+     if (rt.isSwitchingPart?.(sessionId)) return false
+     const session = ctx.get('agents')?.get(sessionId)?.session
+diff --git a/src/host/parts.js b/src/host/parts.js
+--- a/src/host/parts.js
++++ b/src/host/parts.js
+@@ -405,6 +405,7 @@
+     if (bot === undefined) return []
+     const thread = sessionId === undefined ? undefined : threadOfPart(bot, sessionId)
+     if (thread === undefined) return partsOf(bot.id)
++    if (thread.thread === 'open') return partsOf(bot.id, undefined, thread.segments, threadCurrentOfPart(bot, sessionId))
+     if (thread.thread === 'task') {
+       const task = bot.tasks[thread.index]
+       // A foreground turn moved into a background task keeps read_own_chat access to the
+@@ -1021,6 +1022,7 @@
+     if (owner.botId !== undefined) {
+       const bot = rt.botOf(owner.botId)
+       const thread = threadOfPart(bot, sessionId)
++      if (thread?.thread === 'open') return threadCurrentOfPart(bot, sessionId)
+       if (thread?.thread === 'task') {
+         const live = threadCurrentOfPart(bot, sessionId)
+         if (live !== undefined) return live
+diff --git a/src/host/store.js b/src/host/store.js
+--- a/src/host/store.js
++++ b/src/host/store.js
+@@ -8,7 +8,7 @@
+ import { replaceFile } from './files.js'
+ import { homeLock } from './home-lock.js'
+ import { currentColor, headOf, normalize, unquote } from './text.js'
+-import { isActiveTask } from './threads.js'
++import { isActiveTask, openTeamilyParts, retainsOpenTeamilyParts, threadOfPart } from './threads.js'
+ import { AMBIGUOUS_OLD_ROUTES, legacyRoute } from './local-agents/engines.js'
+
+ // A table read that sees only the keys the table holds itself. Ids that come from
+@@ -202,9 +202,62 @@
+         if (memberSid !== undefined) liveTeamSessions.add(memberSid)
+       }
+     }
++    // Reserve native owners before accepting the OpenTeamily conversations
++    // on an existing volume. A duplicate claim must never reassign a Session.
++    const managed = Object.values(state.bots).filter(bot => openTeamilyParts(bot).length > 0)
++    if (managed.length > 0) {
++      const claimed = new Set(liveTeamSessions)
++      const reserve = segments => {
++        for (const part of Array.isArray(segments) ? segments : []) {
++          const sid = sessionIdOf(part?.sessionId)
++          if (sid !== undefined) claimed.add(sid)
++        }
++      }
++      for (const bot of Object.values(state.bots)) reserve(bot?.segments)
++      for (const room of Object.values(state.rooms)) {
++        reserve(room?.parts)
++        for (const segments of Object.values(room?.segments ?? {})) reserve(segments)
++      }
++      for (const agent of Object.values(state.agents ?? {})) {
++        for (const sid of Array.isArray(agent?.sessions) ? agent.sessions : []) {
++          if (sessionIdOf(sid) !== undefined) claimed.add(sid)
++        }
++      }
++      const retained = new Map()
++      for (const bot of managed) {
++        const parts = []
++        for (const part of bot.openParts) {
++          const sid = sessionIdOf(part?.sessionId)
++          if (sid === undefined || claimed.has(sid)) continue
++          claimed.add(sid)
++          parts.push(part)
++        }
++        retained.set(bot, parts)
++      }
++      for (const [bot, parts] of retained) {
++        if (parts.length !== bot.openParts.length) {
++          bot.openParts = parts
++          migrated = true
++        }
++        for (const part of parts) {
++          const all = Array.isArray(part.segments) ? part.segments : []
++          const own = all.filter(segment => {
++            const sid = sessionIdOf(segment?.sessionId)
++            if (sid === undefined || claimed.has(sid)) return false
++            claimed.add(sid)
++            return true
++          })
++          if (own.length !== all.length || (part.segments !== undefined && !Array.isArray(part.segments))) {
++            part.segments = own
++            migrated = true
++          }
++        }
++      }
++    }
+     let foldedOpenParts = false
+     for (const [id, bot] of Object.entries(state.bots)) {
+       if (bot === null || typeof bot !== 'object' || !Object.hasOwn(bot, 'openParts')) continue
++      if (retainsOpenTeamilyParts(bot)) continue
+       const botId = sessionIdOf(bot.id) ?? id
+       const existingSegments = Array.isArray(bot.segments) ? bot.segments : []
+       const seen = new Set([...liveTeamSessions, ...existingSegments.map(segment => sessionIdOf(segment?.sessionId)).filter(Boolean)])
+@@ -412,7 +465,9 @@
+           if (sessionId !== undefined) {
+             // Never archive or move schedules off any live team session (foreground chat,
+             // active #783 background task, group member session, or group's own session).
+-            if (chatOwners.has(sessionId) || groupOwners.has(sessionId) || roomOwners.has(sessionId)) {
++            const past = pastOwners.get(sessionId)
++            const openPart = past?.roomId === undefined && threadOfPart(botOf(past?.botId), sessionId)?.thread === 'open'
++            if (chatOwners.has(sessionId) || groupOwners.has(sessionId) || roomOwners.has(sessionId) || openPart) {
+               dropEntry(entry, sessionId)
+               continue
+             }
+@@ -718,6 +773,11 @@
+       indexPast(bot.segments, { botId })
+       const currentSid = chatOf(botId)
+       if (sessionIdOf(currentSid) !== undefined) chatOwners.set(currentSid, botId)
++      for (const part of openTeamilyParts(bot)) {
++        const sid = sessionIdOf(part?.sessionId)
++        if (sid !== undefined) chatOwners.set(sid, botId)
++        indexPast(part?.segments, { botId })
++      }
+       // Background tasks keep their own stable records. Only
+       // active tasks stay in chatOwners/taskOwners; settled tasks move to pastOwners
+       // so folder/engine/model sweeps do not wake them again.
+diff --git a/src/host/threads.js b/src/host/threads.js
+--- a/src/host/threads.js
++++ b/src/host/threads.js
+@@ -6,6 +6,20 @@
+ // A Bot that never ran yet has no stored session id: its first Session is the Bot id
+ // (store.js chatOf falls back to it).
+ export const currentSession = bot => bot?.sessionId ?? bot?.id
++
++export function retainsOpenTeamilyParts(bot) {
++  const instance = process.env.OPENTEAMILY_ROUTING_INSTANCE_ID ?? process.env.OPENTEAMILY_INSTANCE_ID
++  return /^[0-9a-f]{32}$/.test(instance ?? '') || bot?.openteamily?.managedOpenParts === true
++}
++
++export const openTeamilyParts = bot => retainsOpenTeamilyParts(bot) && Array.isArray(bot?.openParts) ? bot.openParts : []
++
++// A mapped legacy foreground chat must still queue inputs on its own chain.
++export function isOpenTeamilyForeground(bot, sessionId) {
++  if (!bot || !retainsOpenTeamilyParts(bot) || currentSession(bot) !== sessionId) return false
++  const keys = Object.values(bot.openteamily?.sessionKeys ?? {})
++  return keys.includes(sessionId) || (bot.segments ?? []).some(part => keys.includes(part.sessionId))
++}
+
+ export const ACTIVE_TASK_STATUSES = new Set(['running', 'waiting_work', 'waiting_approval'])
+
+@@ -23,7 +37,9 @@
+   if (bot === undefined || sessionId === undefined) return undefined
+   if (currentSession(bot) === sessionId) return { thread: 'current', segments: bot.segments ?? [] }
+   const taskAt = (bot.tasks ?? []).findIndex(task => task?.sessionId === sessionId)
+-  return taskAt === -1 ? undefined : { thread: 'task', index: taskAt, taskId: bot.tasks[taskAt].id, segments: bot.tasks[taskAt].segments ?? [] }
++  if (taskAt !== -1) return { thread: 'task', index: taskAt, taskId: bot.tasks[taskAt].id, segments: bot.tasks[taskAt].segments ?? [] }
++  const openAt = openTeamilyParts(bot).findIndex(part => part?.sessionId === sessionId)
++  return openAt === -1 ? undefined : { thread: 'open', index: openAt, segments: bot.openParts[openAt].segments ?? [] }
+ }
+
+ export const threadSegments = (bot, sessionId) => threadOf(bot, sessionId)?.segments ?? []
+@@ -33,6 +49,7 @@
+   const thread = threadOf(bot, sessionId)
+   if (thread === undefined) return undefined
+   if (thread.thread === 'current') return currentSession(bot)
++  if (thread.thread === 'open') return bot.openParts[thread.index].sessionId
+   return bot.tasks[thread.index].sessionId
+ }
+
+@@ -45,7 +62,9 @@
+   if (found !== undefined || bot === undefined || sessionId === undefined) return found
+   if ((bot.segments ?? []).some(segment => segment.sessionId === sessionId)) return { thread: 'current', segments: bot.segments }
+   const taskAt = (bot.tasks ?? []).findIndex(task => (task.segments ?? []).some(segment => segment.sessionId === sessionId))
+-  return taskAt === -1 ? undefined : { thread: 'task', index: taskAt, taskId: bot.tasks[taskAt].id, segments: bot.tasks[taskAt].segments ?? [] }
++  if (taskAt !== -1) return { thread: 'task', index: taskAt, taskId: bot.tasks[taskAt].id, segments: bot.tasks[taskAt].segments ?? [] }
++  const openAt = openTeamilyParts(bot).findIndex(part => part?.segments?.some(segment => segment.sessionId === sessionId))
++  return openAt === -1 ? undefined : { thread: 'open', index: openAt, segments: bot.openParts[openAt].segments }
+ }
+
+ // The live session a part's thread goes on in: a reply to, or input given to, an
+@@ -56,6 +75,7 @@
+   const thread = threadOfPart(bot, sessionId)
+   if (thread === undefined) return undefined
+   if (thread.thread === 'current') return currentSession(bot)
++  if (thread.thread === 'open') return bot.openParts[thread.index].sessionId
+   const task = bot.tasks[thread.index]
+   return isActiveTask(task) ? task.sessionId : undefined
+ }
+@@ -68,6 +88,10 @@
+   if (thread.thread === 'current') {
+     ;(bot.segments ??= []).push(segment)
+     bot.sessionId = freshId
++  } else if (thread.thread === 'open') {
++    const part = bot.openParts[thread.index]
++    ;(part.segments ??= []).push(segment)
++    part.sessionId = freshId
+   } else {
+     const task = bot.tasks[thread.index]
+     ;(task.segments ??= []).push(segment)
+@@ -78,13 +102,15 @@
+ }
+
+ // Every session this Bot keeps outside its current thread, for cleanup, memory and usage.
+-export const openSessions = bot => (bot?.tasks ?? [])
+-  .flatMap(task => [task.sessionId, ...(task.segments ?? []).map(segment => segment.sessionId)])
++export const openSessions = bot => [...openTeamilyParts(bot), ...(bot?.tasks ?? [])]
++  .flatMap(part => [part.sessionId, ...(part.segments ?? []).map(segment => segment.sessionId)])
+   .filter(Boolean)
+
+-// A part that just moved on records a successor only when it belongs to a task thread:
+-// the foreground chat keeps its current part in `bot.sessionId`.
+-export const successorOfMovedPart = (bot, freshId) => (threadOf(bot, freshId)?.thread === 'task' ? freshId : undefined)
++// A part outside the foreground records a successor for its own thread.
++export const successorOfMovedPart = (bot, freshId) => {
++  const thread = threadOf(bot, freshId)?.thread
++  return thread === 'task' || thread === 'open' ? freshId : undefined
++}
+
+ // Whether two Session ids belong to the same Bot conversation thread or group membership.
+ // Stays stable across part switches while isolating the foreground chat, background tasks
+@@ -107,9 +133,9 @@
+   return threadA.thread === threadB.thread && threadA.index === threadB.index
+ }
+
+-// Every live thread's current session (foreground and active tasks only). Settled tasks
+-// are excluded so folder/engine/model sweeps do not wake them.
++// Settled tasks are excluded so folder/engine/model sweeps do not wake them.
+ export const ownChatSessions = bot => [
+   currentSession(bot),
++  ...openTeamilyParts(bot).map(part => part.sessionId),
+   ...activeTasksOf(bot).map(task => task.sessionId),
+ ].filter((id, index, list) => id !== undefined && list.indexOf(id) === index)

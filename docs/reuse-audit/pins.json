@@ -143,9 +143,9 @@
       },
       "runtime/ds-bot-upstream": {
         "source": "Fei2411/DS-Bot",
-        "tag": "v0.3.9",
-        "commit": "881b57b54046fb355095e9c11f7918bd62b8bf1e",
-        "via": "PR #21, updated to v0.3.9 by PR #565",
+        "tag": "v0.3.10",
+        "commit": "d104d9ca18d69a35460f14e15dff4d553181433a",
+        "via": "PR #21, updated to v0.3.10 by PR #566",
         "license": "Apache-2.0",
         "unmodified_pinned_copy": true,
         "LICENSE": {
