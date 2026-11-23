@@ -11,6 +11,7 @@ from openteamily.manager.safety import ManagerError
 
 IID = '3' * 32
 REF = 'a' * 32
+STARTED_AT = '2026-11-24T04:30:00.123456789Z'
 URL = 'http://172.30.5.9:8080/?token=' + 'T' * 43
 
 
@@ -35,16 +36,18 @@ class FakeEngine:
         self.runner, self.logs, self.healthy = runner, logs, healthy
         self.private_ip = private_ip
         self.log_reads = 0
+        self.logs_since = []
         self.inspections = 0
 
     def inspect(self, iid, heartbeat=lambda: None):
         self.inspections += 1
         return {'present': True, 'healthy': self.healthy, 'process_ref': REF if self.healthy else None,
-                'private_ip': self.private_ip}
+                'private_ip': self.private_ip, 'started_at': STARTED_AT if self.healthy else None}
 
-    def compose(self, iid, operation, heartbeat=lambda: None, tail=100):
+    def compose(self, iid, operation, heartbeat=lambda: None, tail=100, since=None):
         assert operation == 'logs'
         self.log_reads += 1
+        self.logs_since.append(since)
         return f'dsh web ready\n{self.logs}\n', ''
 
 
@@ -88,6 +91,7 @@ class PublishTests(unittest.TestCase):
         engine.logs = 'rotated'
         dsbot_route.publish(engine, client, IID, exchange=exchange)
         self.assertEqual(engine.log_reads, 1)
+        self.assertEqual(engine.logs_since, [STARTED_AT])
         self.assertEqual(sum(1 for c in runner.calls if c[:2] == ['network', 'connect']), 1)
 
     def test_invalid_address_fails_before_connecting_the_web_container(self):
@@ -127,6 +131,25 @@ class PublishTests(unittest.TestCase):
         with self.assertRaises(ManagerError) as caught:
             dsbot_route.publish(FakeEngine(self.root, FakeRunner()), FakeClient(), IID, exchange=boom)
         self.assertEqual(caught.exception.code, 'dsh_exchange')
+        self.assertIsNone(dsbot_route._cached_launch(SimpleNamespace(root=self.root), IID, REF))
+
+    def test_refused_cached_url_refreshes_from_current_process(self):
+        engine, client = FakeEngine(self.root, FakeRunner()), FakeClient()
+        wrong = URL.replace('T' * 43, 'O' * 43)
+        dsbot_route._store_launch(engine.registry, IID, REF, wrong)
+        attempts = []
+
+        def exchange(url, address):
+            attempts.append(url)
+            if url == wrong:
+                raise ValueError('expired')
+            return 'dsh-auth-test=' + 'C' * 30
+
+        self.assertEqual(dsbot_route.publish(engine, client, IID, exchange=exchange)['status'], 'published')
+        self.assertEqual(attempts, [wrong, URL])
+        self.assertEqual(engine.logs_since, [STARTED_AT])
+        self.assertEqual(len(client.reports), 1)
+        self.assertEqual(dsbot_route._cached_launch(engine.registry, IID, REF), URL)
 
 
 if __name__ == '__main__':
