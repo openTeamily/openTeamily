@@ -198,6 +198,53 @@ async function meetingActionContinuity(page, account, name) {
   await waitForRows(0);
 }
 
+async function memoryHistory(page, account, name) {
+  const workspace = account.instanceId;
+  const base = '/v1/workspaces/'+workspace+'/memory';
+  const body = revision => '浏览器验收正文 '+revision;
+  const created = await account.rpc('memory/v1',{method:'POST',path:base,
+    idempotency_key:crypto.randomUUID().replaceAll('-',''),body:{title:'CI 记忆历史验收',body:body(1)}});
+  assert.equal(created.status,201);
+  const id = created.body.page.id;
+  const path = base+'/'+id;
+  for (let revision = 1; revision < 55; revision++) {
+    const saved = await account.rpc('memory/v1',{method:'POST',path,
+      body:{revision,changes:{body:body(revision+1)}}});
+    assert.equal(saved.status,200);
+  }
+  await openNative(page,'/memory?workspace='+workspace+'&page='+id,workspace,'#page-history-open');
+  const list = page.locator('#page-history-list');
+  const more = page.locator('#page-history-more');
+  const oldest = list.locator('[data-revision="6"]');
+  const heading = page.locator('#page-history-preview-title');
+  const previewBody = page.locator('#page-history-preview-body');
+  await page.locator('#page-history-open').click();
+  for (const count of [20,40,49]) {
+    if (count > 20) await more.click();
+    await page.waitForFunction(expected => document.getElementById('page-history-list').children.length === expected,count);
+  }
+  assert.equal(await more.isVisible(),false);
+  assert.equal(await list.locator('[data-revision="5"]').count(),0);
+  await oldest.click();
+  await previewBody.getByText(body(6),{exact:true}).waitFor();
+  assert.equal(await heading.evaluate(el => el === document.activeElement),true);
+  await screenshot(page,name);
+  await page.locator('#page-history-preview-back').click();
+  assert.equal(await oldest.evaluate(el => el === document.activeElement),true);
+  await oldest.click();
+  await previewBody.getByText(body(6),{exact:true}).waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('revision'),'6');
+  await page.reload();
+  await previewBody.getByText(body(6),{exact:true}).waitFor();
+  await page.locator('#page-history-restore').click();
+  await page.locator('#editor-meta').getByText(/修订 56/).waitFor();
+  const current = await account.rpc('memory/v1',{method:'GET',path});
+  assert.equal(current.body.page.revision,56);
+  assert.equal(current.body.page.body,body(6));
+  const previouslyCurrent = await account.rpc('memory/v1',{method:'GET',path:path+'/versions/55'});
+  assert.equal(previouslyCurrent.body.version.body,body(55));
+}
+
 try {
   browser = await chromium.launch({executablePath:process.env.OT_UI_CHROMIUM_EXECUTABLE});
   const desktop = await contextFor({width:1440,height:900});
@@ -223,6 +270,7 @@ try {
     if (expected) await page.getByText(expected,{exact:true}).first().waitFor();
     await screenshot(page,name);
   }
+  await memoryHistory(page,fixture.owner,'desktop-memory-history');
   await connectors(page);
   await meetingActionContinuity(page,fixture.owner,'desktop-meeting-actions');
   await openNative(page,'/members#workspace='+fixture.team.workspace_id,fixture.owner.instanceId,'#main-panel');
@@ -261,6 +309,7 @@ try {
   assert.ok(!JSON.stringify(isolation).includes(fixture.owner.chat.reply));
   await peer.page.setViewportSize({width:390,height:844});
   await meetingActionContinuity(peer.page,fixture.peer,'mobile-meeting-actions');
+  await memoryHistory(peer.page,fixture.peer,'mobile-memory-history');
   await peer.context.close();
   await desktop.context.close();
   assert.deepEqual(errors,[]);

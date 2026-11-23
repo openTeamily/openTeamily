@@ -135,6 +135,10 @@ def create_key(user_id):
     return 'autoprov-' + user_id
 
 
+def at_capacity(db, policy):
+    return db.execute('SELECT COUNT(*) FROM runtime_auto_provisions').fetchone()[0] >= policy.max_instances
+
+
 def ensure(db, lifecycle, policy, user_id, workspace_id, agent_id, now):
     """Idempotently provision the account container in an IMMEDIATE transaction.
 
@@ -160,7 +164,7 @@ def ensure(db, lifecycle, policy, user_id, workspace_id, agent_id, now):
     if existing is not None:
         # Existing operator-enrolled instances retain their current manager grants.
         return {'state': 'bound', 'instance_id': existing}
-    if db.execute('SELECT COUNT(*) FROM runtime_auto_provisions').fetchone()[0] >= policy.max_instances:
+    if at_capacity(db, policy):
         return {'state': 'capacity', 'instance_id': None}
     try:
         # Compose up can create the volume and start the container under one lease.

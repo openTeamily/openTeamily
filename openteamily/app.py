@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
-from .lifecycle import RuntimeFault, UNSUPPORTED
+from .lifecycle import RuntimeFault, UNSUPPORTED, valid_key
 from . import agents, artifacts, bot_social, composio, conversations, meetings, members, model_api, oidc, onboarding, personal, profiles, runtime_autoprovision, skill_secrets, social, team_templates, teams, skill_installs
 
 
@@ -572,7 +572,7 @@ class App:
                 session = self.authenticated(db, env, now)
             if method == 'POST':
                 self.csrf_check(env, session)
-            return self.runtime_dispatch(env, session['user_id'], method, path, query)
+            return self.runtime_dispatch(env, session, method, path, query)
         if path == '/v1/auth/runtime-readiness' and method == 'GET' and query in ('', 'include=personal-chat'):
             with self.store.connect() as db:
                 session = self.authenticated(db, env, now)
@@ -827,7 +827,19 @@ class App:
     def runtime_readiness(self, db, user_id):
         if not self.auto_provision.enabled:
             return 'unmanaged'
-        return owner_runtime_readiness(db, user_id, self.auto_provision.manager_id, manager_auth=self.manager_auth)
+        state = owner_runtime_readiness(db, user_id, self.auto_provision.manager_id, manager_auth=self.manager_auth)
+        if state != 'setup':
+            return state
+        if runtime_autoprovision.at_capacity(db, self.auto_provision):
+            return 'capacity'
+        personal_agent = personal.load(db, user_id)
+        try:
+            self.lifecycle.check_create_capacity(db, personal_agent['workspace_id'] if personal_agent is not None else None)
+        except RuntimeFault as error:
+            if error.status == 429:
+                return 'capacity'
+            raise
+        return state
 
     def start_personal_runtime(self, env, now):
         with self.store.connect() as db:
@@ -1077,14 +1089,39 @@ class App:
         except ValueError:
             refuse(400, 'invalid', 'Invalid pagination parameters')
 
-    def runtime_dispatch(self, env, owner, method, path, query):
+    def create_account_instance(self, owner, username, workspace_id, key):
+        if not valid_key(key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
         runtime = self.lifecycle
+        now = int(self.clock())
+        with self.store.transaction() as db:
+            runtime.workspace(db, owner, workspace_id, write=True)
+            existing = runtime_autoprovision.owned_instance(db, owner)
+            if existing is not None:
+                return False, runtime.result(db, existing)
+            try:
+                personal_row, _ = self.ensure_personal_agent(db, owner, username, now)
+            except personal.WorkspaceCapacity:
+                refuse(429, 'quota', 'Workspace capacity reached')
+            provision = self.ensure_personal_runtime(db, owner, personal_row, now)
+            if provision['state'] == 'capacity':
+                refuse(429, 'quota', 'Instance capacity reached')
+            if provision['instance_id'] is None:
+                refuse(409, 'runtime_unavailable', 'The account runtime could not be provisioned')
+            return provision['state'] == 'provisioned', runtime.result(db, provision['instance_id'])
+
+    def runtime_dispatch(self, env, session, method, path, query):
+        runtime = self.lifecycle
+        owner = session['user_id']
         match = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/instances', path)
         if match:
             if method == 'POST':
                 self.body(env, [])
-                created, result = runtime.create(owner, match[1], env.get('HTTP_IDEMPOTENCY_KEY', ''),
-                                                 per_user=self.auto_provision.enabled)
+                key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+                if self.auto_provision.enabled and runtime.policy.backend_mode == 'compose':
+                    created, result = self.create_account_instance(owner, session['username'], match[1], key)
+                else:
+                    created, result = runtime.create(owner, match[1], key, per_user=self.auto_provision.enabled)
                 return 201 if created else 200, self.with_model_api(result), []
             limit, cursor, _ = self.pagination(query)
             listed = runtime.listing(owner, match[1], limit, cursor)

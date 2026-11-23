@@ -104,6 +104,41 @@ test('memory pages run inside this DS-Bot: create, list, edit, conflict, version
   assert.equal((await call('GET', base('/' + page.id))).status, 404)
 })
 
+test('every retained memory version can be paged and restored in the owning workspace', async () => {
+  const team = 'b'.repeat(32)
+  const bot = await boot(volume(),{teams:[team]})
+  const call = (...args) => bot.call('memory', ...args)
+  const created = await call('POST',base(),{title:'保留的记忆历史',body:'修订正文 1'},key())
+  assert.equal(created.status,201)
+  const id = created.body.page.id
+  const path = base('/'+id)
+  for (let revision = 1; revision < 55; revision++) {
+    const edited = await call('POST',path,{revision,changes:{body:'修订正文 '+(revision+1)}})
+    assert.equal(edited.status,200)
+  }
+  const list = async (cursor, first, count) => {
+    const response = await call('GET',path+'/versions'+(cursor ? '?cursor='+cursor : ''))
+    assert.equal(response.status,200)
+    assert.equal(response.body.current,55)
+    assert.deepEqual(response.body.items.map(item => item.revision), Array.from({length:count},(_,index) => first-index))
+    return response.body.cursor
+  }
+  assert.equal(await list(null,54,20),35)
+  assert.equal(await list(35,34,20),15)
+  assert.equal(await list(15,14,9),null)
+  assert.equal((await call('GET',base('/'+id+'/versions?cursor=15',team))).status,404)
+  for (const query of ['?cursor=0','?cursor=','?cursor=-3','?cursor=15&cursor=20','?limit=100']) {
+    assert.equal((await call('GET',path+'/versions'+query)).status,400)
+  }
+  assert.equal((await call('GET',path+'/versions/6?cursor=15')).status,400)
+  assert.equal((await call('GET',path+'/versions/5')).status,404)
+  assert.equal((await call('POST',path+'/versions/6/restore',{revision:54})).status,409)
+  const restored = await call('POST',path+'/versions/6/restore',{revision:55})
+  assert.equal(restored.body.page.revision,56)
+  assert.equal(restored.body.page.body,'修订正文 6')
+  assert.equal((await call('GET',path+'/versions/55')).body.version.body,'修订正文 55')
+})
+
 test('simultaneous edits and restores cannot replace a page from the same revision', async () => {
   const bot = await boot()
   const call = (...args) => bot.call('memory', ...args)

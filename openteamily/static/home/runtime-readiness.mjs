@@ -11,6 +11,11 @@ const coldDraftHandoffKey = 'openteamily.cold-chat-draft';
 const signupChatPath = /^\/chat#workspace=([a-f0-9]{32})&agent=([a-f0-9]{32})$/;
 const messageLimit = 4000;
 export const signupSessionError = '账户已创建，但登录会话尚未确认。请使用本实例 HTTPS 地址，允许同源 Cookie，然后尝试登录；不要重复注册。';
+export const runtimeCapacityNotice = {
+  title: '专属智能体名额已满',
+  detail: '你的账户已登录。请联系管理员处理容量，容量恢复后点击重新检查即可继续。',
+  retry: '重新检查',
+};
 const validSignupUser = id => typeof id === 'string' && platformUserId.test(id);
 
 const workspacePage = /^\/(?:agents|artifacts|automations|chat|contacts|meetings|members|memory|messenger|onboarding|profile|settings|skills|team|team-runs)\/?$/;
@@ -247,7 +252,7 @@ export async function waitForRuntime(read, {
       if (!validSignupUser(user)) continue;
       if (user !== expectedUser) return 'signup-mismatch';
     }
-    if (['ready', 'unmanaged', 'unavailable', 'setup', 'stopped'].includes(state)) return state;
+    if (['ready', 'unmanaged', 'unavailable', 'setup', 'stopped', 'capacity'].includes(state)) return state;
   }
   return 'timeout';
 }
