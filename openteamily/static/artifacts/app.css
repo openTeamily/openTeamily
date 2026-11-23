@@ -53,6 +53,7 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
 }
 #editor-document-nav button, #document-tree button { min-height: 2.5rem; }
 #document-tree { width: min(32rem, calc(100vw - 2rem)); box-sizing: border-box; }
+.document-tree-header h2 { min-width: 0; overflow-wrap: anywhere; }
 #document-tree-list {
   max-height: 55vh;
   overflow: auto;
@@ -71,6 +72,7 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
 }
 .document-tree-row a { padding-block: .5rem; overflow-wrap: anywhere; }
 .document-tree-row a[aria-current="page"] { font-weight: 650; }
+#move-document-destination { width: 100%; min-width: 0; margin-block: .35rem 1rem; }
 .workspace-retry-icon { display: none; }
 
 .artifact-scopes,

@@ -3666,6 +3666,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderSocialMessages(lastSocialItems, {anchor});
   }
 
+  function showSocialMessageChange(scope, message) {
+    const prior = lastSocialItems.find(item => item.id === message.id);
+    if (!prior || prior.revision > message.revision) return;
+    const anchor = chatHistoryAnchor();
+    const draft = replyDrafts.get(scope);
+    if (draft?.message_id === message.id) {
+      setReplyDraft(scope, message.retracted ? {message_id:message.id, state:'missing', available:false}
+        : composerReply(message, draft.author));
+    }
+    if (pinnedIds.has(message.id)) {
+      const pin = Array.from(document.getElementById('pinned-message-list').children)
+        .find(row => row.dataset.pinnedMessage === message.id);
+      if (message.retracted) {
+        pin?.remove();
+        pinnedIds.delete(message.id);
+        document.getElementById('pinned-messages').hidden = !pinnedIds.size;
+      } else {
+        const button = pin?.querySelector('button');
+        if (button) button.textContent = message.body.replace(/\s+/g, ' ').slice(0, 100);
+      }
+    }
+    renderSocialMessages(lastSocialItems.map(item => item.id === message.id ? message : item), {anchor});
+  }
+
   function messageTools(item, row) {
     const tools = document.createElement('span');
     tools.className = 'message-tools';
@@ -4956,6 +4980,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
     }
     const previousGroupViews = sameReplyScope ? new Map(groupReplyViews) : new Map();
+    if (sameReplyScope && items) {
+      const previous = new Map(lastSocialItems.filter(item => item.edited || item.retracted).map(item => [item.id, item]));
+      if (previous.size) items = items.map(item => {
+        const changed = previous.get(item.id);
+        return changed?.revision > item.revision ? changed : item;
+      });
+    }
     if (sameReplyScope && items?.some(item => item.reply_jobs?.length)) {
       // An earlier history read can settle after the retry receipt. Keep the
       // acknowledged attempt until the transcript catches up.
@@ -4965,6 +4996,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         : item);
     }
     lastSocialItems = items || [];
+    const editedSources = new Map(lastSocialItems.filter(item => item.retracted || item.edited).map(item => [item.id, item]));
     const queue = pendingSends.get(scope);
     if (servedByDsbot && queue?.social) {
       for (const job of queue.jobs) {
@@ -5043,7 +5075,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       time.className = 'time';
       time.textContent = formatTime(item.created);
       li.append(role);
-      if (!item.retracted && item.reply_preview) li.append(quoteBlock(item.reply_preview, true));
+      if (!item.retracted && item.reply_preview) {
+        const original = editedSources.get(item.reply_preview.message_id);
+        const reply = original?.retracted ? {message_id:original.id, available:false}
+          : original && item.reply_preview.available ? {...item.reply_preview, excerpt:original.body.replace(/\s+/g, ' ').trim().slice(0,120)}
+          : item.reply_preview;
+        li.append(quoteBlock(reply, true));
+      }
       li.append(body, time);
       if (!item.retracted && item.group_memory_refs?.length) li.insertBefore(renderGroupMemoryRefs(item.group_memory_refs), time);
       const studioReference = !item.retracted && showsStudioReferences && studioRevisionReference(item.studio_reference);
@@ -5101,17 +5139,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         retract.type = 'button'; retract.textContent = '撤回'; retract.hidden = true;
         const controls = document.createElement('span');
         controls.className = 'message-edit-controls';
-        const change = async (operation, text) => {
+        let changing = false;
+        const change = async (operation, confirm, cancel, text) => {
+          if (scope !== sendScope() || changing) return;
+          changing = cancel.disabled = true;
+          confirm.setAttribute('aria-busy', 'true');
           const payload = {revision: item.revision || 1};
           if (operation === 'edit') payload.body = text;
-          const wid = workspaceId(), cid = currentConversation.id;
-          const result = await request('POST', `${socialBase()}/${cid}/messages/${item.id}/${operation}`, payload);
-          if (workspaceId() !== wid || !currentConversation || currentConversation.id !== cid) return;
-          if (result.status !== 200) { show('error', messageFor(result.body.error, '消息未更新，请重新打开后重试。')); return; }
-          await loadSessions();
-          await openSocialConversation(cid);
+          const owner = currentUser, wid = workspaceId(), cid = currentConversation.id;
+          const result = await request('POST', `${socialBase()}/${cid}/messages/${item.id}/${operation}`, payload, undefined,
+            AbortSignal.timeout(10000)).catch(() => ({status:0, body:{}}));
+          changing = cancel.disabled = false;
+          confirm.removeAttribute('aria-busy');
+          if (currentUser !== owner || workspaceId() !== wid) return;
+          const message = result.body?.message;
+          if (result.status !== 200 || message?.id !== item.id || message.user_id !== owner.id ||
+              message.workspace_id !== wid || message.conversation_id !== cid || !Number.isSafeInteger(message.revision) ||
+              message.revision <= payload.revision || message.retracted !== (operation === 'retract')) {
+            if (scope === sendScope()) {
+              show('error', messageFor(result.body?.error, '消息未更新，请重试。'));
+              if (!sessionTransition?.pending) confirm.focus({preventScroll:true});
+            }
+            return;
+          }
+          if (scope === sendScope()) {
+            const restoreFocus = document.activeElement === confirm && !sessionTransition?.pending;
+            showSocialMessageChange(scope, message);
+            if (restoreFocus) {
+              const row = Array.from(list.children).find(node => node.dataset.messageId === item.id);
+              if (row) { row.tabIndex = -1; row.focus({preventScroll:true}); }
+            }
+          }
+          void loadSessions();
         };
         edit.addEventListener('click', () => {
+          if (changing) return;
           controls.replaceChildren();
           const input = document.createElement('textarea'); input.value = item.body || '';
           input.setAttribute('aria-label', '编辑消息'); input.maxLength = 4000;
@@ -5124,22 +5186,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             note.className = 'message-edit-note';
             note.textContent = '保存后，这条已发出的消息会被新内容替换，其他人看到的是修改后的版本。';
             const confirm = document.createElement('button'); confirm.type = 'button'; confirm.textContent = '确认修改';
-            confirm.addEventListener('click', () => change('edit', draft));
             const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '取消';
             cancel.addEventListener('click', () => controls.replaceChildren());
+            confirm.addEventListener('click', () => change('edit', confirm, cancel, draft));
             controls.replaceChildren(note, confirm, cancel);
+            confirm.focus({preventScroll:true});
           });
           const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '取消';
           cancel.addEventListener('click', () => controls.replaceChildren());
           controls.append(input, save, cancel);
+          input.focus({preventScroll:true});
         });
         retract.addEventListener('click', () => {
+          if (changing) return;
           controls.replaceChildren();
           const confirm = document.createElement('button'); confirm.type = 'button'; confirm.textContent = '确认撤回';
-          confirm.addEventListener('click', () => change('retract'));
           const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '取消';
           cancel.addEventListener('click', () => controls.replaceChildren());
+          confirm.addEventListener('click', () => change('retract', confirm, cancel));
           controls.append(confirm, cancel);
+          confirm.focus({preventScroll:true});
         });
         li.append(edit, retract, controls);
       }

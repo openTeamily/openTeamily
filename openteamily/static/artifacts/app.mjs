@@ -576,13 +576,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const discoverSlug = document.getElementById('discover-slug');
   const treeOpen = document.getElementById('catalog-document-tree');
   const treeDialog = document.getElementById('document-tree');
+  const treeHeading = document.getElementById('document-tree-heading');
   const treeList = document.getElementById('document-tree-list');
   const treeStatus = document.getElementById('document-tree-status');
   const treeRetry = document.getElementById('retry-document-tree');
   const editorDocumentNav = document.getElementById('editor-document-nav');
   const editorParentDocument = document.getElementById('editor-parent-document');
   const newChildDocument = document.getElementById('new-child-document');
+  const moveDocument = document.getElementById('move-document');
+  const moveDocumentForm = document.getElementById('move-document-form');
+  const moveDestination = document.getElementById('move-document-destination');
+  const moveSubmit = document.getElementById('move-document-submit');
   let treeRead;
+  let documentMove;
   const discoverTopic = document.getElementById('discover-topic');
   const discoverTopicField = document.getElementById('discover-topic-field');
   const discoverEditable = document.getElementById('discover-editable-remix');
@@ -2865,6 +2871,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (!editorDocumentNav) return;
     editorDocumentNav.hidden = !nativeCatalog || current?.kind !== 'document';
     newChildDocument.hidden = !current?.id;
+    if (moveDocument) moveDocument.hidden = !current?.id;
     const parent = current?.parent;
     editorParentDocument.hidden = !CATALOG_CURSOR.test(parent?.id || '');
     editorParentDocument.textContent = parent ? '上级 · ' + parent.title : '';
@@ -2875,6 +2882,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   function discardDocumentTree() {
     treeRead?.abort();
     treeRead = null;
+    documentMove = null;
     treeList?.replaceChildren();
     if (treeStatus) treeStatus.textContent = '';
   }
@@ -2897,12 +2905,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     return openEditor({kind:'document', parent:{id, title}}, {focusTitle:true});
   }
 
-  async function showDocumentTree() {
+  async function showDocumentTree({move = false} = {}) {
     if (!treeDialog || !nativeCatalog || !canCreateInWorkspace()) return;
     const workspace = workspaceId(), account = currentUser;
+    const itemToMove = move && current?.kind === 'document' && current.id ? current : null;
     discardDocumentTree();
     const controller = new AbortController();
     treeRead = controller;
+    if (itemToMove) documentMove = {item: itemToMove, workspace, account, controller};
+    if (treeHeading) treeHeading.textContent = itemToMove ? `移动「${itemToMove.title}」` : '文档树';
+    if (moveDocumentForm) moveDocumentForm.hidden = true;
+    treeList.hidden = Boolean(itemToMove);
     treeStatus.textContent = '正在读取文档…';
     treeRetry.hidden = true;
     if (!treeDialog.open) treeDialog.showModal();
@@ -2922,6 +2935,40 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       const list = children.get(parent) || [];
       list.push(item);
       children.set(parent, list);
+    }
+    if (itemToMove) {
+      const row = items.find(item => item.id === itemToMove.id);
+      if (!row) {
+        treeStatus.textContent = '这份文档已不在当前工作区。';
+        return;
+      }
+      documentMove.expectedParent = row.parent_id;
+      const destinationOption = (value, text) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = text;
+        return option;
+      };
+      moveDestination.replaceChildren(destinationOption('', '请选择位置'));
+      if (row.parent_id !== null) moveDestination.append(destinationOption('root', '资料空间根目录'));
+      const addDestinations = (parent, depth) => {
+        for (const item of children.get(parent) || []) {
+          if (item.id === row.id) continue;
+          if (item.id !== row.parent_id) {
+            moveDestination.append(destinationOption(item.id, ' '.repeat(Math.min(depth, 6)) + item.title));
+          }
+          addDestinations(item.id, depth + 1);
+        }
+      };
+      addDestinations(null, 0);
+      const available = moveDestination.options.length > 1;
+      treeStatus.textContent = available ? '' : '当前没有其他可选位置。';
+      moveDocumentForm.hidden = !available;
+      moveDestination.value = '';
+      moveDestination.disabled = false;
+      moveSubmit.disabled = true;
+      if (available) moveDestination.focus({preventScroll: true});
+      return;
     }
     treeStatus.textContent = items.length ? '' : '这个工作区还没有云文档。';
     const addRows = (parent, depth) => {
@@ -2949,6 +2996,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       }
     };
     addRows(null, 0);
+  }
+
+  async function submitDocumentMove(event) {
+    event.preventDefault();
+    const move = documentMove;
+    const target = moveDestination.value;
+    if (!move || moveSubmit.disabled || (target !== 'root' && !CATALOG_CURSOR.test(target))) return;
+    const parentId = target === 'root' ? null : target;
+    moveSubmit.disabled = moveDestination.disabled = true;
+    treeStatus.textContent = '正在移动文档…';
+    const result = await request('POST', `/v1/workspaces/${move.workspace}/artifacts/document-tree`, {
+      artifact_id: move.item.id, parent_id: parentId, expected_parent_id: move.expectedParent,
+    }, undefined, AbortSignal.any([move.controller.signal, AbortSignal.timeout(8000)])).catch(() => ({status:0}));
+    if (documentMove !== move || currentUser !== move.account || workspaceId() !== move.workspace || current?.id !== move.item.id) return;
+    const parent = result.body?.parent;
+    if (result.status !== 200 || result.body?.id !== move.item.id || (parent?.id ?? null) !== parentId) {
+      treeStatus.textContent = messageFor(result.body?.error, '无法确认文档位置，请刷新后重试。');
+      treeRetry.hidden = false;
+      return;
+    }
+    if (parent) current.parent = parent;
+    else delete current.parent;
+    syncDocumentLocation();
+    closeDocumentTree();
+    show('success', '文档已移动。');
   }
 
   function panelStatus(name, text) {
@@ -4141,8 +4213,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
 
   treeOpen?.addEventListener('click', showDocumentTree);
   document.getElementById('editor-document-tree')?.addEventListener('click', showDocumentTree);
+  moveDocument?.addEventListener('click', () => void showDocumentTree({move:true}));
+  moveDestination?.addEventListener('change', () => { moveSubmit.disabled = !moveDestination.value; });
+  moveDocumentForm?.addEventListener('submit', submitDocumentMove);
   document.getElementById('close-document-tree')?.addEventListener('click', closeDocumentTree);
-  treeRetry?.addEventListener('click', showDocumentTree);
+  treeRetry?.addEventListener('click', () => void showDocumentTree({move:Boolean(documentMove)}));
   treeDialog?.addEventListener('close', () => { if (!treeDialog.open) discardDocumentTree(); });
   editorParentDocument?.addEventListener('click', event => {
     if (!documentClick(event) || !current?.parent) return;

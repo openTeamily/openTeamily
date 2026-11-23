@@ -16,6 +16,25 @@ The [runtime image checks](https://github.com/openTeamily/openTeamily/actions/ru
 
 Reproduce the upgrade check with the [workflow](../.github/workflows/ds-bot-conversation-upgrade.yml) and [test runner](../runtime/flybot-image/test/upgrade/check.py). See [Compose manager](COMPOSE_MANAGER.md) for deployment and existing-volume boundaries.
 
+## Memory and navigation release
+
+[PR #610](https://github.com/openTeamily/openTeamily/pull/610) was deployed as
+`466d7985ca8bf99c2194ab9650fb575855a92b28`. The cutover preserved all 27
+existing account volumes. Four previously running containers were healthy
+and the other 23 stayed stopped.
+
+| Environment | Checks |
+| --- | --- |
+| Deployment, signed Chromium at 390 px and 1280 px | Checked a task and edited a table in Memory. The saved page reopened with both changes, including a literal pipe in a cell. The Markdown export matched the stored content. The test removed its temporary note. |
+| Signed native test fixture at 390 px and 1280 px | Verified saved private and group message links, Discover detail and adjacent navigation, Team Runs filters and focus restoration, and Memory editing. |
+| Release CI | All six workflows passed, including [native Chromium screenshots](https://github.com/openTeamily/openTeamily/actions/runs/45282621412) and [the runtime image checks](https://github.com/openTeamily/openTeamily/actions/runs/45282621491). |
+
+After the rollout, the operator reconciled two accounts that had a personal
+agent record and no assigned runtime. Both new DS-Bots reached healthy status
+on separate volumes and loaded the platform DeepSeek default. All 29 accounts
+then had a distinct Compose binding and volume. No retired execution task was
+queued or claimed in the management database.
+
 ## Record per check
 
 Preserve these fields even when empty, using `pending-verification` rather than a guessed result:

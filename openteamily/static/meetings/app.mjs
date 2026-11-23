@@ -135,6 +135,20 @@ function linkedMeetingAction(params) {
   const completed = inbox && params.getAll('status').length === 1 && params.get('status') === 'completed';
   return {index:Number(index), revision:Number(revision), inbox, mine:inbox && params.get('mine') === '1', completed};
 }
+
+function automationFollowupHref(workspace, meeting, action, revision) {
+  return '/automations?' + new URLSearchParams({workspace, meeting, action, revision});
+}
+
+function automationFollowupLink(document) {
+  const link = document.createElement('a');
+  link.className = 'action-followup';
+  link.textContent = '跟进自动化';
+  link.target = '_blank';
+  link.rel = 'noopener';
+  return link;
+}
+
 const unavailable = {status: 0, body: {}};
 const DETAIL_READ_TIMEOUT_MS = 15000;
 const SAVE_TIMEOUT_MS = 12000;
@@ -784,11 +798,11 @@ function mount() {
   const currentInbox = state => state === inboxView && sameInboxScope(state);
   const inboxKey = (state, item) => `${state.viewer}/${state.workspace}/${item.meeting_id}`;
 
-  function inboxPosition(button = document.activeElement) {
-    const row = button?.closest?.('li[data-action]');
-    if (row?.parentElement !== inboxList || !button.dataset.inboxControl) return null;
+  function inboxPosition(control = document.activeElement) {
+    const row = control?.closest?.('li[data-action]');
+    if (row?.parentElement !== inboxList || !control.dataset.inboxControl) return null;
     return {key:row.dataset.action, index:Array.from(inboxList.children).indexOf(row),
-      control:button.dataset.inboxControl, top:button.getBoundingClientRect().top};
+      control:control.dataset.inboxControl, top:control.getBoundingClientRect().top};
   }
 
   function focusInboxPosition(position, restorePosition = false) {
@@ -796,11 +810,11 @@ function mount() {
     const rows = Array.from(inboxList.children);
     const original = rows.find(item => item.dataset.action === position.key);
     const row = original || rows[Math.min(position.index, rows.length - 1)];
-    const button = row?.querySelector(`button[data-inbox-control="${position.control}"]:enabled`) ||
+    const control = row?.querySelector(`[data-inbox-control="${position.control}"]:not(:disabled)`) ||
       row?.querySelector('button[data-inbox-control="source"]');
-    (button || inboxHeading).focus({preventScroll:true});
-    if (restorePosition && original && button) {
-      main.scrollTop += button.getBoundingClientRect().top - position.top;
+    (control || inboxHeading).focus({preventScroll:true});
+    if (restorePosition && original && control) {
+      main.scrollTop += control.getBoundingClientRect().top - position.top;
     }
   }
 
@@ -848,6 +862,12 @@ function mount() {
       });
       buttons.append(source);
       if (!state.received) {
+        if (!state.completed) {
+          const followup = automationFollowupLink(document);
+          followup.dataset.inboxControl = 'followup';
+          followup.href = automationFollowupHref(state.workspace, item.meeting_id, item.action_index, item.revision);
+          buttons.append(followup);
+        }
         const done = document.createElement('button');
         done.type = 'button';
         done.dataset.inboxControl = 'status';
@@ -1098,9 +1118,7 @@ function mount() {
         link.title = '请先保存行动项';
         continue;
       }
-      link.href = '/automations?' + new URLSearchParams({
-        workspace: workspaceId(), meeting: current.id, action: action.savedIndex, revision: current.revision,
-      });
+      link.href = automationFollowupHref(workspaceId(), current.id, action.savedIndex, current.revision);
       link.removeAttribute('aria-disabled');
       link.title = '';
     }
@@ -1679,11 +1697,7 @@ function mount() {
         actions.splice(index, 1);
         renderActions();
       });
-      const link = document.createElement('a');
-      link.className = 'action-followup';
-      link.textContent = '跟进自动化';
-      link.target = '_blank';
-      link.rel = 'noopener';
+      const link = automationFollowupLink(document);
       const copy = document.createElement('button');
       copy.type = 'button';
       copy.className = 'secondary action-memory';

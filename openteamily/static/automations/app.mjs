@@ -1820,8 +1820,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     owner.hidden = !source?.owner;
     owner.textContent = source?.owner ? '原负责人：' + source.owner : '';
     if (source) {
-      const {workspace, meeting} = source.target;
-      link.href = '/meetings#' + new URLSearchParams({workspace, meeting});
+      const {workspace, meeting, action, revision} = source.target;
+      link.href = '/meetings#' + new URLSearchParams({workspace, meeting, action, revision});
     } else link.removeAttribute?.('href');
   }
 

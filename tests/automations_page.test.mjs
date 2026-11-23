@@ -1063,7 +1063,7 @@ test('a reviewed meeting follow-up explicitly saves paused and replaces the draf
   assert.equal(elements.get('meeting-action-source-title').textContent, '交付例会');
   assert.equal(elements.get('meeting-action-source-text').textContent, '列出待核对的交付项');
   assert.equal(elements.get('meeting-action-source-owner').textContent, '原负责人：Bob');
-  assert.equal(elements.get('meeting-action-source-link').href, `/meetings#workspace=${SOURCE_WORKSPACE}&meeting=${SOURCE_MEETING}`);
+  assert.equal(elements.get('meeting-action-source-link').href, '/meetings#' + SOURCE_LINK.slice(1));
   assert.equal(form.elements.title.value, '会议跟进：交付例会 · 行动项 2');
   assert.match(form.elements.prompt.value, /列出待核对的交付项/);
   assert.doesNotMatch(form.elements.prompt.value, /会议私有全文/);

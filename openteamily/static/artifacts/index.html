@@ -341,6 +341,7 @@
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>
       <nav id="editor-document-nav" aria-label="文档位置" hidden>
         <button type="button" id="editor-document-tree" aria-haspopup="dialog" aria-controls="document-tree">文档树</button>
+        <button type="button" id="move-document" aria-haspopup="dialog" aria-controls="document-tree" hidden>移动到…</button>
         <a id="editor-parent-document" hidden></a>
         <button type="button" id="new-child-document" hidden>新建子文档</button>
       </nav>
@@ -611,6 +612,11 @@
     <p id="document-tree-status" class="note" role="status"></p>
     <button type="button" id="retry-document-tree" hidden>重试</button>
     <ol id="document-tree-list"></ol>
+    <form id="move-document-form" hidden>
+      <label for="move-document-destination">目标位置</label>
+      <select id="move-document-destination" required></select>
+      <div class="space-action-row"><button type="submit" class="primary" id="move-document-submit" disabled>移动文档</button></div>
+    </form>
   </dialog>
   <dialog id="duplicate-artifact-dialog" class="send-dialog-card" aria-labelledby="duplicate-artifact-heading">
     <form id="duplicate-artifact-form">

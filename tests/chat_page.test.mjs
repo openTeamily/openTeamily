@@ -2602,6 +2602,11 @@ test('own message editing and confirmed retraction call versioned endpoints', as
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: original} = sessionFetcher();
   let text = 'Original', revision = 1, retracted = false;
+  const message = () => ({id:'mine-1', seq:1, user_id:alice, workspace_id:'ws-1', conversation_id:'conv-1',
+    body:text, revision, retracted, edited:revision > 1 ? 15 : null});
+  const waiting = Promise.withResolvers();
+  let holdDirectory = false;
+  let transcriptReads = 0;
   const posts = [];
   const restore = installChatGlobals({narrow: true});
   try {
@@ -2612,13 +2617,20 @@ test('own message editing and confirmed retraction call versioned endpoints', as
         revision += 1;
         if (path.endsWith('/edit')) text = payload.body;
         else { text = ''; retracted = true; }
-        return json(200, {message: {}});
+        return json(200, {message:message()});
       }
+      if (holdDirectory && path.endsWith('/agents?limit=100&include=conversations')) await waiting.promise;
       const result = await original(path), body = await result.json();
-      if (path.endsWith('/social/conversations/conv-1')) body.items = [{id: 'mine-1', user_id: alice, body: text, revision, retracted}];
+      if (path.endsWith('/social/conversations/conv-1')) {
+        transcriptReads += 1;
+        body.items = [message()];
+      }
       return json(result.status, body);
     }});
     await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    holdDirectory = true;
+    const transcriptBefore = transcriptReads;
+    el('chat-body').value = 'Independent draft';
     let li = el('message-list').children[0];
     await fire(li.children[3], 'click'); // edit opens inline controls
     li.children[5].children[0].value = 'Edited';
@@ -2632,13 +2644,17 @@ test('own message editing and confirmed retraction call versioned endpoints', as
     await fire(li.children[5].children[0], 'click');
     assert.equal(posts.length, 2);
     assert.equal(el('message-list').children[0].children[1].textContent, '此消息已撤回');
-  } finally { restore(); }
+    assert.equal(transcriptReads, transcriptBefore);
+    assert.equal(el('chat-body').value, 'Independent draft');
+  } finally { waiting.resolve(); await settle(); restore(); }
 });
 
 test('editing a sent message adds a confirm step before the text is replaced', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: original} = sessionFetcher();
   let text = 'Original', revision = 1;
+  const message = () => ({id:'mine-1', seq:1, user_id:alice, workspace_id:'ws-1', conversation_id:'conv-1',
+    body:text, revision, retracted:false, edited:revision > 1 ? 15 : null});
   const posts = [];
   const restore = installChatGlobals({narrow: true});
   try {
@@ -2646,11 +2662,11 @@ test('editing a sent message adds a confirm step before the text is replaced', a
       if (path.includes('/messages/mine-1/')) {
         const payload = JSON.parse(options.body); posts.push([path, payload]);
         revision += 1; text = payload.body;
-        return json(200, {message: {}});
+        return json(200, {message:message()});
       }
       const result = await original(path), body = await result.json();
       if (path.endsWith('/social/conversations/conv-1')) {
-        body.items = [{id: 'mine-1', user_id: alice, body: text, revision, retracted: false}];
+        body.items = [message()];
       }
       return json(result.status, body);
     }});
