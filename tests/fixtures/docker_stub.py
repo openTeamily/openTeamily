@@ -36,6 +36,17 @@ elif args[:2] == ['volume', 'inspect']:
     if ctrl.get('volume_inspect_warning'):
         print('unexpected warning', file=sys.stderr)
     emit([{'Name': args[2], 'Driver': ctrl.get('volume_driver', 'local'), 'Scope': ctrl.get('volume_scope', 'local'), 'Options': {'device': '/untrusted'} if ctrl.get('volume_driver_options') else None, 'Labels': {'com.docker.compose.project': 'wrong' if ctrl.get('wrong_volume') else args[2], 'com.docker.compose.volume': 'data'}}])
+elif args[:4] == ['ps', '--all', '--quiet', '--no-trunc']:
+    filters = args[4:]
+    assert len(filters) == 6 and filters[::2] == ['--filter'] * 3
+    project, service, config_hash = filters[1::2]
+    assert project.startswith('label=com.docker.compose.project=ot-')
+    assert service == 'label=com.docker.compose.service=flybot'
+    assert config_hash == 'label=com.docker.compose.config-hash'
+    if 'container_list_raw' in ctrl:
+        print(ctrl['container_list_raw'])
+    elif state.get('id') and project == 'label=com.docker.compose.project=' + state['project']:
+        print(state['id'])
 elif args[0] == 'inspect':
     iid = state['project'][3:]
     manifest = json.loads((root / ('compose-' + iid + '.json')).read_text())
@@ -60,7 +71,8 @@ elif args[0] == 'inspect':
         mounts.append({'Type': 'bind', 'Source': '/etc/passwd', 'Destination': '/evil', 'RW': False})
         binds.append('/etc/passwd:/evil:ro')
     emit([{'Id': args[-1], 'Config': {'Image': manifest['services']['flybot']['image'], 'User': '1000:1000',
-           'Labels': {'com.docker.compose.project': 'wrong' if ctrl.get('wrong_project') else state['project'], 'com.docker.compose.service': 'flybot'}},
+           'Labels': {'com.docker.compose.project': 'wrong' if ctrl.get('wrong_project') else state['project'],
+                      'com.docker.compose.service': 'flybot', 'com.docker.compose.config-hash': 'test-compose-config'}},
            'HostConfig': {'Privileged': bool(ctrl.get('privileged')), 'ReadonlyRootfs': True, 'CapDrop': ['ALL'],
                           'SecurityOpt': ['no-new-privileges:true'], 'IpcMode': 'private', 'NetworkMode': state['project'] + '_default', 'PortBindings': {},
                           'Binds': binds, 'Memory': state.get('memory_bytes', 0)},
@@ -99,9 +111,6 @@ elif args[0] == 'compose':
         else:
             state['running'] = False
         save()
-    elif verb == 'ps':
-        if state.get('id'):
-            print(state['id'])
     elif verb == 'logs':
         time.sleep(ctrl.get('log_delay', 0))
         if ctrl.get('log_bytes'):

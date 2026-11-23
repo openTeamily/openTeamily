@@ -162,6 +162,7 @@ export function registerWorkComments(app: FastifyInstance, ot: OtContext) {
       const { row, created } = postComment(ot, work, viewer, body(req));
       return {created, data: {
         comment: commentView(row, work, viewer), comment_count: workCommentCount(ot, work.id),
+        ...(row.parent_id ? {parent_reply_count: requireComment(ot, work, row.parent_id, viewer).reply_count} : {}),
         ...(created ? {} : {replayed: true}),
       }};
     });

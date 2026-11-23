@@ -1675,6 +1675,46 @@ test('Space leaves an inaccessible pinned workspace unselected before starting a
   assert.equal(page.calls.some(call => /\/artifacts(?:\?|$)/.test(call.path)),false);
 });
 
+test('Space uses the saved release to confirm a lost publish or withdrawal receipt', async () => {
+  const saved = {...linkedRecord,revision:2};
+  const path = linkedDetail+'/discover';
+  const slug = 'public-work';
+  let listing = {listed:true,slug,published_revision:1};
+  const page = linkFixture((requested,options) => {
+    if (requested === linkedDetail) return reply({body:{artifact:saved}});
+    if (requested === linkedCatalog+'?order=recent') return reply({body:{items:[saved]}});
+    if (requested === path && options.method === 'GET') return reply({body:{discover:listing}});
+    if (requested === path && options.method === 'POST') return reply({status:503});
+    if (requested === path+'/revoke' && options.method === 'POST') {
+      listing = {listed:false};
+      return reply({status:503});
+    }
+  },linkedSearch,{native:true});
+  await page.mounted;
+  const el = id => page.elements.get(id);
+  const discover = el('discover-panel');
+  discover.open = true;
+  await discover.dispatch('toggle');
+  await nextTask();
+  assert.equal(el('discover-slug').value,slug);
+
+  await el('publish-discover').dispatch('click');
+  assert.match(el('discover-status').textContent,/当前公开状态与本次发布请求不一致/);
+  assert.match(el('discover-revision').textContent,/公开修订 1 · 当前保存的修订 2/);
+  assert.equal(el('discover-public-link').href,'/w/'+slug);
+
+  listing = {...listing,published_revision:2};
+  await el('publish-discover').dispatch('click');
+  assert.equal(el('discover-status').textContent,'已公开到发现页。');
+  assert.equal(el('discover-revision').textContent,'发现页公开修订 2。');
+  await el('revoke-discover').dispatch('click');
+  assert.equal(el('discover-status').textContent,'已从发现页撤回。');
+  assert.equal(el('discover-public-link').hidden,true);
+  assert.deepEqual(page.calls.filter(call => call.path.startsWith(path)).map(call => [call.method,call.path]),[
+    ['GET',path], ['POST',path], ['GET',path], ['POST',path], ['GET',path], ['POST',path+'/revoke'], ['GET',path],
+  ]);
+});
+
 test('copying a historic version recovers a lost receipt without discarding an unsaved Space draft', async () => {
   const copy = {...linkedRecord,id:'c'.repeat(32),title:'历史副本',body:'第一版内容'};
   const saved = {...linkedRecord,revision:2,body:'第二版内容'};

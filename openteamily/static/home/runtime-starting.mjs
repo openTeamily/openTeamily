@@ -1,4 +1,4 @@
-import {csrfCookie, pendingSignupSession, personalDraftScope, readChatDrafts, rememberColdDraftHandoff, runtimeCapacityNotice, signupDraftScope, waitForRuntime, workspaceLoginHash, workspacePageTarget, writeChatDrafts} from './runtime-readiness.mjs';
+import {csrfCookie, pendingSignupSession, personalDraftScope, readChatDrafts, rememberColdDraftHandoff, runtimeHoldNotice, signupDraftScope, waitForRuntime, workspaceLoginHash, workspacePageTarget, writeChatDrafts} from './runtime-readiness.mjs';
 
 export function mountRuntimeStarting(document, {
   view = document.defaultView ?? globalThis, fetcher = globalThis.fetch.bind(globalThis),
@@ -142,15 +142,15 @@ export function mountRuntimeStarting(document, {
       return;
     }
     canStart = state === 'stopped';
-    const capacity = state === 'capacity';
-    title.textContent = capacity ? runtimeCapacityNotice.title : canStart ? '你的专属智能体已停止' : '专属智能体暂未就绪';
+    const notice = runtimeHoldNotice(state);
+    title.textContent = notice?.title || (canStart ? '你的专属智能体已停止' : '专属智能体暂未就绪');
     status.textContent = canStart
       ? (chatTarget ? '启动后会自动打开聊天。' : '启动后会自动返回当前页面。')
-      : capacity ? runtimeCapacityNotice.detail
+      : notice ? notice.detail
         : state === 'timeout' ? '你的专属智能体仍在启动。点击重试即可继续检查。'
         : '暂时无法连接到你的专属智能体。请重试。';
     if (progress) progress.hidden = true;
-    retry.textContent = canStart ? '启动我的智能体' : capacity ? runtimeCapacityNotice.retry : '重试';
+    retry.textContent = canStart ? '启动我的智能体' : notice ? '重新检查' : '重试';
     retry.hidden = false;
     checking = false;
   }

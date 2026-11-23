@@ -43,9 +43,14 @@ test("published work comments persist, deduplicate concurrent delivery, allow re
   assert.equal(saved.comment.client_key, undefined);
   assert.equal((await commenter.call("POST", path, {...submitted, body: "reuse key"})).status, 409);
 
-  const replied = await author.ok("POST", path, {body: "回复记录", parent_id: root, client_key: "reply-unique"});
+  const reply = {body: "回复记录", parent_id: root, client_key: "reply-unique"};
+  const replied = await author.ok("POST", path, reply);
   assert.equal(replied.comment_count, 2);
   assert.equal(replied.comment.parent_id, root);
+  assert.equal(replied.parent_reply_count, 1);
+  const replyReplay = await author.call("POST", path, reply);
+  assert.equal(replyReplay.status, 200);
+  assert.equal(replyReplay.data.parent_reply_count, 1);
   assert.equal((await reader.call("POST", path, {
     body: "不能再嵌套", parent_id: replied.comment.id, client_key: "nested",
   })).status, 400);
@@ -88,6 +93,10 @@ test("published work comments persist, deduplicate concurrent delivery, allow re
   assert.equal((await author.ok("POST", remove, {})).comment_count, 1);
   const retained = (await reader.ok("GET", path)).items[0];
   assert.deepEqual([retained.removed, retained.author, retained.body, retained.reply_count, retained.likes], [true, null, "", 1, 0]);
+  const replyToRemovedRoot = await author.call("POST", path, reply);
+  assert.equal(replyToRemovedRoot.status, 200);
+  assert.equal(replyToRemovedRoot.data.comment.id, replied.comment.id);
+  assert.equal(replyToRemovedRoot.data.parent_reply_count, 1);
   assert.equal((await reader.call("POST", like, {enabled: true})).status, 404);
   assert.equal((await reader.call("POST", path, {body: "追加", parent_id: root, client_key: "removed-root"})).status, 404);
   assert.equal((await author.ok("POST", path + "/" + replied.comment.id + "/remove", {})).comment_count, 0);

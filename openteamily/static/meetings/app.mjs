@@ -2305,7 +2305,7 @@ function mount() {
   function renderConflictReview(review, local, remote, revision) {
     document.getElementById('meeting-conflict-description').textContent = review.conflicts.length
       ? `请选择有冲突的字段。其他修改会合并到修订 ${revision}。`
-      : `你的修改可与修订 ${revision} 合并。请载入后核对内容。`;
+      : `载入修订 ${revision} 后，可在编辑器里核对内容。`;
     conflictFields.replaceChildren();
     const chosen = new Set();
     for (const index of review.conflicts) {
@@ -2613,25 +2613,41 @@ function mount() {
 
   remove.addEventListener('click', () => {
     if (!current?.id || remove.disabled) return;
-    deleting = {...scope(), id: current.id};
+    deleting = {...scope(), id: current.id, revision: current.revision};
     document.getElementById('meeting-delete-target').textContent = current.title;
     deleteDialog.showModal();
   });
   document.getElementById('cancel-remove-meeting')?.addEventListener('click', () => deleteDialog.close());
   document.getElementById('confirm-remove-meeting')?.addEventListener('click', async () => {
     const target = deleting;
+    deleting = null;
     deleteDialog.close();
     if (!target || !active(target) || current?.id !== target.id || remove.disabled) return;
     const operation = {...target, kind: 'delete'};
     writing = operation;
     syncWriting();
     show('loading', '正在删除会议…');
-    const result = await request('POST', `${base()}/${target.id}/remove`, {}).catch(() => unavailable);
+    const body = native ? {revision: target.revision} : {};
+    const result = await request('POST', `${base()}/${target.id}/remove`, body).catch(() => unavailable);
     if (writing === operation) writing = null;
     if (!active(operation)) return;
+    if (native && result.status === 409) {
+      saveConflict = true;
+      syncWriting();
+      show('', '');
+      showSave('error', '会议已更新，已取消删除。请核对最新版本。');
+      reviewConflict?.focus({preventScroll:true});
+      return;
+    }
     syncWriting();
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '删除失败。'));
+      return;
+    }
+    const removed = result.body.removed;
+    if (native && (result.body.viewer_username !== target.viewer || removed?.id !== target.id ||
+        removed.workspace_id !== target.workspace || removed.revision !== target.revision)) {
+      show('error', '无法确认删除结果，请重新打开会议核对。');
       return;
     }
     meetings = meetings.filter(item => item.id !== target.id);

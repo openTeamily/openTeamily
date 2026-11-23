@@ -1416,7 +1416,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const element = document.createElement(canJump ? 'button' : 'div');
     element.className = 'message-quote';
     if (!reply.available) {
-      element.textContent = '原消息不可查看';
+      element.textContent = reply.state === 'checking' ? uiLabel('回复引用', 'Reply quote') : '原消息不可查看';
       return element;
     }
     const name = document.createElement('strong');
@@ -9195,7 +9195,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else {
       const job = makeSendJob(queue, message, files, reply, sticker);
       if (!social && chatSettings && !chatSettings.ready) job.preferences = chatSettings;
-      if (!files.length && !reply && !sticker && (social ? currentSharedTextConversation() : currentPrivateThread())) {
+      if (!files.length && !sticker && (social ? currentSharedTextConversation() : !reply && currentPrivateThread())) {
         // A reload can interrupt the request after the composer clears.
         job.storedText = savePendingChatText(document.defaultView, scope, job.key, message);
       }
@@ -9284,7 +9284,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       const queue = currentChatSendQueue();
       if (queue.jobs.some(job => job.key === key)) continue;
-      const job = makeSendJob(queue, message, [], null, null, key);
+      let reply = null;
+      if (message.reply_to) {
+        // Preview text must come from the current conversation read.
+        const quoted = items.find(item => item.id === message.reply_to &&
+          (!item.conversation_id || item.conversation_id === queue.conversationId) &&
+          (!item.workspace_id || item.workspace_id === queue.wid));
+        reply = quoted && !quoted.retracted ? composerReply(quoted, socialMessageAuthor(quoted))
+          : {message_id:message.reply_to, available:false, state:quoted ? 'missing' : 'checking'};
+      }
+      const job = makeSendJob(queue, message, [], reply, null, key);
       job.storedText = true;
       job.failed = true;
       job.state = uiLabel('上次发送未确认，可重试。', 'Delivery wasn’t confirmed. You can retry.');
@@ -9465,7 +9474,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
                   agentMentions.restoreDirect(job.message.agent_mentions)) {
                 input.value = job.message.body;
                 publicDraft.persist();
-                if (job.reply) setReplyDraft(queue.scope, job.reply);
+                if (job.reply) {
+                  setReplyDraft(queue.scope, job.reply);
+                  if (job.reply.state === 'checking') void restoreReplyDraft(lastSocialItems);
+                }
                 removeSendJob(queue, job);
                 show('error', uiLabel('部分智能体已不可用。消息已恢复到输入框。',
                   'Some agents are unavailable. Your message is back in the composer.'));

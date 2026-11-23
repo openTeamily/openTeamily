@@ -2806,35 +2806,71 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     selection.reads.delete('discover');
     setDiscoverPending(true);
     panelStatus('discover', publish ? '正在发布作品…' : '正在撤回作品…');
-    const path = editorPath(selection) + (publish ? '/discover' : '/discover/revoke');
+    const id = current.id;
+    const path = editorPath(selection, id) + '/discover';
     const payload = publish ? {slug,revision:current.revision} : {};
     if (publish && discoverEditableField && !discoverEditableField.hidden) {
       payload.allow_editable_remix = discoverEditable.checked;
     }
-    const result = await request('POST', path, payload, undefined, selection.controller.signal)
-      .catch(() => ({status: 0, body: {}}));
-    if (!activeEditor(selection)) return;
-    selection.discoverWrite = false;
-    setDiscoverPending(false);
-    if (result.status === 200 || (publish && result.status === 201)) {
+    const isCurrent = () => activeEditor(selection) && current?.id === id;
+    const validListing = row => row?.listed === false ||
+      (row?.listed === true && typeof row.slug === 'string' && DISCOVER_SLUG.test(row.slug));
+    const showConfirmed = row => {
       if (publish) selection.discoverSlugEdited = false;
       selection.discoverEditableEdited = false;
-      if (result.body?.discover) renderDiscoverListing(result.body.discover, !selection.discoverSlugEdited);
-      else await loadDiscover();
-      if (!publish && activeEditor(selection)) panelStatus('discover', '已从发现页撤回。');
-      return;
-    }
-    const error = result.body?.error;
-    const messages = {
-      forbidden: '只有所有者或管理员可以将作品发布到发现页。',
-      conflict: '这个短地址已经在用。',
-      invalid: '请输入符合要求的公开短地址。',
-      attachment_type_blocked: '这个文件格式无法公开发布。',
+      renderDiscoverListing(row, !selection.discoverSlugEdited);
+      if (!publish) panelStatus('discover', '已从发现页撤回。');
     };
-    const code = typeof error === 'string' ? error : error?.code;
-    if (publish && code === 'artifact_changed') displayEditorUpdate({dirty:hasEditorDraft()});
-    const fallback = publish ? '无法发布到发现页，请重试。' : '无法从发现页撤回，请重试。';
-    panelStatus('discover', messageFor(error, publish && Object.hasOwn(messages, code) ? messages[code] : fallback));
+
+    try {
+      const result = await request('POST', path + (publish ? '' : '/revoke'), payload, undefined,
+        AbortSignal.any([selection.controller.signal, AbortSignal.timeout(15000)]))
+        .catch(() => ({status: 0}));
+      if (!isCurrent()) return;
+      const accepted = result.status === 200 || (publish && result.status === 201);
+      const received = result.body?.discover;
+      if (accepted && validListing(received) && received.listed === publish && (!publish || received.slug === slug)) {
+        showConfirmed(received);
+        return;
+      }
+
+      const action = publish ? '发布' : '撤回';
+      if (accepted || !result.status || result.status === 408 || result.status >= 500) {
+        panelStatus('discover', '正在核对公开状态…');
+        const check = await request('GET', path, undefined, undefined,
+          AbortSignal.any([selection.controller.signal, AbortSignal.timeout(8000)]))
+          .catch(() => ({status: 0}));
+        if (!isCurrent()) return;
+        const observed = check.body?.discover;
+        if (check.status !== 200 || !validListing(observed)) {
+          panelStatus('discover', `未能确认${action}结果。重新展开此面板可查询公开状态。`);
+          return;
+        }
+        const matches = publish ? observed.listed && observed.slug === slug && observed.published_revision === payload.revision &&
+          Boolean(observed.editable_remix) === Boolean(payload.allow_editable_remix) : observed.listed === false;
+        if (matches) showConfirmed(observed);
+        else {
+          renderDiscoverListing(observed, !selection.discoverSlugEdited);
+          panelStatus('discover', `当前公开状态与本次${action}请求不一致。请核对后重试。`);
+        }
+        return;
+      }
+
+      const error = result.body?.error;
+      const messages = {
+        forbidden: '只有所有者或管理员可以将作品发布到发现页。',
+        conflict: '这个短地址已经在用。',
+        invalid: '请输入符合要求的公开短地址。',
+        attachment_type_blocked: '这个文件格式无法公开发布。',
+      };
+      const code = typeof error === 'string' ? error : error?.code;
+      if (publish && code === 'artifact_changed') displayEditorUpdate({dirty:hasEditorDraft()});
+      const fallback = publish ? '无法发布到发现页，请重试。' : '无法从发现页撤回，请重试。';
+      panelStatus('discover', messageFor(error, publish && Object.hasOwn(messages, code) ? messages[code] : fallback));
+    } finally {
+      selection.discoverWrite = false;
+      if (isCurrent()) setDiscoverPending(false);
+    }
   }
 
   function clearCreatedShare() {

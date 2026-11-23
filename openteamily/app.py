@@ -839,6 +839,8 @@ class App:
             state = self.runtime_readiness(db, owner)
             if state in ('starting', 'ready'):
                 return 200, {'state': state}, []
+            if state == 'parked':
+                refuse(409, runtime_autoprovision.PARKED, runtime_autoprovision.PARKED_MESSAGE)
             if state != 'stopped':
                 refuse(409, 'runtime_unavailable', 'The personal runtime cannot be started here')
             instance = runtime_autoprovision.resumable_instance(

@@ -63,6 +63,10 @@ its own WSGI service and HTTPS gateway configuration.
    it publishes the route for each healthy managed runtime. The public HTTPS
    gateway uses the signed-in account to choose that runtime. Set up shared
    service connectivity using the [Bot Social deployment guide](../deploy/isolated/BOT_SOCIAL_DEPLOY.md).
+   The [isolated deployment supervisor](../deploy/isolated/manager-poll.py)
+   checks for new work one second after each successful pass. Idle passes
+   stay out of the logs. Failed passes retry after 10 seconds and back off
+   up to 60 seconds until the next successful pass.
 4. Configure the [platform default model API](MODEL_API.md) before verifying
    first-time chat. Sign in with two test accounts, confirm each has a distinct
    runtime and data volume, and send a message in each account. Verify the
@@ -71,6 +75,30 @@ its own WSGI service and HTTPS gateway configuration.
 With automatic Compose provisioning enabled, workspace instance requests use
 the same account limit and manager assignment as signup. An existing account
 runtime is returned across workspaces where the caller can operate instances.
+
+### Release and restore a stopped reservation
+
+An operator can release the automatic provisioning reservation for a stopped
+account runtime. Its container, volume, owner, and manager assignment are
+preserved. The owner sees a paused status until the reservation is restored.
+The global runtime instance limit still includes paused runtimes.
+
+Run these commands as the management service user with the same data directory
+and private auto-provision policy as the running management service. Use the
+instance ID and current revision from the manager's instance status. Verify the
+container is stopped on the Docker host before releasing a reservation.
+
+```sh
+python3 -m openteamily.runtime_slots --data-dir "$DATA_DIR" --auto-provision "$AUTO_PROVISION" status
+python3 -m openteamily.runtime_slots --data-dir "$DATA_DIR" --auto-provision "$AUTO_PROVISION" park "$INSTANCE_ID" --revision "$REVISION"
+python3 -m openteamily.runtime_slots --data-dir "$DATA_DIR" --auto-provision "$AUTO_PROVISION" restore "$INSTANCE_ID" --revision "$REVISION"
+```
+
+The runtime must be stopped with a confirmed lifecycle revision and no active
+job. Restoring requires a free reservation. Once restored, the owner can start
+the same runtime from the startup page.
+
+### Upgrade existing runtimes
 
 Changing the image for **existing** account volumes is a separate operator
 rollout. Record the current image digest, take consistent volume snapshots,
