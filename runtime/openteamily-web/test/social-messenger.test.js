@@ -136,3 +136,22 @@ test('voice recording and playback proxy through the member messenger', async ()
   const fetched = await feature.v1({method:'GET',path:path+'/m1/voice'})
   assert.deepEqual(fetched,{status:200,body:voice})
 })
+
+
+test('member history forwards older, around and search cursors to Bot Social', async () => {
+  const dir = fixture()
+  const f = fake({'GET /v1/ot/conversations/otc_1/messages': () => ({
+    messages:[{id:'m1',seq:9,body:'Search phrase'}],next_before:9,has_newer:true,
+  })})
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:join(dir,'bot','flybot-social.json'),fetch:f.fetch}))
+  const feature=messenger({dataDir:dir}).endpoints
+  const path='/v1/workspaces/' + 'a'.repeat(32) + '/social/conversations/otc_1/messages'
+  for (const query of ['?before=20&limit=50','?around=m1&limit=50','?q=Search%20phrase&before=20']) {
+    const page=await feature.v1({method:'GET',path:path+query})
+    assert.equal(page.status,200)
+    assert.equal(page.body.cursor,9)
+    assert.equal(page.body.has_newer,true)
+    const sent=new URL(f.calls.at(-1).path,SERVER)
+    for (const [key,value] of new URL(path+query,SERVER).searchParams) assert.equal(sent.searchParams.get(key),value)
+  }
+})

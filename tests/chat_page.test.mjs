@@ -1060,11 +1060,11 @@ test('independent conversation search uses current id and pages without opening 
   const restore = installChatGlobals({narrow: true});
   try {
     await mount(doc, {fetcher: async path => {
-      if (path.includes('/search/messages?')) {
+      if (path.includes('/social/conversations/conv-1/messages?q=')) {
         calls.push(path);
         const url = new URL(path, 'https://management.test');
-        assert.equal(url.searchParams.get('conversation_id'), 'conv-1');
-        return json(200, {items: [{kind: 'social', conversation_id: 'conv-1', message_id: url.searchParams.get('cursor') ? 'second' : 'first', snippet: 'Scoped result'}], cursor: url.searchParams.get('cursor') ? null : 'next-id'});
+        assert.equal(url.pathname, '/v1/workspaces/ws-1/social/conversations/conv-1/messages');
+        return json(200, {items: [{kind: 'social', conversation_id: 'conv-1', id: url.searchParams.get('before') ? 'second' : 'first', body: 'Scoped result'}], cursor: url.searchParams.get('before') ? null : 42});
       }
       return original(path);
     }});
@@ -1080,7 +1080,7 @@ test('independent conversation search uses current id and pages without opening 
     await fire(el('conversation-search-more'), 'click');
     assert.equal(calls.length, 2);
     assert.equal(el('conversation-search-results').children.length, 2);
-    assert.match(calls[1], /cursor=next-id/);
+    assert.match(calls[1], /before=42/);
   } finally { restore(); }
 });
 
@@ -1567,13 +1567,53 @@ test('an audio attachment keeps the document card instead of becoming an image',
   }
 });
 
+test('social history prepends older messages and returns from a searched window to latest', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow:true});
+  const row = seq => ({id: 'history-' + seq, seq, user_id:bob, body:'Message ' + seq, created:seq});
+  const list = el('message-list');
+  const scroller = el('message-scroller');
+  Object.defineProperty(scroller, 'scrollHeight', {get: () => list.children.length * 100});
+  try {
+    await mount(doc, {fetcher: async path => {
+      if (path.endsWith('/conv-1')) {
+        const old = await original(path);
+        return json(200, {...await old.json(), items:[row(5), row(6)], cursor:5});
+      }
+      if (path.includes('before=5')) return json(200, {items:[row(3), row(4), row(5)],cursor:3});
+      if (path.includes('around=history-1')) return json(200, {items:[row(1), row(2)],cursor:null,has_newer:true});
+      if (path.includes('/messages?q=')) return json(200, {items:[row(1)],cursor:null});
+      return original(path);
+    }});
+    await fire(el('conversation-list'), 'click', {target:sessionRows(el)[0]});
+    const ids = () => list.children.map(item => item.dataset.messageId);
+    assert.deepEqual(ids(), ['history-5','history-6']);
+    scroller.scrollTop = 25;
+    await fire(el('chat-load-older'), 'click');
+    assert.deepEqual(ids(), ['history-3','history-4','history-5','history-6']);
+    assert.equal(scroller.scrollTop,225);
+    await fire(el('conversation-search-open'), 'click');
+    el('conversation-search-query').value = 'Message';
+    await fire(el('conversation-search-form'), 'submit', {preventDefault(){}});
+    await fire(el('conversation-search-results').children[0], 'click');
+    assert.deepEqual(ids(), ['history-1','history-2']);
+    assert.equal(list.children[0].dataset.searchJump,'true');
+    assert.equal(el('chat-back-to-latest').hidden,false);
+    await fire(el('chat-back-to-latest'),'click');
+    await settle();
+    assert.deepEqual(ids(), ['history-5','history-6']);
+    assert.equal(el('chat-back-to-latest').hidden,true);
+  } finally { restore(); }
+});
+
 test('in-chat search jumps to loaded messages, explains unloaded hits, and restores scroll on close', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: original} = sessionFetcher();
   const restore = installChatGlobals({narrow:true});
   try {
     await mount(doc, {fetcher: async path => {
-      if (path.includes('/search/messages?')) return json(200, {items:[{message_id:'jump-loaded',snippet:'Find me'}, {message_id:'not-loaded',snippet:'Earlier message'}],cursor:null});
+      if (path.includes('/messages?q=')) return json(200, {items:[{id:'jump-loaded',body:'Find me'}, {id:'not-loaded',body:'Earlier message'}],cursor:null});
       return original(path);
     }});
     await fire(el('conversation-list'), 'click', {target:sessionRows(el)[0]});
@@ -1771,7 +1811,8 @@ test('conversation search lists this conversation photos and files from real att
     assert.ok(descendants(files[0]).some(node => node.textContent === 'plan.pdf'));
     assert.match(el('conversation-search-status').textContent, /已显示 1 个文件/);
     await fire(files[0], 'click');
-    assert.match(el('conversation-search-status').textContent, /不在当前已加载/, 'a hit outside the loaded window says so instead of pretending');
+    const located = el('message-list').children.find(node => node.dataset.messageId === 'm-2');
+    assert.equal(located.dataset.searchJump, 'true', 'a file outside the window loads and highlights its message');
   } finally { restore(); }
 });
 

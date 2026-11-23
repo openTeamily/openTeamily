@@ -271,20 +271,92 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   });
 
   // ---- messages
+  app.get("/v1/ot/workspaces/:workspace/messages/search", async req => {
+    const me = ot.me(req);
+    const workspace = params(req).workspace;
+    assert(/^[0-9a-f]{32}$/.test(workspace), 400, "invalid_request", "Invalid workspace");
+    const team = ot.get<{id: string}>("SELECT id FROM ot_teams WHERE workspace_id=?", workspace);
+    assert(team, 404, "team_not_found", "Workspace not found");
+    requireMember(ot, team.id, me.ownerId);
+
+    const q = query(req);
+    const term = text(q.q, "q", { min: 1, max: 80 });
+    const limit = Math.max(1, intParam(q.limit, "limit", 20, 51));
+    assert(q.before === undefined || (typeof q.before === "string" && /^[0-9]{1,16}:[0-9]{1,16}$/.test(q.before)),
+      400, "invalid_request", "Invalid search cursor");
+    const [beforeTime, beforeRow] = typeof q.before === "string" ? q.before.split(":").map(Number) : [0, 0];
+    assert(Number.isSafeInteger(beforeTime) && Number.isSafeInteger(beforeRow), 400, "invalid_request", "Invalid search cursor");
+    assert(q.conversation_id === undefined || (typeof q.conversation_id === "string" && /^[A-Za-z0-9._-]{1,80}$/.test(q.conversation_id)),
+      400, "invalid_request", "Invalid conversation");
+    const conversation = q.conversation_id ?? null;
+    const rows = ot.all<any>(`SELECT m.id, m.conversation_id, m.rowseq, m.body, m.created_at,
+      CASE WHEN c.kind='dm' THEN (
+        SELECT p.display_name FROM ot_conversation_members peer JOIN ot_profiles p ON p.owner_id=peer.owner_id
+        WHERE peer.conversation_id=c.id AND peer.owner_id<>? LIMIT 1)
+      ELSE c.title END AS title
+      FROM ot_messages m
+      JOIN ot_conversations c ON c.id=m.conversation_id
+      JOIN ot_conversation_members mine ON mine.conversation_id=c.id AND mine.owner_id=?
+      WHERE m.retracted=0 AND (? IS NULL OR c.id=?)
+        AND (c.team_id=? OR (c.kind='dm' AND c.team_id IS NULL AND EXISTS (
+          SELECT 1 FROM ot_conversation_members peer
+          JOIN ot_team_members teammate ON teammate.owner_id=peer.owner_id AND teammate.team_id=? AND teammate.suspended=0
+          WHERE peer.conversation_id=c.id AND peer.owner_id<>?)))
+        AND (?=0 OR m.created_at<? OR (m.created_at=? AND m.rowseq<?))
+        AND instr(lower(m.body),lower(?))>0
+      ORDER BY m.created_at DESC, m.rowseq DESC LIMIT ?`,
+    me.ownerId, me.ownerId, conversation, conversation, team.id, team.id, me.ownerId,
+    beforeRow, beforeTime, beforeTime, beforeRow, term, limit + 1);
+    const items = rows.slice(0, limit).map(row => ({
+      conversation_id: row.conversation_id, message_id: row.id, title: row.title || "会话",
+      body: row.body, created_ms: row.created_at, cursor: `${row.created_at}:${row.rowseq}`,
+    }));
+    return { items, more: rows.length > limit };
+  });
   app.get("/v1/ot/conversations/:id/messages", async (req) => {
     const me = ot.me(req);
     const conv = memberOf(ot, params(req).id, me.ownerId);
     const q = query(req);
-    const limit = intParam(q.limit, "limit", 50, 200);
+    const limit = Math.max(1, intParam(q.limit, "limit", 50, 200));
     const before = intParam(q.before, "before", 0);
     const after = intParam(q.after, "after", 0);
-    const rows = before
-      ? ot.all<any>("SELECT * FROM (SELECT * FROM ot_messages WHERE conversation_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?) ORDER BY seq", conv.id, before, limit)
-      : after
-        ? ot.all<any>("SELECT * FROM ot_messages WHERE conversation_id = ? AND seq > ? ORDER BY seq LIMIT ?", conv.id, after, limit)
-        : ot.all<any>("SELECT * FROM (SELECT * FROM ot_messages WHERE conversation_id = ? ORDER BY seq DESC LIMIT ?) ORDER BY seq", conv.id, limit);
+    const around = q.around;
+    const term = q.q === undefined ? "" : text(q.q, "q", { min: 1, max: 80 });
+    assert(!term || (around === undefined && !after), 400, "invalid_request", "Search supports only an older cursor");
+    assert(Number(Boolean(before)) + Number(Boolean(after)) + Number(around !== undefined) <= 1,
+      400, "invalid_request", "Choose one message cursor");
+    let rows;
+    if (term) {
+      const matches = ot.all<any>(`SELECT * FROM ot_messages WHERE conversation_id=? AND retracted=0
+        AND (?=0 OR seq<?) AND instr(lower(body),lower(?))>0 ORDER BY seq DESC LIMIT ?`,
+      conv.id, before, before, term, limit + 1);
+      const cursor = matches.length > limit ? matches[limit - 1].seq : null;
+      return { messages: matches.slice(0, limit).map(m => messageView(ot, m, me.ownerId)), next_before: cursor };
+    }
+    if (around !== undefined) {
+      assert(typeof around === "string" && /^[A-Za-z0-9._-]{1,80}$/.test(around), 400, "invalid_request", "Invalid message ID");
+      const anchor = ot.get<{seq: number}>("SELECT seq FROM ot_messages WHERE id=? AND conversation_id=?", around, conv.id);
+      assert(anchor, 404, "message_not_found", "Message not found in this conversation");
+      const preceding = ot.all<any>("SELECT * FROM ot_messages WHERE conversation_id=? AND seq<? ORDER BY seq DESC LIMIT ?",
+        conv.id, anchor.seq, Math.floor((limit - 1) / 2));
+      const following = ot.all<any>("SELECT * FROM ot_messages WHERE conversation_id=? AND seq>=? ORDER BY seq LIMIT ?",
+        conv.id, anchor.seq, limit - preceding.length);
+      rows = [...preceding.reverse(), ...following];
+    } else if (before) {
+      rows = ot.all<any>("SELECT * FROM ot_messages WHERE conversation_id=? AND seq<? ORDER BY seq DESC LIMIT ?", conv.id, before, limit).reverse();
+    } else if (after) {
+      rows = ot.all<any>("SELECT * FROM ot_messages WHERE conversation_id=? AND seq>? ORDER BY seq LIMIT ?", conv.id, after, limit);
+    } else {
+      rows = ot.all<any>("SELECT * FROM ot_messages WHERE conversation_id=? ORDER BY seq DESC LIMIT ?", conv.id, limit).reverse();
+    }
     const mine = ot.get<any>("SELECT read_seq FROM ot_conversation_members WHERE conversation_id = ? AND owner_id = ?", conv.id, me.ownerId);
-    return { messages: rows.map((m) => messageView(ot, m, me.ownerId)), read_seq: mine.read_seq, last_seq: conv.last_seq };
+    const first = rows[0]?.seq;
+    const hasOlder = first > 1 && ot.get("SELECT 1 FROM ot_messages WHERE conversation_id=? AND seq<? LIMIT 1", conv.id, first);
+    return {
+      messages: rows.map(m => messageView(ot, m, me.ownerId)), read_seq: mine.read_seq, last_seq: conv.last_seq,
+      next_before: hasOlder ? first : null,
+      has_newer: (rows.at(-1)?.seq ?? conv.last_seq) < conv.last_seq,
+    };
   });
   app.post("/v1/ot/conversations/:id/messages", async (req, reply) => {
     const me = ot.me(req);

@@ -546,7 +546,7 @@ function messengerRoutes(host) {
             items: (page.messages || []).map((m) => messageItem({ ...m, conversation_id: conv.id }, me, env, match[1])),
             agent_replies: [],
             pinned_messages: [],
-            cursor: null,
+            cursor: page.next_before ?? null,
           }]
         })
       },
@@ -559,8 +559,13 @@ function messengerRoutes(host) {
           await teamFor(bs, match[1], 'Workspace', env)
           const me = await meOf(bs, env)
           const q = parseQuery(query)
-          const page = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages` + qs({ limit: q.get('limit') }))
-          return [200, { items: (page.messages || []).map((m) => messageItem({ ...m, conversation_id: match[2] }, me, env, match[1])), cursor: null }]
+          const page = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages` + qs({
+            limit: q.get('limit'), before: q.get('before') || q.get('cursor'), around: q.get('around'), q: q.get('q'),
+          }))
+          return [200, {
+            items: (page.messages || []).map(m => messageItem({ ...m, conversation_id: match[2] }, me, env, match[1])),
+            cursor: page.next_before ?? null, has_newer: page.has_newer === true,
+          }]
         })
       },
     },

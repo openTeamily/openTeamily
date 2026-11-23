@@ -122,6 +122,7 @@ export function searchHitFromItem(item) {
     title: item.title || '消息',
     preview: item.snippet || '',
     conversationId: item.conversation_id,
+    agentId: item.agent_id || '',
     kind: item.kind,
   };
 }
@@ -142,7 +143,7 @@ export function mergeSearchHits(existing, incoming) {
 // rows already shown and appends the next page, so a failed or repeated page
 // never drops what the user is already reading.
 export function createMessageSearch(loadPage) {
-  const state = {hits: [], cursor: '', loading: false, error: ''};
+  const state = {hits: [], cursor: '', loading: false, error: '', warning: ''};
   let generation = 0;
   let pending = null;
   let activeKey = '';
@@ -153,7 +154,7 @@ export function createMessageSearch(loadPage) {
       generation += 1;
       activeKey = '';
       pending = null;
-      Object.assign(state, {hits: [], cursor: '', error: '', loading: false});
+      Object.assign(state, {hits: [], cursor: '', error: '', warning: '', loading: false});
       return state;
     }
     // A tab switch during the same search must await the existing request,
@@ -165,6 +166,7 @@ export function createMessageSearch(loadPage) {
     if (!append) {
       state.hits = [];
       state.cursor = '';
+      state.warning = '';
     }
     state.loading = true;
     pending = (async () => {
@@ -175,6 +177,7 @@ export function createMessageSearch(loadPage) {
         state.hits = mergeSearchHits(append ? state.hits : [], incoming);
         state.cursor = (page && page.cursor) || '';
         state.error = '';
+        state.warning = (page && page.warning) || '';
       } catch (failure) {
         if (token !== generation) return state;
         state.error = (failure && failure.message) || '无法搜索消息。';
@@ -832,7 +835,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       `/v1/workspaces/${workspaceId()}/search/messages?${messageSearchQuery(query, conversationId, cursor)}`,
     );
     if (result.status !== 200) throw new Error(messageFor(result.body.error, '无法搜索消息。'));
-    return {items: result.body.items || [], cursor: result.body.cursor || ''};
+    return result.body;
   });
 
   function renderGroupReplyAction(requests) {
@@ -1338,8 +1341,66 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     finally { button.disabled = false; }
   });
 
+  let socialHistory = null;
+  let socialOpen = 0;
+  let historyJump = 0;
+  const olderMessages = document.getElementById('chat-load-older');
+  const latestMessages = document.getElementById('chat-back-to-latest');
+  const historyNotice = document.getElementById('chat-history-status');
+
+  function setSocialHistory(state) {
+    socialHistory = state;
+    if (historyNotice) historyNotice.textContent = '';
+    updateHistoryControls();
+  }
+
+  function updateHistoryControls() {
+    if (olderMessages) {
+      olderMessages.hidden = !socialHistory?.cursor;
+      olderMessages.disabled = Boolean(socialHistory?.loading);
+    }
+    if (latestMessages) latestMessages.hidden = !socialHistory?.readingHistory;
+  }
+
+  async function historyPage(state, query) {
+    const result = await request('GET', `/v1/workspaces/${state.wid}/social/conversations/${state.cid}/messages?${query}`);
+    return socialHistory === state && currentSource === 'social' && workspaceId() === state.wid
+      && currentConversation?.id === state.cid ? result : null;
+  }
+
+  olderMessages?.addEventListener('click', async () => {
+    const state = socialHistory;
+    if (!state?.cursor || state.loading) return;
+    state.loading = true;
+    updateHistoryControls();
+    if (historyNotice) historyNotice.textContent = '';
+    try {
+      const query = new URLSearchParams({before: String(state.cursor), limit: '50'});
+      const result = await historyPage(state, query);
+      if (!result) return;
+      if (result.status !== 200) throw new Error('History unavailable');
+      const existing = new Set(lastSocialItems.map(item => item.id));
+      const older = (result.body.items || []).filter(item => !existing.has(item.id));
+      state.cursor = result.body.cursor ?? null;
+      state.readingHistory = true;
+      if (older.length) renderSocialMessages([...older, ...lastSocialItems], {keepScroll: true});
+      if (historyNotice) historyNotice.textContent = older.length ? `已加载 ${older.length} 条旧消息。` : '没有更早的消息。';
+    } catch {
+      if (socialHistory === state && historyNotice) historyNotice.textContent = '旧消息加载失败，请重试。';
+    } finally {
+      state.loading = false;
+      updateHistoryControls();
+    }
+  });
+  latestMessages?.addEventListener('click', () => {
+    if (currentSource === 'social' && currentConversation) openSocialConversation(currentConversation.id);
+  });
+
   let lastSocialItems = [];
-  function renderSocialMessages(items) {
+  function renderSocialMessages(items, {keepScroll = Boolean(socialHistory?.readingHistory)} = {}) {
+    const scroller = document.getElementById('message-scroller');
+    const oldHeight = scroller.scrollHeight;
+    const oldTop = scroller.scrollTop;
     clearVoicePlayers();
     lastSocialItems = items || [];
     const list = document.getElementById('message-list');
@@ -1474,8 +1535,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       list.append(li);
     }
-    const scroller = document.getElementById('message-scroller');
-    scroller.scrollTop = scroller.scrollHeight;
+    scroller.scrollTop = keepScroll ? Math.max(0, oldTop + scroller.scrollHeight - oldHeight) : scroller.scrollHeight;
     return false;
   }
 
@@ -1535,9 +1595,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const target = notificationTarget(item);
         if (target) { globalThis.location.assign(target); return; }
         if (item.conversation_id) {
-          await openSocialConversation(item.conversation_id);
-          if (item.message_id && currentSource === 'social' && currentConversation?.id === item.conversation_id) {
-            jumpToMessage(item.message_id, status);
+          const opened = await openSocialConversation(item.conversation_id, {acknowledge: !item.message_id});
+          if (opened && item.message_id && currentSource === 'social' && currentConversation?.id === item.conversation_id) {
+            await jumpToMessage(item.message_id, status);
           }
         }
         await loadNotifications();
@@ -1825,6 +1885,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openAgentConversation(agentId, conversationId) {
+    const open = ++socialOpen;
+    const wid = workspaceId();
+    const result = await request('GET', `/v1/workspaces/${wid}/agents/${agentId}/conversations/${conversationId}`);
+    if (open !== socialOpen || workspaceId() !== wid) return false;
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, '无法打开对话。'));
+      return false;
+    }
+    const agent = agents.find(item => item.id === agentId) || result.body.agent;
+    if (!agent) return false;
+    setSocialHistory(null);
     agentMentions.clear();
     voiceRecorder.clear();
     clearVoicePlayers();
@@ -1833,22 +1904,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const pin = document.getElementById('pin-conversation');
     if (pin) pin.hidden = true;
     syncMuteButton();
-    const agent = agents.find(item => item.id === agentId);
-    if (!agent) {
-      show('error', '找不到这个智能体。');
-      return;
-    }
-    currentAgent = agent;
     currentSource = 'agent';
+    currentAgent = agent;
     voiceRecorder.refresh();
     document.getElementById('social-agent-members').hidden = true;
-    applyChatIdentity(document, agent.name);
     setDirectoryLink({source: 'agent'});
-    const result = await request('GET', `/v1/workspaces/${workspaceId()}/agents/${agentId}/conversations/${conversationId}`);
-    if (result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法打开对话。'));
-      return;
-    }
+    applyChatIdentity(document, agent.name);
     if (!currentConversation || currentConversation.id !== result.body.conversation.id) {
       const autoReplyNotice = document.getElementById('group-agent-auto-reply-status');
       if (autoReplyNotice) autoReplyNotice.hidden = true;
@@ -1861,34 +1922,42 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const pending = renderAgentMessages(result.body.items);
     const finished = (result.body.items || []).filter(item => item.role === 'assistant' && item.status === 'succeeded');
     if (currentConversation.unread_count > 0 && finished.length && document.visibilityState !== 'hidden') {
-      const wid = workspaceId(), cid = conversationId;
-      const acknowledged = await request('POST', `/v1/workspaces/${wid}/agents/${agentId}/conversations/${cid}/read`,
+      const acknowledged = await request('POST', `/v1/workspaces/${wid}/agents/${agentId}/conversations/${conversationId}/read`,
         {message_id: finished[finished.length - 1].id});
-      if (acknowledged.status === 200 && workspaceId() === wid) {
-        const session = sessions.find(item => item.source === 'agent' && item.id === cid);
+      if (open !== socialOpen || workspaceId() !== wid) return false;
+      if (acknowledged.status === 200) {
+        const session = sessions.find(item => item.source === 'agent' && item.id === conversationId);
         if (session) session.unread_count = acknowledged.body.unread_count;
       }
     }
     renderSessions();
     if (pending) schedulePoll();
     else stopPolling();
+    return open === socialOpen && workspaceId() === wid;
   }
 
-  async function openSocialConversation(conversationId) {
-    if (currentConversation?.id !== conversationId) voiceRecorder.clear();
+  async function openSocialConversation(conversationId, {acknowledge = true} = {}) {
+    const open = ++socialOpen;
+    const wid = workspaceId();
+    if (currentConversation?.id !== conversationId) {
+      setSocialHistory(null);
+      voiceRecorder.clear();
+    }
     currentAgent = null;
     currentSource = 'social';
     stopPolling();
     const result = await request('GET', `${socialBase()}/${conversationId}`);
+    if (open !== socialOpen || workspaceId() !== wid || currentSource !== 'social') return false;
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '无法打开会话。'));
-      return;
+      return false;
     }
     if (!currentConversation || currentConversation.id !== result.body.conversation.id) {
       const panel = document.getElementById('conversation-search-panel'); if (panel) panel.hidden = true;
       const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
     }
     currentConversation = result.body.conversation;
+    setSocialHistory({wid, cid: conversationId, cursor: result.body.cursor ?? null});
     agentMentions.refresh();
     voiceRecorder.refresh();
     setSessionsOpen(false);
@@ -1916,7 +1985,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     // Acknowledge only the last message actually rendered, not messages that
     // arrived after this snapshot, and never consume unread in a hidden tab.
     const shown = result.body.items || [];
-    if (currentConversation.unread_count > 0 && shown.length && document.visibilityState !== 'hidden') {
+    if (acknowledge && currentConversation.unread_count > 0 && shown.length && document.visibilityState !== 'hidden') {
       const acknowledged = await request('POST', `${socialBase()}/${conversationId}/read`,
         Number.isSafeInteger(shown[shown.length - 1].seq)
           ? {seq: shown[shown.length - 1].seq}
@@ -1928,6 +1997,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     renderSessions();
     if ((result.body.agent_replies || []).some(item => ['queued', 'running'].includes(item.status))) schedulePoll();
+    return open === socialOpen && workspaceId() === wid && currentSource === 'social';
   }
 
   function schedulePoll() {
@@ -1935,7 +2005,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     pollTimer = globalThis.setTimeout(() => {
       if (currentConversation && currentAgent && currentSource === 'agent') {
         openAgentConversation(currentAgent.id, currentConversation.id);
-      } else if (currentConversation && currentSource === 'social') {
+      } else if (currentConversation && currentSource === 'social' && !socialHistory?.readingHistory) {
         openSocialConversation(currentConversation.id);
       }
     }, 2000);
@@ -2108,6 +2178,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function closeSearchPanel() {
     searchSeq++;
+    void messageSearch.load('');
     searchConversation = '';
     document.getElementById('search-panel').hidden = true;
     document.getElementById('search-close').hidden = true;
@@ -2195,12 +2266,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const results = document.getElementById('search-results');
     const empty = document.getElementById('search-empty');
     const note = document.getElementById('search-source-note');
+    const paged = searchTab === 'messages' || searchTab === 'all';
     results.replaceChildren();
     empty.hidden = true;
     note.hidden = Boolean(query) && !searchConversation;
     note.textContent = searchConversation
       ? '仅搜索当前对话：' + searchConversationTitle
-      : '以下是当前工作区里已有的内容，不是站外推荐。';
+      : '搜索当前工作区。';
     const seq = ++searchSeq;
 
     if (searchTab === 'files' || searchTab === 'links') {
@@ -2226,7 +2298,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
 
     let messageItems = [];
-    if ((searchTab === 'messages' || searchTab === 'all') && query) {
+    if (paged && query) {
       if (!reuseMessages) await messageSearch.load(query, searchConversation);
       if (seq !== searchSeq) return;
       const state = messageSearch.state;
@@ -2235,6 +2307,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         empty.textContent = state.error;
         applySearchMore(document.getElementById('search-more'), {cursor: '', loading: false});
         return;
+      }
+      if (state.warning) {
+        note.hidden = false;
+        note.textContent = state.warning;
       }
       messageItems = state.hits;
     }
@@ -2275,6 +2351,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             currentAgent = agents.find(entry => entry.id === item.id) || null;
             currentConversation = null;
             currentSource = 'agent';
+            socialOpen += 1;
+            setSocialHistory(null);
             if (currentAgent) applyChatIdentity(document, currentAgent.name, null,
               currentAgent.id === personalAgentId ? personalLook : null);
             document.getElementById('chat-empty').hidden = false;
@@ -2282,10 +2360,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             writeHash({workspace: workspaceId(), agent: item.id});
           }
         } else if (item.type === 'social' || item.kind === 'social') {
-          await openSocialConversation(item.conversationId || item.id);
+          const opened = await openSocialConversation(item.conversationId || item.id, {acknowledge: !item.messageId});
+          if (opened && item.messageId && currentConversation?.id === item.conversationId) {
+            await jumpToMessage(item.messageId, status);
+          }
         } else if (item.type === 'agent-message' || item.kind === 'agent') {
           const session = sessions.find(row => row.source === 'agent' && row.id === item.conversationId);
-          if (session) await openAgentConversation(session.agent_id, session.id);
+          const agentId = item.agentId || session?.agent_id;
+          if (agentId && await openAgentConversation(agentId, item.conversationId)
+            && item.messageId && currentConversation?.id === item.conversationId) {
+            await jumpToMessage(item.messageId, status);
+          }
         } else if (item.type === 'contact') {
           openComposeDialog('contact');
           const box = document.querySelector(`#member-choices input[value="${item.id}"]`);
@@ -2295,9 +2380,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (!total) {
       empty.hidden = false;
-      empty.textContent = query ? '当前工作区里没有匹配的结果。' : '当前工作区里还没有可列出的内容。';
+      if (!query) empty.textContent = '当前工作区里还没有可列出的内容。';
+      else if (paged && messageSearch.state.warning) empty.textContent = '可搜索的内容里没有匹配结果。';
+      else empty.textContent = '当前工作区里没有匹配的结果。';
     }
-    const paged = searchTab === 'messages' || searchTab === 'all';
     if (paged && query && messageSearch.state.error) {
       empty.hidden = false;
       empty.textContent = messageSearch.state.error;
@@ -2339,6 +2425,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (session.status !== 200) {
       currentUser = null;
       currentConversation = null;
+      socialOpen += 1;
+      setSocialHistory(null);
       voiceRecorder.refresh();
       clearVoicePlayers();
       loginPanel.hidden = false;
@@ -2430,6 +2518,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       else {
         currentAgent = agents.find(item => item.id === start.agent) || null;
         currentSource = 'agent';
+        socialOpen += 1;
+        setSocialHistory(null);
         if (currentAgent) applyChatIdentity(document, currentAgent.name, null,
           currentAgent.id === personalAgentId ? personalLook : null);
         document.getElementById('chat-empty').hidden = false;
@@ -2527,6 +2617,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadNotifications();
   });
   workspaceSelect.addEventListener('change', async () => {
+    socialOpen += 1;
+    setSocialHistory(null);
     notificationSnapshot = null;
     agentMentions.clear();
     renderNotifications({items: [], unread_count: 0});
@@ -2555,6 +2647,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     else renderSearch();
   });
   const inChatSearch = createMessageSearch(async (query, conversationId, cursor) => {
+    if (currentSource === 'social') {
+      const params = new URLSearchParams({q: query, limit: '20'});
+      if (cursor) params.set('before', cursor);
+      const result = await request('GET', `${socialBase()}/${conversationId}/messages?${params}`);
+      if (result.status !== 200) throw new Error('无法搜索当前会话。');
+      return {
+        items: (result.body.items || []).map(item => {
+          const body = String(item.body || '');
+          const index = body.toLocaleLowerCase().indexOf(query.toLocaleLowerCase());
+          const start = Math.max(0, index - 48);
+          return {
+            kind: 'social', conversation_id: conversationId, message_id: item.id, created: item.created,
+            snippet: (start > 0 ? '…' : '') + body.slice(start, start + 160) + (body.length > start + 160 ? '…' : ''),
+          };
+        }),
+        cursor: result.body.cursor,
+      };
+    }
     const result = await request('GET', `/v1/workspaces/${workspaceId()}/search/messages?${messageSearchQuery(query, conversationId, cursor)}`);
     if (result.status !== 200) throw new Error('无法搜索当前会话。');
     return result.body;
@@ -2573,11 +2683,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('conversation-search-status').textContent = state.error || (state.hits.length ? '已显示 ' + state.hits.length + ' 条消息' : '没有找到匹配的消息。试试其他关键词。');
     document.getElementById('conversation-search-more').hidden = !state.cursor;
   }
-  // One jump-and-highlight action for both message hits and attachment hits: a
-  // search result never opens a second view, it scrolls the real message back in.
-  function jumpToMessage(messageId, notice = document.getElementById('conversation-search-status')) {
+  async function jumpToMessage(messageId, notice = document.getElementById('conversation-search-status')) {
     const list = document.getElementById('message-list');
-    const target = Array.from(list.children || []).find(node => node.dataset.messageId === messageId);
+    const findTarget = () => Array.from(list.children || []).find(node => node.dataset.messageId === messageId);
+    let target = findTarget();
+    const jump = ++historyJump;
+    const state = socialHistory;
+    if (!target && currentSource === 'social' && state) {
+      try {
+        const query = new URLSearchParams({around: messageId, limit: '50'});
+        const result = await historyPage(state, query);
+        if (!result || jump !== historyJump) return;
+        if (result.status === 200 && result.body.items?.some(item => item.id === messageId)) {
+          setSocialHistory({...state, cursor: result.body.cursor ?? null,
+            readingHistory: true, loading: false});
+          searchScrollSnapshot = null;
+          renderSocialMessages(result.body.items, {keepScroll: false});
+          target = findTarget();
+          if (notice) notice.textContent = '';
+        }
+      } catch {
+        if (socialHistory !== state || jump !== historyJump) return;
+      }
+    }
     if (!target) {
       if (notice) notice.textContent = '这条消息不在当前已加载的消息窗口里。';
       return;
@@ -2930,8 +3058,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (searchTab === 'files' || searchTab === 'links') { if (resourceCursor) await renderSearch({appendResources: true}); return; }
     const query = (document.getElementById('session-search').value || '').trim();
     if (!query || messageSearch.state.loading || !messageSearch.state.cursor) return;
+    const seq = searchSeq;
     await messageSearch.load(query, searchConversation, {append: true});
-    await renderSearch({reuseMessages: true});
+    if (seq === searchSeq) await renderSearch({reuseMessages: true});
   });
   document.getElementById('message-search').addEventListener('click', () => {
     if (!currentConversation) {

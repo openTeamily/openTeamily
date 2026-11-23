@@ -115,7 +115,7 @@
         <button type="button" role="tab" data-search-tab="media" aria-selected="false">媒体</button>
         <button type="button" role="tab" data-search-tab="links" aria-selected="false">链接</button>
       </div>
-      <p id="search-source-note" class="note">以下是当前工作区里已有的内容，不是站外推荐。</p>
+      <p id="search-source-note" class="note" role="status">搜索当前工作区。</p>
       <div id="search-results"></div>
       <p id="search-empty" class="note" hidden></p>
       <button type="button" id="search-more" class="search-more" hidden>加载更多</button>
@@ -335,7 +335,12 @@
           <a href="/guide">查看功能指引</a>
         </p>
       </div>
+      <div class="chat-history-toolbar">
+        <button type="button" id="chat-load-older" hidden>加载更早的消息</button>
+        <span id="chat-history-status" class="note" role="status"></span>
+      </div>
       <ol id="message-list"></ol>
+      <button type="button" id="chat-back-to-latest" hidden>回到最新消息</button>
     </div>
     <form id="chat-form" method="post" action="/v1/workspaces">
       <div class="composer">
