@@ -384,7 +384,7 @@ function chatFetcher({failNext = false} = {}) {
     if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: 'ws-1'}}});
     if (path === '/v1/workspaces?limit=100') return json(200, {items: [{id: 'ws-1', name: 'Desk'}]});
     if (path === '/v1/settings') return json(200, {settings: {values: {}}});
-    if (path === '/v1/workspaces/ws-1/agents?limit=100') return json(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/agents?limit=100&include=conversations') return json(200, {items: []});
     if (path === '/v1/workspaces/ws-1/social/conversations?limit=100') return json(200, {items: []});
     if (path === '/v1/workspaces/ws-1/members') return json(200, {items: []});
     if (path === '/v1/workspaces/ws-1/artifacts?limit=100') return json(200, {items: []});
@@ -561,7 +561,7 @@ function sessionFetcher() {
     if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: 'ws-1'}}});
     if (path === '/v1/workspaces?limit=100') return json(200, {items: [{id: 'ws-1', name: 'Desk'}]});
     if (path === '/v1/settings') return json(200, {settings: {values: {}}});
-    if (path === '/v1/workspaces/ws-1/agents?limit=100') return json(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/agents?limit=100&include=conversations') return json(200, {items: []});
     if (path === '/v1/workspaces/ws-1/social/conversations?limit=100') {
       return json(200, {items: [first, second]});
     }
@@ -584,6 +584,36 @@ function sessionFetcher() {
 function sessionRows(el) {
   return el('conversation-list').children.map((li) => li.children[0]);
 }
+
+test('the first chat opens using the batched directory while people and artifacts are pending', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: fallback, requests} = sessionFetcher();
+  const restore = installChatGlobals({narrow: false});
+  let releasePeople, releaseArtifacts;
+  async function fetcher(path) {
+    if (path.endsWith('/agents?limit=100&include=conversations')) {
+      return json(200, {items: [{id: 'brief', name: 'Brief'}],
+        conversations: [{id: 'brief-chat', agent_id: 'brief', title: 'Prior briefing', updated: 1}]});
+    }
+    if (path.endsWith('/members')) return new Promise(resolve => {releasePeople = resolve;});
+    if (path.endsWith('/artifacts?limit=100')) return new Promise(resolve => {releaseArtifacts = resolve;});
+    return fallback(path);
+  }
+  try {
+    mount(doc, {fetcher});
+    await settle();
+    assert.ok(releasePeople && releaseArtifacts);
+    assert.ok(sessionRows(el).some(row => row.dataset.conversation === 'brief-chat'));
+    assert.equal(el('message-list').children[0].dataset.messageId, 'm-1');
+    assert.ok(!requests.some(path => path.includes('/agents/brief/conversations')));
+    await fire(el('compose-add-contact'), 'click');
+    assert.match(el('compose-members-empty').textContent, /正在加载/);
+    releasePeople(json(200, {items: [{user_id: bob, username: 'bob'}]}));
+    releaseArtifacts(json(200, {items: []}));
+    await settle();
+    assert.equal(descendants(el('member-choices')).filter(node => node.tagName === 'INPUT')[0].value, bob);
+  } finally { restore(); }
+});
 
 test('a narrow-screen chat starts on the conversation list and returns to it from the back control', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
@@ -850,7 +880,7 @@ test('a homepage start query opens the created conversation after a member start
     if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: 'ws-1'}}});
     if (path === '/v1/workspaces?limit=100') return json(200, {items: [{id: 'ws-1', name: 'Desk'}]});
     if (path === '/v1/settings') return json(200, {settings: {values: {}}});
-    if (path === '/v1/workspaces/ws-1/agents?limit=100') {
+    if (path === '/v1/workspaces/ws-1/agents?limit=100&include=conversations') {
       return json(200, {items: [{id: conversation.agent_id, name: '文档助手'}]});
     }
     if (path === `/v1/workspaces/ws-1/agents/${conversation.agent_id}/conversations?limit=100`) {
@@ -1013,7 +1043,7 @@ test('the inbox filters personal agents and persists bulk-read and mute', async 
   try {
     await mount(doc, {fetcher: async (path, init) => {
       if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: 'ws-1'}, agent: {id: 'personal'}}});
-      if (path.endsWith('/agents?limit=100')) return json(200, {items: [{id: 'personal', name: 'Personal'}]});
+      if (path.endsWith('/agents?limit=100&include=conversations')) return json(200, {items: [{id: 'personal', name: 'Personal'}]});
       if (path.endsWith('/agents/personal/conversations?limit=100')) return json(200, {items: [{id: 'personal-chat'}]});
       if (path.endsWith('/read')) {
         const id = path.split('/').at(-2);
@@ -1500,7 +1530,7 @@ function attachmentFetcher(item) {
     if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: 'ws-1'}}});
     if (path === '/v1/workspaces?limit=100') return json(200, {items: [{id: 'ws-1', name: 'Desk'}]});
     if (path === '/v1/settings') return json(200, {settings: {values: {}}});
-    if (path === '/v1/workspaces/ws-1/agents?limit=100') return json(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/agents?limit=100&include=conversations') return json(200, {items: []});
     if (path === '/v1/workspaces/ws-1/members') return json(200, {items: []});
     if (path === '/v1/workspaces/ws-1/artifacts?limit=100') return json(200, {items: []});
     if (path === '/v1/workspaces/ws-1/social/conversations?limit=100') return json(200, {items: [conversation]});
@@ -1847,7 +1877,7 @@ for (const phase of ['directory', 'fanout']) for (const target of ['ws-1','ws-2'
       if(path==='/v1/personal-agent')return json(200,{personal_agent:{workspace:{id:'ws-1'}}});
       if(path==='/v1/workspaces?limit=100')return json(200,{items:[{id:'ws-1',name:'First'},{id:'ws-2',name:'Second'}]});
       if(path==='/v1/settings')return json(200,{settings:{values:{}}});
-      if(path.endsWith('/agents?limit=100')){
+      if(path.endsWith('/agents?limit=100&include=conversations')){
         if(first){first=false;
           if(phase==='directory')return await new Promise(resolve=>{release=()=>resolve(json(200,{items:[{id:'old-agent',name:'old'}]}));});
           return json(200,{items:[{id:'old-agent',name:'old'}]});
@@ -1878,7 +1908,7 @@ test('initial SSE cannot supersede an uncommitted session directory and lose a c
  globalThis.EventSource=Source;globalThis.location.hash='#workspace=ws-1&agent=agent-1&conversation=conv-1';
  const fallback=chatFetcher().fetcher;
  const fetcher=async(path,options)=>{
-  if(path.endsWith('/agents?limit=100')){if(first){first=false;return await new Promise(resolve=>{release=()=>resolve(json(200,{items:[{id:'agent-1',name:'Deep link agent'}]}));});}return json(200,{items:[{id:'agent-1',name:'Deep link agent'}]});}
+  if(path.endsWith('/agents?limit=100&include=conversations')){if(first){first=false;return await new Promise(resolve=>{release=()=>resolve(json(200,{items:[{id:'agent-1',name:'Deep link agent'}]}));});}return json(200,{items:[{id:'agent-1',name:'Deep link agent'}]});}
   if(path.endsWith('/agents/agent-1/conversations?limit=100'))return json(200,{items:[{id:'conv-1',title:'Stored conversation'}]});
   if(path.endsWith('/agents/agent-1/conversations/conv-1'))return json(200,{conversation:{id:'conv-1',title:'Stored conversation'},items:[{id:'m-1',role:'assistant',body:'Stored actual response',status:'succeeded'}]});
   return fallback(path,options);

@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, workspace_id TEXT NOT NU
   UNIQUE(workspace_id, key_hash), UNIQUE(workspace_id, name_hash));
 CREATE TABLE IF NOT EXISTS agent_conversations (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
   title TEXT NOT NULL, created INTEGER NOT NULL, updated INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS agent_conversations_by_agent ON agent_conversations(agent_id, updated DESC, id);
 CREATE TABLE IF NOT EXISTS agent_messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES agent_conversations(id) ON DELETE CASCADE,
   role TEXT NOT NULL CHECK(role IN ('user','assistant')), text TEXT NOT NULL, status TEXT NOT NULL, created INTEGER NOT NULL, meta TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS agent_messages_by_conversation ON agent_messages(conversation_id, created, id);
@@ -81,6 +82,8 @@ export function createAgents({ db, host }) {
     if (!row) fail('not-found', 'Conversation not found', 404)
     return row
   }
+  const conversationMessages = id => all('SELECT * FROM agent_messages WHERE conversation_id=? ORDER BY created, id', id)
+    .map(message => ({ ...message, meta: JSON.parse(message.meta) }))
 
   // One DS-Bot turn as this agent. Shared by the external API and team runs.
   async function turn({ agent_id: agentId, key, text, request_id: requestId, reply_language: lang, context }) {
@@ -217,6 +220,19 @@ export function createAgents({ db, host }) {
       const rows = all('SELECT * FROM agent_conversations WHERE agent_id=? ORDER BY updated DESC, id LIMIT 200', agent.id)
       return { items: await Promise.all(rows.map(async c => ({ ...c, ...await native.session(agent, `agent:${agent.id}:${c.id}`, c.title) }))) }
     },
+    async conversationSummaries(p) {
+      const workspaceId = ws(p)
+      const ids = p.agent_ids
+      if (!Array.isArray(ids) || ids.length > 100 || ids.some(id => typeof id !== 'string' || !ID.test(id))) {
+        fail('invalid', 'Provide at most 100 agent IDs', 400)
+      }
+      // Listing a conversation must not hydrate its native Session or import its history.
+      const list = db.prepare(`SELECT c.id, c.agent_id, c.title, c.updated
+        FROM agent_conversations c JOIN agents a ON a.id=c.agent_id
+        WHERE c.agent_id=? AND a.workspace_id=?
+        ORDER BY c.updated DESC, c.id LIMIT 200`)
+      return { items: [...new Set(ids)].flatMap(id => list.all(id, workspaceId)) }
+    },
     async 'conversation-create'(p) {
       const agent = load(ws(p), p.id)
       const title = typeof p.title === 'string' && p.title.trim() ? p.title.trim().slice(0, 120) : agent.name
@@ -225,10 +241,15 @@ export function createAgents({ db, host }) {
       const mapping = await native.session(agent, `agent:${agent.id}:${row.id}`, row.title)
       return { status: 201, conversation: { ...row, ...mapping } }
     },
-    async 'conversation-get'(p) {
+    async openConversation(p) {
       const agent = load(ws(p), p.id)
       const row = conversation(agent, p.conversation_id)
-      return { ...row, ...await native.session(agent, `agent:${agent.id}:${row.id}`, row.title) }
+      const {native_name, ...mapping} = await native.session(agent, `agent:${agent.id}:${row.id}`, row.title)
+      return {
+        agent: view({...load(agent.workspace_id, agent.id), native_bot_id: mapping.native_bot_id, native_name}),
+        conversation: {...row, ...mapping},
+        items: conversationMessages(row.id),
+      }
     },
     async searchMessages(p) {
       const workspaceId = ws(p)
@@ -264,7 +285,7 @@ export function createAgents({ db, host }) {
       const agent = load(ws(p), p.id)
       const convo = conversation(agent, p.conversation_id)
       await native.session(agent, `agent:${agent.id}:${convo.id}`, convo.title)
-      return { items: all('SELECT * FROM agent_messages WHERE conversation_id=? ORDER BY created, id', convo.id).map((m) => ({ ...m, meta: JSON.parse(m.meta) })) }
+      return { items: conversationMessages(convo.id) }
     },
     // Send one message to the agent: a native DS-Bot turn on this conversation's session.
     async send(p) {

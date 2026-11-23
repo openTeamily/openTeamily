@@ -199,7 +199,7 @@ function languageFetcher(values) {
     if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: 'ws-1'}}});
     if (path === '/v1/workspaces?limit=100') return json(200, {items: [{id: 'ws-1', name: 'Desk'}]});
     if (path === '/v1/settings') return json(200, {settings: {values}});
-    if (path === '/v1/workspaces/ws-1/agents?limit=100') return json(200, {items: [{id: AGENT, name: '文档助手'}]});
+    if (path === '/v1/workspaces/ws-1/agents?limit=100&include=conversations') return json(200, {items: [{id: AGENT, name: '文档助手'}]});
     if (path === `/v1/workspaces/ws-1/agents/${AGENT}/conversations?limit=100`) {
       return json(200, {items: [conversation]});
     }
