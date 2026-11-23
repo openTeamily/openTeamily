@@ -476,6 +476,11 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   cursor: pointer;
 }
 
+#graph-canvas .graph-item:focus-visible .graph-node {
+  fill: var(--ot-accent-soft);
+  stroke-width: 4;
+}
+
 #graph-canvas .graph-label {
   fill: var(--ot-ink);
   font-size: 12px;
@@ -531,6 +536,10 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   font-size: 0.75rem;
   color: color-mix(in srgb, var(--ot-ink) 55%, var(--ot-bg));
   pointer-events: none;
+}
+
+@media (pointer: coarse), (max-width: 700px) {
+  .graph-hover-hint { display: none; }
 }
 
 .graph-hover-card {

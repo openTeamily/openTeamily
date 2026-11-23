@@ -1900,8 +1900,8 @@
       "path": "src/openteamily/messenger.ts",
       "reason": "OpenTeamily-authored addition (MIT): shared social state for users' own DS-Bots (phase C, docs/DSBOT_PLUGIN_ARCHITECTURE.md).",
       "license_notice": "MIT (Bot Social snapshot) file added or modified by OpenTeamily; see OPENTEAMILY.md.",
-      "new_sha256": "198dfa5e7c03a52ddfaf34dee8f60d55928f0c056e645c5030c850f26fa51da4",
-      "bytes": 153223
+      "new_sha256": "cb7ff3976eed4dc0968d75600d7623c04292931a81444e6c9281c4e12a8007f2",
+      "bytes": 153683
     },
     "services/bot-social/test/openteamily_messenger.test.ts": {
       "destination": "services/bot-social",
@@ -2246,8 +2246,8 @@
     "services/bot-social/test/openteamily_agent_reply_lease.test.ts": {
       "destination": "services/bot-social",
       "path": "test/openteamily_agent_reply_lease.test.ts",
-      "new_sha256": "0672aa29fee746cc3670a768410ae3c83c42d78006dde4ad1587b06a4e150454",
-      "bytes": 8535,
+      "new_sha256": "4c62fe0020dd04923915c5202718f95d289ef5ef392ae53d049a62664eb22504",
+      "bytes": 9691,
       "reason": "DSH cutover modification/addition in the imported snapshot; see docs/DSBOT_PLUGIN_ARCHITECTURE.md.",
       "license_notice": "MIT (Bot Social snapshot)"
     }

@@ -154,6 +154,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const clearDraft = document.getElementById('discard-agent-draft');
   const chatPanel = document.getElementById('chat-panel');
   const drawer = document.getElementById('manage-drawer');
+  const apiKeyOutput = document.getElementById('api-key-token');
+  const apiKeyValue = document.getElementById('api-key-value');
   const openCreate = document.getElementById('open-create');
   const openSharing = document.getElementById('agent-share-open');
   const openAccess = document.getElementById('agent-access-open');
@@ -168,6 +170,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let actor = null;
   let workspaces = [];
   let currentAgent = null;
+  let revealedApiKey = '';
   let draftKey = '', originalEdits, waitingDraft;
   let personalIdentity = null;
   let agentSelection = 0;
@@ -188,6 +191,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let teamsTabSelected = teamDirectoryLink(directorySearch);
   let focusTemplates = directorySearch === '?tab=teams&new=1';
 
+  function clearApiKeyToken() {
+    revealedApiKey = '';
+    if (apiKeyOutput) apiKeyOutput.hidden = true;
+    if (apiKeyValue) apiKeyValue.textContent = '';
+  }
+
   function hideDrawer() {
     sharing?.close();
     currentAgent = null;
@@ -196,12 +205,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     agentSelection += 1;
     createForm.hidden = editForm.hidden = chatPanel.hidden = true;
     if (drawer) drawer.hidden = true;
-    for (const id of ['homepage-panel', 'api-key-panel', 'api-key-token']) {
+    for (const id of ['homepage-panel', 'api-key-panel']) {
       const control = document.getElementById(id);
       if (control) control.hidden = true;
     }
-    const token = document.getElementById('api-key-token');
-    if (token) token.textContent = '';
+    clearApiKeyToken();
   }
 
   function renderCategoryFilter() {
@@ -595,21 +603,52 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (count) count.textContent = '显示 ' + shown + (archivedOnly ? ' 个已归档的智能体' : ' 个智能体');
   }
 
+  document.getElementById('api-key-copy')?.addEventListener('click', async () => {
+    const key = revealedApiKey;
+    if (!key || apiKeyOutput.hidden) return;
+    try {
+      await document.defaultView.navigator.clipboard.writeText(apiKeyValue.textContent);
+      if (key === revealedApiKey) show('ok', '密钥已复制。');
+    } catch {
+      if (key === revealedApiKey) show('error', '无法访问剪贴板，请选中密钥手动复制。');
+    }
+  });
+
   const apiKeyForm = document.getElementById('api-key-form');
   if (apiKeyForm) apiKeyForm.addEventListener('submit', async event => {
     event.preventDefault();
-    if (!currentAgent) return;
-    const agent = currentAgent, wid = workspaceId();
-    const result = await request('POST', `/v1/workspaces/${wid}/agents/${agent.id}/api-keys`, {
-      name: document.getElementById('api-key-name').value,
-      rate_per_minute: Number(document.getElementById('api-key-rate').value) || 10,
-    });
-    if (result.status !== 201) { show('error', messageFor(result.body.error, '无法生成密钥。')); return; }
-    const out = document.getElementById('api-key-token');
-    out.hidden = false;
-    out.textContent = `密钥只显示一次：${result.body.token}`;
-    document.getElementById('api-key-name').value = '';
-    loadApiKeys(agent, true);
+    const submit = apiKeyForm.querySelector('button[type="submit"]');
+    if (!currentAgent || submit.disabled) return;
+    const agent = currentAgent, wid = workspaceId(), owner = currentUser?.id, selection = agentSelection;
+    const nameInput = document.getElementById('api-key-name');
+    const sameSelection = () => workspaceId() === wid && currentUser?.id === owner &&
+      currentAgent?.id === agent.id && agentSelection === selection;
+    submit.disabled = true;
+    try {
+      const result = await request('POST', `/v1/workspaces/${wid}/agents/${agent.id}/api-keys`, {
+        name: nameInput.value,
+        rate_per_minute: Number(document.getElementById('api-key-rate').value) || 10,
+      });
+      if (!sameSelection()) return;
+      const {token, key} = result.body;
+      if (result.status !== 201 || !key?.id || !token) {
+        show('error', messageFor(result.body.error, '无法生成密钥。'));
+        return;
+      }
+      revealedApiKey = key.id;
+      apiKeyValue.textContent = token;
+      apiKeyOutput.hidden = false;
+      nameInput.value = '';
+      show('ok', '密钥已生成，请复制。');
+      void loadApiKeys(agent, true);
+    } catch {
+      if (sameSelection()) {
+        show('error', '未收到新密钥，请先检查密钥列表。');
+        void loadApiKeys(agent, true);
+      }
+    } finally {
+      submit.disabled = false;
+    }
   });
 
   async function listAgents(base, archived) {
@@ -751,6 +790,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function fillEdit(agent) {
     sharing?.close();
+    clearApiKeyToken();
     if (editConflict) editConflict.hidden = true;
     if (reloadSettings) reloadSettings.hidden = true;
     createForm.hidden = true;
@@ -820,7 +860,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const panel = document.getElementById('api-key-panel');
     if (!panel) return;
     panel.hidden = !writable || Boolean(agent.archived);
-    document.getElementById('api-key-token').hidden = true;
     if (panel.hidden) return;
     const wid = workspaceId();
     let listed;
@@ -845,8 +884,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         revoke.addEventListener('click', async () => {
           const result = await request('POST', `/v1/workspaces/${wid}/agents/${agent.id}/api-keys/${key.id}/revoke`, {});
           if (result.status !== 200) { show('error', messageFor(result.body.error, '无法撤销密钥。')); return; }
+          if (workspaceId() !== wid || currentAgent?.id !== agent.id) return;
+          if (revealedApiKey === key.id) clearApiKeyToken();
           show('ok', '已撤销密钥。');
-          loadApiKeys(agent, writable);
+          void loadApiKeys(agent, writable);
         });
         li.append(revoke);
       }

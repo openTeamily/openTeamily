@@ -12,7 +12,7 @@ import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 import {mountWorkspaceInvite} from './workspace-invite.mjs';
 import { studioDocumentHref, studioDocumentHrefInMessage } from '../shell/studio-link.mjs';
 import { chatStartFromHash, startChatReads, takeChatReads } from './startup.mjs';
-import { confirmSignupSession, personalDraftScope, readPendingPrivateText, savePendingPrivateText,
+import { confirmSignupSession, personalDraftScope, readPendingChatText, savePendingChatText,
   signupDraftScope, signupSessionError, takeColdDraftHandoff } from '../home/runtime-readiness.mjs';
 import { mountActionMenus } from '../shell/action-menu.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
@@ -551,14 +551,20 @@ function writeHash(values, {push = false} = {}) {
   else history.replaceState(null, '', path);
 }
 
+let messageTimeFormatter;
+let sessionTodayFormatter;
+let sessionWeekdayFormatter;
+let sessionDateFormatter;
+
 function formatTime(value) {
   if (!value) return '';
   const date = new Date(Number(value) * 1000);
   if (Number.isNaN(date.getTime())) return '';
-  return new Intl.DateTimeFormat('zh-CN', {
+  messageTimeFormatter ??= new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric',
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-  }).format(date);
+  });
+  return messageTimeFormatter.format(date);
 }
 
 export function sessionDisplayGroup(item) {
@@ -576,10 +582,21 @@ export function formatSessionTime(value, now = Date.now()) {
   if (Number.isNaN(date.getTime())) return '';
   const day = ms => Math.floor((ms + 8 * 3600000) / 86400000);
   const days = day(now) - day(timestamp);
-  if (days === 0) return new Intl.DateTimeFormat('zh-CN', {timeZone: 'Asia/Hong_Kong', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'}).format(date);
+  if (days === 0) {
+    sessionTodayFormatter ??= new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Hong_Kong', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    });
+    return sessionTodayFormatter.format(date);
+  }
   if (days === 1) return '昨天';
-  if (days > 1 && days < 7) return new Intl.DateTimeFormat('zh-CN', {timeZone: 'Asia/Hong_Kong', weekday: 'short'}).format(date);
-  return new Intl.DateTimeFormat('zh-CN', {timeZone: 'Asia/Hong_Kong', year: 'numeric', month: 'numeric', day: 'numeric'}).format(date);
+  if (days > 1 && days < 7) {
+    sessionWeekdayFormatter ??= new Intl.DateTimeFormat('zh-CN', {timeZone: 'Asia/Hong_Kong', weekday: 'short'});
+    return sessionWeekdayFormatter.format(date);
+  }
+  sessionDateFormatter ??= new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Hong_Kong', year: 'numeric', month: 'numeric', day: 'numeric',
+  });
+  return sessionDateFormatter.format(date);
 }
 
 // Six original pastel tones so neighbouring avatars are distinguishable; stable per name.
@@ -1701,7 +1718,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function removeSendJob(queue, job, {keepStored = false} = {}) {
     queue.jobs = queue.jobs.filter(item => item !== job);
-    if (job.storedText && !keepStored) savePendingPrivateText(document.defaultView, queue.scope, job.key);
+    if (job.storedText && !keepStored) savePendingChatText(document.defaultView, queue.scope, job.key);
     job.bubble.remove();
     job.replyView?.bubble.remove();
     for (const url of job.previews) document.defaultView.URL.revokeObjectURL(url);
@@ -2788,6 +2805,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const items = [];
     let lastGroup = '';
+    const now = Date.now();
     for (const session of groupSessionsForDisplay(visible)) {
       const li = document.createElement('li');
       const button = document.createElement('button');
@@ -2822,7 +2840,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       copy.append(title, preview);
       const time = document.createElement('span');
       time.className = 'time';
-      time.textContent = formatSessionTime(session.updated);
+      time.textContent = formatSessionTime(session.updated, now);
       time.title = formatTime(session.updated);
       button.append(avatar, copy, time);
       if (session.muted) button.classList.add('is-muted');
@@ -6559,7 +6577,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     setChatSubtitle(publicChat ? '公开智能体 · 发布者可查看此对话'
       : currentConversation.kind === 'group' ? groupHeaderSubtitle(currentConversation)
         : '单聊 · ' + ((currentConversation.members || []).length) + ' 人');
-    renderSocialMessages(result.body.items, {refresh, anchor:readingPositionAnchor(position)});
+    if (!refresh) restorePendingSocialText(shown);
+    renderSocialMessages(shown, {refresh, anchor:readingPositionAnchor(position)});
     renderGroupReplyAction(result.body.agent_replies || []);
     if (unread?.firstId) {
       const divider = document.getElementById('chat-first-unread');
@@ -9176,9 +9195,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else {
       const job = makeSendJob(queue, message, files, reply, sticker);
       if (!social && chatSettings && !chatSettings.ready) job.preferences = chatSettings;
-      if (!social && !files.length && !reply && !sticker && currentPrivateThread()) {
+      if (!files.length && !reply && !sticker && (social ? currentSharedTextConversation() : currentPrivateThread())) {
         // A reload can interrupt the request after the composer clears.
-        job.storedText = savePendingPrivateText(document.defaultView, scope, job.key, message);
+        job.storedText = savePendingChatText(document.defaultView, scope, job.key, message);
       }
       queue.jobs.push(job);
     }
@@ -9221,12 +9240,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function restorePendingPrivateText(items) {
     if (!currentPrivateThread()) return;
     const scope = sendScope();
-    const stored = readPendingPrivateText(document.defaultView, scope);
+    const stored = readPendingChatText(document.defaultView, scope);
     if (!stored.length) return;
     const delivered = new Set(items.filter(item => item.role === 'user' && item.client_key).map(item => item.client_key));
     for (const {key,message} of stored) {
       if (delivered.has(key)) {
-        savePendingPrivateText(document.defaultView, scope, key);
+        savePendingChatText(document.defaultView, scope, key);
         continue;
       }
       const queue = currentChatSendQueue();
@@ -9243,6 +9262,39 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         if (scope !== sendScope()) return;
         renderPendingSend();
         if (!queue.active && !readingPrivateContext()) void openAgentConversation(queue.agentId, queue.conversationId, {refresh:true});
+      });
+    }
+  }
+
+  function currentSharedTextConversation() {
+    return servedByDsbot && currentSource === 'social' && currentUser?.id &&
+      currentConversation && currentConversation.workspace_id === workspaceId() && !currentConversation.public_agent;
+  }
+
+  function restorePendingSocialText(items) {
+    if (!currentSharedTextConversation()) return;
+    const scope = sendScope();
+    const stored = readPendingChatText(document.defaultView, scope);
+    if (!stored.length) return;
+    const destination = {owner:currentUser.id, wid:workspaceId(), conversationId:currentConversation.id};
+    for (const {key,message} of stored) {
+      if (items.some(item => ownSocialReceipt(item, destination, key))) {
+        savePendingChatText(document.defaultView, scope, key);
+        continue;
+      }
+      const queue = currentChatSendQueue();
+      if (queue.jobs.some(job => job.key === key)) continue;
+      const job = makeSendJob(queue, message, [], null, null, key);
+      job.storedText = true;
+      job.failed = true;
+      job.state = uiLabel('上次发送未确认，可重试。', 'Delivery wasn’t confirmed. You can retry.');
+      queue.jobs.push(job);
+      const checking = () => pendingSends.get(scope) === queue && queue.jobs.includes(job) && job.failed &&
+        currentUser?.id === queue.owner;
+      void socialSendReceipt(queue, key, checking).then(receipt => {
+        if (!receipt || !checking()) return;
+        removeSendJob(queue, job);
+        if (scope === sendScope()) renderDeliveredSocialMessage(scope, receipt);
       });
     }
   }
@@ -9285,7 +9337,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             await job.preferences.promise;
             if (pendingSends.get(queue.scope) !== queue || queue.owner !== currentUser?.id) return;
             job.message = {...job.message,...messagePayload(job.message.body, chatLanguage)};
-            if (job.storedText) savePendingPrivateText(document.defaultView, queue.scope, job.key, job.message);
+            if (job.storedText) savePendingChatText(document.defaultView, queue.scope, job.key, job.message);
             job.preferences = null;
           }
           if (!queue.conversationId) {

@@ -44,13 +44,16 @@ export function createAgentApi({ db, host, clock = now }) {
   const all = (sql, ...a) => db.prepare(sql).all(...a)
   const run = (sql, ...a) => db.prepare(sql).run(...a)
   const inflight = new Map()
+  // The edge routes by the manager's instance id. A migrated volume keeps
+  // its existing DS-Bot identity, which can differ from that routing id.
+  const routingId = host.identity.routingInstanceId ?? host.identity.instanceId
   const ws = (p) => { if (typeof p?.workspace_id !== 'string' || !ID.test(p.workspace_id)) fail('invalid', 'workspace_id required', 400); return p.workspace_id }
   const agentOf = async (workspaceId, agentId) => (await host.call('agents/get', { workspace_id: workspaceId, id: agentId })).agent
 
   // Constant-time check of a presented key; 401 for anything that does not match.
   function authenticate(token) {
     const m = typeof token === 'string' ? TOKEN.exec(token) : null
-    if (!m || m[1] !== host.identity.instanceId) fail('unauthorized', 'Invalid API key', 401)
+    if (!m || m[1] !== routingId) fail('unauthorized', 'Invalid API key', 401)
     const digest = sha(token)
     const row = one('SELECT * FROM api_keys WHERE token_hash=?', digest)
     if (!row || row.revoked || !timingSafeEqual(Buffer.from(row.token_hash), Buffer.from(digest))) fail('unauthorized', 'Invalid API key', 401)
@@ -101,7 +104,7 @@ export function createAgentApi({ db, host, clock = now }) {
       const rate = p.rate_per_minute ?? DEFAULT_RATE
       if (!Number.isInteger(rate) || rate < 1 || rate > 60) fail('invalid', 'rate_per_minute must be 1–60', 400)
       if (one('SELECT COUNT(*) AS n FROM api_keys WHERE agent_id=? AND revoked=0', agent.id).n >= MAX_KEYS_PER_AGENT) fail('quota', 'API key capacity reached', 429)
-      const token = `ota_${host.identity.instanceId}_${randomBytes(32).toString('base64url')}`
+      const token = `ota_${routingId}_${randomBytes(32).toString('base64url')}`
       const id = newId()
       run('INSERT INTO api_keys VALUES(?,?,?,?,?,?,?,?,?,0)', id, workspaceId, agent.id, name, sha(token), 'invoke', rate, clock(), null)
       // Shown once; only the digest is kept.

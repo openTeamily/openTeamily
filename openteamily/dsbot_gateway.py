@@ -220,9 +220,9 @@ def _same_origin(method, origin, fetch_site, fetch_mode, upgrade, public_origin)
 def gateway_call(uri, authorization):
     """Map /v1/gateway/* + Bearer ota_<instance>_<secret> to a plugin call.
 
-    The instance id in the key is used only to pick the owner's DS-Bot. The secret
-    is passed in the JSON body so the DS-Bot can verify it; nginx still strips
-    Authorization so the raw key never arrives as a header.
+    The instance id in the key identifies a candidate DS-Bot. The edge checks
+    the current owner binding and forwards the key in a dedicated header for
+    verification inside that DS-Bot.
     """
     parts = urlsplit(uri)
     path = parts.path
@@ -247,7 +247,7 @@ def gateway_call(uri, authorization):
 
 def _upstream_row(db, instance_id):
     row = db.execute(
-        "SELECT i.id, u.address, u.auth_cookie FROM instances i JOIN dsbot_upstreams u ON u.instance_id=i.id "
+        "SELECT i.id, u.address, u.auth_cookie, i.owner_id FROM instances i JOIN dsbot_upstreams u ON u.instance_id=i.id "
         "WHERE i.id=? AND i.retired_at IS NULL AND i.desired='running' AND i.observed='running' AND i.health='healthy' "
         "AND i.blocked=0 AND i.observed_revision=i.revision",
         (instance_id,)).fetchone()
@@ -296,12 +296,17 @@ def authorize(db, *, cookie_header, session_cookie, method, uri, origin, fetch_s
         raise GatewayError(400, 'upgrade')
     call = gateway_call(uri, authorization)
     if call is not None:
-        # External Agent API: no browser session, no Origin requirement. The key's
-        # instance id picks the owner's DS-Bot; the secret is verified there.
+        # External Agent API: the key can target only its owner's assigned DS-Bot.
         if upgrade:
             raise GatewayError(400, 'upgrade')
         instance_id, endpoint, extra, token = call
         row = _upstream_row(db, instance_id)
+        try:
+            canonical = owned_instance(db, row['owner_id'])
+        except RuntimeFault as error:
+            raise GatewayError(503, 'dsbot_not_ready') from error
+        if canonical != instance_id:
+            raise GatewayError(503, 'dsbot_not_ready')
         address = validate_address(row[1])
         # Path includes the original /v1/gateway/... so the plugin can dispatch;
         # the token travels in a dedicated header (not Authorization; nginx strips that).
@@ -481,6 +486,8 @@ class GatewayApp:
         if env.get('REQUEST_METHOD') != 'GET':
             raise GatewayError(405, 'method')
         with self.store.connect() as db:
+            # Resolve the account binding and upstream from the same snapshot.
+            db.execute('BEGIN')
             return authorize(
                 db, cookie_header=env.get('HTTP_COOKIE', ''), session_cookie=self.session_cookie,
                 method=env.get('HTTP_X_ORIGINAL_METHOD', ''), uri=env.get('HTTP_X_ORIGINAL_URI', ''),
@@ -686,6 +693,9 @@ __DSBOT_LOCATIONS__
   }
   location ^~ /v1/gateway/ {
     auth_request /_ot_authz;
+    error_page 401 = @ot_gateway_unauthorized;
+    error_page 500 = @ot_gateway_error;
+    auth_request_set $ot_gateway_error $upstream_http_x_ot_gateway_error;
     auth_request_set $ot_upstream $upstream_http_x_ot_upstream;
     auth_request_set $ot_path $upstream_http_x_ot_upstream_path;
     auth_request_set $ot_origin $upstream_http_x_ot_upstream_origin;
@@ -707,6 +717,18 @@ __DSBOT_LOCATIONS__
     proxy_buffering off;
     proxy_read_timeout 120s;
     proxy_redirect off;
+  }
+  location @ot_gateway_unauthorized {
+    default_type application/json;
+    add_header Cache-Control no-store always;
+    return 401 '{"error":{"code":"unauthorized"}}';
+  }
+  location @ot_gateway_error {
+    default_type application/json;
+    add_header Cache-Control no-store always;
+    if ($ot_gateway_error = dsbot_not_ready) { return 503 '{"error":{"code":"dsbot_not_ready"}}'; }
+    if ($ot_gateway_error = not_found) { return 404 '{"error":{"code":"not_found"}}'; }
+    return 500 '{"error":{"code":"runtime_route_failed"}}';
   }
   recursive_error_pages on;
   error_page 418 = @ot_dsbot;

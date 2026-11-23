@@ -46,7 +46,10 @@ async function fixture(t: TestContext) {
   const pass = (source: Message, claim_id: string, attempt = 1) => worker.call("POST", task(source), {
     action:"pass", attempt, claim_id,
   });
-  return {service,worker,author,room,job,task,send,stored,view,claim,keepalive,reply,pass,
+  const fail = (source: Message, claim_id: string, attempt = 1) => worker.call("POST", task(source), {
+    action:"fail", attempt, claim_id,
+  });
+  return {service,worker,author,room,job,task,send,stored,view,claim,keepalive,reply,pass,fail,
     move(ms: number) { now += ms; }};
 }
 
@@ -113,6 +116,24 @@ test("an expired exact claim may finish or pass once, but a heartbeat cannot res
   assert.equal(transcript.filter((row: {reply_job_id?:string}) => row.reply_job_id===f.job(silent)).length,0);
 });
 
+test("a late native failure clears the timeout and accepts an exact replay without rewriting state", async t => {
+  const f = await fixture(t);
+  const source = await f.send("Review this shared source");
+  const claim = await f.claim(source);
+  f.move(180_001);
+  assert.equal((await f.view(source)).error_code,"reply_timeout");
+  assert.equal((await f.fail(source,randomUUID())).status,409);
+  assert.deepEqual(await f.fail(source,claim),{status:200,data:{ok:true}});
+  assert.equal((await f.view(source)).status,"failed");
+  assert.equal((await f.view(source)).error_code,undefined);
+  assert.equal((await f.view(source)).can_retry,true);
+  const settled = f.stored(source);
+  f.move(20_000);
+  assert.deepEqual(await f.fail(source,claim),{status:200,data:{ok:true}});
+  assert.deepEqual(f.stored(source),settled);
+  assert.equal((await f.reply(source,claim)).status,409);
+});
+
 test("a retry or changed source fences off late completions and keepalives", async t => {
   const f = await fixture(t);
   const original = await f.send("Review once more");
@@ -125,11 +146,13 @@ test("a retry or changed source fences off late completions and keepalives", asy
   const current = await f.claim(original,2);
   assert.equal((await f.reply(original,stale)).status,409);
   assert.equal((await f.pass(original,stale)).status,409);
+  assert.equal((await f.fail(original,stale)).status,409);
   assert.equal((await f.keepalive(original,stale)).status,409);
   assert.equal((await f.reply(original,current,2)).status,201);
   await f.author.ok("PATCH","/v1/ot/messages/"+changed.id,{body:"The source has changed"});
   assert.equal((await f.reply(changed,changedClaim)).status,409);
   assert.equal((await f.pass(changed,changedClaim)).status,409);
+  assert.equal((await f.fail(changed,changedClaim)).status,409);
   assert.equal((await f.keepalive(changed,changedClaim)).status,409);
 });
 

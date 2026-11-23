@@ -219,9 +219,9 @@ export function bindGraphNodeGestures(target, node, options = {}) {
   target.addEventListener('click', open);
   target.addEventListener('dblclick', open);
   target.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
+    if (event.key === 'Enter' || event.key === ' ') {
       if (event.preventDefault) event.preventDefault();
-      open();
+      if (!event.repeat) open();
       return;
     }
     if (event.key === 'Escape') hide();
@@ -1509,7 +1509,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const stage = canvas.parentElement;
         const card = document.getElementById('graph-hover-card');
         bindGraphNodeGestures(group, node, {
-          openPage,
+          openPage: id => openPage(id, undefined, id),
           card,
           pointerCoarse: currentPointerIsCoarse(),
           viewportWidth: currentViewportWidth(),
@@ -1797,11 +1797,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   // While a page or action is open the directory column stays visible (as in
   // the recorded editor); only the overview/side/actions/profile panels hide.
-  function showPageMode() {
-    if (listPanel.dataset.view !== 'page' && listPanel.dataset.mobileGraph !== 'true') {
+  function showPageMode(graphId) {
+    if (listPanel.dataset.view !== 'page') {
       const scrollers = [document.scrollingElement, document.getElementById('main'), listPanel,
         document.getElementById('memory-dir'), listEl].filter(Boolean);
-      directoryReturn = {state: activeDirectory, scroll: scrollers.map(node => [node, node.scrollTop])};
+      directoryReturn = {
+        state: activeDirectory,
+        scroll: scrollers.map(node => [node, node.scrollTop]),
+        graphId,
+        mobileGraph: listPanel.dataset.mobileGraph === 'true',
+      };
     }
     closeProfilePreview();
     candidates.show(false);
@@ -2272,7 +2277,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     citationTitle.focus?.();
   }
 
-  async function openPage(pageId, revision) {
+  async function openPage(pageId, revision, graphId) {
     if (groupShareDialog?.open) groupShareDialog.close();
     closeDeleteConfirm({restoreFocus: false});
     closePageHistory({restoreFocus: false});
@@ -2295,7 +2300,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const page = seen.body.page;
     hideCitationPreview();
-    showPage(page, revision);
+    showPage(page, revision, graphId);
     if (citation) setCitationStatus('');
     if (revision && revision !== page.revision && historyPanel) {
       const listing = openPageHistory({focus:false});
@@ -2306,7 +2311,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  function showPage(page, revision) {
+  function showPage(page, revision, graphId) {
     persistPageDraft();
     if (activeCitation && !citationFor(page.id)) setCitation(null);
     hideCitationPreview();
@@ -2323,7 +2328,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (dreamPanel) dreamPanel.hidden = true;
     dreamSuggestion = null;
     resetDream();
-    showPageMode();
+    showPageMode(graphId);
     if (actionEditor) actionEditor.hidden = true;
     editor.hidden = false;
     applyPageToEditor(page);
@@ -3454,18 +3459,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     closeDeleteConfirm({restoreFocus: false});
     closePageHistory({restoreFocus: false});
     if (groupShareDialog?.open) groupShareDialog.close();
-    setMobileGraph(false);
+    const returnToGraph = currentView === 'overview' && previous?.mobileGraph === true;
+    setMobileGraph(returnToGraph);
     showView(currentView);
     syncExportButton();
     syncDirectorySelection();
     if (previous?.state && previous.state === activeDirectory && ownsDirectoryWindow(previous.state)) {
       for (const [node, offset] of previous.scroll) node.scrollTop = offset;
     }
+    const graphNode = currentView === 'overview' && previous?.graphId
+      ? [...document.querySelectorAll('#graph-world [data-id]')].find(node => node.dataset.id === previous.graphId)
+      : null;
     const result = currentView === 'actions' && action
       ? [...(document.getElementById('action-list').querySelectorAll?.('[data-id]') || [])]
         .find(button => button.dataset.id === action)
-      : currentView === 'overview' ? directoryRow(page) : null;
-    const target = result || (currentView === 'overview' ? searchInput
+      : currentView === 'overview' && !returnToGraph ? directoryRow(page) : null;
+    const target = graphNode || result || (currentView === 'overview' ? (returnToGraph ? mobileGraph : searchInput)
       : document.querySelector('.memory-views [aria-current="page"]'));
     target?.scrollIntoView?.({block: 'nearest', inline: 'nearest'});
     target?.focus?.({preventScroll: true});

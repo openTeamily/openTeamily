@@ -45,8 +45,6 @@ def main():
     parser.add_argument('--model-http-policy', help='Private operator file of exact public IPv4 HTTP task-model bases; HTTPS default unchanged')
     parser.add_argument('--oidc-providers', help='Operator-owned private JSON file of OIDC/OAuth client credentials; secrets are never logged')
     parser.add_argument('--auto-provision', help='Private operator JSON enabling one capped, isolated runtime per user personal workspace (default off)')
-    parser.add_argument('--no-automation-worker', action='store_true',
-                        help='Do not start the background automation worker; explicit tick still works')
     args = parser.parse_args()
     if args.simulation and args.compose_image:
         parser.error('Choose simulation OR explicit Compose execution')
@@ -70,14 +68,9 @@ def main():
     except (OSError, ValueError, TypeError):
         parser.error('Cannot initialize private storage or origin configuration')
     page = SettingsPage(app)
-    if not args.no_automation_worker:
-        app.start_automation_worker()
-    # Never changes firewall/proxy rules or binds the development service to all interfaces.
-    try:
-        with make_server('127.0.0.1', args.port, page, handler_class=QuietHandler, server_class=ThreadedWSGIServer) as server:
-            server.serve_forever()
-    finally:
-        app.stop_automation_worker()
+    # This development server binds to loopback only.
+    with make_server('127.0.0.1', args.port, page, handler_class=QuietHandler, server_class=ThreadedWSGIServer) as server:
+        server.serve_forever()
 
 
 if __name__ == '__main__':
