@@ -1413,6 +1413,50 @@ test('group members can change automatic replies for their own agent only', asyn
   } finally { restore(); }
 });
 
+test('a selected group mention sends the chosen owner and agent together', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  const composer = el('chat-body');
+  composer.setSelectionRange = (start, end) => {
+    composer.selectionStart = start;
+    composer.selectionEnd = end;
+  };
+  const posts = [];
+  try {
+    await mount(doc, {fetcher: async (path, init) => {
+      if (path.endsWith('/conv-1/messages') && init.method === 'POST') {
+        posts.push(JSON.parse(init.body));
+        return json(201, {});
+      }
+      const result = await original(path);
+      const body = await result.json();
+      if (path.endsWith('/conv-1')) return json(200, {
+        ...body, conversation: {...body.conversation, kind: 'group', agent_members: [
+          {id: 'same', name: '研究助手', owner_id: 'owner-one', owner_name: '小林'},
+          {id: 'same', name: '研究助手', owner_id: 'owner-two', owner_name: '小周'},
+        ]},
+      });
+      return json(result.status, body);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    composer.value = '@研究';
+    composer.setSelectionRange(composer.value.length, composer.value.length);
+    await fire(composer, 'input');
+    const list = el('chat-agent-mention-options');
+    assert.deepEqual(list.children.map(row => row.textContent), ['研究助手 · 小林', '研究助手 · 小周']);
+    await fire(composer, 'keydown', {key: 'ArrowDown', preventDefault() {}});
+    await fire(composer, 'keydown', {key: 'Enter', preventDefault() {}});
+    assert.deepEqual(posts, []);
+    assert.equal(el('chat-agent-mentions').children[0].textContent, '@研究助手 · 小周 ×');
+    composer.value = '请查一下';
+    await fire(el('chat-form'), 'submit', {preventDefault() {}});
+    await settle();
+    assert.deepEqual(posts, [{body: '请查一下', agent_mentions: [{owner_id: 'owner-two', agent_id: 'same'}]}]);
+    assert.equal(el('chat-agent-mentions').hidden, true);
+  } finally { restore(); }
+});
+
 test('in-chat search highlights every case-insensitive match without HTML', async () => {
   const { highlightParts } = await import('../openteamily/static/chat/app.mjs');
   assert.deepEqual(highlightParts('Test a test', 'test'), [

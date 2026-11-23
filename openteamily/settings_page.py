@@ -61,6 +61,7 @@ class SettingsPage:
         '/chat': ('chat', 'index.html', 'text/html; charset=utf-8'),
         '/chat/utilities.mjs': ('chat', 'utilities.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.mjs': ('chat', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/mentions.mjs': ('chat', 'mentions.mjs', 'text/javascript; charset=utf-8'),
         '/chat/dsbot.mjs': ('chat', 'dsbot.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.css': ('chat', 'app.css', 'text/css; charset=utf-8'),
         '/messenger': ('messenger', 'index.html', 'text/html; charset=utf-8'),

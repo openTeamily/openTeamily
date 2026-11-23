@@ -98,7 +98,7 @@ function conversationItem(row, me, env, workspaceId) {
     pinned: !!row.pinned,
     first_unread_seq: row.unread > 0 ? (row.read_seq || 0) + 1 : null,
     members,
-    agent_members: (row.agents || []).map((a) => ({ id: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply, mine: a.mine === true })),
+    agent_members: (row.agents || []).map((a) => ({ id: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply, mine: a.mine === true, owner_id: a.owner?.owner_id || '', owner_name: a.owner?.display_name || a.owner?.handle || '' })),
   }
 }
 
@@ -570,7 +570,7 @@ function messengerRoutes(host) {
           const bs = client(host)
           await teamFor(bs, match[1], 'Workspace', env)
           const me = await meOf(bs, env)
-          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: body?.body, client_key: idempotency_key, mentions: body?.mentions, reply_to: body?.reply_to })
+          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: body?.body, client_key: idempotency_key, mentions: body?.mentions, agent_mentions: body?.agent_mentions, reply_to: body?.reply_to })
           return [201, { message: messageItem({ ...data, conversation_id: match[2] }, me, env, match[1]) }]
         })
       },

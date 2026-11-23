@@ -1813,3 +1813,22 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
   background: var(--ot-surface-2);
   color: var(--ot-muted);
 }
+
+.chat-agent-mention-options, .chat-agent-mentions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .375rem;
+  margin: .25rem .5rem;
+}
+.chat-agent-mention-options { border-top: 1px solid var(--ot-line); padding-block: .375rem; }
+.chat-agent-mention-options[hidden], .chat-agent-mentions[hidden] { display: none; }
+.chat-agent-mentions button, .chat-agent-mention-options button {
+  border: 1px solid var(--ot-line);
+  border-radius: .75rem;
+  padding: .375rem .625rem;
+  font-size: .8125rem;
+}
+.chat-agent-mention-options button[aria-selected="true"], .chat-agent-mentions button {
+  background: var(--ot-accent-soft);
+  color: var(--ot-ink);
+}
