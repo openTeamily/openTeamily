@@ -81,19 +81,32 @@ def owned_instance(db, user_id):
     return rows[0]['id'] if rows else None
 
 
-def resumable_instance(db, user_id, manager_id):
-    """Find a confirmed stopped instance managed by the current auto-provision policy."""
+def resumable_instance(db, user_id, manager_id, *, manager_auth=None):
+    """Find the owner's confirmed stopped runtime with an active manager grant."""
     if not manager_id:
         return None
-    return db.execute(
-        """SELECT i.id,i.revision FROM runtime_auto_provisions p
-        JOIN instances i ON i.id=p.instance_id AND i.owner_id=p.user_id
-        WHERE p.user_id=? AND p.manager_id=? AND i.backend_mode='compose'
+    iid = owned_instance(db, user_id)
+    if iid is None:
+        return None
+    row = db.execute(
+        """SELECT i.id,i.revision,p.manager_id FROM instances i
+        LEFT JOIN runtime_auto_provisions p ON p.instance_id=i.id AND p.user_id=i.owner_id
+        WHERE i.id=? AND i.owner_id=? AND i.backend_mode='compose'
           AND i.retired_at IS NULL AND i.desired='stopped' AND i.observed='stopped'
           AND i.observed_revision=i.revision AND i.process_ref IS NULL AND i.blocked=0
           AND i.error_code IS NULL AND NOT EXISTS (
             SELECT 1 FROM runtime_jobs j WHERE j.instance_id=i.id AND j.status IN ('queued','running')
-          )""", (user_id, manager_id)).fetchone()
+          )""", (iid, user_id)).fetchone()
+    if row is None:
+        return None
+    if row['manager_id'] is not None:
+        return row if row['manager_id'] == manager_id else None
+    if manager_auth is not None and any(
+        manager.backend_mode == 'compose' and iid in manager.instance_ids
+        for manager in manager_auth.identities.values()
+    ):
+        return row
+    return None
 
 
 def assigned(db, manager_id, instance_id):

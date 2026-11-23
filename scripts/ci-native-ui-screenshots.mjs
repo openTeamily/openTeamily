@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
 import {mkdir, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {chromium} from 'playwright';
@@ -127,6 +128,65 @@ async function connectors(page) {
   await screenshot(page,'desktop-connectors');
 }
 
+async function meetingActionContinuity(page, account, name) {
+  const workspace = account.instanceId;
+  const path = '/v1/workspaces/'+workspace+'/meetings';
+  const now = Math.floor(Date.now()/1000);
+  const actionName = index => '验收行动项 '+index;
+  for (let index = 0; index < 2; index++) {
+    const saved = await account.rpc('meetings/v1',{
+      method:'POST',path,idempotency_key:randomUUID().replaceAll('-',''),
+      body:{title:'CI 行动项验收 '+index,started_at:now-index,attendees:[],summary:'浏览器验收',
+        action_items:Array.from({length:40},(_,offset) => ({text:actionName(index*40+offset),owner:account.user.username}))},
+    });
+    assert.equal(saved.status,201);
+  }
+  await openNative(page,'/meetings#workspace='+workspace,workspace,'#meeting-inbox-open');
+  const list = page.locator('#meeting-inbox-list');
+  const open = page.locator('#meeting-inbox-open');
+  const more = page.locator('#meeting-inbox-more');
+  const row = index => list.getByRole('listitem').filter({has:page.getByText(actionName(index),{exact:true})});
+  const source = index => row(index).getByRole('button',{name:'查看会议'});
+  const toggle = (index, label) => row(index).getByRole('button',{name:label,exact:true});
+  const waitForRows = count => page.waitForFunction(expected => {
+    const queue = document.getElementById('meeting-inbox-list');
+    return queue.getAttribute('aria-busy') === 'false' && queue.children.length === expected;
+  },count);
+
+  await open.click();
+  for (const count of [20,40,60]) {
+    if (count > 20) await more.click();
+    await waitForRows(count);
+  }
+  const chosen = source(53);
+  await chosen.scrollIntoViewIfNeeded();
+  const {y} = await chosen.boundingBox();
+  await chosen.click();
+  const action = page.getByRole('textbox',{name:'行动项 14',exact:true});
+  await page.waitForFunction(text => document.activeElement?.value === text,actionName(53));
+  assert.equal(await action.inputValue(),actionName(53));
+  await (name.startsWith('mobile') ? page.locator('#meeting-inbox-return') : open).click();
+  await waitForRows(60);
+  assert.equal(await chosen.evaluate(button => button === document.activeElement),true);
+  assert.ok(Math.abs((await chosen.boundingBox()).y-y) <= 2);
+  await screenshot(page,name);
+
+  await toggle(53,'标记完成').click();
+  await page.locator('#meeting-inbox-status').getByText('已标记完成。',{exact:true}).waitFor();
+  await waitForRows(60);
+  assert.equal(await chosen.count(),0);
+  await source(60).waitFor();
+  assert.equal(await toggle(54,'标记完成').evaluate(button => button === document.activeElement),true);
+  await more.click();
+  await waitForRows(79);
+  assert.equal(await source(61).evaluate(button => button === document.activeElement),true);
+  await page.locator('#meeting-inbox-state').selectOption('completed');
+  await waitForRows(1);
+  await toggle(53,'重新打开').click();
+  await page.locator('#meeting-inbox-status').getByText('已重新打开，行动项已回到待完成。',{exact:true}).waitFor();
+  await waitForRows(0);
+}
+
 try {
   browser = await chromium.launch({executablePath:process.env.OT_UI_CHROMIUM_EXECUTABLE});
   const desktop = await contextFor({width:1440,height:900});
@@ -153,6 +213,7 @@ try {
     await screenshot(page,name);
   }
   await connectors(page);
+  await meetingActionContinuity(page,fixture.owner,'desktop-meeting-actions');
   await openNative(page,'/members#workspace='+fixture.team.workspace_id,fixture.owner.instanceId,'#main-panel');
   await page.locator('#member-list').getByText(fixture.peer.profile.handle.split('.')[0],{exact:true}).first().waitFor();
   await screenshot(page,'desktop-members');
@@ -187,6 +248,8 @@ try {
   assert.equal(isolation.ok,true);
   assert.equal(isolation.value.status,404);
   assert.ok(!JSON.stringify(isolation).includes(fixture.owner.chat.reply));
+  await peer.page.setViewportSize({width:390,height:844});
+  await meetingActionContinuity(peer.page,fixture.peer,'mobile-meeting-actions');
   await peer.context.close();
   await desktop.context.close();
   assert.deepEqual(errors,[]);

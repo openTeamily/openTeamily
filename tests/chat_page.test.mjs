@@ -4617,6 +4617,48 @@ test('returning to a private chat fetches once and keeps the older scroll positi
   }
 });
 
+test('reopening the current mobile conversation shows its cached messages and refreshes once in the background', async () => {
+  const hash = '#' + new URLSearchParams({workspace:linkWork, agent:linkAgent, conversation:linkThread});
+  const fixture = linkedChatFixture(hash, {narrow:true});
+  const {doc, el, routes, messages, restore} = fixture;
+  const conversation = {...fixture.nativeThread, archived:false, unread_count:0};
+  const incoming = {id:'c'.repeat(32), role:'assistant', body:'Sent from another device', status:'succeeded', created:15};
+  const refresh = Promise.withResolvers();
+  let reads = 0;
+  routes.set(linkBase(linkWork) + linkNativeLatest, () => {
+    if (++reads > 1) return refresh.promise;
+    return json(200, {agent:fixture.agent, conversation, items:fixture.nativeRows, cursor:null});
+  });
+  try {
+    await mount(doc, {fetcher:fixture.fetcher});
+    const cached = [...el('message-list').children];
+    const draft = el('chat-body');
+    draft.value = 'unfinished mobile draft';
+    await fire(draft, 'input');
+    const reopen = async () => {
+      await fire(el('chat-back'), 'click');
+      assert.equal(doc.body.classList.contains('sessions-open'), true);
+      const button = sessionRows(el).find(row => row.dataset.conversation === linkThread);
+      await fire(el('conversation-list'), 'click', {target:button});
+      assert.equal(doc.body.classList.contains('sessions-open'), false);
+    };
+    await reopen();
+    assert.equal(reads, 2);
+    assert.deepEqual([...el('message-list').children], cached);
+    assert.equal(draft.value, 'unfinished mobile draft');
+    await reopen();
+    assert.equal(reads, 2, 'another return shares the pending refresh');
+
+    refresh.resolve(json(200, {agent:fixture.agent, conversation, items:[...fixture.nativeRows,incoming], cursor:null}));
+    await settle();
+    assert.deepEqual(messages(), [linkAgentOlder, linkAgentLatest, incoming.id]);
+    assert.equal(draft.value, 'unfinished mobile draft');
+  } finally {
+    refresh.resolve(json(503, {}));
+    restore();
+  }
+});
+
 for (const hasGap of [false, true]) {
   test(`the plain inbox sends before native history loads and ${hasGap ? 'keeps a history gap out of view' : 'shows the confirmed next message'}`, async () => {
     const fixture = linkedChatFixture('', {narrow:true});

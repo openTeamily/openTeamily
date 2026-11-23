@@ -95,6 +95,46 @@ class AutoProvisionPollTests(unittest.TestCase):
         manager_cfg = json.loads(self.cfgpath.read_text())
         self.assertNotIn(auto, manager_cfg['instances'])  # never written back
 
+    def test_browser_resumes_the_existing_granted_container_without_auto_adopting_it(self):
+        client = self.start_http()
+        worker = ManagerWorker(client, self.registry, self.engine)
+        self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
+        fixture = self.root / 'stub-engine.json'
+        before = json.loads(fixture.read_text())
+        with self.store.connect() as db:
+            ensure_schema(db)
+
+        readiness, start = '/v1/auth/runtime-readiness', '/v1/auth/runtime-start'
+        self.enable_auto()
+        self.assertEqual(self.client.call('GET', readiness)['body']['state'], 'unavailable')
+        self.assertEqual(self.client.call('POST', start, {})['status'], 409)
+        self.assertEqual(client.assigned(), [])
+
+        self.app.manager_auth = ManagerAuth([
+            self.identity,
+            ManagerIdentity('auto-manager', 'b' * 64, frozenset(), 'compose', True),
+        ])
+        self.app.auto_provision = AutoProvisionPolicy(enabled=True, manager_id='auto-manager', max_instances=3)
+        bound = self.client.call('POST', '/v1/personal-agent')['body']['personal_agent']['runtime_provisioning']
+        self.assertEqual((bound['state'], bound['instance_id'], bound['readiness']), ('bound', self.iid, 'stopped'))
+        self.assertEqual(self.client.call('GET', readiness)['body']['state'], 'stopped')
+        self.assertEqual(self.client.call('POST', start, {}, csrf=False)['status'], 403)
+        self.assertEqual(self.client.call('POST', start, {'instance_id': 'a' * 32})['status'], 400)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(pool.map(lambda _: self.client.call('POST', start, {}), range(2)))
+        self.assertEqual(sorted(reply['status'] for reply in responses), [200, 202])
+        self.assertTrue(all(reply['body'] == {'state': 'starting'} for reply in responses))
+
+        self.assertEqual(worker.run_once(self.iid)['observed'], 'running')
+        after = json.loads(fixture.read_text())
+        self.assertEqual((after['id'], after['sentinel']), (before['id'], before['sentinel']))
+        with self.store.transaction() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM instances').fetchone()[0], 1)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM runtime_auto_provisions').fetchone()[0], 0)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM runtime_jobs').fetchone()[0], 2)
+            record_upstream(db, self.iid, '10.0.0.1:8080', 'dsh-auth-fixture=' + 'x' * 24, self.now)
+        self.assertEqual(self.client.call('GET', readiness)['body']['state'], 'ready')
+
     def test_pending_owners_use_two_fenced_worker_slots(self):
         self.start_http()
         assigned = [self.auto_instance(name, '127.0.0.' + str(peer))[1]

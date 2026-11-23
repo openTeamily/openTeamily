@@ -827,7 +827,7 @@ class App:
     def runtime_readiness(self, db, user_id):
         if not self.auto_provision.enabled:
             return 'unmanaged'
-        return owner_runtime_readiness(db, user_id, self.auto_provision.manager_id)
+        return owner_runtime_readiness(db, user_id, self.auto_provision.manager_id, manager_auth=self.manager_auth)
 
     def start_personal_runtime(self, env, now):
         with self.store.connect() as db:
@@ -840,7 +840,9 @@ class App:
                 return 200, {'state': state}, []
             if state != 'stopped':
                 refuse(409, 'runtime_unavailable', 'The personal runtime cannot be started here')
-            instance = runtime_autoprovision.resumable_instance(db, owner, self.auto_provision.manager_id)
+            instance = runtime_autoprovision.resumable_instance(
+                db, owner, self.auto_provision.manager_id, manager_auth=self.manager_auth,
+            )
         if instance is None:
             refuse(409, 'runtime_unavailable', 'The personal runtime changed; check its current state')
         started, _ = self.lifecycle.start(owner, instance['id'], expected_revision=instance['revision'])
