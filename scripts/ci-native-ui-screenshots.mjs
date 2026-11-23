@@ -159,16 +159,27 @@ async function meetingActionContinuity(page, account, name) {
     await waitForRows(count);
   }
   const chosen = source(53);
-  await chosen.scrollIntoViewIfNeeded();
-  const {y} = await chosen.boundingBox();
+  await chosen.evaluate(button => {
+    button.addEventListener('click', () => {
+      window.ciMeetingActionTop = button.getBoundingClientRect().top;
+    }, {capture:true, once:true});
+  });
   await chosen.click();
+  const y = await page.evaluate(() => window.ciMeetingActionTop);
+  assert.ok(Number.isFinite(y));
   const action = page.getByRole('textbox',{name:'行动项 14',exact:true});
   await page.waitForFunction(text => document.activeElement?.value === text,actionName(53));
   assert.equal(await action.inputValue(),actionName(53));
   await (name.startsWith('mobile') ? page.locator('#meeting-inbox-return') : open).click();
   await waitForRows(60);
   assert.equal(await chosen.evaluate(button => button === document.activeElement),true);
-  assert.ok(Math.abs((await chosen.boundingBox()).y-y) <= 2);
+  await chosen.evaluate(async button => {
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
+    if (!button.isConnected) throw new Error('Restored action lost focus');
+  });
+  const restoredY = (await chosen.boundingBox()).y;
+  assert.ok(Math.abs(restoredY-y) <= 2, `Action position changed from ${y} to ${restoredY}`);
   await screenshot(page,name);
 
   await toggle(53,'标记完成').click();

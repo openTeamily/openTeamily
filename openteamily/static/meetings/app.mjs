@@ -617,6 +617,7 @@ function mount() {
   const inboxOpen = document.getElementById('meeting-inbox-open');
   const inboxReturn = document.getElementById('meeting-inbox-return');
   const inboxList = document.getElementById('meeting-inbox-list');
+  const main = document.getElementById('main');
   const inboxHeading = document.getElementById('meeting-inbox-heading');
   const inboxState = document.getElementById('meeting-inbox-state');
   const inboxMine = document.getElementById('meeting-inbox-mine');
@@ -750,18 +751,25 @@ function mount() {
   function inboxPosition(button = document.activeElement) {
     const row = button?.closest?.('li[data-action]');
     if (row?.parentElement !== inboxList || !button.dataset.inboxControl) return null;
-    return {key:row.dataset.action, index:Array.from(inboxList.children).indexOf(row), control:button.dataset.inboxControl};
+    return {key:row.dataset.action, index:Array.from(inboxList.children).indexOf(row),
+      control:button.dataset.inboxControl, top:button.getBoundingClientRect().top};
   }
 
-  function focusInboxPosition(position) {
+  function focusInboxPosition(position, restorePosition = false) {
     if (!position) return;
     const rows = Array.from(inboxList.children);
-    const row = rows.find(item => item.dataset.action === position.key) || rows[Math.min(position.index, rows.length - 1)];
-    (row?.querySelector(`button[data-inbox-control="${position.control}"]:enabled`) ||
-      row?.querySelector('button[data-inbox-control="source"]') || inboxHeading).focus({preventScroll:true});
+    const original = rows.find(item => item.dataset.action === position.key);
+    const row = original || rows[Math.min(position.index, rows.length - 1)];
+    const button = row?.querySelector(`button[data-inbox-control="${position.control}"]:enabled`) ||
+      row?.querySelector('button[data-inbox-control="source"]');
+    (button || inboxHeading).focus({preventScroll:true});
+    if (restorePosition && original && button) {
+      main.scrollTop += button.getBoundingClientRect().top - position.top;
+    }
   }
 
   function renderInbox(state, position = inboxPosition()) {
+    const scrollTop = main.scrollTop;
     inboxList.replaceChildren();
     for (const item of state.items) {
       const row = document.createElement('li');
@@ -784,7 +792,6 @@ function mount() {
         if (!currentInbox(state)) return;
         return confirmNavigation(async () => {
           if (!currentInbox(state)) return;
-          const main = document.getElementById('main');
           inboxResume = {state, position:inboxPosition(source), scrollTop:main.scrollTop};
           setInbox(false, {focus:false});
           const expectedSelection = selection + 1;
@@ -813,7 +820,8 @@ function mount() {
     inboxEmpty.textContent = state.completed
       ? state.mine ? '没有分配给你的已完成行动项。' : '没有已完成的会议行动项。'
       : state.mine ? '没有分配给你的待办行动项。' : '没有待完成的会议行动项。';
-    focusInboxPosition(position);
+    main.scrollTop = scrollTop;
+    focusInboxPosition(position, true);
   }
 
   async function loadInbox(state, {append = false, notice = '', minimum = Math.max(20, state.items.length)} = {}) {
@@ -966,11 +974,10 @@ function mount() {
       const resumable = saved && sameInboxScope(saved.state) && saved.state.mine === mine && saved.state.completed === completed;
       inboxView = resumable ? saved.state : {workspace:workspaceId(), owner:viewerId, viewer, mine, completed,
         items:[], cursor:'', loaded:false};
+      if (resumable) main.scrollTop = saved.scrollTop;
       renderInbox(inboxView, resumable ? saved.position : null);
-      if (resumable) {
-        document.getElementById('main').scrollTop = saved.scrollTop;
-      } else if (focus) {
-        document.getElementById('main').scrollTop = 0;
+      if (!resumable && focus) {
+        main.scrollTop = 0;
         inboxHeading.focus({preventScroll:true});
       }
       void loadInbox(inboxView, {notice});
