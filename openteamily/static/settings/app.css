@@ -706,6 +706,19 @@ body.app-workspace > main > #settings-panel { width: 100%; max-width: 42rem; mar
    soft canvas, 11px group labels, white rounded groups with compact 2.5rem rows. */
 body.app-workspace > main:has(> #settings-panel:not([hidden])) { background: var(--ot-surface-2); }
 body.app-workspace > main > #settings-panel { max-width: 32rem; padding: .875rem 1.25rem 3rem; }
+/* Recorded language / folding / privacy / shortcuts cards are wider than the settings hub. */
+body.app-workspace > main > #settings-panel:has([data-settings-page="language"]:not([hidden])),
+body.app-workspace > main > #settings-panel:has([data-settings-page="message-folding"]:not([hidden])),
+body.app-workspace > main > #settings-panel:has([data-settings-page="privacy"]:not([hidden])),
+body.app-workspace > main > #settings-panel:has([data-settings-page="shortcuts"]:not([hidden])) {
+  max-width: 36rem;
+}
+#settings-panel [data-settings-page="language"] > .note {
+  margin: .75rem 0 0;
+  color: var(--ot-muted);
+  font-size: .75rem;
+  line-height: 1.5;
+}
 #settings-panel .page-top { margin: 0 0 .75rem; padding: 0; border: 0; background: transparent; box-shadow: none; min-height: 0; }
 #settings-panel .page-top h1 { font-size: 1rem; font-weight: 650; margin: 0; }
 #settings-panel [data-settings-hub] > #whoami {

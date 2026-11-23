@@ -251,6 +251,38 @@ test('syncAppearanceExtras moves the status into the schedule card only for auto
   assert.equal(parent.moved.before, scheduleCard);
 });
 
+
+test('settings subpages use a wider column than the hub, with language notes below the card', () => {
+  const html = readFileSync(new URL('../openteamily/static/settings/index.html', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../openteamily/static/settings/app.css', import.meta.url), 'utf8');
+  assert.match(css, /body\.app-workspace > main > #settings-panel \{ max-width: 32rem;/);
+  for (const page of ['language', 'message-folding', 'privacy', 'shortcuts']) {
+    assert.match(
+      css,
+      new RegExp(`#settings-panel:has\\(\\[data-settings-page="${page}"\\]:not\\(\\[hidden\\]\\)\\)`),
+    );
+  }
+  assert.match(
+    css,
+    /\[data-settings-page="shortcuts"\]:not\(\[hidden\]\)\) \{\s*max-width: 36rem;/,
+  );
+
+  const languageStart = html.indexOf('id="language-section"');
+  const languageEnd = html.indexOf('</fieldset>', languageStart);
+  const card = html.slice(languageStart, languageEnd);
+  assert.equal(card.includes('id="system-language-scope"'), false);
+  assert.equal(card.includes('id="system-language-fallback"'), false);
+  assert.equal(card.includes('id="chat-language-effect"'), false);
+  const after = html.slice(languageEnd, html.indexOf('data-settings-page="shortcuts"'));
+  assert.match(after, /id="system-language-scope"/);
+  assert.match(after, /id="system-language-fallback"/);
+  assert.match(after, /id="chat-language-effect"/);
+
+  const lead = html.indexOf('选择长消息在对话里最先展示多少内容。');
+  const foldingCard = html.indexOf('id="message-display"');
+  assert.ok(lead > 0 && lead < foldingCard);
+});
+
 test('newlineBinding complements the recorded send shortcut', () => {
   assert.equal(newlineBinding('enter'), 'Shift+Enter');
   assert.equal(newlineBinding('mod_enter'), 'Enter');

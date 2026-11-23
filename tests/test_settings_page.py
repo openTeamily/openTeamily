@@ -459,12 +459,32 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('根据消息语言回复', language)
         self.assertIn('class="settings-field"', language)
 
+        language_start = language.find('id="language-section"')
+        language_end = language.find('</fieldset>', language_start)
+        card = language[language_start:language_end]
+        self.assertGreater(language_start, -1)
+        self.assertNotIn('id="system-language-scope"', card)
+        self.assertNotIn('id="system-language-fallback"', card)
+        self.assertNotIn('id="chat-language-effect"', card)
+        self.assertIn('id="system-language-scope"', language[language_end:])
+        self.assertIn('id="system-language-fallback"', language[language_end:])
+        self.assertIn('id="chat-language-effect"', language[language_end:])
+        self.assertIn('data-settings-page="language"]:not([hidden])', css)
+        self.assertIn('data-settings-page="message-folding"]:not([hidden])', css)
+        self.assertIn('data-settings-page="privacy"]:not([hidden])', css)
+        self.assertIn('data-settings-page="shortcuts"]:not([hidden])', css)
+        self.assertIn('max-width: 36rem;', css)
+
         folding = self.raw.call('GET', '/settings/message-folding')['body'].decode()
         self.assertIn('‹ 设置', folding)
         self.assertIn('选择长消息在对话里最先展示多少内容。', folding)
         self.assertIn('长消息会把对话推得很高。', folding)
         self.assertIn('长文档收成卡片', folding)
         self.assertIn('含多个章节的消息会显示为卡片', folding)
+        self.assertLess(
+            folding.find('选择长消息在对话里最先展示多少内容。'),
+            folding.find('id="message-display"'),
+        )
         self.assertNotIn('折叠前展示多少内容', folding)
         self.assertNotIn('长消息会拉开推动聊天窗', folding)
 
