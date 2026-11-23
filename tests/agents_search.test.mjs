@@ -269,6 +269,49 @@ test('the saved Personal Agent look replaces the monogram in the directory', asy
 });
 
 
+test('native directory renders the updated look only for the signed account and its personal workspace', async () => {
+  const requests = [];
+  const {doc, el} = fakeDocument();
+  doc.querySelector = (selector) => selector === 'meta[name="openteamily-served-by"][content="ds-bot"]' ? {} : null;
+  const owner = {id: 'e'.repeat(32), username: 'alice'};
+  const workspace = {id: 'a'.repeat(32), name: 'Desk', kind: 'personal', owner_id: owner.id};
+  const agent = {id: 'b'.repeat(32), name: "alice's Personal Agent", summary: ''};
+  const look = {color: '葡萄紫', expression: '好奇', headwear: '贝雷帽', glasses: '圆框眼镜', hand: '魔法棒'};
+  let returnLook;
+  let snapshot = {items: [workspace], personal_agent_id: agent.id, personal_look: look, viewer_username: 'alice'};
+  const load = () => mount(doc, {fetcher: async (path) => {
+    requests.push(path);
+    if (path === '/v1/auth/session') return json(200, {user: owner});
+    if (path === '/v1/workspaces?scope=personal&include=personal-agent') return returnLook.then(() => json(200, snapshot));
+    if (path === '/v1/workspaces?limit=100') return json(200, {items: [workspace]});
+    if (path === '/v1/workspaces/' + workspace.id) return json(200, {workspace});
+    if (path.endsWith('/members')) return json(200, {items: [{user_id: owner.id, role: 'owner'}]});
+    if (path.endsWith('/agents?limit=100')) return json(200, {items: [agent]});
+    return json(404, {});
+  }});
+  const avatar = () => el('agent-list').children[0].children[0];
+  const pending = Promise.withResolvers();
+  returnLook = pending.promise;
+  await load();
+  assert.equal(avatar().className, 'avatar', 'the directory must render before the look read finishes');
+  pending.resolve();
+  await tick();
+  assert.equal(avatar().className, 'look-avatar');
+  assert.equal(avatar().dataset.color, look.color);
+  assert.equal(requests.includes('/v1/personal-agent'), false);
+
+  snapshot = {...snapshot, viewer_username: 'another-user'};
+  await load();
+  await tick();
+  assert.equal(avatar().className, 'avatar', 'a different signed-in viewer must never apply the look');
+
+  snapshot = {...snapshot, viewer_username: 'alice', items: [{...workspace, id: 'c'.repeat(32)}]};
+  await load();
+  await tick();
+  assert.equal(avatar().className, 'avatar', 'the personal look must only decorate the bound workspace');
+});
+
+
 test('create form retains its element after DOM dispatch clears currentTarget during await', async () => {
   const {doc,el}=fakeDocument();const requests=[],agents=[];let release,reset=0;
   const ordinary=directoryFetcher(requests,{agents,conversations:[]});

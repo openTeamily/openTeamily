@@ -2136,11 +2136,11 @@
     {"source": "openteamily/static/terms/index.html", "line": 133, "tag": "a", "id": null, "name": null, "href": "https://github.com/openTeamily/openTeamily/issues", "type": null, "label": " 仓库 issue 列表", "initially_disabled": false, "data": {}, "execution_profile": "terms", "verification": "unverified individual control/state; route-level evidence is not universal acceptance"}
   ],
   "dynamic_sites": [
-    {"source": "openteamily/static/agents/app.mjs", "line": 287, "construction": "const apply = document.createElement('button');", "execution_profile": "agents", "verification": "unverified dynamic construction site; conditional instances require execution"},
-    {"source": "openteamily/static/agents/app.mjs", "line": 512, "construction": "const button = document.createElement('button');", "execution_profile": "agents", "verification": "unverified dynamic construction site; conditional instances require execution"},
-    {"source": "openteamily/static/agents/app.mjs", "line": 530, "construction": "const chat = document.createElement('a');", "execution_profile": "agents", "verification": "unverified dynamic construction site; conditional instances require execution"},
-    {"source": "openteamily/static/agents/app.mjs", "line": 536, "construction": "const restore = document.createElement('button');", "execution_profile": "agents", "verification": "unverified dynamic construction site; conditional instances require execution"},
-    {"source": "openteamily/static/agents/app.mjs", "line": 799, "construction": "const revoke = document.createElement('button');", "execution_profile": "agents", "verification": "unverified dynamic construction site; conditional instances require execution"},
+    {"source": "openteamily/static/agents/app.mjs", "line": 286, "construction": "const apply = document.createElement('button');", "execution_profile": "agents", "verification": "unverified dynamic construction site; conditional instances require execution"},
+    {"source": "openteamily/static/agents/app.mjs", "line": 523, "construction": "const button = document.createElement('button');", "execution_profile": "agents", "verification": "unverified dynamic construction site; conditional instances require execution"},
+    {"source": "openteamily/static/agents/app.mjs", "line": 541, "construction": "const chat = document.createElement('a');", "execution_profile": "agents", "verification": "unverified dynamic construction site; conditional instances require execution"},
+    {"source": "openteamily/static/agents/app.mjs", "line": 547, "construction": "const restore = document.createElement('button');", "execution_profile": "agents", "verification": "unverified dynamic construction site; conditional instances require execution"},
+    {"source": "openteamily/static/agents/app.mjs", "line": 810, "construction": "const revoke = document.createElement('button');", "execution_profile": "agents", "verification": "unverified dynamic construction site; conditional instances require execution"},
     {"source": "openteamily/static/agents/sharing.mjs", "line": 103, "construction": "const control = document.createElement('button');", "execution_profile": "agents", "verification": "unverified dynamic construction site; conditional instances require execution"},
     {"source": "openteamily/static/artifacts/app.mjs", "line": 840, "construction": "const button = document.createElement('button');", "execution_profile": "artifacts", "verification": "unverified dynamic construction site; conditional instances require execution"},
     {"source": "openteamily/static/artifacts/app.mjs", "line": 948, "construction": "const move = document.createElement('button');", "execution_profile": "artifacts", "verification": "unverified dynamic construction site; conditional instances require execution"},
@@ -2407,7 +2407,8 @@
         "/v1/workspaces/${workspace}/agents/${agent.id}/${access",
         "/v1/workspaces/${workspace}/agents/${agentId}",
         "/v1/workspaces/${workspace}/agents/${edited}",
-        "/v1/workspaces?limit=100"
+        "/v1/workspaces?limit=100",
+        "/v1/workspaces?scope=personal&include=personal-agent"
       ]
     },
     "openteamily/static/artifacts/index.html": {

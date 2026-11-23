@@ -567,6 +567,17 @@ function teamsRoutes(host) {
               }
               return [200, result]
             }
+            if (include === 'personal-agent') {
+              Object.assign(result, platformViewer(call))
+              const workspace = q.getAll('workspace')
+              if (personal && (personal.owner_id || result.viewer_username) && q.getAll('include').length === 1
+                  && (!workspace.length || (workspace.length === 1 && workspace[0] === personal.id))) {
+                result.personal_agent_id = localBinding.agent_id
+                const settings = await host.call('settings/look', {}).catch(() => null)
+                result.personal_look = settings?.look ?? null
+              }
+              return [200, result]
+            }
             if (include === 'artifacts' || include === 'chat') {
               Object.assign(result, platformViewer(call))
               if (personal && (personal.owner_id || result.viewer_username)) {

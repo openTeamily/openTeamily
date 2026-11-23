@@ -164,8 +164,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let workspaces = [];
   let currentAgent = null;
   let draftKey = '', originalEdits, waitingDraft;
-  let personalAgentId = '';
-  let personalLook = null;
+  let personalIdentity = null;
   let agentSelection = 0;
   let sessionLoad = 0;
   let workspaceLoad = 0;
@@ -430,20 +429,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentUser = session.body.user;
     loginPanel.hidden = true;
     mainPanel.hidden = false;
-    personalAgentId = '';
-    personalLook = null;
+    personalIdentity = null;
     directoryLoaded = false;
     loadedWorkspace = '';
     directoryAgents = [];
     archivedOnly = false;
     if (directoryStatus) directoryStatus.value = 'active';
     document.getElementById('agent-list').replaceChildren();
-    void request('GET', '/v1/personal-agent').catch(() => unavailable).then(personal => {
-      if (seq !== sessionLoad) return;
-      const found = personal.status === 200 && personal.body.personal_agent;
-      personalAgentId = found?.agent?.id || '';
-      personalLook = found ? found.look || null : null;
-      if (directoryLoaded && personalAgentId) renderDirectory();
+    const personalPath = nativeSharing ? '/v1/workspaces?scope=personal&include=personal-agent' : '/v1/personal-agent';
+    void request('GET', personalPath).catch(() => unavailable).then(personal => {
+      if (seq !== sessionLoad || personal.status !== 200) return;
+      const body = personal.body ?? {};
+      if (nativeSharing) {
+        const space = body.items?.length === 1 ? body.items[0] : null;
+        const viewer = body.viewer_username;
+        if (space?.kind !== 'personal' || !directoryId.test(space.id) || !directoryId.test(body.personal_agent_id ?? '')
+            || (!space.owner_id && !viewer) || (space.owner_id && space.owner_id !== currentUser.id)
+            || (viewer && viewer !== currentUser.username)) return;
+        personalIdentity = {agentId: body.personal_agent_id, workspaceId: space.id, look: body.personal_look ?? null};
+      } else if (body.personal_agent?.agent?.id) {
+        const found = body.personal_agent;
+        personalIdentity = {agentId: found.agent.id, workspaceId: found.workspace?.id, look: found.look ?? null};
+      }
+      if (directoryLoaded && personalIdentity && (!personalIdentity.workspaceId || personalIdentity.workspaceId === workspaceId())) {
+        renderDirectory();
+      }
     });
     const whoami = document.getElementById('whoami');
     whoami.dataset.username = currentUser.username;
@@ -500,7 +510,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       shown += 1;
       const li = document.createElement('li');
       li.className = 'agent-card';
-      const lookAvatar = item.id === personalAgentId ? createLookAvatar(personalLook, document) : null;
+      const isPersonal = item.id === personalIdentity?.agentId && (!personalIdentity.workspaceId || personalIdentity.workspaceId === id);
+      const lookAvatar = isPersonal ? createLookAvatar(personalIdentity.look, document) : null;
       const avatar = lookAvatar || document.createElement('span');
       if (!lookAvatar) {
         avatar.className = 'avatar';
