@@ -1212,6 +1212,75 @@ for (const deliveredBeforeAck of [false, true]) {
   });
 }
 
+test('a streaming reply can be stopped before a delayed send acknowledgment', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const post = Promise.withResolvers();
+  let sendKey, ack, historyReads = 0, receiptReads = 0;
+  const stopped = [];
+  const {doc, el, restore, fetcher} = nativeReplyChat((path, opts, scope) => {
+    if (path === '?limit=50') {
+      historyReads++;
+      return json(200, {...scope, items: []});
+    }
+    if (path === '/messages' && opts.method === 'POST') {
+      sendKey = opts.headers['Idempotency-Key'];
+      const fields = {workspace_id:'ws-1', agent_id:'agent-1', conversation_id:'private-1', client_key:sendKey};
+      ack = {
+        message:{...fields, id:'1'.repeat(32), role:'user', status:'succeeded', body:'需要停止的回复'},
+        reply:{...fields, id:'2'.repeat(32), role:'assistant', status:'running', can_stop:true, attempt:1},
+      };
+      return post.promise;
+    }
+    if (path === '/reply-progress?key=' + sendKey + '&receipt=1') {
+      receiptReads++;
+      return json(200, {...ack, state:'running'});
+    }
+    if (path === '/reply-stop' && opts.method === 'POST') {
+      stopped.push(JSON.parse(opts.body));
+      return json(200, {...ack, reply:{...ack.reply, status:'cancelled', can_stop:false}});
+    }
+    assert.fail('Unexpected request: ' + path);
+  });
+  const streams = [];
+  doc.defaultView = {EventSource: class {
+    handlers = new Map();
+    constructor() { streams.push(this); }
+    addEventListener(name, fn) { this.handlers.set(name, fn); }
+    close() { this.closed = true; }
+    running(text) { this.handlers.get('message')({data:JSON.stringify({state:'running', phase:'writing', text})}); }
+  }};
+  try {
+    await mount(doc, {fetcher});
+    const field = el('chat-body'), stop = el('chat-reply-stop'), list = el('message-list');
+    field.value = '需要停止的回复';
+    await fire(el('chat-form'), 'submit', {preventDefault() {}});
+    assert.equal(field.value, '');
+    field.value = '下一条草稿';
+    streams[0].running('已收到部分内容');
+    assert.equal(stop.hidden, true);
+    t.mock.timers.tick(249);
+    await settle();
+    assert.equal(receiptReads, 0);
+    t.mock.timers.tick(1);
+    await settle();
+    assert.equal(receiptReads, 1);
+    assert.equal(stop.hidden, false);
+    assert.equal(streams.length, 1);
+    assert.equal(streams[0].closed, undefined);
+    assert.deepEqual(list.children.map(row => row.dataset.messageId), [ack.message.id, ack.reply.id]);
+    assert.equal(list.children.at(-1).children.at(-1).textContent, '已收到部分内容');
+    await fire(stop, 'click');
+    assert.deepEqual(stopped, [{key:sendKey, attempt:1}]);
+    assert.equal(stop.hidden, true);
+    assert.equal(list.children.at(-1).dataset.state, 'cancelled');
+    post.resolve(json(202, ack));
+    await settle();
+    assert.equal(list.children.at(-1).dataset.state, 'cancelled');
+    assert.equal(field.value, '下一条草稿');
+    assert.equal(historyReads, 1);
+  } finally { restore(); }
+});
+
 test('a durable failed reply can be retried in place after reload and a lost retry acknowledgment', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
   const key = 'msg-retryable-text';

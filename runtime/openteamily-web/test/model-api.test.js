@@ -48,7 +48,9 @@ test('legacy model_api.wrap blobs unwrap (platform export bundles)', () => {
 })
 
 test('GET/POST /v1/model-api: account override, key never returned, effective source', async () => {
-  const api = make(noPolicy, () => ({ provider: 'openai', base_url: 'https://platform.example/v1', model: 'p', api_key: 'never-shown-1234' }))
+  const platform = () => ({ provider: 'openai', base_url: 'https://platform.example/v1', model: 'p', api_key: 'never-shown-1234' })
+  const volume = { dir: tmp(), sealKey: randomBytes(32), policy: noPolicy, platform }
+  const api = createModelApi(volume)
   const empty = await v1(api, 'GET')
   assert.deepEqual([empty.body.model_api.revision, empty.body.effective.source], [0, 'platform'])
   assert.ok(!JSON.stringify(empty).includes('never-shown'))
@@ -58,6 +60,7 @@ test('GET/POST /v1/model-api: account override, key never returned, effective so
   assert.ok(!JSON.stringify(saved).includes(KEY))
   assert.ok(!readFileSync(api.store.file, 'utf8').includes(KEY), 'key is sealed at rest')
   assert.equal((await v1(api, 'GET')).body.effective.source, 'account')
+  assert.equal((await v1(make(noPolicy, platform), 'GET')).body.effective.source, 'platform')
   const proxy = api.resolveForProxy()
   assert.deepEqual([proxy.api_key, proxy.source, proxy.http_endpoint_grant], [KEY, 'user', undefined])
   assert.equal((await v1(api, 'POST', { revision: 0, changes: { model: 'y' } })).status, 409)
@@ -66,6 +69,9 @@ test('GET/POST /v1/model-api: account override, key never returned, effective so
   const cleared = await v1(api, 'POST', { revision: 1, changes: { api_key: null } })
   assert.equal(cleared.body.model_api.api_key_set, false)
   assert.equal(api.resolveForProxy(), null)
+  const reopened = createModelApi(volume)
+  assert.equal(reopened.resolveForProxy(), null)
+  assert.equal((await v1(reopened, 'GET')).body.effective.source, 'platform')
   for (const changes of [{ provider: 'evil' }, { api_key: 'short' }, { base_url: 'ftp://x.example' }, { foo: 1 }, { base_url: 'https://u:p@x.example/v1' }]) {
     assert.equal((await v1(api, 'POST', { revision: 2, changes })).status, 400, JSON.stringify(changes))
   }

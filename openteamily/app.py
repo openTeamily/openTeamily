@@ -1049,23 +1049,16 @@ class App:
         stored = bot_social.load_platform(db) if scope == 'platform' else bot_social.load_workspace(db, workspace['id'])
         return 200, {'bot_social': bot_social.public_view(stored, scope)}, []
 
-    def with_model_api(self, workspace_id, payload):
+    def with_model_api(self, payload):
+        def attach(db, instance):
+            workspace_id = self.lifecycle.runtime_model_workspace(db, instance)
+            public, _key, source = model_api.resolve(db, self.store, workspace_id=workspace_id)
+            return {**instance, 'model_api': model_api.effective_view(public, source)}
+
         with self.store.connect() as db:
-            public, _secret, source = model_api.resolve(db, self.store, workspace_id=workspace_id)
-        public = model_api.effective_view(public, source)
-        if isinstance(payload, dict) and 'id' in payload and 'workspace_id' in payload:
-            return {**payload, 'model_api': public}
-        if not isinstance(payload, dict):
-            return payload
-        result = dict(payload)
-        if 'instance' in result and isinstance(result['instance'], dict):
-            result['instance'] = {**result['instance'], 'model_api': public}
-        if 'items' in result and isinstance(result['items'], list):
-            result['items'] = [
-                {**item, 'model_api': public} if isinstance(item, dict) and 'id' in item else item
-                for item in result['items']
-            ]
-        return result
+            if 'instance' in payload:
+                return {**payload, 'instance': attach(db, payload['instance'])}
+            return {**payload, 'items': [attach(db, instance) for instance in payload['items']]}
 
     @staticmethod
     def pagination(query, allowed=()):
@@ -1090,11 +1083,10 @@ class App:
                 self.body(env, [])
                 created, result = runtime.create(owner, match[1], env.get('HTTP_IDEMPOTENCY_KEY', ''),
                                                  per_user=self.auto_provision.enabled)
-                return 201 if created else 200, self.with_model_api(result['instance']['workspace_id'], result), []
+                return 201 if created else 200, self.with_model_api(result), []
             limit, cursor, _ = self.pagination(query)
             listed = runtime.listing(owner, match[1], limit, cursor)
-            runtime_workspace = listed['items'][0]['workspace_id'] if listed['items'] else match[1]
-            return 200, self.with_model_api(runtime_workspace, listed), []
+            return 200, self.with_model_api(listed), []
         match = re.fullmatch(r'/v1/jobs/([0-9a-f]{32})', path)
         if match and method == 'GET' and not query:
             return 200, {'job': runtime.get_job(owner, match[1])}, []
@@ -1104,14 +1096,14 @@ class App:
             # Authorization precedes even unsupported operation disclosure.
             instance = runtime.inspect(owner, iid)
             if method == 'GET' and action is None and not query:
-                return 200, {'instance': self.with_model_api(instance['workspace_id'], instance)}, []
+                return 200, self.with_model_api({'instance': instance}), []
             if method == 'POST' and action in UNSUPPORTED:
                 self.body(env, [])
                 refuse(501, 'unsupported', 'This runtime operation is not implemented')
             if method == 'POST' and action in ('start', 'stop', 'restart'):
                 body = self.body(env, ['expected_revision', 'operation_id'] if action == 'restart' else ['expected_revision'])
                 changed, result = getattr(runtime, action)(owner, iid, **body)
-                return 202 if changed else 200, self.with_model_api(instance['workspace_id'], result), []
+                return 202 if changed else 200, self.with_model_api(result), []
             if method == 'GET' and action == 'logs':
                 try:
                     args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=1) if query else {}

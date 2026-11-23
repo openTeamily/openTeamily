@@ -1,30 +1,27 @@
-# OpenTeamily as a DS-Bot plugin — target architecture and migration plan
+# OpenTeamily DS-Bot architecture and migration history
 
-Status: **design, accepted by the owner on 2026-11-20** ("所有的执行都要基于 DS-Bot，你的前端只是基于 DS-Bot 的一个插件";
-"像 FlyBot 平台那样：每个用户自己的 DS-Bot 直接提供 OpenTeamily 页面，网站只负责注册登录和转发").
-This document is the contract for the implementation PRs listed in [Phase plan](#6-phase-plan). Until the
-cutover PR (phase D) lands, the legacy Flask management server keeps working unchanged, so open feature
-PRs keep merging.
+The account runtime and gateway are the current deployment design. The phase
+table below records the migration plan; see [runtime acceptance](ACCEPTANCE.md)
+for verified builds and [Compose manager](COMPOSE_MANAGER.md) for operator setup.
 
-## 1. Target in one paragraph
+## 1. Runtime architecture
 
-Every account owns exactly one isolated **DS-Bot** (upstream DS-Bot v0.3.10 on DSH 0.2.2-rc.1, pinned in
-`runtime/ds-bot-upstream.pin.json`, one container + one volume per user, provisioned by the compose
-manager). The OpenTeamily product — pages, APIs and **all execution** (chat, skills, Composio/MCP tools,
-automations and schedules, exports, memory, artifacts, meetings, group replies) — is an **OpenTeamily DSH
-plugin** that runs inside that user's DS-Bot and uses DS-Bot/DSH host APIs. The public site
-`openteamily.botawaken.com` becomes a thin **platform**: registration, login/session, provisioning one
-DS-Bot per user, and an authenticated reverse proxy that routes the signed-in browser to *their own*
-DS-Bot and nothing else. Anything that involves more than one user (member DMs, teams/groups, discover,
-follows, invites) goes through **Bot Social** (`services/bot-social` + `runtime/flybot/plugins/social`),
-never through a central executor.
+With automatic provisioning enabled, each account gets one isolated **DS-Bot**
+container and its own persistent volume. The Compose manager runs the pinned
+DS-Bot v0.3.10 on DSH 0.2.2-rc.1. The **OpenTeamily DSH plugin** serves product
+pages and APIs from that container and uses DS-Bot/DSH host APIs for execution.
+The
+**platform** handles registration, sessions and provisioning. The authenticated
+gateway routes a signed-in browser to its own DS-Bot. Shared state for member
+DMs, teams and groups, discovery, follows and invitations goes through **Bot Social**
+(`services/bot-social` and `runtime/flybot/plugins/social`).
 
 ```
 browser ──https──> platform (register / login / session / provision / gateway)
                         │ auth_request: session → own instance only
                         ▼
               user's DS-Bot container (dsh web :8080)
-                ├─ ds-bot (unmodified upstream createRuntime)
+                ├─ ds-bot (pinned upstream with an image-time integration overlay)
                 ├─ @flybot/social via flybot-social-host  ──> Bot Social (cross-user)
                 └─ @openteamily/web  (this plugin: pages + /api/openteamily + all execution)
 ```
@@ -250,6 +247,8 @@ sequenced by the deploy owner).
   backed up first.
 
 ## 6. Phase plan
+
+This table preserves the original sequence and estimates. See [acceptance](ACCEPTANCE.md) for current verification.
 
 | Phase | PR | Content | Size (honest) |
 |---|---|---|---|
