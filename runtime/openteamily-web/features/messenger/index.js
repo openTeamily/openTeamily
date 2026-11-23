@@ -31,7 +31,7 @@ export default function messenger(host) {
         // #358: the first message after the viewer's read cursor is the "new messages" divider.
         return { ...page, first_unread_seq: page.read_seq < page.last_seq ? page.read_seq + 1 : null }
       },
-      send: async (p) => bs().post(`${conv(p)}/messages`, { body: p?.body, mentions: p?.mentions, agent_mentions: p?.agent_mentions, reply_to: p?.reply_to, client_key: p?.client_key }),
+      send: async (p) => bs().post(`${conv(p)}/messages`, { body: p?.body, voice: p?.voice, mentions: p?.mentions, agent_mentions: p?.agent_mentions, reply_to: p?.reply_to, client_key: p?.client_key }),
       read: async (p) => bs().post(`${conv(p)}/read`, p?.seq === undefined ? {} : { seq: p.seq }),
       edit: async (p) => bs().patch(msg(p), { body: p?.body }),
       retract: async (p) => bs().del(msg(p)),

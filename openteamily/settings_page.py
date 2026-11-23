@@ -61,6 +61,7 @@ class SettingsPage:
         '/chat': ('chat', 'index.html', 'text/html; charset=utf-8'),
         '/chat/utilities.mjs': ('chat', 'utilities.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.mjs': ('chat', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/voice.mjs': ('chat', 'voice.mjs', 'text/javascript; charset=utf-8'),
         '/chat/mentions.mjs': ('chat', 'mentions.mjs', 'text/javascript; charset=utf-8'),
         '/chat/dsbot.mjs': ('chat', 'dsbot.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.css': ('chat', 'app.css', 'text/css; charset=utf-8'),
@@ -219,10 +220,13 @@ class SettingsPage:
                                                  ('Content-Length', '9')])
                 return [] if env.get('REQUEST_METHOD') == 'HEAD' else [b'Not found']
             return self.api(env, start_response)
+        chat = path in ('/chat', '/chat/')
+        csp = self.CSP + "; media-src 'self' blob:" if chat else self.CSP
+        microphone = '(self)' if chat else '()'
         headers = [('Cache-Control', 'no-store'), ('X-Content-Type-Options', 'nosniff'),
-                   ('Content-Security-Policy', self.CSP), ('Referrer-Policy', 'no-referrer'),
+                   ('Content-Security-Policy', csp), ('Referrer-Policy', 'no-referrer'),
                    ('Cross-Origin-Resource-Policy', 'same-origin'),
-                   ('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')]
+                   ('Permissions-Policy', f'camera=(), microphone={microphone}, geolocation=()')]
         content_type = 'text/plain; charset=utf-8'
         status, data = '404 Not Found', b'Not found'
         origin = self.api.config.origin

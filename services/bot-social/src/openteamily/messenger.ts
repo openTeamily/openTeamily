@@ -40,6 +40,10 @@ CREATE TABLE IF NOT EXISTS ot_messages (
   created_at INTEGER NOT NULL, edited_at INTEGER, retracted INTEGER NOT NULL DEFAULT 0, pinned_by TEXT,
   UNIQUE (conversation_id, seq), UNIQUE (conversation_id, author_id, client_key)
 );
+CREATE TABLE IF NOT EXISTS ot_voice_messages (
+  message_id TEXT PRIMARY KEY REFERENCES ot_messages(id) ON DELETE CASCADE,
+  mime TEXT NOT NULL, data BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ot_reactions (
   message_id TEXT NOT NULL REFERENCES ot_messages(id) ON DELETE CASCADE, owner_id TEXT NOT NULL, emoji TEXT NOT NULL,
   created_at INTEGER NOT NULL, PRIMARY KEY (message_id, owner_id, emoji)
@@ -48,6 +52,23 @@ CREATE TABLE IF NOT EXISTS ot_reactions (
 
 export const REACTIONS = ["👍", "❤️", "😄", "🎉", "👀", "✅"];
 const BODY_MAX = 4000;
+const VOICE_MAX_BYTES = 128 * 1024;
+
+function voiceData(value: any) {
+  const mime = value?.mime;
+  const encoded = value?.data;
+  assert(typeof encoded === "string" && encoded.length <= Math.ceil(VOICE_MAX_BYTES / 3) * 4,
+    400, "invalid_voice", "Voice messages can contain up to 128 KiB");
+  const data = Buffer.from(encoded, "base64");
+  assert(data.length >= 12 && data.length <= VOICE_MAX_BYTES && data.toString("base64") === encoded,
+    400, "invalid_voice", "Invalid voice message data");
+  const webm = mime === "audio/webm" && data.readUInt32BE(0) === 0x1a45dfa3;
+  const ogg = mime === "audio/ogg" && data.toString("ascii", 0, 4) === "OggS";
+  const mp4 = mime === "audio/mp4" && data.toString("ascii", 4, 8) === "ftyp";
+  assert(webm || ogg || mp4, 400, "invalid_voice", "Use a WebM, Ogg, or MP4 audio recording");
+  return {mime, data};
+}
+
 const AUTO_PER_HOUR = 3;
 const MENTION_PER_HOUR = 30;
 const HOUR = 3_600_000;
@@ -65,6 +86,7 @@ const messageView = (ot: OtContext, m: any, viewer?: string) => ({
   mine: viewer ? m.author_id === viewer && m.author_kind === "member" : undefined,
   body: m.retracted ? "" : m.body, revision: m.revision, retracted: !!m.retracted, edited_at: m.edited_at, created_at: m.created_at,
   mentions: JSON.parse(m.mentions), reply_to: m.reply_to, pinned: !!m.pinned_by,
+  voice: m.retracted ? undefined : ot.get<{mime: string}>("SELECT mime FROM ot_voice_messages WHERE message_id=?", m.id),
   reactions: ot.all<any>("SELECT emoji, COUNT(*) AS n, SUM(owner_id = ?) AS me FROM ot_reactions WHERE message_id = ? GROUP BY emoji", viewer ?? "", m.id).map((r) => ({ emoji: r.emoji, count: r.n, mine: !!r.me })),
 });
 
@@ -267,14 +289,22 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   app.post("/v1/ot/conversations/:id/messages", async (req, reply) => {
     const me = ot.me(req);
     const b = body(req);
-    const bodyText = text(b.body, "body", { min: 1, max: BODY_MAX, multiline: true });
+    const voice = b.voice === undefined ? null : voiceData(b.voice);
+    const bodyText = text(voice && !b.body ? "语音消息" : b.body, "body", { min: 1, max: BODY_MAX, multiline: true });
     const clientKey = optText(b.client_key, "client_key", { min: 1, max: 80 }) ?? null;
     const msg = ot.tx(() => {
       const conv = memberOf(ot, params(req).id, me.ownerId);
+      if (clientKey) {
+        const previous = ot.get<any>(
+          "SELECT * FROM ot_messages WHERE conversation_id=? AND author_id=? AND client_key=?", conv.id, me.ownerId, clientKey,
+        );
+        if (previous) return previous;
+      }
       if (b.reply_to) assert(ot.get("SELECT 1 FROM ot_messages WHERE id = ? AND conversation_id = ?", String(b.reply_to), conv.id), 400, "invalid_request", "reply_to is not in this conversation");
       const parsed = parseMentions(ot, conv.id, b.mentions, bodyText, b.agent_mentions);
       const mentions = parsed.mentions;
       const m = insertMessage(ot, conv, { author: me.ownerId, kind: "member", body: parsed.body, mentions, replyTo: b.reply_to ? String(b.reply_to) : null, clientKey });
+      if (voice) ot.run("INSERT INTO ot_voice_messages VALUES (?,?,?)", m.id, voice.mime, voice.data);
       for (const h of mentions) {
         const row = ot.get<any>("SELECT owner_id FROM ot_profiles WHERE handle = ?", h);
         if (row && row.owner_id !== me.ownerId) ot.notify(row.owner_id, "messenger.mention", { conversation_id: conv.id, message_id: m.id, by: ot.profileView(me.ownerId) });
@@ -282,6 +312,15 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       return m;
     });
     return reply.status(201).send(messageView(ot, msg, me.ownerId));
+  });
+  app.get("/v1/ot/conversations/:id/messages/:message/voice", async req => {
+    const me = ot.me(req);
+    const conv = memberOf(ot, params(req).id, me.ownerId);
+    const voice = ot.get<{mime: string; data: Buffer}>(`SELECT v.mime,v.data FROM ot_voice_messages v
+      JOIN ot_messages m ON m.id=v.message_id WHERE m.id=? AND m.conversation_id=? AND m.retracted=0`,
+    params(req).message, conv.id);
+    assert(voice, 404, "message_not_found", "Voice message not found");
+    return {mime: voice.mime, data: voice.data.toString("base64")};
   });
   app.post("/v1/ot/conversations/:id/read", async (req) => {
     const me = ot.me(req);
@@ -378,6 +417,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const rows = ot.all<any>(`WITH pending AS (
       SELECT m.* FROM ot_messages m
       WHERE m.rowseq > ? AND m.author_kind = 'member' AND m.retracted = 0
+        AND NOT EXISTS (SELECT 1 FROM ot_voice_messages v WHERE v.message_id=m.id)
         AND EXISTS (SELECT 1 FROM ot_conversation_members cm WHERE cm.conversation_id=m.conversation_id AND cm.owner_id=?)
         AND EXISTS (SELECT 1 FROM ot_conversation_agents ca WHERE ca.conversation_id=m.conversation_id AND ca.owner_id=?)
       ORDER BY m.rowseq LIMIT ?

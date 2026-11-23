@@ -151,3 +151,26 @@ test("explicit mentions address the selected owner, even when agents share IDs a
   assert.deepEqual(page.items.map((entry: any) => entry.agent_ref).sort(), ["second","shared"]);
   assert.deepEqual((await B.ok("GET", `/v1/ot/agent-inbox?after=${page.cursor}`)).items, []);
 });
+
+test("voice messages are idempotent and only current conversation members can play them", async () => {
+  const A = await home(S.base,"voice-a");
+  const B = await home(S.base,"voice-b");
+  const C = await home(S.base,"voice-c");
+  await teamOf(A,B,C);
+  const group = await A.ok("POST","/v1/ot/conversations",{kind:"group",title:"Voice",members:[B.handle]});
+  const root = `/v1/ot/conversations/${group.id}/messages`;
+  const voice = {mime:"audio/webm",data:Buffer.from([0x1a,0x45,0xdf,0xa3,...Array(8).fill(0)]).toString("base64")};
+  assert.equal((await A.call("POST",root,{voice:{...voice,mime:"text/html"}})).status,400);
+  const request = {voice,client_key:"voice-retry"};
+  const sent = await A.ok("POST",root,request);
+  assert.equal(sent.body,"语音消息");
+  assert.deepEqual(sent.voice,{mime:voice.mime});
+  assert.equal((await A.ok("POST",root,request)).id,sent.id);
+  assert.equal((await B.ok("GET",root)).messages.length,1);
+  const audioPath = root + "/" + sent.id + "/voice";
+  assert.deepEqual(await B.ok("GET",audioPath),voice);
+  assert.equal((await C.call("GET",audioPath)).status,404);
+  await A.ok("DELETE",`/v1/ot/messages/${sent.id}`);
+  assert.equal((await B.call("GET",audioPath)).status,404);
+  assert.equal((await B.ok("GET",root)).messages[0].voice,undefined);
+});
