@@ -176,7 +176,61 @@ async function request(method, path, body) {
   return {status: response.status, body: payload};
 }
 
-function iconNode() {
+// Original icons for OpenTeamily's own catalog. They follow the recorded
+// Teamily guide placements (category chip, group title, row) and meanings,
+// without copying Teamily artwork or its 295-item catalog.
+export const CATEGORY_ICON_PATHS = {
+  all: 'M4 4h7v7H4V4zm9 0h7v7h-7V4zM4 13h7v7H4v-7zm9 0h7v7h-7v-7z',
+  chat: 'M4 4h16v11H8.8L4 19.2V4zm2 2v9.2l2.1-1.7H18V6H6z',
+  agents: 'M11 2h2v3h-2V2zM7 6h10v9H7V6zm2.2 2.3h2v2h-2v-2zm5.6 0h2v2h-2v-2zM8 16.2h8V20H8v-3.8zM4.5 8.5h2v5h-2v-5zm13 0h2v5h-2v-5z',
+  discover: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm4.1 5.7-2.1 6.3-6.3 2.1 2.1-6.3 6.3-2.1z',
+  automations: 'M13.2 2 5.5 13.2h5.2L9.3 22 18.5 9.6h-5.3L13.2 2z',
+  memory: 'M6 3h11a2 2 0 0 1 2 2v16l-7.5-2.4L4 21V5a2 2 0 0 1 2-2zm1.5 3v11.3l4.5-1.4 4.5 1.4V6H7.5z',
+  artifacts: 'M12 3 21 8.2 12 13.4 3 8.2 12 3zm-8 8.6 8 4.7 8-4.7 2 1.2-10 5.8L2 12.8l2-1.2zm0 4.2 8 4.7 8-4.7 2 1.2-10 5.8L2 17l2-1.2z',
+  me: 'M12 3a4.2 4.2 0 1 1 0 8.4A4.2 4.2 0 0 1 12 3zM4 21v-2.4A7.8 7.8 0 0 1 12 11a7.8 7.8 0 0 1 8 7.6V21H4z',
+  settings: 'M11 2h2v3.2l2.2 1.3 2.7-1.6 1.6 2.8-2.2 1.7.1 2.6 2.1 1.7-1.6 2.8-2.7-1.6-2.2 1.3V22h-2v-3.2l-2.2-1.3-2.7 1.6-1.6-2.8 2.2-1.7-.1-2.6-2.1-1.7 1.6-2.8 2.7 1.6L11 5.2V2zm1 7a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
+  'account-menu': 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM8.5 9.2a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2zm7 0a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2zM8 15.2a5.2 5.2 0 0 0 8 0l-1.5-1.2a3.2 3.2 0 0 1-5 0L8 15.2z',
+  calls: 'M7.2 3.2c.8-.8 2.1-.8 2.9 0l1.8 1.8c.8.8.8 2.1 0 2.9l-1.3 1.3a11 11 0 0 0 4.2 4.2l1.3-1.3c.8-.8 2.1-.8 2.9 0l1.8 1.8c.8.8.8 2.1 0 2.9l-1.4 1.4c-.9.9-2.3 1.1-3.6.6C9.8 17.8 6.2 14.2 5 8.2c-.5-1.3-.3-2.7.6-3.6L7.2 3.2z',
+  other: 'M8.2 4 2 12l6.2 8 1.6-1.2L5 12l4.8-6.8L8.2 4zm7.6 0-1.6 1.2L19 12l-4.8 6.8 1.6 1.2L22 12 15.8 4z',
+};
+
+export const ITEM_ICON_PATHS = {
+  'open-chat': 'M3 5h16v10.5H8.2L3 19.4V5zm2 2v8.1l1.8-1.4H17V7H5z',
+  'conversation-search': 'M10 3a7 7 0 1 1 0 14 7 7 0 0 1 0-14zm0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm8.3 13.3-3.4-3.4 1.4-1.4 3.4 3.4-1.4 1.4z',
+  'send-shortcut': 'M5 4h12v2H7v5.2h7.3l-1.8-1.8 1.4-1.4 4.2 4.2-4.2 4.2-1.4-1.4 1.8-1.8H5V4z',
+  'chat-previews': 'M4 5h16v2.2H4V5zm0 5.9h16V13H4v-2.1zm0 5.9h11V19H4v-2.2z',
+  'open-agents': 'M10.8 2.2h2.4v2.4h-2.4V2.2zM6.5 6h11v8.5h-11V6zm2.3 2.4h2.2v2.2H8.8V8.4zm5.2 0h2.2v2.2h-2.2V8.4zM8 15.8h8V20H8v-4.2zM3.8 8.6h2.2v5H3.8v-5zm14.2 0h2.2v5h-2.2v-5z',
+  'agent-homepage': 'M12 3.2 21 11h-2.4v9h-5.2v-6.2H10.6V20H5.4v-9H3L12 3.2z',
+  'discover-feed': 'M4 4.5h16v4.2H4V4.5zm0 5.4h16v4.2H4V9.9zm0 5.4h16v4.2H4v-4.2z',
+  'discover-catalog': 'M3.5 3.5h7.5v7.5H3.5V3.5zm9.5 0h7.5v7.5H13V3.5zM3.5 13h7.5v7.5H3.5V13zM13 13h7.5v7.5H13V13z',
+  'open-automations': 'M13 2.2 6.2 13h4.8l-1.2 8.8 7.6-11.6h-4.7L13 2.2z',
+  'memory-overview': 'M6.2 6.2a2.8 2.8 0 1 1 0 5.6 2.8 2.8 0 0 1 0-5.6zm11.6 0a2.8 2.8 0 1 1 0 5.6 2.8 2.8 0 0 1 0-5.6zM12 14.2a2.8 2.8 0 1 1 0 5.6 2.8 2.8 0 0 1 0-5.6zM8.4 10.6l2.2 3.8 1.7-1-2.2-3.8-1.7 1zm7.2 0-2.2 3.8 1.7 1 2.2-3.8-1.7-1z',
+  'memory-profile': 'M6 3.2h12v17.6H6V3.2zm6 2.4a3 3 0 1 1 0 6 3 3 0 0 1 0-6zM8.4 17.6v-1.2A3.6 3.6 0 0 1 12 13a3.6 3.6 0 0 1 3.6 3.4v1.2H8.4z',
+  'memory-actions': 'M4 5h16v2.2H4V5zm0 6h11v2.2H4V11zm0 6h16v2.2H4V17zm13.2-7.2 1.4-1.4 2.6 2.6-4.4 4.4-2.6-2.6 1.4-1.4.12.12 1.48-1.48z',
+  'memory-dir-collapse': 'M3.5 3.5h7v17h-7v-17zm9 0h8v2.2h-8V3.5zm0 5.2h8v2.2h-8V8.7zm0 5.2h8v2.2h-8v-2.2z',
+  'space-library': 'M4 6.2 12 3l8 3.2v2.2L12 5.2 4 8.4V6.2zm0 4.2 8-3.2 8 3.2V18l-8 3.2L4 18v-7.6z',
+  'space-filters': 'M3.2 4h17.6l-6.4 7.4V20l-4.8 2v-10.6L3.2 4z',
+  'space-dir-collapse': 'M13.5 3.5h7v17h-7v-17zM3.5 3.5h8v2.2h-8V3.5zm0 5.2h8v2.2h-8V8.7zm0 5.2h8v2.2h-8v-2.2z',
+  'open-profile': 'M12 3a4.4 4.4 0 1 1 0 8.8A4.4 4.4 0 0 1 12 3zM3.8 21v-2.2A8 8 0 0 1 12 11a8 8 0 0 1 8.2 7.8V21H3.8z',
+  'settings-hub': 'M4 6h16v2.2H4V6zm0 5h16v2.2H4V11zm0 5h16v2.2H4v-2.2zM8 5.2a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2zm8 5a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2zm-6 5a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2z',
+  'settings-appearance': 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 2v14a7 7 0 0 0 0-14z',
+  'settings-language': 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-1.2 2.2v15.5A8 8 0 0 1 6.2 12a8 8 0 0 1 4.6-7.8zm2.4 0A8 8 0 0 1 17.8 12a8 8 0 0 1-4.6 7.7V4.2z',
+  'settings-folding': 'M6 3h8l4 4v14H6V3zm8 0v4h4',
+  'settings-privacy': 'M8 10V8a4 4 0 1 1 8 0v2h1.5A1.5 1.5 0 0 1 19 11.5v8A1.5 1.5 0 0 1 17.5 21h-11A1.5 1.5 0 0 1 5 19.5v-8A1.5 1.5 0 0 1 6.5 10H8zm2 0h4V8a2 2 0 1 0-4 0v2z',
+  'settings-runtimes': 'M3 5h18v12H3V5zm2 2v8h14V7H5zm3 13h8v2H8v-2z',
+  'account-menu': 'M12 3a4 4 0 1 1 0 8 4 4 0 0 1 0-8zM5 20.2V18A7 7 0 0 1 12 11a7 7 0 0 1 7 7v2.2H5z',
+  'create-team': 'M8.2 4.2a3.2 3.2 0 1 1 0 6.4 3.2 3.2 0 0 1 0-6.4zm8.2 1a2.8 2.8 0 1 1 0 5.6 2.8 2.8 0 0 1 0-5.6zM2.8 20v-1.8A5.6 5.6 0 0 1 8.2 12.6 5.6 5.6 0 0 1 13.6 18.2V20H2.8zm9.8 0v-1.6a6.8 6.8 0 0 1 2.2-4.9 5 5 0 0 1 5.4 4.8V20h-7.6z',
+  'download-runtime': 'M11 3h2v10.2h3.2L12 19l-4.2-5.8H11V3zM4 19.2h16V21H4v-1.8z',
+};
+
+export function guideIconPath(kind, id) {
+  const table = kind === 'category' ? CATEGORY_ICON_PATHS : ITEM_ICON_PATHS;
+  const path = table[id];
+  if (!path) throw new Error(`missing ${kind} guide icon for ${id}`);
+  return path;
+}
+
+function iconNode(kind, id) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
   svg.setAttribute('width', '16');
@@ -184,7 +238,7 @@ function iconNode() {
   svg.setAttribute('aria-hidden', 'true');
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
   path.setAttribute('fill', 'currentColor');
-  path.setAttribute('d', 'M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18zm0 2a7 7 0 1 0 0 14 7 7 0 0 0 0-14zm-1 3h2v5h-2V8zm0 6h2v2h-2v-2z');
+  path.setAttribute('d', guideIconPath(kind, id));
   svg.append(path);
   return svg;
 }
@@ -264,7 +318,7 @@ function mount() {
       if (category.id === currentCategory) button.setAttribute('aria-current', 'true');
       const icon = document.createElement('span');
       icon.className = 'cat-icon';
-      icon.append(iconNode());
+      icon.append(iconNode('category', category.id));
       const label = document.createElement('span');
       label.className = 'cat-label';
       label.textContent = category.label;
@@ -299,7 +353,12 @@ function mount() {
       section.className = 'guide-group';
       const heading = document.createElement('h2');
       heading.className = 'guide-group-title';
-      heading.textContent = group.label;
+      const headingIcon = document.createElement('span');
+      headingIcon.className = 'cat-icon';
+      headingIcon.append(iconNode('category', group.id));
+      const headingLabel = document.createElement('span');
+      headingLabel.textContent = group.label;
+      heading.append(headingIcon, headingLabel);
       section.append(heading);
       for (const item of group.items) {
         const button = document.createElement('button');
@@ -309,7 +368,7 @@ function mount() {
         if (item.id === currentItemId) button.setAttribute('aria-current', 'true');
         const icon = document.createElement('span');
         icon.className = 'item-icon';
-        icon.append(iconNode());
+        icon.append(iconNode('item', item.id));
         const title = document.createElement('span');
         fillHighlighted(title, item.title, query);
         button.append(icon, title);
