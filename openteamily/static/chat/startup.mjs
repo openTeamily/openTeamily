@@ -68,7 +68,14 @@ if (view?.document.querySelector('meta[name="openteamily-instance"]')) {
     }
   };
   const openingPublicAgent = new URLSearchParams(hash.replace(/^#/, '')).has('public-agent');
-  early = {document: view.document, href, ...startChatReads(read, chatStartFromHash(hash), !openingPublicAgent)};
+  const target = chatStartFromHash(hash);
+  const reads = startChatReads(read, target, !openingPublicAgent);
+  // The current runtime authenticates this directory independently of the UI.
+  // Opening a saved workspace conversation still waits for both results.
+  const sharedRequest = !openingPublicAgent && /^[0-9a-f]{32}$/.test(target.workspace)
+    && (target.social || (target.agent && target.conversation))
+    ? read('/v1/workspaces?limit=100', AbortSignal.timeout(4000)) : null;
+  early = {document: view.document, href, ...reads, sharedRequest};
 }
 
 export function takeChatReads(document) {

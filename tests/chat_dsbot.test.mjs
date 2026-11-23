@@ -52,8 +52,8 @@ test('native Chat starts scoped reads without the browser transport or optional 
   try {
     const {takeChatReads} = await import('../openteamily/static/chat/startup.mjs?test-direct-early-read');
     assert.equal(calls[0].path, '/v1/auth/session');
-    const [first, second] = calls;
-    assert.equal(calls.length, 2);
+    const [first, second, third] = calls;
+    assert.equal(calls.length, 3);
     assert.equal(first.init.credentials, 'same-origin');
     const {pathname, searchParams} = new URL(second.path, location.href);
     assert.equal(pathname, '/v1/workspaces');
@@ -62,8 +62,12 @@ test('native Chat starts scoped reads without the browser transport or optional 
     });
     assert.equal(second.init.credentials, 'same-origin');
     assert.ok(second.init.signal instanceof AbortSignal);
+    assert.equal(third.path, '/v1/workspaces?limit=100');
+    assert.equal(third.init.credentials, 'same-origin');
+    assert.ok(third.init.signal instanceof AbortSignal);
     const early = takeChatReads(document);
     assert.equal((await early.localRequest).status, 200);
+    assert.equal((await early.sharedRequest).status, 200);
     assert.equal(takeChatReads(document), null);
 
     calls.length = 0;

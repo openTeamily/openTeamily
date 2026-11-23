@@ -1642,6 +1642,26 @@ function linkFixture(respond, search = linkedSearch, {native = false} = {}) {
   return {...page, view, calls, mounted: mount(page.doc, {fetcher})};
 }
 
+test('Space overlaps the linked workspace directory with sign-in before requesting its artifact', async () => {
+  const session = deferred();
+  const teams = deferred();
+  const page = linkFixture(path => {
+    if (path === '/v1/auth/session') return session.promise;
+    if (path === '/v1/workspaces?limit=100') return teams.promise;
+    if (path === linkedCatalog + '?order=recent') return reply({body: {items: [linkedRecord]}});
+  }, linkedSearch, {native:true});
+  await nextTask();
+  assert.ok(page.calls.some(call => call.path === '/v1/workspaces?limit=100'));
+  assert.equal(page.calls.some(call => call.path === linkedDetail), false);
+  teams.finish(reply({body: {items: [{id: linkedWorkspace, name: '团队空间'}]}}));
+  await nextTask();
+  assert.equal(page.calls.some(call => call.path === linkedDetail), false);
+  session.finish(reply({body: {user: {id:'u1', username:'alice'}}}));
+  await page.mounted;
+  assert.equal(page.form.hidden, false);
+  assert.equal(page.calls.filter(call => call.path === linkedDetail).length, 1);
+});
+
 test('Space keeps the selected workspace in its catalog address and reloads the intended catalog', async () => {
   const personal = 'c'.repeat(32);
   const respond = path => {

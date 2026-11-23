@@ -3589,6 +3589,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const newKind = newKindFromSearch(location?.search);
     const linkedWorkspace = linkedStudio?.workspace || requested?.workspace || workspaceFromFragment(location?.hash);
     const sessionRequest = request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
+    const sharedPath = '/v1/workspaces?limit=100';
+    const namedStudio = nativeCatalog && linkedStudio?.workspace;
+    const studioDirectory = namedStudio ? request('GET', sharedPath)
+      .catch(() => ({status: 0, body: {}})).then(initial => ({initial, supplemental: null})) : null;
+    // A saved link can check its workspace while the session is loading.
+    // The exact artifact still waits for the verified selection.
+    const linkedDirectory = studioDirectory ||
+      (nativeCatalog && requested?.artifact ? readWorkspaceChoices(request, sharedPath) : null);
     const studioCode = nativeCatalog && linkedStudio?.workspace ? studio.prepare().then(() => true, () => false) : null;
     const sharedCopyCode = sharedWork ? sharedWorkCopy.prepare().then(() => true, () => false) : null;
     const initialCatalog = nativeCatalog && catalogKind !== 'meetings' && !newKind &&
@@ -3627,7 +3635,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     whoami.textContent = currentUser.username;
     // The native Studio GET checks team membership itself. Start it alongside
     // the workspace directory, and use it only for the verified selected team.
-    const namedStudio = nativeCatalog && linkedStudio?.workspace;
     const prepared = namedStudio ? preloadStudio(studioRequest, namedStudio, linkedStudio.id, currentUser.id) : null;
     if (prepared) studioPreload = prepared;
     const personalRequest = initialCatalog?.then(result => {
@@ -3639,10 +3646,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
           (viewer && viewer !== session.body.user.username)) return null;
       return result;
     });
-    const sharedPath = '/v1/workspaces?limit=100';
-    let {initial: space, supplemental} = namedStudio
-      ? {initial:await request('GET', sharedPath).catch(() => ({status:0, body:{}})), supplemental:null}
-      : await readWorkspaceChoices(request, sharedPath, personalRequest);
+    let {initial: space, supplemental} = await (linkedDirectory || readWorkspaceChoices(request, sharedPath, personalRequest));
     if (linkedWorkspace && !space.body.items?.some(item => item.id === linkedWorkspace) && supplemental) {
       const shared = await supplemental;
       if (shared.status === 200) space = shared;

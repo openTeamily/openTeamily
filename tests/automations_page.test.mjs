@@ -521,7 +521,11 @@ test('a native result link reads the item early and opens only once its workspac
   }});
   try {
     await flush();
-    assert.deepEqual(calls, [['GET','/v1/auth/session']]);
+    assert.deepEqual(calls, [
+      ['GET','/v1/auth/session'],
+      ['GET','/v1/workspaces?limit=100'],
+      ['GET','/v1/workspaces?scope=personal'],
+    ]);
     session.resolve(respond({user:{id:projectedOwner, username:'alice'}}));
     await flush();
     assert.ok(calls.some(([,path]) => path === exactPath));

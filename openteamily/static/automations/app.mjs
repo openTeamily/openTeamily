@@ -2183,6 +2183,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     workspaceStatus.textContent = '';
     if (linkRetry) linkRetry.hidden = true;
     const sessionRequest = request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
+    const sharedPath = '/v1/workspaces?limit=100';
+    const linkedDirectory = native && /^[0-9a-f]{32}$/.test(wantedWorkspace || '')
+      ? readWorkspaceChoices(request, sharedPath) : null;
     const initialCatalogue = native && !target && !hasWorkspace && !wantedTemplate && category === 'mine' && !search.value.trim()
       ? request('GET', '/v1/workspaces?scope=personal&include=automations').catch(() => null) : null;
     const session = await sessionRequest;
@@ -2223,7 +2226,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const catalog = wantedTemplate ? loadTemplates(seq) : null;
     const linked = native && target?.automation ? readLinkedAutomation(target) : null;
     const personalRequest = initialCatalogue?.then(result => ownedPersonalCatalogue(result, session.body.user));
-    let {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100', personalRequest);
+    let {initial: space, supplemental} = await (linkedDirectory || readWorkspaceChoices(request, sharedPath, personalRequest));
     if (wantedWorkspace && !space.body?.items?.some(item => item.id === wantedWorkspace) && supplemental) {
       const shared = await supplemental;
       if (shared.status === 200) space = shared;

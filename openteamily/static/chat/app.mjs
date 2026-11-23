@@ -7559,7 +7559,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const loadCurrent = () => sequence === loadRequest && location.hash === hash && location.pathname === pathname;
     const bootCurrent = () => loadCurrent() && socialOpen === navigation;
     const read = (path, signal) => request('GET', path, undefined, undefined, signal).catch(() => ({status: 0, body: {}}));
-    const {sessionRequest, localRequest} = takeChatReads(document)
+    const {sessionRequest, localRequest, sharedRequest: preparedDirectory} = takeChatReads(document)
       || startChatReads(read, start, servedByDsbot && !publicIntent);
     const session = await sessionRequest;
     if (!bootCurrent()) return;
@@ -7637,7 +7637,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('whoami').textContent = currentUser.username;
     if (!sessions.length) setSessionsStatus('正在加载对话…');
     const listWorkspaces = () => read('/v1/workspaces?limit=100');
-    const sharedRequest = servedByDsbot ? listWorkspaces() : null;
+    const sharedRequest = servedByDsbot
+      ? preparedDirectory?.then(result => result.status === 200 && Array.isArray(result.body?.items)
+        ? result : listWorkspaces()) || listWorkspaces()
+      : null;
     const localReady = Promise.resolve(localRequest).then(result => ownedChatStartup(result, owner));
     let personalRequest;
     const readPersonal = () => personalRequest ??= read('/v1/workspaces?scope=personal&include=personal-agent').then(result => {
