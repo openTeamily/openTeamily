@@ -98,7 +98,7 @@ function conversationItem(row, me, env, workspaceId) {
     pinned: !!row.pinned,
     first_unread_seq: row.unread > 0 ? (row.read_seq || 0) + 1 : null,
     members,
-    agent_members: (row.agents || []).map((a) => ({ id: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply })),
+    agent_members: (row.agents || []).map((a) => ({ id: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply, mine: a.mine === true })),
   }
 }
 
@@ -718,6 +718,17 @@ function messengerExtraRoutes(host) {
             await bs.put(`${conv(match[2])}/agents/${seg(agent.id, 'agent_ref')}`, { name: String(agent.name).slice(0, 40), auto_reply: false })
           }
           return [201, { added: ids.length }]
+        })
+      },
+    },
+    {
+      method: 'POST', path: re('\\/agents\\/([A-Za-z0-9._-]{1,80})\\/auto-reply'),
+      async handle({ match, body }) {
+        return wrap(async () => {
+          if (typeof body?.auto_reply !== 'boolean') throw new Fault(400, 'invalid', 'Provide auto_reply as a boolean')
+          const bs = client(host); await guard(bs, match[1])
+          const result = await bs.patch(`${conv(match[2])}/agents/${seg(match[3], 'agent_ref')}`, { auto_reply: body.auto_reply })
+          return [200, { auto_reply: result.auto_reply }]
         })
       },
     },

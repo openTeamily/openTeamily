@@ -251,6 +251,7 @@ class FakeElement {
       this.children.push(node);
     }
   }
+  appendChild(node) { this.append(node); return node; }
   replaceChildren(...nodes) {
     for (const child of this.children) child.parent = null;
     this.children = [];
@@ -1369,8 +1370,47 @@ test('group info panel counts members and agents honestly and picks a readable g
   assert.equal(leadGlyph('产品群'), '产');
   assert.equal(leadGlyph('---', '群'), '群');
   const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
-  for (const label of ['视频通话', '语音通话', 'Agent 主动性', '自动翻译', '消息免打扰']) assert.ok(html.includes(label));
+  for (const label of ['视频通话', '语音通话', '自动回复', '自动翻译', '消息免打扰']) assert.ok(html.includes(label));
   assert.match(html, /aria-label="自动翻译（未接通）"/);
+});
+
+test('group members can change automatic replies for their own agent only', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  const members = [
+    {id: 'own', name: '助手', mine: true, auto_reply: false},
+    {id: 'other', name: '同事的助手', mine: false, auto_reply: true},
+  ];
+  const updates = [];
+  let failNext = false;
+  try {
+    await mount(doc, {fetcher: async (path, init) => {
+      if (path.endsWith('/agents/own/auto-reply')) {
+        const data = JSON.parse(init.body);
+        updates.push(data);
+        return json(failNext ? 503 : 200, data);
+      }
+      const result = await original(path);
+      const body = await result.json();
+      if (path.endsWith('/conv-1')) return json(200, {
+        ...body, conversation: {...body.conversation, kind: 'group', agent_members: members},
+      });
+      return json(result.status, body);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    const [own, other] = el('group-info-agents').children;
+    assert.equal(other.children.some(child => child.tagName === 'BUTTON'), false);
+    const toggle = own.children.find(child => child.tagName === 'BUTTON');
+    assert.equal(toggle.getAttribute('aria-checked'), 'false');
+    await fire(toggle, 'click');
+    assert.deepEqual(updates, [{auto_reply: true}]);
+    assert.equal(toggle.getAttribute('aria-checked'), 'true');
+    failNext = true;
+    await fire(toggle, 'click');
+    assert.equal(toggle.getAttribute('aria-checked'), 'true');
+    assert.match(el('group-agent-auto-reply-status').textContent, /保存失败/);
+  } finally { restore(); }
 });
 
 test('in-chat search highlights every case-insensitive match without HTML', async () => {

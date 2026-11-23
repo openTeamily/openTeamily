@@ -315,7 +315,7 @@ export function groupInfoCounts(conversation) {
 export function groupAgentSummary(conversation) {
   const list = conversation && conversation.agent_members || [];
   return list.length ? '群内智能体：' + list.map(agent => agent.name).join('、')
-    + '。可明确请求一次回复。未接通：群内自动回复、@Agent 和任务委派。' : '';
+    + '。可明确请求一次回复，或在群信息中为自己的智能体开启自动回复。' : '';
 }
 
 // Personal-runtime states from server-side auto-provisioning (operator opt-in).
@@ -1642,7 +1642,62 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     agentsTab.setAttribute('aria-selected', String(which === 'agents'));
     peopleTab.setAttribute('aria-selected', String(which === 'people'));
     document.getElementById('group-info-agents').hidden = which !== 'agents';
+    const autoNote = document.getElementById('group-agent-auto-reply-note');
+    if (autoNote) autoNote.hidden = which !== 'agents';
     document.getElementById('group-info-people').hidden = which !== 'people';
+  }
+
+  const pendingAutoReplies = new Set();
+
+  function renderGroupAgent(conversation, agent) {
+    const mode = agent.auto_reply ? '自动回复已开启' : '自动回复已关闭';
+    const row = memberRow(agent.name, agent.archived ? '已归档' : mode, 'agent');
+    if (!agent.mine || agent.archived) return row;
+    const wid = workspaceId();
+    const key = `${wid}/${conversation.id}/${agent.id}`;
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'group-info-switch';
+    toggle.setAttribute('role', 'switch');
+    toggle.setAttribute('aria-label', `${agent.name}的自动回复`);
+    toggle.setAttribute('aria-checked', String(Boolean(agent.auto_reply)));
+    toggle.setAttribute('aria-describedby', 'group-agent-auto-reply-note');
+    toggle.disabled = pendingAutoReplies.has(key);
+    toggle.addEventListener('click', async () => {
+      if (workspaceId() !== wid || currentConversation?.id !== conversation.id || pendingAutoReplies.has(key)) return;
+      const notice = document.getElementById('group-agent-auto-reply-status');
+      const activeConversation = currentConversation;
+      const enabled = toggle.getAttribute('aria-checked') !== 'true';
+      pendingAutoReplies.add(key);
+      toggle.disabled = true;
+      if (notice) notice.hidden = true;
+      try {
+        const path = `/v1/workspaces/${wid}/social/conversations/${conversation.id}/agents/${encodeURIComponent(agent.id)}/auto-reply`;
+        const result = await request('POST', path, {auto_reply: enabled});
+        if (workspaceId() !== wid || currentConversation?.id !== conversation.id) return;
+        if (result.status !== 200 || result.body.auto_reply !== enabled) throw new Error('Automatic replies were not updated');
+        const currentAgent = currentConversation.agent_members?.find(item => item.id === agent.id && item.mine);
+        if (currentAgent) currentAgent.auto_reply = enabled;
+        if (currentConversation === activeConversation && currentAgent === agent) {
+          toggle.setAttribute('aria-checked', String(enabled));
+          const description = row.children[1]?.children[1];
+          if (description) description.textContent = enabled ? '自动回复已开启' : '自动回复已关闭';
+        }
+      } catch {
+        if (notice && workspaceId() === wid && currentConversation?.id === conversation.id) {
+          notice.textContent = '自动回复设置保存失败，请重试。';
+          notice.hidden = false;
+        }
+      } finally {
+        pendingAutoReplies.delete(key);
+        toggle.disabled = false;
+        if (workspaceId() === wid && currentConversation?.id === conversation.id && currentConversation !== activeConversation) {
+          setGroupInfo(currentConversation);
+        }
+      }
+    });
+    row.append(toggle);
+    return row;
   }
 
   function setGroupInfo(conversation) {
@@ -1664,8 +1719,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('group-info-tab-agents').textContent = `智能体 (${counts.agents})`;
     document.getElementById('group-info-tab-people').textContent = `成员 (${counts.people})`;
     const agentList = document.getElementById('group-info-agents');
-    agentList.replaceChildren(...(conversation.agent_members || []).map(agent =>
-      memberRow(agent.name, agent.archived ? '已归档' : '可明确请求一次回复', 'agent')));
+    agentList.replaceChildren(...(conversation.agent_members || []).map(agent => renderGroupAgent(conversation, agent)));
     if (!agentList.children.length) agentList.append(memberRow('还没有智能体', '创建群聊时可以加入工作区智能体', 'empty'));
     const peopleList = document.getElementById('group-info-people');
     peopleList.replaceChildren(...(conversation.members || []).map(member =>
@@ -1718,6 +1772,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (!currentConversation || currentConversation.id !== result.body.conversation.id) {
+      const autoReplyNotice = document.getElementById('group-agent-auto-reply-status');
+      if (autoReplyNotice) autoReplyNotice.hidden = true;
       const panel = document.getElementById('conversation-search-panel'); if (panel) panel.hidden = true;
       const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
     }

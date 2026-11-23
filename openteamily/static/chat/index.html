@@ -230,7 +230,6 @@
         <button type="button" class="group-info-row" disabled title="未接通：还没有语音通话">语音通话<span class="group-info-tag">未接通</span></button>
       </section>
       <section class="group-info-card group-info-list" aria-label="群设置">
-        <div class="group-info-toggle-row"><span><strong>Agent 主动性</strong><small>未接通：群内自动回复尚未实现，只能明确请求一次回复。</small></span><button type="button" role="switch" aria-checked="false" disabled class="group-info-switch" aria-label="Agent 主动性（未接通）"></button></div>
         <div class="group-info-toggle-row"><span><strong>自动翻译</strong><small>未接通：没有翻译服务。</small></span><button type="button" role="switch" aria-checked="false" disabled class="group-info-switch" aria-label="自动翻译（未接通）"></button></div>
         <div class="group-info-toggle-row"><span><strong>消息免打扰</strong><small>保留未读消息，静音此会话。</small></span><button type="button" id="group-info-mute" role="switch" aria-checked="false" class="group-info-switch" aria-label="消息免打扰"></button></div>
         <div class="group-info-toggle-row"><span><strong>置顶聊天</strong></span><button type="button" role="switch" aria-checked="false" id="group-info-pin" class="group-info-switch" aria-label="置顶聊天"></button></div>
@@ -240,6 +239,8 @@
           <button type="button" role="tab" id="group-info-tab-agents" aria-selected="true" aria-controls="group-info-agents"></button>
           <button type="button" role="tab" id="group-info-tab-people" aria-selected="false" aria-controls="group-info-people"></button>
         </div>
+        <p id="group-agent-auto-reply-note" class="note">可为自己的智能体开启自动回复。新群消息可能触发回复，每个群每小时最多自动回复 3 次。</p>
+        <p id="group-agent-auto-reply-status" class="note" role="status" hidden></p>
         <ul id="group-info-agents" class="group-info-members" role="tabpanel" aria-labelledby="group-info-tab-agents"></ul>
         <ul id="group-info-people" class="group-info-members" role="tabpanel" aria-labelledby="group-info-tab-people" hidden></ul>
       </section>

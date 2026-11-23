@@ -2,6 +2,7 @@
 // Bot Social hands over only the messages addressed to this user's agents (agent inbox: @mentions,
 // or every member message where auto-reply is on); the reply is one native DS-Bot turn here and is
 // posted back as the agent. Bot Social enforces the 3-per-hour cap on automatic replies (#346).
+import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -50,6 +51,8 @@ export function createAgentReplier({ bs, host, stateFile, log = () => {} }) {
       let replied = 0
       for (const item of inbox.items ?? []) {
         const id = item.message?.id
+        if (!id || !item.agent_ref) continue
+        const replyKey = `r:${createHash('sha256').update(JSON.stringify([id, item.agent_ref])).digest('hex')}`
         let text
         try {
           const turn = await host.call('agents/turn', { agent_id: item.agent_ref, key: `social:${item.conversation_id}`, text: replyPrompt(item), request_id: `ots:${id}:${item.agent_ref}` })
@@ -58,11 +61,11 @@ export function createAgentReplier({ bs, host, stateFile, log = () => {} }) {
         if (!text) continue
         try {
           await bs.post(`/v1/ot/conversations/${encodeURIComponent(item.conversation_id)}/agent-messages`, {
-            agent_ref: item.agent_ref, body: text.slice(0, 4000), reply_to: id, mode: item.mode, client_key: `r:${id}`.slice(0, 80),
+            agent_ref: item.agent_ref, body: text.slice(0, 4000), reply_to: id, mode: item.mode, client_key: replyKey,
           })
           replied++
         } catch (error) {
-          if (error?.code !== 'social/agent_reply_limit') log(`agent reply not posted: ${error?.code ?? 'error'}`)
+          if (!['social/agent_reply_limit', 'social/auto_reply_disabled'].includes(error?.code)) log(`agent reply not posted: ${error?.code ?? 'error'}`)
         }
       }
       if (typeof inbox.cursor === 'number' && inbox.cursor > after) writeCursor(inbox.cursor)
