@@ -68,6 +68,10 @@ its own WSGI service and HTTPS gateway configuration.
    runtime and data volume, and send a message in each account. Verify the
    persisted history after restart.
 
+With automatic Compose provisioning enabled, workspace instance requests use
+the same account limit and manager assignment as signup. An existing account
+runtime is returned across workspaces where the caller can operate instances.
+
 Changing the image for **existing** account volumes is a separate operator
 rollout. Record the current image digest, take consistent volume snapshots,
 and verify health, routing and private-chat continuity on staged upgrades.

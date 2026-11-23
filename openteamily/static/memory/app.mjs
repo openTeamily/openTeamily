@@ -2298,8 +2298,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     showPage(page, revision);
     if (citation) setCitationStatus('');
     if (revision && revision !== page.revision && historyPanel) {
+      const listing = openPageHistory({focus:false});
       const preview = historyPreviewToken;
-      await openPageHistory();
+      await listing;
       if (seq === workspaceRequest && token === pageRequest && currentPage?.id === pageId
           && !historyPanel.hidden && preview === historyPreviewToken) await previewPageVersion(revision);
     }
@@ -2378,15 +2379,36 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   const historyPanel = document.getElementById('page-history');
   const historyOpen = document.getElementById('page-history-open');
+  const historyTitle = document.getElementById('page-history-title');
+  const historyBrowse = document.getElementById('page-history-browse');
+  const historyList = document.getElementById('page-history-list');
+  const historyMore = document.getElementById('page-history-more');
+  const historyRetry = document.getElementById('page-history-retry');
+  const historyEmpty = document.getElementById('page-history-empty');
+  const historyListStatus = document.getElementById('page-history-list-status');
+  const historyPreview = document.getElementById('page-history-preview');
+  const historyPreviewTitle = document.getElementById('page-history-preview-title');
+  const historyPreviewBody = document.getElementById('page-history-preview-body');
+  const historyPreviewBack = document.getElementById('page-history-preview-back');
+  const historyPreviewRetry = document.getElementById('page-history-preview-retry');
+  const historyRestore = document.getElementById('page-history-restore');
+  const historyRestoreNote = document.getElementById('page-history-restore-note');
+  const historyStatus = document.getElementById('page-history-status');
+  let historyCursor = null;
+  let historyTarget = 0;
   let historySelection = 0;
   let historyTokens = 0;
   let historyPreviewToken = 0;
+  let historyLoading = false;
+  let historyRestoring = null;
 
   function closePageHistory({restoreFocus = true} = {}) {
     if (!historyPanel || historyPanel.hidden) return;
     historyPanel.hidden = true;
+    historyOpen?.setAttribute('aria-expanded','false');
     historyTokens += 1;
     historyPreviewToken += 1;
+    historyLoading = false;
     historySelection = 0;
     if (restoreFocus) {
       syncPageUrl();
@@ -2404,85 +2426,134 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderPageLinks();
   }
 
-  async function loadPageHistory() {
-    const wid = workspaceId();
-    if (!wid || !currentPage) return;
+  async function loadPageHistory({append = false} = {}) {
+    const wid = workspaceId(), id = currentPage?.id, owner = currentUser?.id;
+    if (!wid || !id || !historyList || (append && (!historyCursor || historyLoading))) return;
+    const cursor = append ? historyCursor : null;
+    const paging = append && document.activeElement === historyMore;
     const token = ++historyTokens;
-    const result = await request('GET', `/v1/workspaces/${wid}/memory/${currentPage.id}/versions`);
-    if (token !== historyTokens || workspaceId() !== wid) return;
-    const list = document.getElementById('page-history-list');
-    const empty = document.getElementById('page-history-empty');
-    const status = document.getElementById('page-history-status');
-    if (!list) return;
-    list.replaceChildren();
-    if (result.status !== 200) {
-      if (status) status.textContent = '历史没有读取成功。';
+    historyLoading = true;
+    historyList.setAttribute('aria-busy','true');
+    historyMore.disabled = true;
+    historyRetry.hidden = true;
+    historyListStatus.textContent = '正在读取版本…';
+    if (!append) {
+      historyCursor = null;
+      historyList.replaceChildren();
+      historyMore.hidden = true;
+      historyEmpty.hidden = true;
+    }
+    const result = await request('GET', `/v1/workspaces/${wid}/memory/${id}/versions${cursor ? '?cursor=' + cursor : ''}`)
+      .catch(() => ({status:0,body:{}}));
+    if (token !== historyTokens || workspaceId() !== wid || currentPage?.id !== id || currentUser?.id !== owner) return;
+    historyLoading = false;
+    historyList.setAttribute('aria-busy','false');
+    historyMore.disabled = false;
+    if (result.status !== 200 || !Array.isArray(result.body.items)) {
+      historyRetry.hidden = append;
+      historyListStatus.textContent = append ? '更早的版本没有读取成功，请重试。' : '历史没有读取成功，请重试。';
       return;
     }
-    const items = result.body.items || [];
-    if (empty) empty.hidden = items.length > 0;
-    if (status) status.textContent = '';
+    const boundary = cursor ?? result.body.current;
+    const items = result.body.items.filter(item => Number.isSafeInteger(item?.revision) &&
+      item.revision > 0 && item.revision < boundary && typeof item.summary === 'string');
+    const next = result.body.cursor;
+    historyCursor = Number.isSafeInteger(next) && next > 0 && next < boundary && next === items.at(-1)?.revision ? next : null;
+    const firstNew = historyList.children.length;
     for (const item of items) {
       const row = document.createElement('li');
       const open = document.createElement('button');
       open.type = 'button';
       open.className = 'page-history-item';
       open.dataset.revision = String(item.revision);
+      const title = document.createElement('strong');
       const when = memoryUpdatedLabel(item.created);
-      open.textContent = `修订 ${item.revision} · ${when || '时间未知'} · ${item.summary}`;
+      title.textContent = `修订 ${item.revision}${when ? ' · ' + when : ''}`;
+      const summary = document.createElement('span');
+      summary.textContent = item.summary;
+      open.append(title,summary);
       open.addEventListener('click', () => previewPageVersion(item.revision));
       row.appendChild(open);
-      list.appendChild(row);
+      historyList.appendChild(row);
+    }
+    const focusNew = paging && (document.activeElement === historyMore || document.activeElement === document.body);
+    historyMore.hidden = !historyCursor;
+    historyEmpty.hidden = historyList.children.length > 0;
+    historyListStatus.textContent = '';
+    if (focusNew) {
+      (historyList.children[firstNew]?.firstElementChild || historyList.lastElementChild?.firstElementChild || historyTitle).focus();
     }
   }
 
-  async function openPageHistory() {
+  function showHistoryList({focus = true} = {}) {
+    historyPreviewToken += 1;
+    historySelection = 0;
+    historyPreview.hidden = true;
+    historyBrowse.hidden = false;
+    if (focus) {
+      syncPageUrl();
+      (historyList.querySelector(`button[data-revision="${historyTarget}"]`) || historyTitle).focus();
+    }
+  }
+
+  async function openPageHistory({focus = true} = {}) {
     if (!currentPage || !historyPanel) return;
     historyPanel.hidden = false;
-    historySelection = 0;
-    const preview = document.getElementById('page-history-preview');
-    if (preview) preview.hidden = true;
-    if (historyOpen) historyOpen.focus();
+    historyOpen.setAttribute('aria-expanded','true');
+    historyTarget = 0;
+    showHistoryList({focus});
     await loadPageHistory();
   }
 
   async function previewPageVersion(revision) {
     const wid = workspaceId();
     if (!wid || !currentPage) return;
-    const id = currentPage.id;
+    const id = currentPage.id, owner = currentUser?.id;
     const token = ++historyPreviewToken;
-    const result = await request('GET', `/v1/workspaces/${wid}/memory/${id}/versions/${revision}`);
-    if (workspaceId() !== wid || currentPage?.id !== id || token !== historyPreviewToken) return;
-    const status = document.getElementById('page-history-status');
-    if (result.status !== 200 || !result.body.version) {
-      if (status) status.textContent = '这一版没有读取成功。';
+    historyTarget = revision;
+    historySelection = 0;
+    historyBrowse.hidden = true;
+    historyPreview.hidden = false;
+    historyPreviewTitle.textContent = `修订 ${revision}`;
+    historyPreviewBody.textContent = '';
+    historyRestore.hidden = historyRestoreNote.hidden = historyPreviewRetry.hidden = true;
+    historyStatus.textContent = '正在读取此版本…';
+    historyPreviewTitle.focus();
+    const result = await request('GET', `/v1/workspaces/${wid}/memory/${id}/versions/${revision}`)
+      .catch(() => ({status:0,body:{}}));
+    if (workspaceId() !== wid || currentPage?.id !== id || currentUser?.id !== owner || token !== historyPreviewToken) return;
+    const version = result.body.version;
+    if (result.status !== 200 || version?.revision !== revision || typeof version.body !== 'string' || typeof version.title !== 'string') {
+      historyPreviewRetry.hidden = result.status === 404;
+      historyStatus.textContent = result.status === 404 ? '此版本已不在保留范围内。' : '此版本没有读取成功，请重试。';
       return;
     }
-    const version = result.body.version;
     historySelection = version.revision;
-    document.getElementById('page-history-preview-title').textContent =
-      `修订 ${version.revision} · ${version.created_by}`;
-    document.getElementById('page-history-preview-body').textContent = version.body || '（空白正文）';
-    const preview = document.getElementById('page-history-preview');
-    if (preview) preview.hidden = false;
+    historyPreviewTitle.textContent = `修订 ${version.revision} · ${version.title}`;
+    historyPreviewBody.textContent = version.body || '（空白正文）';
+    historyRestore.hidden = historyRestoreNote.hidden = false;
+    historyRestore.disabled = historyRestoring?.id === id;
     syncPageUrl(revision);
-    if (status) status.textContent = '';
+    historyStatus.textContent = '';
   }
 
   async function restorePageVersion() {
     const wid = workspaceId();
     const owner = currentUser;
     const editing = currentPage;
-    if (!wid || !editing || !historySelection) return;
+    if (!wid || !editing || !historySelection || historyRestoring?.id === editing.id) return;
     const revision = historySelection;
-    const status = document.getElementById('page-history-status');
     if (!pageMatchesDraft(editing, editorFields())) {
-      if (status) status.textContent = '请先保存或清除当前草稿，再回滚历史版本。';
+      historyStatus.textContent = '请先保存或清除当前草稿，再恢复历史版本。';
       return;
     }
+    const pending = historyRestoring = {id:editing.id};
+    historyRestore.disabled = true;
+    historyStatus.textContent = '正在恢复版本…';
     const result = await request(
       'POST', `/v1/workspaces/${wid}/memory/${editing.id}/versions/${revision}/restore`,
       {revision: editing.revision}).catch(() => ({status:0, body:{}}));
+    if (historyRestoring === pending) historyRestoring = null;
     if (workspaceId() !== wid || currentUser !== owner) return;
     if (currentPage !== editing) {
       if (result.status === 200 && result.body.page) {
@@ -2492,9 +2563,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (result.status !== 200 || !result.body.page) {
-      if (status) status.textContent = result.status === 409
-        ? '这一页已在别处更新，重新打开后再回滚。'
-        : '没有回滚成功。';
+      historyRestore.disabled = false;
+      if (!historyPreview.hidden) historyStatus.textContent = result.status === 409
+        ? '这一页已在别处更新，重新打开后再恢复。'
+        : '没有恢复成功，请重试。';
       return;
     }
     persistPageDraft();
@@ -2502,20 +2574,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     showPageDraft();
     rememberPage(result.body.page);
     syncPageUrl();
-    historySelection = 0;
-    const preview = document.getElementById('page-history-preview');
-    if (preview) preview.hidden = true;
-    await Promise.all([loadPageHistory(),loadGraph()]);
+    if (!historyPanel.hidden) {
+      historyTarget = 0;
+      showHistoryList();
+      await Promise.all([loadPageHistory(),loadGraph()]);
+    } else await loadGraph();
     if (currentPage === result.body.page && currentUser === owner && workspaceId() === wid) {
-      show('ok', `已回滚到修订 ${revision}，保存为新的修订 ${currentPage.revision}。`);
+      show('ok', `已恢复修订 ${revision}，保存为修订 ${currentPage.revision}。`);
     }
   }
 
   if (historyOpen) historyOpen.addEventListener('click', openPageHistory);
   const historyClose = document.getElementById('page-history-close');
   if (historyClose) historyClose.addEventListener('click', () => closePageHistory());
-  const historyRestore = document.getElementById('page-history-restore');
   if (historyRestore) historyRestore.addEventListener('click', restorePageVersion);
+  historyMore?.addEventListener('click', () => loadPageHistory({append:true}));
+  historyRetry?.addEventListener('click', () => loadPageHistory());
+  historyPreviewBack?.addEventListener('click', () => showHistoryList());
+  historyPreviewRetry?.addEventListener('click', () => previewPageVersion(historyTarget));
 
   function savedActionFollowups() {
     const workspace = workspaceId();

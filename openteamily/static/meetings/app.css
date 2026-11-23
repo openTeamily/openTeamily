@@ -25,6 +25,7 @@
   gap: 0.5rem;
 }
 #meeting-inbox[hidden], #meeting-layout[hidden] { display: none; }
+#main:has(> #meeting-inbox:not([hidden])) { overflow-anchor: none; }
 #meeting-inbox-open[aria-expanded="true"] { display: none; }
 #meeting-inbox { max-width: 55rem; }
 #meeting-inbox h2 { margin: 0; }
