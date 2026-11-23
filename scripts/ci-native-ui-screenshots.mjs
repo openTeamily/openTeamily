@@ -224,6 +224,31 @@ async function agentApiKey(page, account) {
   await page.locator('#cancel-edit').click();
 }
 
+async function spaceCatalogQueryReturn(page, account) {
+  const workspace = account.instanceId;
+  const root = '/v1/workspaces/'+workspace+'/artifacts';
+  const title = 'CI 工作区链接验收 '+page.viewportSize().width;
+  const created = await account.rpc('artifacts/v1',{method:'POST',path:root,
+    idempotency_key:randomUUID().replaceAll('-',''),body:{title,kind:'document',body:'用于验证筛选往返。'}});
+  assert.equal(created.status,201);
+
+  await openNative(page,'/space?workspace='+workspace,workspace,'#search');
+  const search = page.locator('#search');
+  const item = page.locator('#artifact-list').getByRole('button',{name:title,exact:true});
+  await search.fill(title);
+  await search.press('Enter');
+  await item.click();
+  await page.locator('#editor-title').waitFor();
+  assert.equal(await page.locator('#editor-title').inputValue(),title);
+  await page.reload({waitUntil:'domcontentloaded'});
+  await page.waitForFunction(title => document.querySelector('#editor-title')?.value === title,title);
+  await page.locator(page.viewportSize().width < 700 ? '#cancel-editor-load' : '#cancel-editor').click();
+  await item.waitFor();
+  assert.equal(await search.inputValue(),title,'a workspace-qualified catalog URL restores its saved search');
+  assert.equal(await item.evaluate(el => el === document.activeElement),true);
+  assert.deepEqual([...new URL(page.url()).searchParams],[['workspace',workspace]]);
+}
+
 async function memoryGraphReturn(page, account) {
   const workspace = account.instanceId;
   const base = '/v1/workspaces/'+workspace+'/memory';
@@ -345,6 +370,7 @@ try {
     await screenshot(page,name);
   }
   await agentApiKey(page,fixture.owner);
+  await spaceCatalogQueryReturn(page,fixture.owner);
   await memoryGraphReturn(page,fixture.owner);
   await memoryHistory(page,fixture.owner,'desktop-memory-history');
   await connectors(page);
@@ -386,6 +412,7 @@ try {
   assert.ok(!JSON.stringify(isolation).includes(fixture.owner.chat.reply));
   await peer.page.setViewportSize({width:390,height:844});
   await meetingActionContinuity(peer.page,fixture.peer,'mobile-meeting-actions');
+  await spaceCatalogQueryReturn(peer.page,fixture.peer);
   await memoryGraphReturn(peer.page,fixture.peer);
   await memoryHistory(peer.page,fixture.peer,'mobile-memory-history');
   await peer.context.close();

@@ -4822,12 +4822,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         void studio.instance.open(studioTarget.id, studioTarget.revision, studioTarget.catalog ? address?.entry.studioFocus : undefined);
         return;
       }
-      if (studioTarget || artifactTargetFromSearch(view.location.search) ||
+      const requested = artifactTargetFromSearch(view.location.search);
+      if (studioTarget || requested?.artifact || requested?.invalid ||
           newKindFromSearch(view.location.search) || sharedWorkCopyToken(view.location.hash)) {
         void load();
         return;
       }
-      const targetWorkspace = catalogView?.workspace || workspaceFromFragment(view.location.hash);
+      const targetWorkspace = requested?.workspace || catalogView?.workspace || workspaceFromFragment(view.location.hash);
       if (targetWorkspace && ![...workspaceSelect.options].some(option => option.value === targetWorkspace)) {
         void load();
         return;
