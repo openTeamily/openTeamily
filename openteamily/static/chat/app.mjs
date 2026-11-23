@@ -981,6 +981,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const loadGroupManagement = deferModule('./group-management.mjs');
   let groupManagement;
   let lastGroupInfo = '';
+  let groupInfoOpener;
   const groupManagementReceipts = new Map();
   const loadStickers = deferModule('./stickers.mjs');
   let stickerPicker;
@@ -1282,6 +1283,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       text = agents.length
         ? uiLabel('用 @ 请智能体根据附言回复', 'Use @ to ask agents to reply to the caption')
         : uiLabel('附件将发送给群成员', 'The files will be shared with the group');
+    } else if (policy?.mode === 'mentions' && agents.length) {
+      text = uiLabel('仅在被 @ 时回复 · 可用 @所有人', 'Agents reply only when mentioned · Use @all to ask them all');
     } else if (quote) {
       kind = 'targeted';
       text = uiLabel(`将请 ${quote.name} 回复这条引用`, `${quote.name} will be asked to reply to this quote`);
@@ -5717,43 +5720,58 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return true;
   }
 
-  async function initializeGroupManagement() {
-    if (groupManagement) return;
+  async function initializeGroupManagement({fromShortcut = false} = {}) {
+    if (groupManagement) return groupManagement;
     const target = groupManagementContext();
-    if (!target) return;
+    if (!target) return null;
     const {mountGroupManagement} = await loadGroupManagement();
-    if (groupManagement || !groupMatches({...target,conversationId:target.conversation.id}) ||
-        document.getElementById('group-info-panel').hidden) return;
-    groupManagement = mountGroupManagement(document, {
-      request, context:groupManagementContext, notify:show,
-      onChanged:reportGroupChange, onLeft:forgetGroup,
-      onRefresh:refreshGroupManagement,
-    });
-    setGroupInfo(currentConversation);
+    if (!groupMatches({...target,conversationId:target.conversation.id}) ||
+        (!fromShortcut && document.getElementById('group-info-panel').hidden)) return null;
+    if (!groupManagement) {
+      groupManagement = mountGroupManagement(document, {
+        request, context:groupManagementContext, notify:show,
+        onChanged:reportGroupChange, onLeft:forgetGroup,
+        onRefresh:refreshGroupManagement,
+      });
+      setGroupInfo(currentConversation);
+    }
+    return groupManagement;
   }
 
   function renderGroupReplyPolicy(conversation) {
     const section = document.getElementById('group-reply-policy');
     const summary = document.getElementById('group-reply-policy-summary');
+    const shortcut = document.getElementById('group-reply-shortcut');
     const routing = conversation?.group_agent_routing;
     const policy = routing?.policy;
-    section.hidden = conversation?.kind !== 'group' || Boolean(conversation.public_agent) ||
-      document.getElementById('group-info-tab-agents').getAttribute('aria-selected') !== 'true';
+    section.hidden = conversation?.kind !== 'group' || Boolean(conversation.public_agent);
+    if (shortcut) shortcut.hidden = section.hidden || !servedByDsbot || !routing;
     if (section.hidden) return;
-    if (policy?.mode === 'everyone') summary.textContent = uiLabel('由所有群内智能体判断是否回复', 'All group agents decide whether to reply');
+    if (policy?.mode === 'mentions') summary.textContent = uiLabel('仅在被 @ 时回复', 'Only when mentioned');
+    else if (!conversation.agent_members?.some(agent => !agent.archived && !agent.native_deleted)) {
+      summary.textContent = uiLabel('群里暂无可回复的智能体', 'There are no group agents available to reply');
+    } else if (policy?.mode === 'everyone') summary.textContent = uiLabel('由所有群内智能体判断是否回复', 'All group agents decide whether to reply');
     else if (policy?.mode === 'lead') {
       const lead = !policy.lead_unavailable && activeGroupAgent(conversation, policy.lead);
       if (lead) {
         const name = groupAgentName(lead.name, groupAgentOwnerLabel(lead), lead.owner_id, lead.mine === false ? lead.owner_handle : '');
         summary.textContent = uiLabel(`指定智能体优先 · ${name}`, `Preferred agent · ${name}`);
-      } else if (conversation.agent_members?.some(agent => !agent.archived && !agent.native_deleted)) {
+      } else {
         summary.textContent = uiLabel('优先智能体不可用，由其他群内智能体判断是否回复。',
           'The preferred agent is unavailable. Other group agents decide whether to reply.');
-      } else summary.textContent = uiLabel('群里暂无可回复的智能体', 'There are no group agents available to reply');
+      }
     } else if (conversation.agent_members?.some(agent => !agent.archived && !agent.native_deleted && agent.auto_reply)) {
       summary.textContent = uiLabel('跟随群组默认 · 由开启自动回复的智能体判断',
         'Group default · Agents with auto-reply enabled decide');
     } else summary.textContent = uiLabel('跟随群组默认 · 由群内智能体判断', 'Group default · Group agents decide');
+    if (shortcut && !shortcut.hidden) {
+      const canEdit = routing.can_edit === true;
+      shortcut.title = summary.textContent;
+      shortcut.setAttribute('aria-description', summary.textContent);
+      shortcut.setAttribute('aria-controls', canEdit ? 'group-management-dialog' : 'group-info-panel');
+      if (canEdit) shortcut.setAttribute('aria-haspopup', 'dialog');
+      else shortcut.removeAttribute('aria-haspopup');
+    }
   }
 
   function setGroupInfoTab(which) {
@@ -5768,7 +5786,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (autoNote) autoNote.hidden = which !== 'agents';
     document.getElementById('group-info-people').hidden = which !== 'people';
     document.getElementById('group-info-invite').hidden = which !== 'people';
-    renderGroupReplyPolicy(currentConversation);
   }
 
   const groupInfoAddOpener = document.getElementById('group-info-add-agent');
@@ -6177,13 +6194,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }));
   }
 
-  function setGroupInfoOpen(open) {
+  function setGroupInfoOpen(open, opener) {
     const toggle = document.getElementById('group-info-toggle');
     const panel = document.getElementById('group-info-panel');
     if (!toggle || !panel) return;
     panel.hidden = !open;
     toggle.setAttribute('aria-expanded', String(open));
     if (open) {
+      groupInfoOpener = opener || toggle;
       const group = groupManagementContext()?.conversation;
       if (group && group.id !== lastGroupInfo) {
         lastGroupInfo = group.id;
@@ -8520,7 +8538,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (open) closeInChatSearch({restoreScroll: false, focus: false});
       setGroupInfoOpen(open);
     });
-    document.getElementById('group-info-close').addEventListener('click', () => { setGroupInfoOpen(false); groupInfoToggle.focus(); });
+    document.getElementById('group-info-close').addEventListener('click', () => {
+      setGroupInfoOpen(false);
+      (groupInfoOpener || groupInfoToggle).focus();
+    });
+    const replyShortcut = document.getElementById('group-reply-shortcut');
+    replyShortcut?.addEventListener('click', async () => {
+      if (replyShortcut.hidden) return;
+      if (currentConversation?.group_agent_routing?.can_edit !== true) {
+        closeInChatSearch({restoreScroll:false, focus:false});
+        setGroupInfoOpen(true, replyShortcut);
+        document.getElementById('group-reply-policy').focus();
+        return;
+      }
+      const target = groupManagementContext();
+      if (!target) return;
+      const scope = {...target, conversationId:target.conversation.id};
+      try {
+        const controls = await initializeGroupManagement({fromShortcut:true});
+        if (groupMatches(scope)) controls?.openReplyPolicy();
+      } catch {
+        if (groupMatches(scope)) show('error', uiLabel('无法打开群回复规则，请重试。', 'Could not open the group reply policy. Try again.'));
+      }
+    });
     document.getElementById('group-agent-manage').addEventListener('click', () => {
       if (!agentRosterCurrent(agentRosterView) || agentRosterView.direct) return;
       agentRosterSheet.open = false;
@@ -8538,8 +8578,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('group-info-tab-people').addEventListener('click', () => setGroupInfoTab('people'));
     groupPin?.addEventListener('click', toggleConversationPin);
     document.addEventListener('keydown', event => {
-      if (event.key === 'Escape' && !groupInfoAddDialog.open && !document.getElementById('group-management-dialog')?.open &&
-          !document.getElementById('group-info-panel').hidden) setGroupInfoOpen(false);
+      const panel = document.getElementById('group-info-panel');
+      if (event.key !== 'Escape' || panel.hidden || groupInfoAddDialog.open || document.getElementById('group-management-dialog')?.open) return;
+      const returnFocus = panel.contains(document.activeElement);
+      setGroupInfoOpen(false);
+      if (returnFocus) (groupInfoOpener || groupInfoToggle).focus();
     });
   }
   let searchScrollSnapshot = null;

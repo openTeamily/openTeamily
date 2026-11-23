@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { nativeGroupCreation } from './native-group-create.js'
 import { nativeGroupDirectory } from './native-group-directory.js'
 const installed = new WeakMap()
-const replyModes = new Set(['default', 'everyone', 'lead'])
+const replyModes = new Set(['default', 'everyone', 'lead', 'mentions'])
 const groupAgentId = /^[A-Za-z0-9._:-]{1,80}$/
 const objectId = /^[0-9a-f]{32}$/
 // The native picker's inline chip uses a text codec. Preserve ordinary code

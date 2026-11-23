@@ -149,6 +149,8 @@ test('the image overlay checks pinned inputs before adding native group and skil
   assertNativeConsentOverlay(copy)
   assert.match(readFileSync(clientPath, 'utf8'), /Shared human participants/)
   assert.match(readFileSync(clientPath, 'utf8'), /data-ot-shared-reply-save/)
+  assert.match(readFileSync(clientPath, 'utf8'), /\["mentions", "Only when mentioned"\]/)
+  assert.match(readFileSync(join(copy, 'src/client/group-settings.js'), 'utf8'), /\['mentions', 'Only when mentioned'\]/)
   assert.match(readFileSync(clientPath, 'utf8'), /function sharedMentionRows\(/)
   assert.match(readFileSync(clientPath, 'utf8'), /function SharedGroupForm\(/)
   assert.match(readFileSync(channelPath, 'utf8'), /remoteParticipants: Array\.isArray\(body\.remoteParticipants\)/)

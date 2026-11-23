@@ -14,7 +14,7 @@ export type Group = {id: string; kind: string; dm_key: string | null; title: str
   team_id: string | null; account_group: number; group_owner_id: string | null; group_revision: number; group_archived_at: number | null;
   group_reply_policy?: string | null};
 type Lead = {owner_id: string; agent_id: string};
-type ReplyPolicy = {mode: "default" | "everyone"} | {mode: "lead"; lead: Lead};
+type ReplyPolicy = {mode: "default" | "everyone" | "mentions"} | {mode: "lead"; lead: Lead};
 type GroupAction = {action: "rename"; title: string} | {action: "remove" | "transfer"; member_id: string} |
   {action: "leave"} | ({action: "reply_policy"} & ReplyPolicy);
 const AGENT_PAIR_ID = /^[A-Za-z0-9._:-]{1,80}$/;
@@ -28,7 +28,7 @@ function validLead(value: unknown): value is Lead {
 
 function validReplyPolicy(input: Record<string, unknown>): input is ReplyPolicy {
   return input.mode === "lead" ? validLead(input.lead)
-    : (input.mode === "default" || input.mode === "everyone") && !Object.hasOwn(input, "lead");
+    : (input.mode === "default" || input.mode === "everyone" || input.mode === "mentions") && !Object.hasOwn(input, "lead");
 }
 
 export function readGroupReplyPolicy(group: Pick<Group, "group_reply_policy">): ReplyPolicy {

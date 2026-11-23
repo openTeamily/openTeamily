@@ -44,11 +44,15 @@ test('the native management adapter derives workspace scope and projects the exa
   assert.equal(saved.status,200)
   assert.equal(saved.body.conversation.group_management.revision,2)
   assert.deepEqual(saved.body.conversation.group_agent_routing,{mode:'personal',default:'all',policy:{mode:'everyone'},can_edit:true})
+  const quiet = await post(teamWorkspace,{action,revision:2,mode:'mentions'})
+  assert.equal(quiet.status,200)
+  assert.deepEqual(quiet.body.conversation.group_agent_routing,{mode:'shared',policy:{mode:'mentions'},can_edit:true})
   const denied = await post(teamWorkspace,{action,revision:1,mode:'lead',lead})
   assert.equal(denied.status,409)
   assert.equal(denied.body.error.code,'group_reply_lead_unavailable')
   assert.deepEqual(writes,[
     {action,revision:1,mode:'everyone',direct:true},
+    {action,revision:2,mode:'mentions',workspace:teamWorkspace},
     {action,revision:1,mode:'lead',lead,workspace:teamWorkspace},
   ])
 })

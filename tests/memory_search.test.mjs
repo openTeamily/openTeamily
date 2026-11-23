@@ -290,3 +290,46 @@ test('recent filter delegates the whole seven-day range and clears back to the s
   el('filter-all').handlers.click();
   assert.deepEqual(pageTitles(el), ['项目简报', '运维手册']);
 });
+
+test('memory directory restores a private search only for the matching account and workspace', async () => {
+  const history = {state: {other: 'untouched'}, replaceState(state, _title, url) {
+    this.state = state;
+    assert.equal(url, '/memory');
+  }};
+  const start = async (state = history.state) => {
+    history.state = state;
+    const requests = [];
+    const fixture = fakeDocument();
+    fixture.doc.defaultView = {history, location: {pathname: '/memory', search: ''}};
+    await mount(fixture.doc, {fetcher: directoryFetcher(requests, () => json(200, {items:[], total:0}))});
+    await tick();
+    return {...fixture, requests};
+  };
+  const first = await start();
+  first.el('filter-updated').handlers.click();
+  enterSearch(first.el, '内部会议');
+  await tick();
+  const saved = history.state;
+  assert.equal(saved.other, 'untouched');
+  assert.deepEqual(saved.memoryDirectory, {
+    owner: 'user-1', workspace: 'ws-1', query: '内部会议', filter: 'updated', topic: '', result: false,
+  });
+
+  const same = await start();
+  assert.equal(same.el('search').value, '内部会议');
+  assert.equal(same.el('filter-updated').getAttribute('aria-pressed'), 'true');
+  assert.equal(same.el('memory-directory-reset').hidden, false);
+  assert.ok(same.requests.some(({path}) => path.includes('q=' + encodeURIComponent('内部会议')) && path.includes('updated_after=')));
+  same.el('memory-directory-reset').handlers.click();
+  assert.equal(same.el('search').value, '');
+  assert.equal(same.el('filter-all').getAttribute('aria-pressed'), 'true');
+  assert.equal(same.el('memory-directory-reset').hidden, true);
+  assert.deepEqual(pageTitles(same.el), ['项目简报', '运维手册']);
+
+  for (const scope of [{owner: 'other-user'}, {workspace: 'other-workspace'}]) {
+    const different = await start({...saved, memoryDirectory: {...saved.memoryDirectory, ...scope}});
+    assert.equal(different.el('search').value, '');
+    assert.equal(different.el('filter-all').getAttribute('aria-pressed'), 'true');
+    assert.ok(!different.requests.some(({path}) => path.includes('q=') || path.includes('updated_after=')));
+  }
+});

@@ -1,8 +1,8 @@
 diff --git a/client.js b/client.js
-index 30e9d8f..12fc1bd 100644
+index 30e9d8f..44a8b6b 100644
 --- a/client.js
 +++ b/client.js
-@@ -14126,6 +14126,43 @@ var ZH = {
+@@ -14126,6 +14126,45 @@ var ZH = {
    "{name} leads this group: it can call members with @Name, change the group, and post here.": "{name} 主持这个群：可以用 @名字 点名成员、修改群设置、在群里发言。",
    "No admin yet. An admin can call members with @Name, change the group, and post here.": "还没有管理员。管理员可以用 @名字 点名成员、修改群设置、在群里发言。",
    "Who answers": "谁来回答",
@@ -32,6 +32,8 @@ index 30e9d8f..12fc1bd 100644
 +  "Group defaults": "群组默认",
 +  "All agents": "全体智能体",
 +  "Agent leads": "指定主答",
++  "Only when mentioned": "仅在被 @ 时回复",
++  "Only @mentioned agents answer. Use @everyone to ask all agents.": "只有被 @ 的智能体才会回复。用 @所有人 向全体智能体提问。",
 +  "Lead {name}": "{name} 主答",
 +  "Lead unavailable": "主答智能体不可用",
 +  "Current reply policy": "当前回复策略",
@@ -46,7 +48,7 @@ index 30e9d8f..12fc1bd 100644
    "Choose an admin first": "先选一个管理员",
    "@mentions always pick who answers.": "@提及总是指定由谁回答。",
    Notice: "群公告",
-@@ -16472,6 +16509,10 @@ function teamActions({ call: call2, after, partFor, roster, ui, live, cards, hel
+@@ -16472,6 +16511,10 @@ function teamActions({ call: call2, after, partFor, roster, ui, live, cards, hel
      importAvatars: (items) => call2("avatar-import", { items }),
      deleteAvatar: (id) => call2("avatar-delete", { id }),
      createRoom: (members, options = {}) => after(call2("create-room", { members, ...options })),
@@ -57,7 +59,7 @@ index 30e9d8f..12fc1bd 100644
      updateBot: (id, patch) => after(call2("update-bot", { id, ...patch })),
      // Give up one wait the Bot has on a hand-off that will not come back.
      abandonWork: (id) => after(call2("abandon-work", { id })),
-@@ -22016,7 +22057,7 @@ var COMPUTER_CSS = `
+@@ -22016,7 +22059,7 @@ var COMPUTER_CSS = `
  .bt-cstep-shot-open img{max-height:280px;max-width:480px}
  `;
 
@@ -66,7 +68,7 @@ index 30e9d8f..12fc1bd 100644
  var import_react13 = require("react");
  var FallbackMarkdown = ({ text }) => (0, import_react13.createElement)("span", null, String(text ?? ""));
  var ViewUi = (0, import_react13.createContext)({ t: (key) => key, Markdown: FallbackMarkdown });
-@@ -22083,7 +22124,7 @@ function useOptionKeys2(count, onPick, ownRef) {
+@@ -22083,7 +22126,7 @@ function useOptionKeys2(count, onPick, ownRef) {
    return count > 0 && listening <= 1;
  }
 
@@ -75,7 +77,7 @@ index 30e9d8f..12fc1bd 100644
  var FUNCTIONS = {
    min: { args: [1, Infinity], run: (...values) => Math.min(...values.map(num)) },
    max: { args: [1, Infinity], run: (...values) => Math.max(...values.map(num)) },
-@@ -22364,7 +22405,7 @@ function evaluate(tree, lookup) {
+@@ -22364,7 +22407,7 @@ function evaluate(tree, lookup) {
    }
  }
 
@@ -84,7 +86,7 @@ index 30e9d8f..12fc1bd 100644
  var LAYOUT = ["stack", "row"];
  var DISPLAY = ["text", "metric", "table", "chart", "progress", "callout", "sources", "html"];
  var INPUT_TYPES = ["slider", "choice", "toggle", "number"];
-@@ -22996,7 +23037,7 @@ function validateForm(node, values) {
+@@ -22996,7 +23039,7 @@ function validateForm(node, values) {
    return { fields };
  }
 
@@ -93,7 +95,7 @@ index 30e9d8f..12fc1bd 100644
  var import_react14 = require("react");
  var PALETTE = ["var(--dv-accent)", "var(--dv-ink-tangerine)", "var(--dv-ink-green)", "var(--dv-ink-violet)", "var(--dv-ink-sky)", "var(--dv-ink-rose)", "var(--dv-ink-yellow)", "var(--dv-ink-cyan)", "var(--dv-ink-magenta)"];
  var colorAt = (index) => PALETTE[index % PALETTE.length];
-@@ -23435,7 +23476,7 @@ var CHART_CSS = `
+@@ -23435,7 +23478,7 @@ var CHART_CSS = `
  @media (prefers-reduced-motion:reduce){.dv-chart-mark,.dv-chart-dot{transition:none}.dv-chart-tip{animation:none}}
  `;
 
@@ -102,7 +104,7 @@ index 30e9d8f..12fc1bd 100644
  var import_react15 = require("react");
  var THEME_VARS = [
    ["--view-ink", "--bt-ink", "--dv-ink"],
-@@ -23517,7 +23558,7 @@ var HTML_CSS = `
+@@ -23517,7 +23560,7 @@ var HTML_CSS = `
  .dv-view-frame-stopped{margin:0;font-size:13px;line-height:18px;color:var(--dv-ink-2)}
  `;
 
@@ -111,7 +113,7 @@ index 30e9d8f..12fc1bd 100644
  var import_react16 = require("react");
  var mdLabels2 = (ui) => ({ code: { copyLabel: ui.t("Copy"), copiedLabel: ui.t("Copied") }, footnotes: ui.t("Footnotes") });
  var TONES2 = ["good", "warn", "bad"];
-@@ -24259,7 +24300,7 @@ ${CHART_CSS}
+@@ -24259,7 +24302,7 @@ ${CHART_CSS}
  ${HTML_CSS}
  `;
 
@@ -120,7 +122,7 @@ index 30e9d8f..12fc1bd 100644
  var THEME_CSS = `
  body{
  --dv-ink:var(--dsw-alias-label-primary);
-@@ -24357,10 +24398,10 @@ button.dv-q-opt:active{background:var(--dv-active)}
+@@ -24357,10 +24400,10 @@ button.dv-q-opt:active{background:var(--dv-active)}
  @media (prefers-reduced-motion:reduce){.dv-q,.dv-view-bare,.dv-q-submit,.dv-menu,.dv-q-check{animation:none}}
  `;
 
@@ -133,14 +135,15 @@ index 30e9d8f..12fc1bd 100644
  var REPLY_KIND = "user-question-reply";
  var REPLY_SOURCE_KIND = "deep-view-reply";
  function viewCardText(args) {
-@@ -34705,9 +34746,139 @@ var ROOM_MODES = [
+@@ -34705,9 +34748,140 @@ var ROOM_MODES = [
    ["everyone", "Everyone", "Every member answers in turn, admin first."]
  ];
  var shownMode = (room2, roster) => roster.byId[room2.admin] ? room2.mode : "everyone";
 +var SHARED_REPLY_MODES = [
 +  ["default", "Group defaults"],
 +  ["everyone", "All agents"],
-+  ["lead", "Agent leads"]
++  ["lead", "Agent leads"],
++  ["mentions", "Only when mentioned"]
 +];
 +var replyPairKey = (pair) => pair ? JSON.stringify([pair.owner_id, pair.agent_id]) : "";
 +var replyModeLabel = (mode) => SHARED_REPLY_MODES.find(([value]) => value === mode)?.[1] ?? "Group defaults";
@@ -199,7 +202,7 @@ index 30e9d8f..12fc1bd 100644
 +    { title: t("Who answers") },
 +    policy ? (0, import_react38.createElement)(
 +      Row,
-+      { label: t("Current reply policy"), hint: policy.lead_unavailable ? t("The saved lead is unavailable. Other available group agents decide whether to reply.") : t(policy.mode === "everyone" ? "All group agents decide whether to respond." : policy.mode === "lead" ? "The selected lead decides whether to respond." : "@mentions always pick who answers."), stack: true },
++      { label: t("Current reply policy"), hint: policy.lead_unavailable ? t("The saved lead is unavailable. Other available group agents decide whether to reply.") : t(policy.mode === "everyone" ? "All group agents decide whether to respond." : policy.mode === "lead" ? "The selected lead decides whether to respond." : policy.mode === "mentions" ? "Only @mentioned agents answer. Use @everyone to ask all agents." : "@mentions always pick who answers."), stack: true },
 +      (0, import_react38.createElement)(
 +        "span",
 +        { className: "bt-set-hint", "data-ot-shared-reply-current": true },
@@ -274,7 +277,7 @@ index 30e9d8f..12fc1bd 100644
  }
  function GroupPermission({ room: room2, catalog, update }) {
    if (!catalog?.options?.length) return null;
-@@ -34781,6 +34952,8 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
+@@ -34781,6 +34955,8 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
      const timer = setTimeout(() => setConfirming(false), 4e3);
      return () => clearTimeout(timer);
    }, [confirming]);
@@ -283,7 +286,7 @@ index 30e9d8f..12fc1bd 100644
    const members = room2.members.map((id) => roster.byId[id]).filter(Boolean);
    const outside = roster.bots.filter((bot) => !room2.members.includes(bot.id));
    const admin = roster.byId[room2.admin];
-@@ -34828,7 +35001,21 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
+@@ -34828,7 +35004,21 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
          (0, import_react39.createElement)(InlineText, { label: t("Group notice"), value: room2.notice, multiline: true, maxLength: 2e3, placeholder: t("Shared instructions every member reads before speaking…"), onSave: (notice) => update({ notice }) })
        )
      ),
@@ -306,7 +309,7 @@ index 30e9d8f..12fc1bd 100644
        Card2,
        { title: t("Who answers") },
        (0, import_react39.createElement)(
-@@ -34862,7 +35049,7 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
+@@ -34862,7 +35052,7 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
        Card2,
        { title: t("Members · {count}", { count: members.length }) },
        members.map((member) => {
@@ -315,7 +318,7 @@ index 30e9d8f..12fc1bd 100644
          return (0, import_react39.createElement)(
            "div",
            { key: member.id, className: "bt-set-row bt-bs-row bt-gs-member" },
-@@ -34873,7 +35060,7 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
+@@ -34873,7 +35063,7 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
              (0, import_react39.createElement)("span", { className: "bt-row-title" }, member.name),
              leads ? (0, import_react39.createElement)("span", { className: "bt-tag" }, t("Admin")) : null
            ),
@@ -324,7 +327,7 @@ index 30e9d8f..12fc1bd 100644
            members.length > 2 ? (0, import_react39.createElement)("button", { type: "button", className: "bt-x", "aria-label": t("Remove {name} from the group", { name: member.name }), title: t("Remove from group"), onClick: () => update({ remove: [member.id] }) }, "×") : null
          );
        }),
-@@ -34890,7 +35077,7 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
+@@ -34890,7 +35080,7 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted
          )),
          (0, import_react39.createElement)("button", { key: "cancel", type: "button", className: "bt-set-row bt-bs-row bt-gs-add", onClick: () => setAdding(false) }, t("Cancel"))
        ] : outside.length > 0 ? (0, import_react39.createElement)("button", { type: "button", className: "bt-set-row bt-bs-row bt-gs-add", onClick: () => setAdding(true) }, (0, import_react39.createElement)(PlusIcon), t("Add member")) : null,
@@ -333,7 +336,7 @@ index 30e9d8f..12fc1bd 100644
          "span",
          { className: "bt-set-hint" },
          // The host checks for two members on every change, even a rename.
-@@ -36595,7 +36782,7 @@ var CONNECTORS_PAGE_CSS = `
+@@ -36595,7 +36785,7 @@ var CONNECTORS_PAGE_CSS = `
  @media (prefers-reduced-motion:reduce){.bt-app[data-fresh]::after,.bt-app[data-fresh] .bt-app-icon,.bt-app[data-fresh] .bt-app-btn-done{animation:none}}
  `;
 
@@ -342,7 +345,7 @@ index 30e9d8f..12fc1bd 100644
  var qrcode = function(typeNumber, errorCorrectionLevel) {
    const PAD0 = 236;
    const PAD1 = 17;
-@@ -45145,6 +45332,28 @@ var BOTS_SOURCE = "ds-bot";
+@@ -45145,6 +45335,28 @@ var BOTS_SOURCE = "ds-bot";
  var CHATS_SOURCE = "ds-bot-chats";
  var ROOM_ALL = ["all", "everyone", "所有人", "全体"];
  var OTHER_CHATS_MAX = 8;
@@ -371,7 +374,7 @@ index 30e9d8f..12fc1bd 100644
  var conversationOf = (roster, sessionId) => {
    if (!roster.ready) return null;
    const room2 = roster.roomsById[sessionId];
-@@ -45155,8 +45364,9 @@ var conversationOf = (roster, sessionId) => {
+@@ -45155,8 +45367,9 @@ var conversationOf = (roster, sessionId) => {
  function mentionRows(roster, sessionId, query = "") {
    const here = conversationOf(roster, sessionId);
    if (here === null) return null;
@@ -382,7 +385,7 @@ index 30e9d8f..12fc1bd 100644
    const rows2 = bots.filter((bot) => bot.name.toLowerCase().includes(needle)).map((bot) => ({ bot, text: `@${bot.name} ` }));
    const everyone = t("Everyone");
    if (here.room && bots.length > 1 && [everyone, ...ROOM_ALL].some((word) => word.toLowerCase().startsWith(needle))) {
-@@ -45195,13 +45405,20 @@ function atSources({ roster, sessions, launched, iconFor }) {
+@@ -45195,13 +45408,20 @@ function atSources({ roster, sessions, launched, iconFor }) {
        return (mentionRows(roster.getSnapshot(), session.sessionId, query) ?? []).map((row) => ({
          name: row.bot ? row.bot.name : t("Everyone"),
          ...row.bot?.role ? { description: row.bot.role } : {},
@@ -406,7 +409,7 @@ index 30e9d8f..12fc1bd 100644
    };
    const chats = {
      trigger: "@",
-@@ -46750,10 +46967,278 @@ var PASTE_CSS = `
+@@ -46750,10 +46970,278 @@ var PASTE_CSS = `
 
  // src/client/new-chat.js
  var import_react71 = require("react");
@@ -685,7 +688,7 @@ index 30e9d8f..12fc1bd 100644
    const [admin, setAdmin] = (0, import_react71.useState)(null);
    const [message, setMessage] = (0, import_react71.useState)("");
    const [pasted, setPasted] = (0, import_react71.useState)(null);
-@@ -46864,6 +47349,12 @@ function NewChat({ mode, sectionId = null, paneLeft, roster, actions }) {
+@@ -46864,6 +47352,12 @@ function NewChat({ mode, sectionId = null, paneLeft, roster, actions }) {
        }) });
      }
    }
@@ -698,7 +701,7 @@ index 30e9d8f..12fc1bd 100644
    for (const bot of matches3) {
      options.push({ key: bot.id, bot, label: bot.name, hint: choosingAdmin ? t("Make admin") : group || picked.length > 0 ? t("Add to group chat") : void 0, run: () => openBot(bot) });
    }
-@@ -46893,6 +47384,21 @@ ${listed}`, { axis: "y", ...QUICK_EDGES });
+@@ -46893,6 +47387,21 @@ ${listed}`, { axis: "y", ...QUICK_EDGES });
        })
      );
    }
@@ -794,10 +797,10 @@ index ca6c5b7..fdf1981 100644
    const chats = {
      trigger: '@',
 diff --git a/src/client/group-settings.js b/src/client/group-settings.js
-index fce5203..0ad7724 100644
+index fce5203..177dd4d 100644
 --- a/src/client/group-settings.js
 +++ b/src/client/group-settings.js
-@@ -16,9 +16,85 @@ export const ROOM_MODES = [
+@@ -16,9 +16,87 @@ export const ROOM_MODES = [
  // Without an admin the host answers as everyone, whatever the stored mode says.
  export const shownMode = (room, roster) => (roster.byId[room.admin] ? room.mode : 'everyone')
 
@@ -805,6 +808,7 @@ index fce5203..0ad7724 100644
 +  ['default', 'Group defaults'],
 +  ['everyone', 'All agents'],
 +  ['lead', 'Agent leads'],
++  ['mentions', 'Only when mentioned'],
 +]
 +const replyPairKey = pair => pair ? JSON.stringify([pair.owner_id, pair.agent_id]) : ''
 +const replyModeLabel = mode => SHARED_REPLY_MODES.find(([value]) => value === mode)?.[1] ?? 'Group defaults'
@@ -855,7 +859,8 @@ index fce5203..0ad7724 100644
 +    policy ? h(Row, { label: t('Current reply policy'), hint: policy.lead_unavailable
 +      ? t('The saved lead is unavailable. Other available group agents decide whether to reply.')
 +      : t(policy.mode === 'everyone' ? 'All group agents decide whether to respond.' : policy.mode === 'lead'
-+        ? 'The selected lead decides whether to respond.' : '@mentions always pick who answers.'), stack: true },
++        ? 'The selected lead decides whether to respond.' : policy.mode === 'mentions'
++          ? 'Only @mentioned agents answer. Use @everyone to ask all agents.' : '@mentions always pick who answers.'), stack: true },
 +      h('span', { className: 'bt-set-hint', 'data-ot-shared-reply-current': true },
 +        currentLead ? t('Lead {name}', { name: currentLead.name })
 +          : t(policy.lead_unavailable ? 'Lead unavailable' : replyModeLabel(policy.mode)))) : null,
@@ -884,7 +889,7 @@ index fce5203..0ad7724 100644
  }
 
  // One preset for every member in the group, or each member's own. Turning it on starts
-@@ -73,6 +149,8 @@ export function GroupSettingsForm({ room, roster, actions, run, onDeleted }) {
+@@ -73,6 +151,8 @@ export function GroupSettingsForm({ room, roster, actions, run, onDeleted }) {
      const timer = setTimeout(() => setConfirming(false), 4000)
      return () => clearTimeout(timer)
    }, [confirming])
@@ -893,7 +898,7 @@ index fce5203..0ad7724 100644
    const members = room.members.map(id => roster.byId[id]).filter(Boolean)
    const outside = roster.bots.filter(bot => !room.members.includes(bot.id))
    const admin = roster.byId[room.admin]
-@@ -95,7 +173,12 @@ export function GroupSettingsForm({ room, roster, actions, run, onDeleted }) {
+@@ -95,7 +175,12 @@ export function GroupSettingsForm({ room, roster, actions, run, onDeleted }) {
          h(InlineText, { label: t('Group name'), value: room.named ? room.name : '', placeholder: t('Name after members'), maxLength: 60, onSave: name => update({ name }) })),
        h(Row, { label: t('Notice'), hint: t('Every member reads it before speaking in this group.'), stack: true },
          h(InlineText, { label: t('Group notice'), value: room.notice, multiline: true, maxLength: 2000, placeholder: t('Shared instructions every member reads before speaking…'), onSave: notice => update({ notice }) }))),
@@ -907,7 +912,7 @@ index fce5203..0ad7724 100644
        h('div', { className: 'bt-set-row bt-bs-row bt-bs-stack' },
          h(Segmented, { label: t('Who answers'), value: mode }, ROOM_MODES.map(([id, label]) => h('button', {
            key: id, type: 'button', 'aria-pressed': mode === id, disabled: id === 'admin' && !admin,
-@@ -110,13 +193,13 @@ export function GroupSettingsForm({ room, roster, actions, run, onDeleted }) {
+@@ -110,13 +195,13 @@ export function GroupSettingsForm({ room, roster, actions, run, onDeleted }) {
      h(GroupPermission, { room, catalog: roster.permissions, update }),
      h(Card, { title: t('Members · {count}', { count: members.length }) },
        members.map((member) => {
@@ -923,7 +928,7 @@ index fce5203..0ad7724 100644
              ? h('button', { type: 'button', className: 'bt-mini', title: t('Leave the group without an admin'), onClick: () => update({ admin: null }) }, t('Unset'))
              : h('button', { type: 'button', className: 'bt-mini', onClick: () => update({ admin: member.id }) }, t('Make admin')),
            members.length > 2 ? h('button', { type: 'button', className: 'bt-x', 'aria-label': t('Remove {name} from the group', { name: member.name }), title: t('Remove from group'), onClick: () => update({ remove: [member.id] }) }, '×') : null)
-@@ -130,7 +213,7 @@ export function GroupSettingsForm({ room, roster, actions, run, onDeleted }) {
+@@ -130,7 +215,7 @@ export function GroupSettingsForm({ room, roster, actions, run, onDeleted }) {
          : outside.length > 0
            ? h('button', { type: 'button', className: 'bt-set-row bt-bs-row bt-gs-add', onClick: () => setAdding(true) }, h(PlusIcon), t('Add member'))
            : null,
@@ -933,10 +938,10 @@ index fce5203..0ad7724 100644
          members.length < 2 ? t('Add a Bot first: a group chat needs at least two.')
            : admin ? t('{name} leads this group: it can call members with @Name, change the group, and post here.', { name: admin.name })
 diff --git a/src/client/i18n.js b/src/client/i18n.js
-index 0c5908c..d6a181b 100644
+index 0c5908c..6db127f 100644
 --- a/src/client/i18n.js
 +++ b/src/client/i18n.js
-@@ -456,6 +456,43 @@ const ZH = {
+@@ -456,6 +456,45 @@ const ZH = {
    '{name} leads this group: it can call members with @Name, change the group, and post here.': '{name} 主持这个群：可以用 @名字 点名成员、修改群设置、在群里发言。',
    'No admin yet. An admin can call members with @Name, change the group, and post here.': '还没有管理员。管理员可以用 @名字 点名成员、修改群设置、在群里发言。',
    'Who answers': '谁来回答',
@@ -966,6 +971,8 @@ index 0c5908c..d6a181b 100644
 +  'Group defaults': '群组默认',
 +  'All agents': '全体智能体',
 +  'Agent leads': '指定主答',
++  'Only when mentioned': '仅在被 @ 时回复',
++  'Only @mentioned agents answer. Use @everyone to ask all agents.': '只有被 @ 的智能体才会回复。用 @所有人 向全体智能体提问。',
 +  'Lead {name}': '{name} 主答',
 +  'Lead unavailable': '主答智能体不可用',
 +  'Current reply policy': '当前回复策略',
@@ -1225,6 +1232,28 @@ index 3c1d1f7..103df32 100644
      updateBot: (id, patch) => after(call('update-bot', { id, ...patch })),
      // Give up one wait the Bot has on a hand-off that will not come back.
      abandonWork: id => after(call('abandon-work', { id })),
+diff --git a/src/host/bot-tasks.js b/src/host/bot-tasks.js
+index 9116437..1ee020e 100644
+--- a/src/host/bot-tasks.js
++++ b/src/host/bot-tasks.js
+@@ -14,7 +14,7 @@ import { HANDOFF_ACK, HISTORY_TIMEOUT_MS, SOURCE_KIND, STEER_CUT } from './const
+ import { within } from './folders.js'
+ import { absoluteLinks } from './links.js'
+ import { textOf } from './text.js'
+-import { activeTasksOf, isActiveTask, threadCurrentOfPart, threadOfPart } from './threads.js'
++import { activeTasksOf, isActiveTask, isOpenTeamilyForeground, threadCurrentOfPart, threadOfPart } from './threads.js'
+ import { output } from './tools.js'
+ import { answerSender, cutOffText, turnFailure } from './turns.js'
+
+@@ -702,7 +702,7 @@ export function install(rt) {
+   // a fast mid-model steer cut. Disabled for local CLI agents in v1.
+   function shouldMoveForeground(bot, sessionId) {
+     if (bot === undefined || sessionId === undefined || rt.readOnly?.() !== undefined) return false
+-    if (sessionId !== rt.chatOf(bot.id)) return false
++    if (sessionId !== rt.chatOf(bot.id) || isOpenTeamilyForeground(bot, sessionId)) return false
+     if (rt.groupOwners.has(sessionId) || rt.taskOwners?.has(sessionId)) return false
+     if (rt.isSwitchingPart?.(sessionId)) return false
+     const session = ctx.get('agents')?.get(sessionId)?.session
 diff --git a/src/host/capabilities.js b/src/host/capabilities.js
 index efe6323..85c65df 100644
 --- a/src/host/capabilities.js
@@ -1272,31 +1301,11 @@ index c911d2b..0d13f30 100644
          case 'memory-add':
            await rt.load()
            return ok(await rt.mobileEndpoint(endpoint, body))
-diff --git a/src/host/bot-tasks.js b/src/host/bot-tasks.js
---- a/src/host/bot-tasks.js
-+++ b/src/host/bot-tasks.js
-@@ -14,7 +14,7 @@
- import { within } from './folders.js'
- import { absoluteLinks } from './links.js'
- import { textOf } from './text.js'
--import { activeTasksOf, isActiveTask, threadCurrentOfPart, threadOfPart } from './threads.js'
-+import { activeTasksOf, isActiveTask, isOpenTeamilyForeground, threadCurrentOfPart, threadOfPart } from './threads.js'
- import { output } from './tools.js'
- import { answerSender, cutOffText, turnFailure } from './turns.js'
-
-@@ -702,7 +702,7 @@
-   // a fast mid-model steer cut. Disabled for local CLI agents in v1.
-   function shouldMoveForeground(bot, sessionId) {
-     if (bot === undefined || sessionId === undefined || rt.readOnly?.() !== undefined) return false
--    if (sessionId !== rt.chatOf(bot.id)) return false
-+    if (sessionId !== rt.chatOf(bot.id) || isOpenTeamilyForeground(bot, sessionId)) return false
-     if (rt.groupOwners.has(sessionId) || rt.taskOwners?.has(sessionId)) return false
-     if (rt.isSwitchingPart?.(sessionId)) return false
-     const session = ctx.get('agents')?.get(sessionId)?.session
 diff --git a/src/host/parts.js b/src/host/parts.js
+index 109ec22..7ca438b 100644
 --- a/src/host/parts.js
 +++ b/src/host/parts.js
-@@ -405,6 +405,7 @@
+@@ -405,6 +405,7 @@ export function install(rt) {
      if (bot === undefined) return []
      const thread = sessionId === undefined ? undefined : threadOfPart(bot, sessionId)
      if (thread === undefined) return partsOf(bot.id)
@@ -1304,7 +1313,7 @@ diff --git a/src/host/parts.js b/src/host/parts.js
      if (thread.thread === 'task') {
        const task = bot.tasks[thread.index]
        // A foreground turn moved into a background task keeps read_own_chat access to the
-@@ -1021,6 +1022,7 @@
+@@ -1021,6 +1022,7 @@ export function install(rt) {
      if (owner.botId !== undefined) {
        const bot = rt.botOf(owner.botId)
        const thread = threadOfPart(bot, sessionId)
@@ -1313,9 +1322,10 @@ diff --git a/src/host/parts.js b/src/host/parts.js
          const live = threadCurrentOfPart(bot, sessionId)
          if (live !== undefined) return live
 diff --git a/src/host/store.js b/src/host/store.js
+index 5839b17..7cd0dd0 100644
 --- a/src/host/store.js
 +++ b/src/host/store.js
-@@ -8,7 +8,7 @@
+@@ -8,7 +8,7 @@ import { LEGACY_THEMES, MAX_EXCHANGES, ROOM_MODES, SECTION_COLORS, SECTION_NAME_
  import { replaceFile } from './files.js'
  import { homeLock } from './home-lock.js'
  import { currentColor, headOf, normalize, unquote } from './text.js'
@@ -1324,7 +1334,7 @@ diff --git a/src/host/store.js b/src/host/store.js
  import { AMBIGUOUS_OLD_ROUTES, legacyRoute } from './local-agents/engines.js'
 
  // A table read that sees only the keys the table holds itself. Ids that come from
-@@ -202,9 +202,62 @@
+@@ -202,9 +202,62 @@ export function install(rt) {
          if (memberSid !== undefined) liveTeamSessions.add(memberSid)
        }
      }
@@ -1387,7 +1397,7 @@ diff --git a/src/host/store.js b/src/host/store.js
        const botId = sessionIdOf(bot.id) ?? id
        const existingSegments = Array.isArray(bot.segments) ? bot.segments : []
        const seen = new Set([...liveTeamSessions, ...existingSegments.map(segment => sessionIdOf(segment?.sessionId)).filter(Boolean)])
-@@ -412,7 +465,9 @@
+@@ -412,7 +465,9 @@ export function install(rt) {
            if (sessionId !== undefined) {
              // Never archive or move schedules off any live team session (foreground chat,
              // active #783 background task, group member session, or group's own session).
@@ -1398,7 +1408,7 @@ diff --git a/src/host/store.js b/src/host/store.js
                dropEntry(entry, sessionId)
                continue
              }
-@@ -718,6 +773,11 @@
+@@ -718,6 +773,11 @@ export function install(rt) {
        indexPast(bot.segments, { botId })
        const currentSid = chatOf(botId)
        if (sessionIdOf(currentSid) !== undefined) chatOwners.set(currentSid, botId)
@@ -1411,13 +1421,13 @@ diff --git a/src/host/store.js b/src/host/store.js
        // active tasks stay in chatOwners/taskOwners; settled tasks move to pastOwners
        // so folder/engine/model sweeps do not wake them again.
 diff --git a/src/host/threads.js b/src/host/threads.js
+index 70319ca..2e55079 100644
 --- a/src/host/threads.js
 +++ b/src/host/threads.js
-@@ -6,6 +6,20 @@
- // A Bot that never ran yet has no stored session id: its first Session is the Bot id
+@@ -7,6 +7,20 @@
  // (store.js chatOf falls back to it).
  export const currentSession = bot => bot?.sessionId ?? bot?.id
-+
+
 +export function retainsOpenTeamilyParts(bot) {
 +  const instance = process.env.OPENTEAMILY_ROUTING_INSTANCE_ID ?? process.env.OPENTEAMILY_INSTANCE_ID
 +  return /^[0-9a-f]{32}$/.test(instance ?? '') || bot?.openteamily?.managedOpenParts === true
@@ -1431,10 +1441,11 @@ diff --git a/src/host/threads.js b/src/host/threads.js
 +  const keys = Object.values(bot.openteamily?.sessionKeys ?? {})
 +  return keys.includes(sessionId) || (bot.segments ?? []).some(part => keys.includes(part.sessionId))
 +}
-
++
  export const ACTIVE_TASK_STATUSES = new Set(['running', 'waiting_work', 'waiting_approval'])
 
-@@ -23,7 +37,9 @@
+ export const isActiveTask = task => task !== undefined && ACTIVE_TASK_STATUSES.has(task.status)
+@@ -23,7 +37,9 @@ export function threadOf(bot, sessionId) {
    if (bot === undefined || sessionId === undefined) return undefined
    if (currentSession(bot) === sessionId) return { thread: 'current', segments: bot.segments ?? [] }
    const taskAt = (bot.tasks ?? []).findIndex(task => task?.sessionId === sessionId)
@@ -1445,7 +1456,7 @@ diff --git a/src/host/threads.js b/src/host/threads.js
  }
 
  export const threadSegments = (bot, sessionId) => threadOf(bot, sessionId)?.segments ?? []
-@@ -33,6 +49,7 @@
+@@ -33,6 +49,7 @@ export function threadCurrent(bot, sessionId) {
    const thread = threadOf(bot, sessionId)
    if (thread === undefined) return undefined
    if (thread.thread === 'current') return currentSession(bot)
@@ -1453,7 +1464,7 @@ diff --git a/src/host/threads.js b/src/host/threads.js
    return bot.tasks[thread.index].sessionId
  }
 
-@@ -45,7 +62,9 @@
+@@ -45,7 +62,9 @@ export function threadOfPart(bot, sessionId) {
    if (found !== undefined || bot === undefined || sessionId === undefined) return found
    if ((bot.segments ?? []).some(segment => segment.sessionId === sessionId)) return { thread: 'current', segments: bot.segments }
    const taskAt = (bot.tasks ?? []).findIndex(task => (task.segments ?? []).some(segment => segment.sessionId === sessionId))
@@ -1464,7 +1475,7 @@ diff --git a/src/host/threads.js b/src/host/threads.js
  }
 
  // The live session a part's thread goes on in: a reply to, or input given to, an
-@@ -56,6 +75,7 @@
+@@ -56,6 +75,7 @@ export function threadCurrentOfPart(bot, sessionId) {
    const thread = threadOfPart(bot, sessionId)
    if (thread === undefined) return undefined
    if (thread.thread === 'current') return currentSession(bot)
@@ -1472,7 +1483,7 @@ diff --git a/src/host/threads.js b/src/host/threads.js
    const task = bot.tasks[thread.index]
    return isActiveTask(task) ? task.sessionId : undefined
  }
-@@ -68,6 +88,10 @@
+@@ -68,6 +88,10 @@ export function pushThreadPart(bot, sessionId, freshId, segment) {
    if (thread.thread === 'current') {
      ;(bot.segments ??= []).push(segment)
      bot.sessionId = freshId
@@ -1483,7 +1494,7 @@ diff --git a/src/host/threads.js b/src/host/threads.js
    } else {
      const task = bot.tasks[thread.index]
      ;(task.segments ??= []).push(segment)
-@@ -78,13 +102,15 @@
+@@ -78,13 +102,15 @@ export function pushThreadPart(bot, sessionId, freshId, segment) {
  }
 
  // Every session this Bot keeps outside its current thread, for cleanup, memory and usage.
@@ -1504,7 +1515,7 @@ diff --git a/src/host/threads.js b/src/host/threads.js
 
  // Whether two Session ids belong to the same Bot conversation thread or group membership.
  // Stays stable across part switches while isolating the foreground chat, background tasks
-@@ -107,9 +133,9 @@
+@@ -107,9 +133,9 @@ export function sameConversation(state, botId, sessionA, sessionB) {
    return threadA.thread === threadB.thread && threadA.index === threadB.index
  }
 

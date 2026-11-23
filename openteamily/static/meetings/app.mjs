@@ -136,6 +136,7 @@ function linkedMeetingAction(params) {
   return {index:Number(index), revision:Number(revision), inbox, mine:inbox && params.get('mine') === '1', completed};
 }
 const unavailable = {status: 0, body: {}};
+const DETAIL_READ_TIMEOUT_MS = 15000;
 const SAVE_TIMEOUT_MS = 12000;
 const DRAFT_WAIT_MS = 185000;
 const DRAFT_POLL_MS = 1200;
@@ -719,12 +720,41 @@ function mount() {
   const draftRequests = new Map();
   let storedDraft = null;
   let draftPoll = 0;
+  let openRetry = null;
 
   filters.hidden = !native;
 
   function show(kind, text) {
+    openRetry = null;
     status.dataset.kind = kind;
     status.textContent = text;
+  }
+
+  function readDetail(path) {
+    return request('GET', path, undefined, undefined, AbortSignal.timeout(DETAIL_READ_TIMEOUT_MS))
+      .catch(() => unavailable);
+  }
+
+  function showOpenError(result, message, reopen) {
+    show('error', message);
+    if (result.status && ![408, 429].includes(result.status) && result.status < 500) return;
+    const target = scope();
+    const account = viewerId;
+    const button = openRetry = document.createElement('button');
+    button.type = 'button';
+    button.id = 'meeting-open-retry';
+    button.className = 'secondary';
+    button.textContent = '重试打开';
+    button.addEventListener('click', () => confirmNavigation(async () => {
+      if (openRetry !== button || !active(target) || viewerId !== account) return;
+      await reopen();
+      if (document.activeElement === document.body) openRetry?.focus();
+    }));
+    status.append(button);
+  }
+
+  function clearOpenRetry() {
+    if (openRetry) show('', '');
   }
 
   function showSave(kind, text) {
@@ -787,7 +817,9 @@ function mount() {
       const source = document.createElement('button');
       source.type = 'button';
       source.dataset.inboxControl = 'source';
-      source.textContent = '查看会议';
+      const retry = state.retryMeeting;
+      source.textContent = retry?.meeting_id === item.meeting_id && retry.action_index === item.action_index &&
+        retry.revision === item.revision ? '重试打开会议' : '查看会议';
       source.addEventListener('click', () => {
         if (!currentInbox(state)) return;
         return confirmNavigation(async () => {
@@ -798,9 +830,10 @@ function mount() {
           const opened = await openMeeting(item.meeting_id, undefined, undefined,
             {index:item.action_index, revision:item.revision, inbox:true, mine:state.mine, completed:state.completed});
           if (!opened && selection === expectedSelection && !inboxView && sameInboxScope(state)) {
-            const notice = status.textContent;
+            const notice = openRetry ? status.firstChild?.textContent || '' : status.textContent;
+            const retryMeeting = openRetry ? item : null;
             show('', '');
-            setInbox(true, {notice});
+            setInbox(true, {notice, retryMeeting});
           }
         });
       });
@@ -957,7 +990,7 @@ function mount() {
     await loadInbox(state, {notice, minimum});
   }
 
-  function setInbox(open, {focus = true, notice = ''} = {}) {
+  function setInbox(open, {focus = true, notice = '', retryMeeting = null} = {}) {
     if (!inbox || !native || (open && (!viewer || !workspaceId()))) return;
     if (inboxView?.request) {
       inboxView.request.abort();
@@ -968,12 +1001,14 @@ function mount() {
     layout.hidden = open;
     inboxOpen.setAttribute('aria-expanded', String(open));
     if (open) {
+      clearOpenRetry();
       const mine = inboxMine.checked, completed = inboxState?.value === 'completed';
       const saved = inboxResume;
       inboxResume = null;
       const resumable = saved && sameInboxScope(saved.state) && saved.state.mine === mine && saved.state.completed === completed;
       inboxView = resumable ? saved.state : {workspace:workspaceId(), owner:viewerId, viewer, mine, completed,
         items:[], cursor:'', loaded:false};
+      inboxView.retryMeeting = retryMeeting;
       if (resumable) main.scrollTop = saved.scrollTop;
       renderInbox(inboxView, resumable ? saved.position : null);
       if (!resumable && focus) {
@@ -1786,6 +1821,7 @@ function mount() {
   }
 
   function fill(meeting, source = null, draftJob = undefined, {recover = false, chatEditor = ''} = {}) {
+    clearOpenRetry();
     editorReady = false;
     if (inboxReturn) inboxReturn.hidden = true;
     if (mobileBack) mobileBack.hidden = false;
@@ -1830,6 +1866,7 @@ function mount() {
   }
 
   function openCatalogue({focus = false} = {}) {
+    clearOpenRetry();
     selection += 1;
     resetSave();
     current = null;
@@ -1926,7 +1963,7 @@ function mount() {
       form.inert = true;
       show('loading', '正在打开会议…');
     }
-    const result = read || await request('GET', `${base()}/${id}`).catch(() => unavailable);
+    const result = read || await readDetail(`${base()}/${id}`);
     if (workspaceId() !== workspace || pendingSelection !== selection || viewer !== owner) return;
     form.inert = false;
     if (result.status !== 200 || (native && result.body.viewer_username !== viewer) ||
@@ -1937,8 +1974,10 @@ function mount() {
       }
       syncWriting();
       syncDraft();
-      show('error', !result.status || result.status >= 500 ? '无法打开会议，请重试。'
-        : messageFor(result.body.error, '无法打开会议。'));
+      const message = !result.status || result.status >= 500 ? '无法打开会议。'
+        : messageFor(result.body.error, '无法打开会议。');
+      showOpenError(result, message,
+        () => openMeeting(id, undefined, transcriptQuery, actionReference));
       return;
     }
     fill(result.body.meeting, null, result.body.draft_job || null, {recover:true});
@@ -1990,13 +2029,14 @@ function mount() {
     setReceiptMode(true);
     sharedDetail.hidden = true;
     emptyDetail.hidden = true;
-    show('', '正在加载共享纪要…');
-    const result = read || await request('GET', `${base()}/shared/${id}`).catch(() => unavailable);
+    show('loading', '正在加载共享纪要…');
+    const result = read || await readDetail(`${base()}/shared/${id}`);
     if (!active(target)) return;
     const meeting = result.body.meeting;
     if (result.status !== 200 || (native && result.body.viewer_username !== viewer) ||
         meeting?.id !== id || meeting.shared !== true) {
-      show('error', result.status === 404 ? '这份共享纪要已撤回或你没有查看权限。' : '无法打开共享纪要，请重试。');
+      showOpenError(result, result.status === 404 ? '这份共享纪要已撤回或你没有查看权限。'
+        : '无法打开共享纪要。', () => openSharedMeeting(id));
       return;
     }
     const copy = native && result.body.received === true ? async index => {
@@ -2040,7 +2080,7 @@ function mount() {
     const target = scope();
     const account = viewerId;
     show('loading', '正在打开通话纪要…');
-    const result = await (read || request('GET', `${base()}/from-call/${id}`).catch(() => unavailable));
+    const result = await (read || readDetail(`${base()}/from-call/${id}`));
     if (!active(target)) return;
     const {source, meeting, viewer_username: owner, workspace_id: workspace} = result.body;
     if (result.status !== 200 || owner !== target.viewer || workspace !== target.workspace ||
@@ -2049,9 +2089,9 @@ function mount() {
         !Array.isArray(source.attendees) || (meeting &&
         (!meetingIdPattern.test(meeting.id) || meeting.source_call_id !== id || meeting.workspace_id !== workspace))) {
       const code = result.body.error?.code;
-      show('error', result.status === 409 && code === 'meeting_call_active' ? '通话还未结束。结束后可刷新此页面整理纪要。'
+      showOpenError(result, result.status === 409 && code === 'meeting_call_active' ? '通话还未结束。结束后可刷新此页面整理纪要。'
         : result.status === 404 ? '无法访问这场通话的纪要。'
-        : '无法加载通话纪要，请刷新重试。');
+        : '无法加载通话纪要。', () => openCallDraft(id, null, linkedWorkspace));
       return;
     }
     if (meeting) {
@@ -2076,6 +2116,7 @@ function mount() {
 
   async function load() {
     const seq = ++workspaceLoad;
+    clearOpenRetry();
     inboxResume = null;
     setInbox(false, {focus:false});
     selection += 1;
@@ -2097,10 +2138,9 @@ function mount() {
     const exact = !fromCall && meetingIdPattern.test(linkedWorkspace)
       && (linked.has('shared') ? !meetingId && meetingIdPattern.test(shareId) : meetingIdPattern.test(meetingId));
     const eagerDetail = native && exact
-      ? request('GET', `/v1/workspaces/${linkedWorkspace}/meetings/${shareId ? 'shared/' + shareId : meetingId}`)
-        .catch(() => unavailable) : null;
+      ? readDetail(`/v1/workspaces/${linkedWorkspace}/meetings/${shareId ? 'shared/' + shareId : meetingId}`) : null;
     const eagerSource = validCallLink && linkedWorkspace
-      ? request('GET', `/v1/workspaces/${linkedWorkspace}/meetings/from-call/${callId}`).catch(() => unavailable) : null;
+      ? readDetail(`/v1/workspaces/${linkedWorkspace}/meetings/from-call/${callId}`) : null;
     if (fromCall) {
       form.hidden = true;
       if (layout) layout.dataset.view = 'catalogue';
