@@ -183,12 +183,9 @@ servers stopped at the end of a run; a killed run leaves them for inspection.
   `530x61` for a change that did not touch it. Treat origin-text pixels as
   framing, not as part of the PR diff, or run the two arms on one origin.
 - `/automations` can carry a `0.03–0.04%` time-based strip (75x282 at
-  1440x900) even with the worker disabled; it is progress/time rendering, not
-  the PR change.
+  1440x900) from progress and time labels.
 - The capture interleaves the two sides inside each combo (viewport × locale ×
-  theme) so runtime heartbeat and countdown state are seconds apart, and the
-  side servers start with `--no-automation-worker`; both reduce drift without
-  touching product code.
+  theme) so runtime heartbeat and countdown snapshots are seconds apart.
 
 ## What this is not
 
