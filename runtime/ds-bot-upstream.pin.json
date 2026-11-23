@@ -2,21 +2,21 @@
   "repo": "Fei2411/DS-Bot",
   "url": "https://github.com/Fei2411/DS-Bot",
   "license": "Apache-2.0",
-  "tag": "v0.3.8",
-  "commit": "5e9b7da8882da3b68d8a0624342708c2150a9156",
-  "committed": "2026-11-16T07:30:42-08:00",
-  "version": "0.3.8",
+  "tag": "v0.3.10",
+  "commit": "d104d9ca18d69a35460f14e15dff4d553181433a",
+  "committed": "2026-11-22T18:25:36+08:00",
+  "version": "0.3.10",
   "dsh": "0.2.2-rc.1",
   "note": "runtime/ds-bot-upstream/<path> is byte-identical to upstream <commit>:<path> (git object ids below). Never edit it; OpenTeamily changes live outside it (see runtime/ds-bot-upstream/UPSTREAM.md). Update with: node scripts/ds-bot-upstream.mjs sync <tag>",
   "paths": {
     "ds-bot": {
       "type": "tree",
-      "id": "7ba0f17c6b1555a6c517ad48b650f8e1ae85fc5d",
+      "id": "ef97b8b191631f100cbfc2426dc97d19f1dc61e6",
       "mode": "040000"
     },
     "link": {
       "type": "tree",
-      "id": "9790be2a2447a5adaf1a0329ff5effc681b29009",
+      "id": "2e8f3f56ce98c91d8a31cbb9088abefd03470ccd",
       "mode": "040000"
     },
     "docker/Dockerfile": {
@@ -46,7 +46,7 @@
     },
     "NOTICE": {
       "type": "blob",
-      "id": "07f9cd2bbd4880a4001677e9e0b81c0e170483d5",
+      "id": "d9618dc66b0ac5e0e15b2e29cc4bd9a86259b0b0",
       "mode": "100644"
     }
   }

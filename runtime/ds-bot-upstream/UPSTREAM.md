@@ -3,7 +3,7 @@
 This directory holds a **byte-identical copy** of selected paths from
 [Fei2411/DS-Bot](https://github.com/Fei2411/DS-Bot), pinned in
 [`../ds-bot-upstream.pin.json`](../ds-bot-upstream.pin.json). The current pin is the release
-**v0.3.8**, commit `5e9b7da8882da3b68d8a0624342708c2150a9156`, ds-bot package `0.3.8`. Its tests
+**v0.3.10**, commit `d104d9ca18d69a35460f14e15dff4d553181433a`, ds-bot package `0.3.10`. Its tests
 expect DeepSeek Harness (DSH) `0.2.2-rc.1`.
 
 This file is the only OpenTeamily-authored file in this directory. Every other file is upstream's,
