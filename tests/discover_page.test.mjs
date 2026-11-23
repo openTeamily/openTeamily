@@ -1210,6 +1210,112 @@ test('following nobody from a shared URL shows the following empty note, not a b
   assert.match(calls.at(-1), /tab=following/);
 });
 
+test('feed arrow and boundary keys select real tabs immediately with one tab stop', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument(), visits = [], paths = [];
+  const html = readFileSync(new URL('../openteamily/static/discover/index.html', import.meta.url), 'utf8');
+  assert.match(html, /class="feed-tabs" role="tablist" aria-label="动态类型"/);
+  assert.match(html, /id="feed-results" role="tabpanel" aria-labelledby="feed-tab-activity"/);
+  const tabs = ['following', 'activity', 'collected'];
+  const el = name => doc.getElementById('feed-tab-' + name);
+  for (const name of tabs) {
+    assert.match(html, new RegExp('id="feed-tab-' + name + '"[^>]*role="tab" aria-controls="feed-results"'));
+    el(name).focus = () => { doc.activeElement = el(name); };
+  }
+  await mount(doc, {
+    location: {search: '', pathname: '/discover'},
+    history: {pushState(_state, _title, url) { visits.push(url); }},
+    async fetcher(path) {
+      if (path === '/v1/auth/session') return commentResponse({user: {id: 'user-a', username: 'alice'}});
+      paths.push(path);
+      return commentResponse({items: []});
+    },
+  });
+  async function move(from, key, to) {
+    let prevented = false;
+    const pending = el(from).handlers.keydown({key, preventDefault() { prevented = true; }});
+    assert.equal(prevented, true);
+    assert.equal(doc.activeElement, el(to));
+    assert.deepEqual(tabs.map(name => el(name).attributes.tabindex), tabs.map(name => name === to ? '0' : '-1'));
+    assert.deepEqual(tabs.map(name => el(name).attributes['aria-selected']), tabs.map(name => String(name === to)));
+    assert.equal(doc.getElementById('feed-results').attributes['aria-labelledby'], 'feed-tab-' + to);
+    await pending;
+  }
+  await move('activity', 'ArrowLeft', 'following');
+  await move('following', 'ArrowLeft', 'collected');
+  await move('collected', 'Home', 'following');
+  await move('following', 'ArrowRight', 'activity');
+  await move('activity', 'End', 'collected');
+  assert.deepEqual(visits, ['/discover?feed=following', '/discover?feed=collected', '/discover?feed=following',
+    '/discover', '/discover?feed=collected']);
+  assert.match(paths.at(-1), /tab=collected/);
+  const before = paths.length;
+  await el('collected').handlers.keydown({key: 'ArrowRight', altKey: true});
+  assert.equal(paths.length, before);
+});
+
+test('empty filtered following offers a reset and keeps the selected feed', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument(), paths = [];
+  await mount(doc, {
+    location: {search: '?feed=following&kind=image', pathname: '/discover'},
+    async fetcher(path) {
+      if (path === '/v1/auth/session') return commentResponse({user: {id: 'user-a', username: 'alice'}});
+      paths.push(path);
+      return commentResponse({items: []});
+    },
+  });
+  const el = id => doc.getElementById(id);
+  assert.equal(el('feed-following-empty').hidden, true);
+  assert.equal(el('feed-note').textContent, FEED_SEARCH_EMPTY_NOTE);
+  assert.equal(el('feed-empty-reset').hidden, false);
+  await el('feed-empty-reset').handlers.click();
+  assert.match(paths.at(-1), /tab=following/);
+  assert.doesNotMatch(paths.at(-1), /kind=/);
+  assert.equal(el('feed-tab-following').attributes['aria-selected'], 'true');
+  assert.equal(el('feed-following-empty').hidden, false);
+  assert.equal(el('feed-empty-reset').hidden, true);
+});
+
+test('returning to a visited tab restores pages with a fresh cursor without pulling keyboard focus away', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument(), paths = [];
+  let activityReads = 0;
+  await mount(doc, {
+    location: {search: '?q=launch', pathname: '/discover'},
+    async fetcher(path) {
+      if (path === '/v1/auth/session') return commentResponse({user: {id: 'user-a', username: 'alice'}});
+      if (path.endsWith('/preview')) return commentResponse({preview: null});
+      const params = new URL(path, 'https://example.test').searchParams;
+      paths.push(params);
+      if (params.get('tab') === 'following') return commentResponse({items: []});
+      if (params.has('cursor')) return commentResponse({items: [detailFixture({slug: 'second-page'})]});
+      return commentResponse({items: [detailFixture({slug: 'first-page'})], cursor: 'fresh-' + ++activityReads});
+    },
+  });
+  const el = id => doc.getElementById(id);
+  const activity = el('feed-tab-activity');
+  const following = el('feed-tab-following');
+  activity.id = 'feed-tab-activity';
+  following.id = 'feed-tab-following';
+  let focusCount = 0;
+  activity.focus = () => { doc.activeElement = activity; focusCount++; };
+  following.focus = () => { doc.activeElement = following; };
+  await el('feed-more').handlers.click();
+  const before = activityReads;
+  el('main').scrollTop = 570;
+  await activity.handlers.keydown({key: 'ArrowLeft', preventDefault() {}});
+  assert.equal(el('main').scrollTop, 0);
+  assert.equal(doc.activeElement, following);
+  await following.handlers.keydown({key: 'ArrowRight', preventDefault() {}});
+  assert.equal(paths.at(-1).get('cursor'), 'fresh-' + (before + 1));
+  assert.equal(paths.at(-1).get('q'), 'launch');
+  assert.equal(el('feed-grid').children.length, 2);
+  assert.equal(el('main').scrollTop, 570);
+  assert.equal(doc.activeElement, activity);
+  assert.equal(focusCount, 1, 'the key handler, not the async restore, moves focus');
+});
+
 
 test('work covers use real same-origin published media, not invented screenshots', () => {
   const doc = fakeDocument();

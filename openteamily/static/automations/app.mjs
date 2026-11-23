@@ -649,6 +649,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const listPanel = document.getElementById('list-panel');
   const workspaceSelect = document.getElementById('workspace');
   const search = document.getElementById('search');
+  const clearSearch = document.getElementById('automation-search-clear');
   const runButton = document.getElementById('tick-automation');
   const runHistoryButton = document.getElementById('show-run-history');
   const runPanel = document.getElementById('run-panel');
@@ -716,6 +717,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const savedRunResults = new Map();
   const savingRunResults = new Set();
   const runSubmissions = new Map();
+  const tabDrafts = new Map();
   const watchedRuns = new Map();
   const cancellingRuns = new Set();
   const pendingScheduleSwitches = new Set();
@@ -766,7 +768,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (filter !== 'all') params.set('runs', filter);
     const text = params.size ? '?' + params : '';
     if ((view.location.search || '') === text) return;
-    view.history.pushState({runs: filter}, '', text ? base + text : base);
+    const state = catalogueEditorState();
+    if (state.automationDepth) state.automationDepth += 1;
+    view.history.pushState({...state, runs: filter}, '', text ? base + text : base);
   }
 
   function clearEditorLink() {
@@ -779,10 +783,44 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function writeWorkspaceLink() {
     if (!view?.location || !view?.history?.replaceState) return;
+    const catalogue = snapshotCatalogue();
+    view.history.replaceState({runs:runFilter, ...(catalogue && {automationCatalogue: catalogue})}, '', catalogueAddress());
+  }
+
+  function catalogueAddress() {
     const workspace = workspaceId();
     const fragment = /^[a-f0-9]{32}$/.test(workspace) ? '#workspace=' + workspace : '';
-    view.history.replaceState({runs:runFilter}, '',
-      (view.location.pathname || '/automations') + runFilterSearchText(runFilter) + fragment);
+    return (view.location.pathname || '/automations') + runFilterSearchText(runFilter) + fragment;
+  }
+
+  function catalogueState(workspace = workspaceId()) {
+    const saved = view?.history?.state?.automationCatalogue;
+    return native && EDITOR_ID.test(currentUser?.id || '') && saved?.owner === currentUser.id &&
+      saved.workspace === workspace && EDITOR_ID.test(saved.workspace) ? saved : null;
+  }
+
+  function snapshotCatalogue(automation, scroll = main.scrollTop || 0) {
+    const owner = currentUser?.id, workspace = workspaceId();
+    return native && EDITOR_ID.test(owner || '') && EDITOR_ID.test(workspace)
+      ? {owner, workspace, automation, category, query: search.value, scroll} : null;
+  }
+
+  function catalogueEditorState() {
+    const catalogue = catalogueState();
+    const depth = view?.history?.state?.automationDepth;
+    return catalogue?.automation === current?.id && Number.isSafeInteger(depth) && depth > 0
+      ? {automationCatalogue: catalogue, automationDepth: depth} : {};
+  }
+
+  function restoreCatalogue(catalogue) {
+    search.value = typeof catalogue.query === 'string' ? catalogue.query.slice(0, 80) : '';
+    selectCategory(tabCategory(catalogue.category));
+  }
+
+  function rememberCatalogue() {
+    if (!view?.history?.replaceState || listPanel.hidden || editorTargetFromSearch(readSearch())) return;
+    const catalogue = snapshotCatalogue(catalogueState()?.automation);
+    if (catalogue) view.history.replaceState({...view.history.state, automationCatalogue: catalogue}, '', catalogueAddress());
   }
 
   function syncRunFilters() {
@@ -1008,7 +1046,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function readEditorDraft(key) {
     if (!key) return null;
     try {
-      const saved = JSON.parse(view.sessionStorage.getItem(key) || 'null');
+      const saved = tabDrafts.get(key) || JSON.parse(view.sessionStorage.getItem(key) || 'null');
       if (!saved?.values || (saved.revision !== null && !Number.isSafeInteger(saved.revision))) return null;
       const attempt = saved.attempt;
       return {values:draftFields(saved.values), revision:saved.revision, edition:saved.edition === true,
@@ -1028,6 +1066,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function forgetEditorDraft(key = editorDraft?.key) {
     if (!key) return;
+    tabDrafts.delete(key);
     try { view.sessionStorage.removeItem(key); } catch {}
     if (editorDraft?.key === key) editorDraft = null;
   }
@@ -1039,14 +1078,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const patch = editorChanges(values, base);
     const fresh = !current?.id && !followupSource;
     const changed = Boolean(draftSave || (fresh && current?.edition) || Object.keys(patch).length);
+    const saved = {revision, values:fresh ? values : patch, edition:current?.edition === true, attempt:draftSave};
     editorDraft.stored = false;
+    tabDrafts.delete(key);
     try {
-      if (changed) view.sessionStorage.setItem(key, JSON.stringify({
-        revision, values:fresh ? values : patch, edition:current?.edition === true, attempt:draftSave,
-      }));
+      if (changed) view.sessionStorage.setItem(key, JSON.stringify(saved));
       else view.sessionStorage.removeItem(key);
       editorDraft.stored = true;
-    } catch {}
+    } catch {
+      if (changed) tabDrafts.set(key, saved);
+    }
     showDraftStatus(draftSave ? '上次保存尚未确认，可以用原内容确认。'
       : changed ? editorDraft.stored ? '草稿已保存在此标签页。' : '有未保存的修改。' : '');
   }
@@ -2056,11 +2097,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  function replaceAutomationLink(item, run = null) {
+  function replaceAutomationLink(item, run = null, fromCatalogue = false) {
     const params = new URLSearchParams({workspace: item.workspace_id, automation: item.id});
     if (run) params.set('run', run.id);
     if (runFilter !== 'all') params.set('runs', runFilter);
-    view?.history?.replaceState?.({runs: runFilter}, '', (view.location.pathname || '/automations') + '?' + params);
+    if (!view?.history?.replaceState || !view.location) return;
+    const url = (view.location.pathname || '/automations') + '?' + params;
+    const catalogue = fromCatalogue && view.history.pushState && snapshotCatalogue(item.id, listReturn?.scroll || 0);
+    if (catalogue) {
+      view.history.replaceState({runs: runFilter, automationCatalogue: catalogue}, '', catalogueAddress());
+      view.history.pushState({runs: runFilter, automationCatalogue: catalogue, automationDepth: 1}, '', url);
+      return;
+    }
+    view.history.replaceState({...catalogueEditorState(), runs: runFilter}, '', url);
   }
 
   function selectCategory(value) {
@@ -2068,10 +2117,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     for (const tab of tabs) {
       tab.setAttribute('aria-selected', tab.dataset.category === category ? 'true' : 'false');
     }
+    const name = category === 'mine' ? '搜索我的自动化' : '搜索自动化模板';
+    search.placeholder = name + '…';
+    search.setAttribute('aria-label', name);
   }
 
   async function loadList({startup, quiet = false} = {}) {
     globalThis.clearTimeout(listTimer);
+    if (clearSearch) clearSearch.hidden = !search.value;
     const id = workspaceId();
     if (!id) return;
     const seq = ++listRequest;
@@ -2092,7 +2145,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         listFingerprint = fingerprint;
         renderList(items, list, empty, (item, opener) => {
           openEditor(item, null, opener);
-          if (native && /^[0-9a-f]{32}$/.test(item.id) && item.workspace_id === id) replaceAutomationLink(item);
+          if (native && EDITOR_ID.test(item.id) && item.workspace_id === id) replaceAutomationLink(item, null, true);
         }, native && viewer ? (item, control) => toggleSchedule(item, control, id, viewer) : null,
         item => pendingScheduleSwitches.has(scheduleSwitchKey(id, viewer, item.id)));
         if (quiet && /^[a-f0-9]{32}$/.test(focused || '')) {
@@ -2151,7 +2204,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       empty.textContent = messageFor(listed.body.error, '无法读取自动化列表。');
       return;
     }
-    empty.textContent = '这个分类下还没有自动化。';
+    empty.textContent = search.value.trim() ? '没有匹配的自动化。' : '这个分类下还没有自动化。';
     renderItems(listed.body.items || []);
   }
 
@@ -2196,6 +2249,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       templateState = 'idle';
       templateRequest = null;
       runSubmissions.clear();
+      tabDrafts.clear();
       watchedRuns.clear();
       stopRunPoll();
       loginPanel.hidden = false;
@@ -2217,6 +2271,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       templateState = 'idle';
       templateRequest = null;
       runSubmissions.clear();
+      tabDrafts.clear();
       watchedRuns.clear();
       stopRunPoll();
     }
@@ -2260,6 +2315,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (hasWorkspace) workspaceSelect.value = requestedWorkspace;
+    const catalogue = catalogueState();
+    if (hasWorkspace && catalogue) restoreCatalogue(catalogue);
     void supplemental?.then(result => {
       if (seq !== loadRequest) return;
       if (result.status === 200) fillWorkspaces(result.body.items);
@@ -2338,7 +2395,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   editorOptions?.addEventListener('toggle', () => {
     if (editorOptions.open && !form.hidden) void loadTemplates();
   });
-  search.addEventListener('input', () => loadList());
+  function searchCatalogue() {
+    rememberCatalogue();
+    return loadList();
+  }
+  search.addEventListener('input', searchCatalogue);
+  clearSearch?.addEventListener('click', () => {
+    search.value = '';
+    search.focus();
+    return searchCatalogue();
+  });
   runHistoryButton?.addEventListener('click', () => {
     if (runPanel?.hidden) void loadRuns({focus: true});
     else showRunHistory();
@@ -2392,9 +2458,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   if (view && typeof view.addEventListener === 'function') {
     view.addEventListener('popstate', () => {
       const wanted = runFilterFromSearch(readSearch());
-      const linked = automationTargetFromSearch(readSearch());
+      const linked = editorTargetFromSearch(readSearch());
       const target = runScope();
       const inEditor = currentRunScope(target) && linked?.automation === target.automation && linked.workspace === target.workspace;
+      const fragment = new URLSearchParams((view.location?.hash || '').slice(1));
+      const catalogue = catalogueState(linked?.workspace || fragment.get('workspace') || workspaceId());
+      if (catalogue && !linked) {
+        runFilter = wanted;
+        syncRunFilters();
+        if (catalogue.workspace === workspaceId()) {
+          restoreCatalogue(catalogue);
+          void returnToList(catalogue);
+        } else {
+          syncEditorDraft();
+          void load();
+        }
+        return;
+      }
+      if (catalogue && !inEditor && linked?.automation === catalogue.automation && linked.workspace === catalogue.workspace) {
+        runFilter = wanted;
+        syncRunFilters();
+        if (form.hidden && linked.workspace === workspaceId()) void openLinkedAutomation(linked, loadRequest);
+        else {
+          syncEditorDraft();
+          void load();
+        }
+        return;
+      }
       const selectionChanged = inEditor && (selectedRun?.id || linkedRunRequest?.id) !== linked.run;
       if (wanted === runFilter && !selectionChanged) return;
       runIntent += 1;
@@ -2424,6 +2514,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const runPanel = document.getElementById('run-panel');
       if (runPanel) runPanel.hidden = true;
       stopRunPoll();
+      rememberCatalogue();
       await loadList();
     });
   }
@@ -2436,13 +2527,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   scheduleSettings?.addEventListener('input', renderEditorSchedule);
   scheduleSettings?.addEventListener('change', renderEditorSchedule);
 
-  async function returnToList() {
+  async function returnToList(catalogue = null) {
     const transition = ++editorRequest;
-    const position = listReturn;
+    const position = listReturn || catalogue;
     listReturn = null;
-    clearEditorLink();
     closeConfirm({restoreFocus: false});
-    forgetEditorDraft();
+    if (catalogue) {
+      syncEditorDraft();
+      show('', '');
+    } else {
+      forgetEditorDraft();
+      const depth = catalogueEditorState().automationDepth;
+      if (depth && view.history?.go && view.history.length > depth) {
+        backButton.disabled = true;
+        view.history.go(-depth);
+        return;
+      }
+      clearEditorLink();
+    }
     discardFollowupDraft();
     current = null;
     form.hidden = true;
@@ -2455,7 +2557,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const restore = position?.workspace === workspaceId() && position?.category === category && position?.query === search.value;
     const returnFocus = () => {
       const opener = restore ? position.opener : null;
-      const automation = opener?.dataset.automationId;
+      const automation = opener?.dataset.automationId || (restore && catalogue?.automation);
       const template = opener?.dataset.templateId;
       const resolved = opener?.isConnected ? opener : Array.from(listPanel.querySelectorAll('button[data-automation-id], button[data-template-id]'))
         .find(button => automation ? button.dataset.automationId === automation : template && button.dataset.templateId === template);
@@ -2467,7 +2569,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     returnFocus();
     const focused = document.activeElement;
     await loadList({quiet: restore});
-    if (editorRequest === transition && focused && !focused.isConnected && document.activeElement === document.body) returnFocus();
+    if (editorRequest === transition && (document.activeElement === focused ||
+        (focused && !focused.isConnected && document.activeElement === document.body))) returnFocus();
   }
 
   backButton.addEventListener('click', () => {

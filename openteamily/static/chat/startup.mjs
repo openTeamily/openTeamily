@@ -21,6 +21,44 @@ export function startChatReads(read, start, allowLocal) {
   return {sessionRequest, localRequest};
 }
 
+export function ownedChatStartup(result, user) {
+  const body = result?.body;
+  const space = body?.items?.length === 1 ? body.items[0] : null;
+  if (result?.status !== 200 || !user?.id || space?.kind !== 'personal'
+    || !/^[0-9a-f]{32}$/.test(space.id) || !/^[0-9a-f]{32}$/.test(body.personal_agent_id)) return null;
+  const viewer = body.viewer_username;
+  if ((!space.owner_id && !viewer) || (space.owner_id && space.owner_id !== user.id)
+    || (viewer && viewer !== user.username)) return null;
+  const directory = body.chat;
+  return {space, agentId: body.personal_agent_id, entry: body.entry,
+    directory: Array.isArray(directory?.items) && Array.isArray(directory?.conversations) ? directory : null};
+}
+
+export const startupTranscriptAge = 1800;
+export const historyPageSize = '50';
+
+async function prepareDesktopTranscript(read, {sessionRequest, localRequest}) {
+  const [session, personal] = await Promise.all([sessionRequest, localRequest]);
+  if (session.status !== 200) return null;
+  const user = session.body?.user;
+  const local = ownedChatStartup(personal, user);
+  if (!local?.directory) return null;
+  const id = /^[0-9a-f]{32}$/;
+  const workspace = local.space.id;
+  const active = new Set(local.directory.items.filter(agent => id.test(agent?.id || '') &&
+    agent.workspace_id === workspace && !agent.archived && !agent.native_deleted).map(agent => agent.id));
+  let first;
+  for (const row of local.directory.conversations) {
+    if (!id.test(row?.id || '') || !active.has(row.agent_id) || row.archived === true) continue;
+    if (!first || (row.updated || 0) > (first.updated || 0)) first = row;
+  }
+  if (!first) return null;
+  const path = `/v1/workspaces/${workspace}/agents/${first.agent_id}/conversations/${first.id}?limit=${historyPageSize}&snapshot=1`;
+  const expires = performance.now() + startupTranscriptAge;
+  return {owner: user.id, workspace, agent: first.agent_id, conversation: first.id, expires,
+    result: read(path, AbortSignal.timeout(startupTranscriptAge))};
+}
+
 function fitChatToKeyboard(view) {
   const {document, visualViewport: viewport} = view;
   if (!viewport || !view.matchMedia?.('(any-pointer: coarse)').matches) return;
@@ -56,9 +94,8 @@ let early;
 const view = typeof window === 'undefined' ? null : window;
 if (view) fitChatToKeyboard(view);
 if (view?.document.querySelector('meta[name="openteamily-instance"]')) {
-  const {href, hash} = view.location;
-  // These two GETs are already routed by the gateway. Starting them directly
-  // lets the account check and private snapshot overlap the rest of Chat's modules.
+  const {href, hash, search} = view.location;
+  // The gateway can start account and private history reads while Chat loads.
   const read = async (path, signal) => {
     try {
       const response = await view.fetch(path, {credentials: 'same-origin', headers: {Accept: 'application/json'}, signal});
@@ -75,7 +112,11 @@ if (view?.document.querySelector('meta[name="openteamily-instance"]')) {
   const sharedRequest = !openingPublicAgent && /^[0-9a-f]{32}$/.test(target.workspace)
     && (target.social || (target.agent && target.conversation))
     ? read('/v1/workspaces?limit=100', AbortSignal.timeout(4000)) : null;
-  early = {document: view.document, href, ...reads, sharedRequest};
+  // Desktop can read its private candidate before the main module finishes.
+  // The app later chooses between that thread and the shared conversation list.
+  const desktopTranscript = !hash && !search && view.matchMedia?.('(min-width: 901px)').matches
+    ? prepareDesktopTranscript(read, reads) : null;
+  early = {document: view.document, href, ...reads, sharedRequest, desktopTranscript};
 }
 
 export function takeChatReads(document) {

@@ -3,6 +3,9 @@ import { mountActionMenus } from '../shell/action-menu.mjs';
 import { chatPathId } from '../shell/chat-utils.mjs';
 import { studioDocumentFromSearch, studioDocumentHref } from '../shell/studio-link.mjs';
 import { preloadStudio, sharedWorkCopyToken, studioCopyCandidate, studioScope } from './entry.mjs';
+import { artifactTargetFromSearch, startSavedArtifactReads, takeSpaceStartup } from './startup.mjs';
+
+export { artifactTargetFromSearch };
 
 function studioTargetFromSearch(search) {
   const params = new URLSearchParams(search || '');
@@ -12,22 +15,6 @@ function studioTargetFromSearch(search) {
     return {workspace, catalog:true};
   }
   return studioDocumentFromSearch(search) || {invalid:true};
-}
-
-// A workspace-only link opens its catalog; a saved-result link also opens the record.
-export function artifactTargetFromSearch(search) {
-  const params = new URLSearchParams(search || '');
-  if (!params.has('workspace') && !params.has('artifact') && !params.has('revision')) return null;
-  const id = /^[0-9a-f]{32}$/;
-  const workspace = params.get('workspace');
-  const artifact = params.get('artifact');
-  const revision = params.get('revision');
-  if ([...params.keys()].some(key => !['workspace', 'artifact', 'revision'].includes(key))
-    || params.getAll('workspace').length !== 1 || !id.test(workspace || '')
-    || (artifact !== null && (params.getAll('artifact').length !== 1 || !id.test(artifact)))
-    || (revision !== null && (!artifact || params.getAll('revision').length !== 1 || !/^[1-9][0-9]{0,7}$/.test(revision)))) return {invalid: true};
-  if (revision !== null) return {workspace, artifact, revision:Number(revision)};
-  return artifact ? {workspace, artifact} : {workspace};
 }
 
 import { mountArtifactNotifications } from './notifications.mjs';
@@ -3588,15 +3575,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const fragment = new URLSearchParams((location?.hash || '').slice(1));
     const newKind = newKindFromSearch(location?.search);
     const linkedWorkspace = linkedStudio?.workspace || requested?.workspace || workspaceFromFragment(location?.hash);
-    const sessionRequest = request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
+    const startup = nativeCatalog ? takeSpaceStartup(document) ||
+      (requested?.artifact ? startSavedArtifactReads(path => request('GET', path), requested.workspace) : null) : null;
+    const sessionRequest = startup?.sessionRequest || request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
     const sharedPath = '/v1/workspaces?limit=100';
     const namedStudio = nativeCatalog && linkedStudio?.workspace;
     const studioDirectory = namedStudio ? request('GET', sharedPath)
       .catch(() => ({status: 0, body: {}})).then(initial => ({initial, supplemental: null})) : null;
-    // A saved link can check its workspace while the session is loading.
-    // The exact artifact still waits for the verified selection.
-    const linkedDirectory = studioDirectory ||
-      (nativeCatalog && requested?.artifact ? readWorkspaceChoices(request, sharedPath) : null);
+    const linkedDirectory = studioDirectory || startup?.linkedDirectory;
     const studioCode = nativeCatalog && linkedStudio?.workspace ? studio.prepare().then(() => true, () => false) : null;
     const sharedCopyCode = sharedWork ? sharedWorkCopy.prepare().then(() => true, () => false) : null;
     const initialCatalog = nativeCatalog && catalogKind !== 'meetings' && !newKind &&

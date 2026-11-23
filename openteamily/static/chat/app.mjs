@@ -11,7 +11,8 @@ import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContin
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 import {mountWorkspaceInvite} from './workspace-invite.mjs';
 import { studioDocumentHref, studioDocumentHrefInMessage } from '../shell/studio-link.mjs';
-import { chatStartFromHash, startChatReads, takeChatReads } from './startup.mjs';
+import { chatStartFromHash, historyPageSize as HISTORY_PAGE_SIZE, ownedChatStartup,
+  startChatReads, startupTranscriptAge, takeChatReads } from './startup.mjs';
 import { confirmSignupSession, personalDraftScope, readPendingChatText, savePendingChatText,
   signupDraftScope, signupSessionError, takeColdDraftHandoff } from '../home/runtime-readiness.mjs';
 import { mountActionMenus } from '../shell/action-menu.mjs';
@@ -4082,7 +4083,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   });
 
-  const HISTORY_PAGE_SIZE = '50';
   let socialHistory = null;
   let privateHistory = null;
   let privateRefresh = 0;
@@ -6325,15 +6325,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return () => ({status: 200, body});
   }
 
-  function readStartupSnapshot(wid, aid, cid) {
+  function readStartupSnapshot(wid, aid, cid, desktopTranscript) {
     if (![wid, aid, cid].every(id => /^[a-f0-9]{32}$/.test(id))) return null;
-    const maxAge = 1800;
-    const expires = performance.now() + maxAge;
+    const owner = currentUser?.id;
+    let expires = performance.now() + startupTranscriptAge;
     const path = agentConversationPath(wid, aid, cid);
-    const pending = request('GET', `${path}?limit=${HISTORY_PAGE_SIZE}&snapshot=1`,
-      undefined, undefined, AbortSignal.timeout(maxAge)).then(result => {
-        return result.status === 200 && validStartupTranscript(result.body, wid, aid, cid) ? result : null;
-      }).catch(() => null);
+    const pending = Promise.resolve(desktopTranscript).then(prepared => {
+      if (prepared?.owner === owner && prepared.workspace === wid && prepared.agent === aid &&
+          prepared.conversation === cid && performance.now() < prepared.expires) {
+        expires = prepared.expires;
+        return prepared.result;
+      }
+      return request('GET', `${path}?limit=${HISTORY_PAGE_SIZE}&snapshot=1`,
+        undefined, undefined, AbortSignal.timeout(startupTranscriptAge));
+    }).then(result => {
+      return result.status === 200 && validStartupTranscript(result.body, wid, aid, cid) ? result : null;
+    }).catch(() => null);
     return async () => {
       if (performance.now() >= expires) return null;
       const result = await pending;
@@ -7498,19 +7505,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   let loadRequest = 0;
 
-  function ownedChatStartup(result, user) {
-    const body = result?.body;
-    const space = body?.items?.length === 1 ? body.items[0] : null;
-    if (result?.status !== 200 || space?.kind !== 'personal'
-      || !/^[0-9a-f]{32}$/.test(space.id) || !/^[0-9a-f]{32}$/.test(body.personal_agent_id)) return null;
-    const viewer = body.viewer_username;
-    if ((!space.owner_id && !viewer) || (space.owner_id && space.owner_id !== user.id)
-      || (viewer && viewer !== user.username)) return null;
-    const directory = body.chat;
-    return {space, agentId: body.personal_agent_id, entry: body.entry,
-      directory: Array.isArray(directory?.items) && Array.isArray(directory?.conversations) ? directory : null};
-  }
-
   function fillChatWorkspaces(items, preferred, personal) {
     workspaces = items;
     workspaceSelect.replaceChildren();
@@ -7577,7 +7571,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const loadCurrent = () => sequence === loadRequest && location.hash === hash && location.pathname === pathname;
     const bootCurrent = () => loadCurrent() && socialOpen === navigation;
     const read = (path, signal) => request('GET', path, undefined, undefined, signal).catch(() => ({status: 0, body: {}}));
-    const {sessionRequest, localRequest, sharedRequest: preparedDirectory} = takeChatReads(document)
+    const {sessionRequest, localRequest, sharedRequest: preparedDirectory, desktopTranscript} = takeChatReads(document)
       || startChatReads(read, start, servedByDsbot && !publicIntent);
     const session = await sessionRequest;
     if (!bootCurrent()) return;
@@ -7823,7 +7817,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         if (start.agent) {
           openingAgent = openStartingAgent();
         } else if (recent && (!socialReady || sessions[0] === recent)) {
-          firstSnapshot = {row: recent, read: readStartupSnapshot(workspaceId(), recent.agent_id, recent.id)};
+          firstSnapshot = {row: recent, read: readStartupSnapshot(workspaceId(), recent.agent_id, recent.id, desktopTranscript)};
         }
       } : null,
     });

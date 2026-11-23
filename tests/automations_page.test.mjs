@@ -283,6 +283,33 @@ const projectedAutomation = 'c'.repeat(32);
 const projectedPath = '/v1/workspaces?scope=personal&include=automations';
 const projectedPersonal = {id: projectedWorkspace, owner_id: projectedOwner, name: '个人工作区', kind: 'personal'};
 
+test('a catalogue history entry restores its search only for the signed-in account and selected workspace', async () => {
+  const privateQuery = '本人工作区搜索';
+  const other = 'e'.repeat(32);
+  for (const [viewer, workspace, expected] of [
+    [projectedOwner, projectedWorkspace, privateQuery],
+    ['d'.repeat(32), projectedWorkspace, ''],
+    [projectedOwner, other, ''],
+  ]) {
+    const {doc, elements} = fakeDocument();
+    doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+    doc.defaultView = {
+      location: {pathname:'/automations', search:'', hash:'#workspace=' + workspace},
+      history: {state:{automationCatalogue:{owner:projectedOwner, workspace:projectedWorkspace,
+        category:'mine', query:privateQuery, automation:projectedAutomation}}},
+    };
+    const queries = [];
+    await mount(doc, {fetcher:async path => {
+      if (path === '/v1/auth/session') return respond({user:{id:viewer, username:'alice'}});
+      if (path.startsWith('/v1/workspaces?')) return respond({items:[{id:workspace, name:'工作区'}]});
+      queries.push(path);
+      return respond({items:[]});
+    }});
+    assert.equal(elements.get('search').value, expected);
+    assert.deepEqual(queries, [`/v1/workspaces/${workspace}/automations${listQuery('mine', expected)}`]);
+  }
+});
+
 test('a new automation restores the same account and workspace draft without a write', async () => {
   const storage = new Map();
   const location = {pathname:'/automations', search:'', hash:'#workspace=' + projectedWorkspace};

@@ -1642,21 +1642,46 @@ function linkFixture(respond, search = linkedSearch, {native = false} = {}) {
   return {...page, view, calls, mounted: mount(page.doc, {fetcher})};
 }
 
-test('Space overlaps the linked workspace directory with sign-in before requesting its artifact', async () => {
+test('Space opens a verified team document before the unrelated personal directory arrives', async () => {
   const session = deferred();
   const teams = deferred();
+  const local = deferred();
+  const personal = 'c'.repeat(32);
   const page = linkFixture(path => {
     if (path === '/v1/auth/session') return session.promise;
     if (path === '/v1/workspaces?limit=100') return teams.promise;
+    if (path === '/v1/workspaces?scope=personal') return local.promise;
     if (path === linkedCatalog + '?order=recent') return reply({body: {items: [linkedRecord]}});
   }, linkedSearch, {native:true});
   await nextTask();
   assert.ok(page.calls.some(call => call.path === '/v1/workspaces?limit=100'));
+  assert.ok(page.calls.some(call => call.path === '/v1/workspaces?scope=personal'));
   assert.equal(page.calls.some(call => call.path === linkedDetail), false);
   teams.finish(reply({body: {items: [{id: linkedWorkspace, name: '团队空间'}]}}));
   await nextTask();
   assert.equal(page.calls.some(call => call.path === linkedDetail), false);
   session.finish(reply({body: {user: {id:'u1', username:'alice'}}}));
+  await page.mounted;
+  assert.equal(page.form.hidden, false);
+  assert.equal(page.calls.filter(call => call.path === linkedDetail).length, 1);
+  local.finish(reply({body: {items: [{id:personal, name: '个人空间'}]}}));
+  await nextTask();
+  const picker = page.elements.get('workspace');
+  assert.deepEqual(picker.children.map(option => option.value), [personal, linkedWorkspace]);
+  assert.equal(picker.value, linkedWorkspace);
+  assert.equal(page.calls.filter(call => call.path === linkedDetail).length, 1);
+});
+
+test('Space still waits for the linked workspace when the first signed directory only returns other workspaces', async () => {
+  const local = deferred();
+  const page = linkFixture(path => {
+    if (path === '/v1/workspaces?limit=100') return reply({body: {items: [{id:'w2', name:'其他工作区'}]}});
+    if (path === '/v1/workspaces?scope=personal') return local.promise;
+  }, linkedSearch, {native:true});
+  await nextTask();
+  assert.equal(page.form.hidden, true);
+  assert.equal(page.calls.some(call => call.path === linkedDetail), false);
+  local.finish(reply({body: {items: [{id:linkedWorkspace, name:'个人空间'}]}}));
   await page.mounted;
   assert.equal(page.form.hidden, false);
   assert.equal(page.calls.filter(call => call.path === linkedDetail).length, 1);
