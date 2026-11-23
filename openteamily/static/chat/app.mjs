@@ -3323,6 +3323,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     replyWatch = null;
     globalThis.clearTimeout(watch.timer);
     globalThis.clearTimeout(watch.timeout);
+    globalThis.clearTimeout(watch.receiptTimer);
     watch.controller?.abort();
     closeReplyStream(watch);
   }
@@ -3356,15 +3357,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     watch.timer = globalThis.setTimeout(() => void pollReplyProgress(watch), delay);
   }
 
+  async function acceptPostingReply(watch) {
+    const queue = pendingSends.get(watch.scope);
+    const job = queue?.replying;
+    if (job?.key !== watch.key || !job.acceptReceipt) return false;
+    const pair = await confirmPostedSend(queue, job);
+    if (!pair || !job.acceptReceipt || (watch.terminal && waitingAgentReply(pair.reply))) return false;
+    job.acceptReceipt({status: 200, body: pair});
+    return true;
+  }
+
+  function observeReplyProgress(watch, snapshot) {
+    watch.snapshot = snapshot;
+    paintReplyProgress(watch.view, snapshot);
+    if (!watch.posting || snapshot.state !== 'running' || watch.receiptTimer !== undefined) return;
+    // A running stream can arrive before the send response. Once the ordinary
+    // receipt has had a chance to arrive, reconcile the one saved message pair
+    // so Stop uses the server's reply ID and attempt while the stream stays live.
+    watch.receiptTimer = globalThis.setTimeout(() => {
+      if (isCurrentReply(watch) && watch.posting && !watch.terminal) void acceptPostingReply(watch);
+    }, 250);
+  }
+
   async function settleReplyProgress(watch) {
+    watch.terminal = true;
+    globalThis.clearTimeout(watch.receiptTimer);
     if (watch.posting) {
-      const queue = pendingSends.get(watch.scope);
-      const job = queue?.replying;
-      if (job?.key === watch.key && job.acceptReceipt) {
-        const pair = await confirmPostedSend(queue, job);
-        if (pair) job.acceptReceipt?.({status: 200, body: pair});
-        else scheduleReplyProgress(watch, 1200);
-      }
+      if (!await acceptPostingReply(watch)) scheduleReplyProgress(watch, 1200);
       return;
     }
     await openAgentConversation(currentAgent.id, currentConversation.id, {refresh: true});
@@ -3382,8 +3401,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const snapshot = result?.status === 200 ? result.body : null;
     if (snapshot?.state === 'pending' || snapshot?.state === 'running') {
       watch.failures = 0;
-      watch.snapshot = snapshot;
-      paintReplyProgress(watch.view, snapshot);
+      observeReplyProgress(watch, snapshot);
       const changed = Number.isSafeInteger(snapshot.revision) && snapshot.revision !== watch.revision;
       if (changed) watch.revision = snapshot.revision;
       const unchangedDelay = Number.isSafeInteger(snapshot.revision) ? 100 : 400;
@@ -3440,8 +3458,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const text = typeof data.text === 'string' ? data.text : (watch.snapshot?.text || '') + data.append;
       if (text.length > 20000) return fallback();
       if (Number.isSafeInteger(data.revision)) watch.revision = data.revision;
-      watch.snapshot = {state:data.state,phase:data.phase,text};
-      paintReplyProgress(watch.view, watch.snapshot);
+      observeReplyProgress(watch, {state:data.state,phase:data.phase,text});
     });
     timeout(6000);
     return true;

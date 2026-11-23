@@ -152,13 +152,28 @@ class Element {
   }
   get childElementCount() { return this.children.length; }
   get options() { return this.children; }
-  append(...nodes) { this.children.push(...nodes); }
-  prepend(...nodes) { this.children.unshift(...nodes); }
+  append(...nodes) {
+    for (const node of nodes) {
+      if (node instanceof Element) Object.defineProperty(node, 'parent', {value:this, writable:true, configurable:true});
+    }
+    this.children.push(...nodes);
+  }
+  prepend(...nodes) {
+    for (const node of nodes) {
+      if (node instanceof Element) Object.defineProperty(node, 'parent', {value:this, writable:true, configurable:true});
+    }
+    this.children.unshift(...nodes);
+  }
+  contains(node) { return this === node || this.children.some(child => child.contains?.(node)); }
+  remove() {
+    if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this);
+    this.parent = null;
+  }
   showModal() { this.open = true; }
   close() { this.open = false; this.handlers.close?.(); }
   focus() {}
   select() {}
-  replaceChildren(...nodes) { this.children = nodes; }
+  replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
   setAttribute(key, value) { this.attributes[key] = value; }
   removeAttribute(key) { delete this.attributes[key]; }
   addEventListener(key, handler) { this.handlers[key] = handler; }
@@ -887,6 +902,81 @@ test('signed-in feed persists like/collect/follow and loads real private tabs', 
   assert.match(calls.at(-1)[0], /tab=collected/);
 });
 
+
+test('engaging with a later page keeps every card and a failed save can be retried in place', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const grid = doc.getElementById('feed-grid');
+  const pending = Promise.withResolvers();
+  const writes = [];
+  const reads = [];
+  const work = slug => ({slug, title: slug, author:'bob', path:'/w/' + slug, kind:'document'});
+  await mount(doc, {location:{search:''}, fetcher(path, options) {
+    if (path === '/v1/auth/session') return commentResponse({user:{username:'alice'}});
+    if (path.endsWith('/engagement')) {
+      writes.push(JSON.parse(options.body));
+      return writes.length === 1 ? pending.promise : commentResponse({liked:true,likes:3});
+    }
+    if (path.startsWith('/v1/discover/me/works?')) {
+      reads.push(path);
+      return path.includes('cursor=page-2') ? commentResponse({items:[work('second-page')]})
+        : commentResponse({items:[work('first-page')],cursor:'page-2'});
+    }
+    throw new Error(path);
+  }});
+  await doc.getElementById('feed-more').handlers.click();
+  const [first, second] = grid.children;
+  const like = second.children[1].children[0];
+  const write = like.handlers.click();
+  assert.equal(like.attributes['aria-busy'],'true');
+  await like.handlers.click();
+  assert.equal(writes.length,1);
+  pending.resolve({status:503,json:async()=>({})});
+  await write;
+  assert.equal(like.attributes['aria-pressed'],'false');
+  assert.equal(second.children[2].hidden,false);
+  assert.equal(first.children[2].hidden,true);
+  await like.handlers.click();
+  assert.equal(second.children[2].hidden,true);
+  assert.equal(like.attributes['aria-label'],'取消点赞 · 3');
+  assert.equal(like.attributes['aria-pressed'],'true');
+  assert.equal(like.attributes['aria-busy'],'false');
+  assert.equal(grid.children[0],first);
+  assert.equal(grid.children[1],second);
+  assert.equal(reads.length,2);
+});
+
+test('a stale following response cannot restore works from an author just unfollowed', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const mutation = Promise.withResolvers();
+  const following = Promise.withResolvers();
+  const grid = doc.getElementById('feed-grid');
+  const work = (slug,author) => ({slug, title:slug, author, path:'/w/' + slug,kind:'document',following:true});
+  const items = [work('first-work','first'),work('second-work','first'),work('other-work','other')];
+  const reads = [];
+  await mount(doc, {location:{search:''}, fetcher(path) {
+    if (path === '/v1/auth/session') return commentResponse({user:{username:'alice'}});
+    if (path.endsWith('/engagement')) return mutation.promise;
+    if (path.startsWith('/v1/discover/me/works?')) {
+      reads.push(path);
+      return path.includes('tab=following') ? following.promise : commentResponse({items:items.map(item=>({...item}))});
+    }
+    throw new Error(path);
+  }});
+  const firstFollow = grid.children[0].children[1].children[2];
+  const secondFollow = grid.children[1].children[1].children[2];
+  const write = firstFollow.handlers.click();
+  assert.equal(secondFollow.attributes['aria-busy'],'true');
+  const load = doc.getElementById('feed-tab-following').handlers.click();
+  mutation.resolve(commentResponse({following:false}));
+  await write;
+  following.resolve(commentResponse({items}));
+  await load;
+  assert.deepEqual(grid.children.map(card=>card.dataset.slug),['other-work']);
+  assert.equal(grid.children[0].children[1].children[2].attributes['aria-pressed'],'true');
+  assert.equal(reads.length,2);
+});
 
 test('switching private feed tabs cannot be overwritten by an older in-flight response', async () => {
   const {mount} = await import('../openteamily/static/discover/app.mjs');

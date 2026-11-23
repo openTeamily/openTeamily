@@ -16,7 +16,9 @@ The API key is stored only as a wrapped blob next to the private management data
 
 `changes` fields: `provider` (`openai`, `azure`, `anthropic`, `custom`), `base_url` (https, or http only on loopback), `model` (1–128 token characters), optional `api_key` (8–4096 characters). Revision conflicts return `409` with `error.current`.
 
-Instances include a redacted `model_api` object (no key) on list/inspect/create. Automations pass the same metadata to the dispatch hook; stored run records do not contain the key.
+For an automatically provisioned account, the manager mounts the operator default. The account’s DS-Bot applies its own saved override to requests and returns to the operator default when the account clears its key.
+
+Instances include a redacted `model_api` object for the manager-supplied configuration on list, inspect, and create. Automations pass the same metadata to the dispatch hook; stored run records do not contain the key.
 
 ## Operator files
 
