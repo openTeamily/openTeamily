@@ -131,11 +131,11 @@ def wait_for(fn, what, seconds=90):
     raise RuntimeError(f'timed out waiting for {what}: {redact(last)}')
 
 
-def start_runtime(name, network, instance_id):
+def start_runtime(name, network, instance_id, volume_id):
     docker('run', '--detach', '--name', name, '--network', network, '--user', '1000:1000', '--read-only',
            '--tmpfs', '/tmp:rw,noexec,nosuid,size=67108864', '--mount', f'type=volume,src={name}-data,dst=/data',
            '-e', 'DSH_TELEMETRY_DISABLED=1', '-e', 'DSH_LISTEN_PORT=8080',
-           '-e', f'OPENTEAMILY_INSTANCE_ID={instance_id}', IMAGE)
+           '-e', f'OPENTEAMILY_INSTANCE_ID={volume_id}', '-e', f'OPENTEAMILY_ROUTING_INSTANCE_ID={instance_id}', IMAGE)
 
 
 def launch_url(name):
@@ -182,9 +182,10 @@ def main():
         docker('network', 'create', '--driver', 'bridge', '--label', 'io.openteamily.ci=gateway', network)
         gateway_ip = json.loads(docker('network', 'inspect', network).stdout)[0]['IPAM']['Config'][0]['Gateway']
         runtimes = []
-        for name in names:
+        for index, name in enumerate(names):
             rt = {'name': name, 'id': uuid4().hex}
-            start_runtime(name, network, rt['id'])
+            rt['volume_id'] = uuid4().hex if index == 0 else rt['id']
+            start_runtime(name, network, rt['id'], rt['volume_id'])
             started.append(name)
             runtimes.append(rt)
         for rt in runtimes:
@@ -198,7 +199,7 @@ def main():
         # A runtime's own cookie works on it, and is useless on the other runtime.
         ok = request(a['address'], 'POST', '/api/openteamily', {'Host': a['address'], 'Cookie': a['cookie'],
                      'Content-Type': 'application/json'}, json.dumps({'endpoint': 'shell/identity'}))
-        assert ok[0] == 200 and json.loads(ok[2])['value']['instance_id'] == a['id'], 'own DSH cookie must work'
+        assert ok[0] == 200 and json.loads(ok[2])['value']['instance_id'] == a['volume_id'], 'own DSH cookie must work'
         cross = request(b['address'], 'POST', '/api/openteamily', {'Host': b['address'], 'Cookie': a['cookie'],
                         'Content-Type': 'application/json'}, json.dumps({'endpoint': 'shell/identity'}))
         assert cross[0] == 401, f'A cookie must not open B runtime, got {cross[0]}'
@@ -242,15 +243,15 @@ def main():
         for token, rt in ((token_a, a), (token_b, b)):
             status, headers, body = browse(token, 'GET', '/b/api/openteamily/page?path=%2Fchat%2F')
             assert status == 200, f'page via gateway: {status} {redact(body[:200])}'
-            assert headers.get('x-openteamily-served-by') == f'ds-bot; instance={rt["id"]}', 'served by own DS-Bot'
+            assert headers.get('x-openteamily-served-by') == f'ds-bot; instance={rt["volume_id"]}', 'served by own DS-Bot'
             html = body.decode()
-            assert f'<meta name="openteamily-instance" content="{rt["id"]}">' in html
+            assert f'<meta name="openteamily-instance" content="{rt["volume_id"]}">' in html
             assert 'chat' in html.lower() and '<script' in html, 'the real OpenTeamily chat page is bundled'
             assert not headers.get_all('Set-Cookie'), 'no DSH cookie may reach the browser'
             pages[rt['id']] = html
             status, _h, body = browse(token, 'POST', '/b/api/openteamily', json.dumps({'endpoint': 'shell/identity'}))
             value = json.loads(body)['value']
-            assert status == 200 and value['instance_id'] == rt['id'] and value['served_by'] == 'ds-bot'
+            assert status == 200 and value['instance_id'] == rt['volume_id'] and value['served_by'] == 'ds-bot'
             status, _h, body = browse(token, 'POST', '/b/api/bot', json.dumps({'endpoint': 'state', 'payload': {}}))
             result = json.loads(body)
             assert status == 200 and result['ok'] and isinstance(result['value']['bots'], list), 'DS-Bot executes behind the gateway'
@@ -260,7 +261,7 @@ def main():
         # Moved page: /chat/ itself is served by each user's own DS-Bot.
         for token, rt in ((token_a, a), (token_b, b)):
             status, headers, body = browse(token, 'GET', '/chat/')
-            assert status == 200 and headers.get('x-openteamily-served-by') == f'ds-bot; instance={rt["id"]}', f'/chat/ moved: {status}'
+            assert status == 200 and headers.get('x-openteamily-served-by') == f'ds-bot; instance={rt["volume_id"]}', f'/chat/ moved: {status}'
             asset = re.search(rb'href="(/chat/assets/[0-9a-f]{32}/chat/dsbot\.mjs)"', body)
             assert asset, 'chat page preloads its release-scoped adapter'
             status, headers, _b = browse(token, 'GET', asset[1].decode())
@@ -269,9 +270,9 @@ def main():
         status, headers, _b = browse(token_a, 'GET', '/b/api/openteamily/page?path=%2Fchat%2F',
                                      **{'X-OT-Upstream': b['address'], 'X-OT-Instance': b['id'],
                                         'Cookie': f'{COOKIE}={token_a}; {b["cookie"]}'})
-        assert status == 200 and headers['x-openteamily-served-by'] == f'ds-bot; instance={a["id"]}', 'A stays on A'
+        assert status == 200 and headers['x-openteamily-served-by'] == f'ds-bot; instance={a["volume_id"]}', 'A stays on A'
         status, _h, _b = browse(token_a, 'GET', f'/b/api/openteamily/page?path=%2Fchat%2F&instance={b["id"]}')
-        assert _h['x-openteamily-served-by'].endswith(a['id'])
+        assert _h['x-openteamily-served-by'].endswith(a['volume_id'])
         # No session: never reaches any runtime (redirect to platform sign-in).
         status, headers, _b = browse(None, 'GET', '/b/api/openteamily/page?path=%2Fchat%2F')
         assert status == 302 and headers['Location'] == '/login', f'no session: {status}'
@@ -325,6 +326,28 @@ def main():
         assert [m['role'] for m in history['items']] == ['user', 'assistant']
         assert api(token_b, 'GET', agents)['items'] == [], "B never sees A's agents"
         api(token_b, 'GET', chat, expected=404)
+        # An old volume can retain its native identity while using its
+        # canonical manager-issued ID in external Agent API keys.
+        external_key = api(token_a, 'POST', f'{agents}/{agent["id"]}/api-keys',
+                           {'name': 'CI gateway'}, expected=201)['token']
+        SECRETS.append(external_key)
+        assert external_key.startswith(f'ota_{a["id"]}_'), 'key must route through the canonical instance'
+        bearer = {'Authorization': f'Bearer {external_key}'}
+        status, _h, body = browse(None, 'POST', f'/v1/gateway/agents/{agent["id"]}/invocations',
+                                  json.dumps({'prompt': 'hello through the Agent API'}),
+                                  **bearer, **{'Idempotency-Key': uuid4().hex})
+        assert status == 202, f'Agent API invocation: {status} {redact(body[:200])}'
+        invocation_id = json.loads(body)['invocation']['id']
+
+        def invocation_done():
+            status, _h, body = browse(None, 'GET', f'/v1/gateway/invocations/{invocation_id}', **bearer)
+            assert status == 200, f'Agent API poll: {status} {redact(body[:200])}'
+            invocation = json.loads(body)['invocation']
+            return invocation if invocation['status'] not in ('queued', 'running') else None
+
+        result = wait_for(invocation_done, 'native external Agent API reply', seconds=120)
+        assert result['status'] == 'succeeded' and result['engine'] == 'ds-bot'
+        assert result['reply'].startswith('CI-DSBOT-REPLY')
         print(json.dumps({'gateway_isolation': 'ok', 'runtimes': 2, 'served_by': 'ds-bot', 'chat': 'ds-bot-native',
                           'instances': [a['id'], b['id']]}))
     except Exception as error:

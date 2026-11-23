@@ -14,10 +14,10 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const W = 'a'.repeat(32)
 const INSTANCE = 'f'.repeat(32)
 
-async function fixture({ reply = () => 'DS-Bot answer' } = {}) {
+async function fixture({ reply = () => 'DS-Bot answer', routingInstanceId } = {}) {
   const runtime = nativeAgentFixture({reply})
   const table = {}
-  const host = { identity: { instanceId: INSTANCE }, runtime: async () => runtime.services,
+  const host = { identity: { instanceId: INSTANCE, routingInstanceId }, runtime: async () => runtime.services,
     call: async (name, payload) => name === 'skills/materialForScope' ? {items: []} : table[name](payload) }
   const agents = createAgents({ db: new DatabaseSync(':memory:'), host }).endpoints
   for (const [k, v] of Object.entries(agents)) table[`agents/${k}`] = v
@@ -46,6 +46,20 @@ test('a key is shown once, stored as a digest, and invokes its agent as a DS-Bot
   assert.equal(bots[agent.native_bot_id].instructions, 'Be brief.')
   assert.equal((await e.invoke({ token: made.token, agent_id: agent.id, prompt: '你好', idempotency_key: 'i'.repeat(16) })).status, 200)
   await assert.rejects(e.invoke({ token: made.token, agent_id: agent.id, prompt: '别的', idempotency_key: 'i'.repeat(16) }), (err) => err.status === 409)
+})
+
+test('a preserved volume issues and verifies keys with its assigned gateway identity', async () => {
+  const routed = 'b'.repeat(32)
+  const { e, api, agent, turns } = await fixture({ routingInstanceId: routed })
+  const { token } = await e['key-create']({ workspace_id: W, agent_id: agent.id, name: 'migrated' })
+  assert.ok(token.startsWith(`ota_${routed}_`), 'the edge must be able to route the key')
+  const body = { agent_id: agent.id, prompt: 'hello', idempotency_key: 'm'.repeat(16) }
+  await assert.rejects(e.invoke({ ...body, token: token.replace(routed, INSTANCE) }), error => error.status === 401)
+  const submitted = await e.invoke({ ...body, token })
+  assert.equal(submitted.status, 202)
+  await Promise.all(api.inflight.values())
+  assert.equal((await e.invocation({ token, id: submitted.invocation.id })).invocation.reply, 'DS-Bot answer')
+  assert.equal(turns.length, 1)
 })
 
 test('rate limit, wrong agent, revoked and forged keys are refused', async () => {
