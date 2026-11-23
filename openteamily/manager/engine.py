@@ -443,7 +443,6 @@ class ComposeEngine:
             'stop': ['stop', '--timeout', '10', 'flybot'],
             'recover': ['stop', '--timeout', '10', 'flybot'],
             'restart': ['restart', '--no-deps', '--timeout', '10', 'flybot'],
-            'ps': ['ps', '--all', '--quiet', '--no-trunc', 'flybot'],
             'logs': ['logs', '--no-color', '--no-log-prefix', '--tail', str(tail), 'flybot']}
         require(operation in commands, 'operation_not_allowed')
         require('--force-recreate' not in commands[operation] or '-v' not in commands[operation], 'operation_not_allowed')
@@ -474,8 +473,14 @@ class ComposeEngine:
 
     def inspect(self, iid, heartbeat=lambda: None):
         entry, _ = self.registry.entry(iid)
+        project = 'ot-' + iid
         self.volume_check(iid, heartbeat)
-        text, _ = self.compose(iid, 'ps', heartbeat=heartbeat)
+        # Compose ps inspects each matching container even when only IDs are requested.
+        # Use its all-containers label scope, then inspect the one exact ID here.
+        text, _ = self.runner.run(['ps', '--all', '--quiet', '--no-trunc',
+                                   '--filter', 'label=com.docker.compose.project=' + project,
+                                   '--filter', 'label=com.docker.compose.service=flybot',
+                                   '--filter', 'label=com.docker.compose.config-hash'], heartbeat=heartbeat)
         ids = text.split()
         require(len(ids) <= 1 and all(re.fullmatch('[0-9a-f]{64}', x) for x in ids), 'container_scope')
         if not ids:
@@ -519,7 +524,8 @@ class ComposeEngine:
         require((host.get('PortBindings') or {}) == expected_ports, 'unsafe_ports')
         labels = config.get('Labels')
         require(container.get('Id') == ids[0] and isinstance(labels, dict) and
-                labels.get('com.docker.compose.project') == 'ot-' + iid and labels.get('com.docker.compose.service') == 'flybot' and
+                labels.get('com.docker.compose.project') == project and labels.get('com.docker.compose.service') == 'flybot' and
+                'com.docker.compose.config-hash' in labels and
                 config.get('Image') == entry['image'], 'container_owner')
         data_mounts = [m for m in mounts if isinstance(m, dict) and m.get('Destination') == '/data']
         require(len(data_mounts) == 1 and data_mounts[0].get('Type') == 'volume' and data_mounts[0].get('Name') == 'ot-' + iid and

@@ -63,6 +63,10 @@ its own WSGI service and HTTPS gateway configuration.
    it publishes the route for each healthy managed runtime. The public HTTPS
    gateway uses the signed-in account to choose that runtime. Set up shared
    service connectivity using the [Bot Social deployment guide](../deploy/isolated/BOT_SOCIAL_DEPLOY.md).
+   The [isolated deployment supervisor](../deploy/isolated/manager-poll.py)
+   checks for new work one second after each successful pass. Idle passes
+   stay out of the logs. Failed passes retry after 10 seconds and back off
+   up to 60 seconds until the next successful pass.
 4. Configure the [platform default model API](MODEL_API.md) before verifying
    first-time chat. Sign in with two test accounts, confirm each has a distinct
    runtime and data volume, and send a message in each account. Verify the

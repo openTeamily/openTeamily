@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import runpy
 import socket
 import subprocess
 import sys
@@ -30,6 +31,28 @@ from openteamily.operator_config import load_manager_auth
 from openteamily.security import digest, opaque
 
 IMAGE = 'operator/runtime@sha256:' + 'a' * 64
+
+
+class IsolatedSupervisorTests(unittest.TestCase):
+    def test_idle_polling_is_prompt_and_failures_keep_the_backoff_and_logs(self):
+        path = Path(__file__).resolve().parents[1] / 'deploy' / 'isolated' / 'manager-poll.py'
+        supervisor = runpy.run_path(str(path))
+        idle = {'status': 'polled', 'results': [{'status': 'no_claim'}, {'status': 'not_running'}]}
+        failure = {'error': 'manager_operation_refused'}
+        work = {'status': 'polled', 'results': [{'status': 'observed'}, {'status': 'published'}]}
+        replies = [(0, idle), *([(2, failure)] * 5), (0, work), (2, failure)]
+        passes = [subprocess.CompletedProcess([], code, json.dumps(body) + '\n') for code, body in replies]
+        output = io.StringIO()
+        with (
+            redirect_stdout(output),
+            patch.object(subprocess, 'run', side_effect=passes) as poll,
+            patch.object(time, 'sleep') as sleep,
+            self.assertRaises(StopIteration),
+        ):
+            supervisor['run']()
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 10, 20, 40, 60, 60, 1, 10])
+        self.assertEqual([json.loads(line) for line in output.getvalue().splitlines()], [body for _, body in replies[1:]])
+        self.assertTrue(all(call.args[0][-2:] == ['--execute', 'poll-once'] for call in poll.call_args_list))
 
 
 class BotSocialSocketManifestTests(unittest.TestCase):
@@ -342,6 +365,23 @@ class ComposeManagerTests(unittest.TestCase):
         with self.assertRaises(ManagerError) as error:
             self.engine.compose(self.iid, 'logs')
         self.assertEqual(error.exception.code, 'output_limit')
+
+    def test_health_inspection_uses_exact_docker_labels_and_refuses_ambiguous_ids(self):
+        self.engine.compose(self.iid, 'start')
+        with patch.object(self.engine.runner, 'run', wraps=self.engine.runner.run) as run:
+            self.assertTrue(self.engine.inspect(self.iid)['healthy'])
+            self.assertEqual([call.args[0][0] for call in run.call_args_list], ['volume', 'ps', 'inspect'])
+            self.assertEqual(run.call_args_list[1].args[0], [
+                'ps', '--all', '--quiet', '--no-trunc',
+                '--filter', 'label=com.docker.compose.project=ot-' + self.iid,
+                '--filter', 'label=com.docker.compose.service=flybot',
+                '--filter', 'label=com.docker.compose.config-hash',
+            ])
+        for output in ('invalid-id', 'b' * 64 + '\n' + 'c' * 64):
+            with self.subTest(output=output):
+                self.controls(container_list_raw=output)
+                with self.assertRaisesRegex(ManagerError, 'container_scope'):
+                    self.engine.inspect(self.iid)
 
     def test_exact_volume_inspect_rejects_existing_untrusted_volume_under_substring_filter_model(self):
         self.engine.compose(self.iid, 'create')
