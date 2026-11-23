@@ -275,10 +275,10 @@ function ownedPersonalCatalogue(result, user) {
 
 function meetingSourceFromResponse(body, target, username) {
   const {meeting, action, viewer_username: viewer} = body || {};
-  if (viewer !== undefined && viewer !== username) return null;
+  if (viewer !== username) return null;
   if (meeting?.id !== target.meeting || meeting.workspace_id !== target.workspace ||
       meeting.revision !== target.revision || typeof meeting.title !== 'string' || !meeting.title.trim() ||
-      action?.done !== false || typeof action.text !== 'string' || !action.text.trim()) return null;
+      action?.index !== target.action || action.done !== false || typeof action.text !== 'string' || !action.text.trim()) return null;
   return {target, title: meeting.title, text: action.text, owner: typeof action.owner === 'string' ? action.owner : ''};
 }
 
@@ -2014,14 +2014,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  async function readMeetingSource(target) {
-    const query = new URLSearchParams({index: target.action, revision: target.revision});
-    return request('GET', `/v1/workspaces/${target.workspace}/meetings/${target.meeting}/action?${query}`)
-      .catch(() => ({status: 0, body: {}}));
-  }
-
   function showMeetingSourceError(status) {
-    const obsolete = [200, 403, 404, 409].includes(status);
+    const obsolete = [200, 401, 403, 404, 409].includes(status);
     show('error', obsolete ? '行动项已更新、已完成或不可访问。请返回会议重新选择。' : '暂时无法读取会议行动项，请重试。');
     return obsolete;
   }
@@ -2030,16 +2024,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const seq = ++editorRequest;
     const user = currentUser;
     show('', '正在读取会议行动项…');
-    const isCurrent = () => seq === editorRequest && loadSeq === loadRequest && currentUser === user &&
-      workspaceId() === target.workspace && form.hidden;
-    const sourceQuery = new URLSearchParams({meeting: target.meeting, revision: target.revision, action: target.action});
-    const sourceRequest = readMeetingSource(target);
-    const existing = await request('GET', `/v1/workspaces/${target.workspace}/automations?${sourceQuery}`)
-      .catch(() => ({status: 0, body: {}}));
-    if (!isCurrent()) return;
-    const item = existing.body?.automation;
+    const query = new URLSearchParams({meeting: target.meeting, revision: target.revision, action: target.action});
+    const result = await runRequestWithTimeout('GET', `/v1/workspaces/${target.workspace}/automations?${query}`);
+    if (seq !== editorRequest || loadSeq !== loadRequest || currentUser !== user ||
+        workspaceId() !== target.workspace || !form.hidden) return;
+    const item = result.body?.automation;
     const saved = savedMeetingSource(item);
-    if (existing.status === 200 && existing.body.viewer_username === user.username && /^[0-9a-f]{32}$/.test(item?.id || '') &&
+    if (result.status === 200 && result.body.viewer_username === user.username && /^[0-9a-f]{32}$/.test(item?.id || '') &&
         saved?.target.workspace === target.workspace && saved.target.meeting === target.meeting &&
         saved.target.action === target.action && saved.target.revision === target.revision) {
       show('', '');
@@ -2047,8 +2038,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       openEditor(item);
       return true;
     }
-    const result = await sourceRequest;
-    if (!isCurrent()) return;
     const source = result.status === 200 ? meetingSourceFromResponse(result.body, target, user.username) : null;
     if (source) {
       show('', '');

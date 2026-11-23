@@ -2,7 +2,7 @@ import {mountCandidates, sourceHref} from './candidates.mjs';
 import {ACTION_EDIT_FIELDS, actionSaveAttempt, encodeActionReview, decodeActionReview, decodeNewActionAttempt,
   actionEditCommitted, advanceActionEdit, decodeActionEdit, reconcileActionEdit} from './action-review.mjs';
 import { domToMarkdown, renderMarkdown, safeHref } from './rich.mjs';
-import { readMarkdownTable, renderMarkdownTable } from '../shell/markdown-table.mjs';
+import { MAX_TABLE_COLUMNS, MAX_TABLE_ROWS, readMarkdownTable, renderMarkdownTable } from '../shell/markdown-table.mjs';
 import { readWorkspaceChoices } from '../shell/dsbot-api.mjs';
 import { actionFollowupChannel } from '../shell/action-followup-events.mjs';
 export function csrfCookie(source) {
@@ -1910,6 +1910,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   // Only an edited rich body is re-serialised, so opening and saving a page
   // without touching the text keeps its stored markdown byte-for-byte.
   let richDirty = false;
+  const tableActions = document.getElementById('editor-table-actions');
+  let activeTableCell;
+  function syncTableActions() {
+    if (!tableActions || !rich) return;
+    const focus = document.getSelection?.()?.focusNode;
+    const cell = (focus?.nodeType === 1 ? focus : focus?.parentElement)?.closest('th, td');
+    if (sourceMode || (activeTableCell && !rich.contains(activeTableCell))) activeTableCell = null;
+    if (!sourceMode && cell && rich.contains(cell) && cell.closest('.chat-markdown-table')) activeTableCell = cell;
+    else if (activeTableCell && !tableActions.contains(document.activeElement)) activeTableCell = null;
+    tableActions.hidden = !activeTableCell;
+    if (!activeTableCell) {
+      tableActions.open = false;
+      return;
+    }
+    const table = activeTableCell.closest('table');
+    const bodyRows = table.tBodies[0]?.rows.length || 0;
+    const columns = table.rows[0].cells.length;
+    tableActions.querySelector('[data-table-edit="add-row"]').disabled = bodyRows >= MAX_TABLE_ROWS;
+    tableActions.querySelector('[data-table-edit="add-column"]').disabled = columns >= MAX_TABLE_COLUMNS;
+    tableActions.querySelector('[data-table-edit="remove-row"]').disabled = activeTableCell.parentElement.rowIndex === 0;
+    tableActions.querySelector('[data-table-edit="remove-column"]').disabled = columns <= 1;
+  }
+
   function syncBodyFromRich() {
     if (!rich || sourceMode || !richDirty) return;
     const markdown = domToMarkdown(rich);
@@ -1926,6 +1949,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!rich) return;
     renderMarkdown(document, rich, markdown, {readTable:readMarkdownTable, renderTable:renderMarkdownTable, interactiveTasks:true});
     richDirty = false;
+    syncTableActions();
   }
   function setSourceMode(next) {
     if (!rich) return;
@@ -1936,11 +1960,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (field) field.hidden = !next;
     rich.hidden = next;
     if (!next) loadRichBody(editor.elements.body.value);
+    if (next) syncTableActions();
     if (sourceToggle) sourceToggle.setAttribute('aria-pressed', next ? 'true' : 'false');
   }
   if (rich) {
     try { document.execCommand('defaultParagraphSeparator', false, 'p'); } catch { /* older engines */ }
     rich.addEventListener('input', () => { richDirty = true; syncBodyFromRich(); });
+    if (tableActions) {
+      document.addEventListener('selectionchange', syncTableActions);
+      editor.addEventListener('focusout', event => {
+        if (!editor.contains(event.relatedTarget)) {
+          activeTableCell = null;
+          tableActions.hidden = true;
+          tableActions.open = false;
+        }
+      });
+    }
     rich.addEventListener('paste', (event) => {
       // Paste as plain text so foreign HTML never enters the page.
       const text = event.clipboardData && event.clipboardData.getData('text/plain');
@@ -2082,6 +2117,81 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     else persistPageDraft();
     showPageDraft();
     editor.elements.title.focus();
+  });
+
+  function applyTableEdit(action) {
+    if (sourceMode || !rich?.contains(activeTableCell)) return;
+    const current = activeTableCell.closest('.chat-markdown-table-scroll');
+    const snapshot = document.createElement('div');
+    const wrapper = current.cloneNode(true);
+    snapshot.appendChild(wrapper);
+    const table = wrapper.querySelector('table');
+    const originalRow = activeTableCell.parentElement.rowIndex;
+    const column = activeTableCell.cellIndex;
+    const header = table.rows[0];
+    const rowCount = table.rows.length - 1;
+    const columnCount = header.cells.length;
+    let nextRow = originalRow;
+    let nextColumn = column;
+
+    if (action === 'add-row' && rowCount < MAX_TABLE_ROWS) {
+      const body = table.tBodies[0] || table.createTBody();
+      const row = body.insertRow(originalRow);
+      for (const source of header.cells) {
+        const cell = row.insertCell();
+        const alignment = source.getAttribute('data-align');
+        if (alignment) cell.setAttribute('data-align', alignment);
+      }
+      nextRow += 1;
+    } else if (action === 'add-column' && columnCount < MAX_TABLE_COLUMNS) {
+      nextColumn += 1;
+      const cell = document.createElement('th');
+      cell.setAttribute('scope', 'col');
+      cell.textContent = '列 ' + (columnCount + 1);
+      header.insertBefore(cell, header.cells[nextColumn] ?? null);
+      for (const row of Array.from(table.rows).slice(1)) row.insertCell(nextColumn);
+    } else if (action === 'remove-row' && originalRow > 0) {
+      table.deleteRow(originalRow);
+      nextRow = Math.min(originalRow, table.rows.length - 1);
+    } else if (action === 'remove-column' && columnCount > 1) {
+      for (const row of table.rows) row.deleteCell(column);
+      nextColumn = Math.min(column, header.cells.length - 1);
+    } else return;
+
+    const replacement = document.createElement('div');
+    renderMarkdown(document, replacement, domToMarkdown(snapshot),
+      {readTable:readMarkdownTable, renderTable:renderMarkdownTable});
+    const rendered = replacement.firstElementChild;
+    rendered.setAttribute('data-table-editing', '');
+    const selection = document.getSelection();
+    const range = document.createRange();
+    rich.focus();
+    range.selectNode(current);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.execCommand('insertHTML', false, replacement.innerHTML);
+    const updated = rich.querySelector('[data-table-editing]');
+    updated?.removeAttribute('data-table-editing');
+    const next = updated?.querySelector('table')?.rows[nextRow]?.cells[nextColumn];
+    if (next) {
+      range.selectNodeContents(next);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    tableActions.open = false;
+    syncTableActions();
+  }
+
+  tableActions?.addEventListener('click', event => {
+    const button = event.target.closest('[data-table-edit]');
+    if (button) applyTableEdit(button.dataset.tableEdit);
+  });
+  tableActions?.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !tableActions.open) return;
+    event.preventDefault();
+    tableActions.open = false;
+    tableActions.querySelector('summary').focus();
   });
 
   function richCommand(kind) {

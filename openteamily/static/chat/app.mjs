@@ -4385,7 +4385,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (state?.restoring) return state.restoring;
     const unread = state?.unread;
     const preserveUnread = Boolean(unread && unread.committed < unread.latest);
-    const opened = openSocialConversation(currentConversation.id, {acknowledge: !preserveUnread, preserveUnread});
+    const opened = openSocialConversation(currentConversation.id, {
+      acknowledge: !preserveUnread, preserveUnread, requireVisible: true, signal: AbortSignal.timeout(10000),
+    });
     if (!state) return opened;
     state.restoring = opened.finally(() => {
       if (socialHistory === state) {
@@ -6606,7 +6608,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openSocialConversation(conversationId, {acknowledge = true, startUnread = false, preserveUnread = false,
-    refresh = false, publicStartCurrent, link, transition, quiet = false, initialRead, signal, finishing, position, message} = {}) {
+    refresh = false, publicStartCurrent, link, transition, quiet = false, initialRead, signal, finishing, position, message, requireVisible = false} = {}) {
     if (sessionTransition?.pending && transition !== sessionTransition) return false;
     if (refresh && (openingStartupLink() || currentSource !== 'social'
       || currentConversation?.id !== conversationId)) return false;
@@ -6618,7 +6620,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const owner = currentUser;
     stopPolling();
     const sameScope = () => open === socialOpen && workspaceId() === wid && currentUser === owner;
-    const stillOpen = () => sameScope() && (!link || link.current());
+    const stillOpen = () => sameScope() && (!link || link.current()) && (!requireVisible || viewingSocialMessages());
     const readPinReceipt = pinReceipt;
     const unreadEntry = servedByDsbot && acknowledge && startUnread && !refresh;
     if (!chatPathId(position?.id)) position = null;
@@ -9699,12 +9701,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
               show(notice.kind, notice.text, notice);
             }
           };
-          const restoring = !queue.social && isCurrent() && privateHistory?.restoring;
-          if (restoring) {
+          const socialReceipt = queue.social && result.body.message;
+          const tail = lastSocialItems.at(-1)?.seq;
+          const pastSocialWindow = servedByDsbot && isCurrent() && viewingSocialMessages() && socialHistory?.readingHistory &&
+            !sessionTransition?.pending && ownSocialReceipt(socialReceipt, queue, job.key) &&
+            Number.isSafeInteger(socialReceipt.seq) && socialReceipt.seq > (tail ?? 0) + 1;
+          if (pastSocialWindow) {
+            // Keep the delivered message visible while reopening the latest window.
+            // The history read can confirm it without adding it to an older page.
             job.accepted = true;
             feedback(uiLabel('已发送。', 'Sent.'));
-            void restoring.then(finish, () => finish());
-          } else finish();
+            void openSocialLatest().then(opened => {
+              if (!queue.jobs.includes(job)) return;
+              if (!isCurrent()) removeSendJob(queue, job);
+              else if (opened) finish(true);
+              else if (job.storedText) {
+                savePendingChatText(document.defaultView, queue.scope, job.key);
+                job.storedText = false;
+              }
+            });
+          } else {
+            const restoring = !queue.social && isCurrent() && privateHistory?.restoring;
+            if (restoring) {
+              job.accepted = true;
+              feedback(uiLabel('已发送。', 'Sent.'));
+              void restoring.then(finish, () => finish());
+            } else finish();
+          }
           if ((!queue.social || !isCurrent()) && queue.owner === currentUser?.id) void loadSessions();
         } catch (error) {
           job.failed = true;

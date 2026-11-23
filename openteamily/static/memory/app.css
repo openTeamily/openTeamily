@@ -1100,6 +1100,31 @@ body.app-workspace #overview-panel .graph-stage,
 .editor-toolbar button:hover { color: var(--ot-ink); }
 .editor-toolbar button:focus-visible { outline: 2px solid var(--ot-focus); outline-offset: -2px; }
 .editor-tool-sep { width: 1px; height: 1rem; margin: 0 .3rem; background: var(--ot-line-strong); }
+.editor-table-actions summary {
+  display: flex; align-items: center; gap: .325rem;
+  padding: .25rem .5rem; border-radius: .375rem; cursor: pointer;
+  color: var(--ot-ink); font-size: .75rem; line-height: 1.5;
+  list-style: none;
+}
+.editor-table-actions summary::-webkit-details-marker { display: none; }
+.editor-table-actions summary::after {
+  content: ""; inline-size: .3rem; block-size: .3rem;
+  border: solid currentColor; border-width: 0 1px 1px 0;
+  transform: rotate(45deg); margin-top: -.15rem;
+}
+.editor-table-actions[open] summary, .editor-table-actions summary:hover { background: var(--ot-bg-accent); }
+.editor-table-menu {
+  position: absolute; z-index: 1; inset-inline-end: 0; inset-block-start: 100%;
+  display: grid; min-width: 8.75rem; padding: .25rem; gap: .125rem;
+  border: 1px solid var(--ot-line); border-radius: .5rem;
+  background: var(--ot-surface); box-shadow: var(--ot-shadow);
+}
+.editor-table-menu button { justify-items: start; padding-inline: .5rem; box-shadow: none; }
+.editor-table-menu button:not(:disabled):hover { background: var(--ot-bg-accent); }
+@media (max-width: 480px) {
+  .editor-toolbar button { min-width: 1.65rem; padding-inline: .25rem; }
+  .editor-tool-sep { margin-inline: .2rem; }
+}
 .editor-source-toggle { margin-left: auto; font-weight: 600 !important; }
 .editor-source-toggle[aria-pressed="true"] { background: var(--ot-accent-soft) !important; color: var(--ot-accent-hover) !important; }
 .editor-rich {

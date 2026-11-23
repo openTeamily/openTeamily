@@ -1,5 +1,5 @@
-const MAX_COLUMNS = 24;
-const MAX_ROWS = 120;
+export const MAX_TABLE_COLUMNS = 24;
+export const MAX_TABLE_ROWS = 120;
 const MAX_LINE_LENGTH = 16_384;
 const SEPARATOR = /^:?-+:?$/;
 const BLOCK_START = /^(?:#{1,6}\s|>|[-+*]\s|\d+[.)]\s|~~~)/;
@@ -47,7 +47,7 @@ function pipeRow(source, {separator = false} = {}) {
       if (firstPipe === -1) firstPipe = i;
       lastPipe = i;
       cells.push(field.trim());
-      if (cells.length > MAX_COLUMNS + 1) return null;
+      if (cells.length > MAX_TABLE_COLUMNS + 1) return null;
       field = '';
     } else field += char;
   }
@@ -55,7 +55,7 @@ function pipeRow(source, {separator = false} = {}) {
   cells.push(field.trim());
   if (firstPipe === 0) cells.shift();
   if (lastPipe === line.length - 1) cells.pop();
-  return cells.length && cells.length <= MAX_COLUMNS ? cells : null;
+  return cells.length && cells.length <= MAX_TABLE_COLUMNS ? cells : null;
 }
 
 export function readMarkdownTable(lines, index) {
@@ -70,7 +70,7 @@ export function readMarkdownTable(lines, index) {
   });
   const rows = [];
   let next = index + 2;
-  while (next < lines.length && rows.length < MAX_ROWS) {
+  while (next < lines.length && rows.length < MAX_TABLE_ROWS) {
     const row = pipeRow(lines[next]);
     if (!row) break;
     rows.push(header.map((_, column) => row[column] ?? ''));

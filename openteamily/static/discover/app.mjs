@@ -1964,7 +1964,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     return !sessionPending && viewer !== null;
   }
 
-  async function loadFeed({append = false, retainItems = false, retryViewer = true, refresh = false} = {}) {
+  async function loadFeed({append = false, retainItems = false, retryViewer = true, refresh = false, overlapSession = false} = {}) {
     if (feedState.loading && append) return;
     const seq = ++feedRequest;
     const scope = sessionRequest;
@@ -1977,12 +1977,13 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
     const needsViewer = feedState.tab !== 'activity';
     const waitingForViewer = needsViewer && !currentUser;
+    const checkingViewer = waitingForViewer && nativeCatalog && overlapSession ? sessionPending : null;
     feedState.loading = !waitingForViewer || Boolean(sessionPending);
     feedState.refreshing = refresh;
     setFeedError('');
     if (append || retainItems || refresh) updateFeedStatus();
     else renderFeed();
-    if (waitingForViewer) return;
+    if (waitingForViewer && !checkingViewer) return;
     // The native all-works route includes the same viewer state as /me/works?tab=all.
     const viewer = currentUser;
     const privateFeed = needsViewer || (viewer && !nativeCatalog);
@@ -1992,9 +1993,21 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const path = privateFeed ? `/v1/discover/me/works?${params}&tab=${tab}` : `/v1/discover/works?${params}`;
     const reader = {controller:new AbortController(), changes:new Map()};
     feedReader = reader;
-    let result;
-    try { result = await request('GET', path, undefined, undefined, reader.controller.signal); }
-    catch { result = {status: 0, body: {}}; }
+    const response = request('GET', path, undefined, undefined, reader.controller.signal).catch(() => ({status: 0, body: {}}));
+    if (checkingViewer) {
+      // Keep the private response out of the feed until the session resolves.
+      await checkingViewer;
+      if (seq !== feedRequest || scope !== sessionRequest) return;
+      if (!currentUser) {
+        reader.controller.abort();
+        feedReader = null;
+        feedState.loading = false;
+        feedState.refreshing = false;
+        updateFeedStatus();
+        return;
+      }
+    }
+    const result = await response;
     if (seq !== feedRequest || scope !== sessionRequest) return;
     feedReader = null;
     feedState.loading = false;
@@ -2003,6 +2016,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return loadFeed();
     }
     if (result.status !== 200) {
+      if (checkingViewer && result.status === 401 && retryViewer) return loadFeed({retryViewer: false});
       const message = result.body?.error?.message || '无法加载公开作品。';
       const restoring = feedRestore;
       const retry = restoring
@@ -2800,7 +2814,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const detailLoad = detailIntent ? openWorkDetail(detailIntent) : closeWorkDetail();
     if (!teamsView) mainPanel.hidden = false;
     if (!catalogView) applyFeedChrome({restoreQuery: true});
-    const feedLoad = catalogView ? null : loadFeed();
+    const overlapSession = nativeCatalog && attempt === 1;
+    const feedLoad = catalogView ? null : loadFeed({overlapSession});
     const initialFeedRequest = feedRequest;
     const directoryLoad = agentsView ? loadCatalog() : null;
     const directoryReturn = directoryLoad && sessionLoad.then(() => {
@@ -2815,7 +2830,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       let loadedFeed = feedRequest === initialFeedRequest ? feedLoad : null;
       if (feedState.tab !== 'activity') {
         applyFeedChrome();
-        loadedFeed = loadFeed();
+        if (!overlapSession || !loadedFeed) loadedFeed = loadFeed();
       } else if (currentUser && !nativeCatalog) loadedFeed = loadFeed({retainItems: true});
       else if (nativeCatalog && feedViewer !== undefined) {
         if (mismatchedNativeFeed(feedViewer)) loadedFeed = loadFeed({retainItems: true, retryViewer: false});

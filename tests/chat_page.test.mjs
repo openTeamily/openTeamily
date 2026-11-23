@@ -4628,6 +4628,59 @@ test('a native group send releases the next message only after activity confirms
   }
 });
 
+for (const unavailable of [false,true]) {
+  test(`sending from a historical group keeps the receipt ${unavailable ? 'visible when the latest read fails' : 'until the latest window arrives'}`, async () => {
+    const base = linkBase(linkWork);
+    const path = base + linkSocialPath;
+    const fixture = linkedChatFixture(`#workspace=${linkWork}&social=${linkSocial}&message=${linkSocialOlder}`);
+    const {el, routes, calls, restore} = fixture;
+    const conversation = {id:linkSocial, workspace_id:linkWork, kind:'group', title:'Linked group', members:[linkMember]};
+    const latest = {id:linkSocialLatest, conversation_id:linkSocial, user_id:bob, seq:110, body:'Latest group context'};
+    const sending = Promise.withResolvers();
+    const returning = Promise.withResolvers();
+    let message;
+    let retriedLatest = false;
+    routes.set(path + '/messages', (call, opts) => {
+      message = {...latest,id:'otm_' + 'B'.repeat(26),user_id:alice,workspace_id:linkWork,
+        client_key:opts.headers['Idempotency-Key'],seq:111,body:call.body.body};
+      return sending.promise;
+    });
+    routes.set(path, () => retriedLatest ? json(200,{conversation,items:[latest,message]}) : returning.promise);
+    const pendingRow = () => el('message-list').children.find(node=>node.dataset.sendPending==='pending');
+    try {
+      await mount(fixture.doc,{fetcher:fixture.fetcher});
+      el('chat-body').value = 'Send while reading the group history';
+      await fire(el('chat-form'),'submit',{preventDefault() {}});
+      assert.equal(el('chat-body').value,'');
+      assert.ok(pendingRow());
+      el('chat-body').value = 'Independent next message';
+      sending.resolve(json(201,{message}));
+      await settle();
+      assert.match(descendants(pendingRow()).find(node=>node.classList.contains('send-feedback')).textContent,/已发送/);
+      assert.deepEqual(fixture.messages().filter(Boolean),[linkSocialOlder]);
+      assert.equal(calls.filter(call=>call.path===path).length,1);
+      assert.equal(el('chat-back-to-latest').disabled,true);
+      returning.resolve(unavailable ? json(503,{}) : json(200,{conversation,items:[latest,message]}));
+      await settle();
+      if (unavailable) {
+        assert.ok(pendingRow());
+        assert.equal(el('chat-back-to-latest').disabled,false);
+        retriedLatest = true;
+        await fire(el('chat-back-to-latest'),'click');
+        await settle();
+      }
+      assert.deepEqual(fixture.messages(),[latest.id,message.id]);
+      assert.equal(pendingRow(),undefined);
+      assert.equal(el('chat-body').value,'Independent next message');
+      assert.equal(calls.filter(call=>call.path===path + '/messages' && call.method==='POST').length,1);
+    } finally {
+      sending.resolve(json(503,{}));
+      returning.resolve(json(503,{}));
+      restore();
+    }
+  });
+}
+
 test('switching workspaces records the original thread and updates the new history entry when a conversation opens', async () => {
   const original = `#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`;
   const fixture = linkedChatFixture(original, {narrow:true});

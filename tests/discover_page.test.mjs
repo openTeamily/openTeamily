@@ -354,6 +354,83 @@ test('the signed-in native feed refreshes once when a different account provided
   assert.deepEqual(requests, ['/v1/auth/session', '/v1/discover/works?limit=12', '/v1/discover/works?limit=12']);
 });
 
+test('native following and collected links start one scoped feed read and confirm the viewer before rendering', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  for (const tab of ['following', 'collected']) {
+    const doc = fakeDocument();
+    doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+    const session = Promise.withResolvers();
+    const paths = [];
+    const workPath = '/v1/discover/me/works?limit=12&q=release&kind=document&tab=' + tab;
+    const mounted = mount(doc, {location:{search:'?feed=' + tab + '&kind=document&q=release'}, fetcher:async path => {
+      paths.push(path);
+      if (path === '/v1/auth/session') return session.promise;
+      if (path === workPath) return commentResponse({viewer_username:'alice', items:[detailFixture({collected:true})]});
+      throw new Error(path);
+    }});
+    const grid = doc.getElementById('feed-grid');
+    await flush();
+    assert.deepEqual(paths, ['/v1/auth/session', workPath]);
+    assert.equal(grid.children.length, 0);
+    assert.match(doc.getElementById('feed-count').textContent, /正在加载作品/);
+    session.resolve(commentResponse({user:{id:'owner', username:'alice'}}));
+    await mounted;
+    assert.deepEqual(paths, ['/v1/auth/session', workPath]);
+    assert.equal(grid.children.length, 1);
+    assert.equal(grid.children[0].children[1].children[1].attributes['aria-pressed'], 'true');
+  }
+});
+
+test('an unverified native visitor never sees the scoped feed and need not wait for it', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const session = Promise.withResolvers();
+  const pending = Promise.withResolvers();
+  let signal;
+  const mounted = mount(doc, {location:{search:'?feed=collected'}, fetcher:async (path, options) => {
+    if (path === '/v1/auth/session') return session.promise;
+    if (path === '/v1/discover/me/works?limit=12&tab=collected') {
+      signal = options.signal;
+      return pending.promise;
+    }
+    throw new Error(path);
+  }});
+  await flush();
+  assert.equal(signal.aborted, false);
+  session.resolve(commentResponse({}, 401));
+  await mounted;
+  assert.equal(signal.aborted, true);
+  assert.match(doc.getElementById('feed-note').textContent, /请先登录/);
+  pending.resolve(commentResponse({viewer_username:'alice', items:[detailFixture()]}));
+  await flush();
+  assert.equal(doc.getElementById('feed-grid').children.length, 0);
+  assert.equal(doc.getElementById('login-panel').hidden, false);
+});
+
+test('a native signed-in feed retries an early unauthorized response once after verifying the account', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const session = Promise.withResolvers();
+  let reads = 0;
+  const mounted = mount(doc, {location:{search:'?feed=collected'}, fetcher:async path => {
+    if (path === '/v1/auth/session') return session.promise;
+    if (path === '/v1/discover/me/works?limit=12&tab=collected') {
+      if (++reads === 1) return commentResponse({}, 401);
+      return commentResponse({viewer_username:'alice', items:[detailFixture()]});
+    }
+    throw new Error(path);
+  }});
+  await flush();
+  assert.equal(reads, 1);
+  assert.equal(doc.getElementById('feed-error').hidden, true);
+  session.resolve(commentResponse({user:{id:'owner', username:'alice'}}));
+  await mounted;
+  assert.equal(reads, 2);
+  assert.equal(doc.getElementById('feed-grid').children.length, 1);
+});
+
 test('the native feed discards private rows with an unproven viewer after a single retry', async () => {
   const {mount} = await import('../openteamily/static/discover/app.mjs');
   const doc = fakeDocument();

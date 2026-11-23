@@ -935,7 +935,7 @@ const SOURCE_PATH = `/v1/workspaces/${SOURCE_WORKSPACE}/meetings/${SOURCE_MEETIN
 const SOURCE_LOOKUP = `/v1/workspaces/${SOURCE_WORKSPACE}/automations?meeting=${SOURCE_MEETING}&revision=4&action=1`;
 const SOURCE = {
   meeting: {id: SOURCE_MEETING, workspace_id: SOURCE_WORKSPACE, title: '交付例会', revision: 4, transcript: '会议私有全文'},
-  action: {text: '列出待核对的交付项', owner: 'Bob', done: false},
+  action: {index: 1, text: '列出待核对的交付项', owner: 'Bob', done: false},
   viewer_username: 'alice',
 };
 const respond = (body, status = 200) => ({status, json: async () => body});
@@ -1018,7 +1018,7 @@ test('a different viewer or changed memory action never populates the editor', a
   }
 });
 
-function mountFollowUp(t, {readSource = () => respond(SOURCE), lookup = null, saveStatus = 201,
+function mountFollowUp(t, {readFollowup = () => respond(SOURCE), saveStatus = 201,
   workspaces = [{id: SOURCE_WORKSPACE, name: '个人空间'}]} = {}) {
   const {doc, elements} = fakeDocument();
   const view = {location: {search: SOURCE_LINK, pathname: '/automations'}, history: {
@@ -1036,14 +1036,13 @@ function mountFollowUp(t, {readSource = () => respond(SOURCE), lookup = null, sa
   };
   t.after(() => { globalThis.document = saved; globalThis.FormData = savedFormData; });
   const mounted = mount(doc, {fetcher: async (target, options) => {
-    const {method, body, headers} = options;
-    calls.push({target, method, body: body && JSON.parse(body), headers});
+    const {method, body, headers, signal} = options;
+    calls.push({target, method, body: body && JSON.parse(body), headers, signal});
     if (target === '/v1/auth/session') return respond({user: {username: 'alice'}});
     if (target === '/v1/workspaces?scope=personal') return respond({items: workspaces});
     if (target === '/v1/workspaces?limit=100') return respond({items: workspaces});
     if (target === '/v1/automation-templates') return respond({items: []});
-    if (target === SOURCE_PATH) return readSource();
-    if (target === SOURCE_LOOKUP) return respond({automation: lookup, viewer_username: 'alice'});
+    if (target === SOURCE_LOOKUP) return readFollowup();
     if (target.endsWith('/automations?category=mine') || target.endsWith('/runs?limit=20')) return respond({items: []});
     if (target === `/v1/workspaces/${SOURCE_WORKSPACE}/automations` && method === 'POST') {
       if (saveStatus !== 201) return respond({error: {code: 'meeting_source_unavailable'}}, saveStatus);
@@ -1075,7 +1074,10 @@ test('a reviewed meeting follow-up explicitly saves paused and replaces the draf
   form.elements.enabled.checked = true;
   await form.handlers.submit[0]({preventDefault() {}});
   const writes = calls.filter(({method}) => method === 'POST');
-  assert.equal(calls.filter(({target}) => target === SOURCE_PATH).length, 1);
+  assert.equal(calls.filter(({target}) => target === SOURCE_PATH).length, 0);
+  const reads = calls.filter(({target}) => target === SOURCE_LOOKUP);
+  assert.equal(reads.length, 1);
+  assert.ok(reads[0].signal instanceof AbortSignal);
   assert.equal(writes.length, 1);
   assert.equal(writes[0].target, `/v1/workspaces/${SOURCE_WORKSPACE}/automations`);
   assert.equal(writes[0].body.enabled, false);
@@ -1101,7 +1103,9 @@ test('meeting follow-up blocks a completed action or changed revision before sav
 
 test('an older exact meeting-action link resumes the saved follow-up even after the meeting changes', async t => {
   const lookup = {id: FOLLOW_UP, workspace_id: SOURCE_WORKSPACE, revision: 3, enabled: true, title: '跟进原行动项', source_meeting: SAVED_SOURCE};
-  const {mounted, elements, calls, view} = mountFollowUp(t, {lookup, readSource: () => respond({}, 409)});
+  const {mounted, elements, calls, view} = mountFollowUp(t, {
+    readFollowup: () => respond({automation:lookup, viewer_username:'alice'}),
+  });
   await mounted;
   assert.equal(elements.get('editor-form').elements.title.value, '跟进原行动项');
   assert.equal(elements.get('editor-form').elements.enabled.checked, true);
@@ -1118,24 +1122,31 @@ test('meeting follow-up never asks for a meeting from an unverified workspace', 
   await mounted;
   assert.equal(elements.get('editor-form').hidden, true);
   assert.match(elements.get('status').textContent, /会议行动项链接已不可用/);
-  assert.equal(calls.some(({target}) => target.includes('/meetings/')), false);
+  assert.equal(calls.some(({target}) => [SOURCE_PATH, SOURCE_LOOKUP].includes(target)), false);
 });
 
-test('a meeting response for a different viewer cannot populate the editor', async t => {
-  const {mounted, elements, calls} = mountFollowUp(t, {readSource: () => respond({...SOURCE, viewer_username: 'other'})});
-  await mounted;
-  assert.equal(elements.get('editor-form').hidden, true);
-  assert.equal(elements.get('editor-form').elements.prompt.value, '');
-  assert.equal(calls.filter(({method}) => method === 'POST').length, 0);
+test('a response for a different viewer or action cannot populate the meeting follow-up editor', async t => {
+  for (const [field, reply] of [
+    ['viewer', {...SOURCE, viewer_username:'other'}],
+    ['action', {...SOURCE, action:{...SOURCE.action, index:0}}],
+  ]) {
+    await t.test(field, async sub => {
+      const {mounted, elements, calls} = mountFollowUp(sub, {readFollowup: () => respond(reply)});
+      await mounted;
+      assert.equal(elements.get('editor-form').hidden, true);
+      assert.equal(elements.get('editor-form').elements.prompt.value, '');
+      assert.equal(calls.filter(({method}) => method === 'POST').length, 0);
+    });
+  }
 });
 
 test('switching workspaces drops a meeting follow-up still loading', async t => {
   const source = Promise.withResolvers();
   const different = 'd'.repeat(32);
-  const {mounted, view, elements, calls} = mountFollowUp(t, {readSource: () => source.promise,
+  const {mounted, view, elements, calls} = mountFollowUp(t, {readFollowup: () => source.promise,
     workspaces: [{id: SOURCE_WORKSPACE, name: '个人空间'}, {id: different, name: '另一工作区'}]});
   await flush();
-  assert.ok(calls.some(call => call.target === SOURCE_PATH));
+  assert.ok(calls.some(call => call.target === SOURCE_LOOKUP));
   const workspace = elements.get('workspace');
   workspace.value = different;
   workspace.handlers.change[0]();

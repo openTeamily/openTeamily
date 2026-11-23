@@ -35,21 +35,42 @@ test('meeting follow-up verifies exact source, coalesces concurrent saves, and r
   const MEETING = 'b'.repeat(32)
   const reference = { meeting_id: MEETING, revision: 2, action_index: 0 }
   const snapshot = Promise.withResolvers()
+  const reads = []
+  let nextRead
   const { e, calls } = fixture(undefined, undefined, undefined, async (workspace, ref) => {
+    reads.push({workspace, ref})
     assert.deepEqual(ref, reference)
     if (workspace !== W) return {status: 404}
-    return snapshot.promise
+    const reply = nextRead ?? snapshot.promise
+    nextRead = undefined
+    return reply
   })
   const payload = {workspace_id: W, title: '跟进验收记录', participants: ['alice'], template_id: 'custom',
     schedule: {kind:'now', time_zone:'UTC'}, enabled: true, source_meeting: {...reference, text:'伪造的来源内容'},
     idempotency_key: 'save-meeting-followup-001'}
   const create = options => e['automations/create']({...payload, ...options})
-  const first = create()
-  const duplicate = create({title:'另一份草稿', idempotency_key:'save-meeting-followup-002'})
+  const lookup = (workspace, username) => e['automations/v1']({
+    method:'GET', path:`/v1/workspaces/${workspace}/automations?meeting=${MEETING}&revision=2&action=0`,
+  }, {request:new Request('https://example.test', {headers:{'x-ot-owner-username':username}})})
+  assert.equal((await lookup(W, '')).status, 403)
+  assert.equal(reads.length, 0)
+  const draft = lookup(W, 'alice')
   snapshot.resolve({status: 200, body: {
     meeting: {id: MEETING, workspace_id: W, revision: 2, title:'交付例会', transcript:'逐字稿不用于跟进'},
-    action: {text:'核对回执', owner:'Alice', done:false},
+    action: {text:'核对回执', owner:'Alice', done:false, extra:'不应回传的字段'},
   }})
+  assert.deepEqual(await draft, {status:200, body:{
+    automation:null, viewer_username:'alice',
+    meeting:{id:MEETING, workspace_id:W, revision:2, title:'交付例会'},
+    action:{index:0, text:'核对回执', owner:'Alice', done:false},
+  }})
+  assert.equal(reads.length, 1)
+  const staleSource = Promise.withResolvers()
+  nextRead = staleSource.promise
+  const loading = lookup(W, 'alice')
+  assert.equal(reads.length, 2)
+  const first = create()
+  const duplicate = create({title:'另一份草稿', idempotency_key:'save-meeting-followup-002'})
   const [saved, replay] = await Promise.all([first, duplicate])
   assert.equal(saved.status, 201)
   assert.equal(replay.status, 200)
@@ -57,10 +78,14 @@ test('meeting follow-up verifies exact source, coalesces concurrent saves, and r
   assert.equal(replay.automation.title, payload.title)
   assert.equal(saved.automation.enabled, false)
   assert.deepEqual(saved.automation.source_meeting, {...reference, title:'交付例会', text:'核对回执', owner:'Alice'})
+  staleSource.resolve({status:409})
+  assert.deepEqual(await loading, {status:200, body:{automation:saved.automation, viewer_username:'alice'}})
   assert.deepEqual(e['automations/list']({workspace_id:W}).items, [saved.automation])
   const item = e['automations/update']({workspace_id:W, id:saved.automation.id, revision:1, changes:{title:'处理验收回执'}}).automation
-  assert.deepEqual(e['automations/meetingFollowup']({workspace_id:W, ...reference}), {automation:item})
-  assert.deepEqual(e['automations/meetingFollowup']({workspace_id:'c'.repeat(32), ...reference}), {automation:null})
+  const beforeExisting = reads.length
+  assert.deepEqual(await lookup(W, 'alice'), {status:200, body:{automation:item, viewer_username:'alice'}})
+  assert.equal(reads.length, beforeExisting)
+  assert.equal((await lookup('c'.repeat(32), 'alice')).status, 404)
   await assert.rejects(create({workspace_id:'c'.repeat(32)}), {status:404, code:'automations/meeting_source_unavailable'})
   assert.equal(calls.length, 0)
 })

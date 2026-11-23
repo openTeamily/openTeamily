@@ -320,6 +320,45 @@ async function memoryGraphReturn(page, account) {
   }
 }
 
+async function memoryTableEditing(page, account, name) {
+  const workspace = account.instanceId;
+  const base = '/v1/workspaces/'+workspace+'/memory';
+  const body = '- [x] 核对内容\n\n| 内容 | 状态 |\n| :--- | ---: |\n| 初稿 | 待处理 |';
+  const created = await account.rpc('memory/v1',{method:'POST',path:base,
+    idempotency_key:randomUUID().replaceAll('-',''),body:{title:'记忆表格验收',body}});
+  assert.equal(created.status,201);
+  const pageId = created.body.page.id;
+  await openNative(page,'/memory?workspace='+workspace+'&page='+pageId,workspace,'#editor-rich');
+  const editor = page.locator('#editor-rich');
+  const table = editor.getByRole('table');
+  const actions = page.locator('#editor-table-actions');
+  const summary = actions.locator('summary');
+  const action = label => actions.getByRole('button',{name:label,exact:true});
+  await table.getByRole('cell',{name:'初稿',exact:true}).click();
+  await summary.click();
+  await screenshot(page,name);
+  await action('下方插入行').click();
+  await page.keyboard.insertText('终稿 | 核对');
+  await table.getByRole('cell',{name:'终稿 | 核对',exact:true}).waitFor();
+  await summary.click();
+  await action('右侧插入列').click();
+  await page.keyboard.insertText('已复核');
+  await summary.click();
+  await action('删除当前列').click();
+  assert.equal(await table.getByRole('columnheader').count(),2);
+  await page.locator('[data-rich="undo"]').click();
+  await table.getByRole('cell',{name:'已复核',exact:true}).waitFor();
+  assert.equal(await table.getByRole('columnheader').count(),3);
+  await page.locator('#save-page').click();
+  await page.locator('#editor-meta').getByText(/修订 2/).waitFor();
+  const saved = await account.rpc('memory/v1',{method:'GET',path:base+'/'+pageId});
+  assert.ok(saved.body.page.body.includes('| 终稿 \\| 核对 | 已复核 |'));
+  assert.ok(saved.body.page.body.includes('| :--- | --- | ---: |'));
+  await page.reload();
+  await table.getByRole('cell',{name:'终稿 | 核对',exact:true}).waitFor();
+  assert.equal(await editor.getByRole('checkbox',{name:'核对内容'}).isChecked(),true);
+}
+
 async function memoryHistory(page, account, name) {
   const workspace = account.instanceId;
   const base = '/v1/workspaces/'+workspace+'/memory';
@@ -396,6 +435,7 @@ try {
   await spaceCatalogQueryReturn(page,fixture.owner);
   await memoryGraphReturn(page,fixture.owner);
   await memoryHistory(page,fixture.owner,'desktop-memory-history');
+  await memoryTableEditing(page,fixture.owner,'desktop-memory-table');
   await connectors(page);
   await meetingActionContinuity(page,fixture.owner,'desktop-meeting-actions');
   await openNative(page,'/members#workspace='+fixture.team.workspace_id,fixture.owner.instanceId,'#main-panel');
@@ -438,6 +478,7 @@ try {
   await spaceCatalogQueryReturn(peer.page,fixture.peer);
   await memoryGraphReturn(peer.page,fixture.peer);
   await memoryHistory(peer.page,fixture.peer,'mobile-memory-history');
+  await memoryTableEditing(peer.page,fixture.peer,'mobile-memory-table');
   await peer.context.close();
   await desktop.context.close();
   assert.deepEqual(errors,[]);
