@@ -188,9 +188,10 @@ class SettingsPageTests(unittest.TestCase):
     def test_discover_page_accepts_supported_filtered_links(self):
         for kind in ('document', 'whiteboard', 'dashboard', 'spreadsheet'):
             with self.subTest(kind=kind):
-                query = f'feed=collected&kind={kind}&q=quarterly&creator=author.home&work=public-preview'
+                query = f'feed=collected&kind={kind}&q=quarterly&creator=author.home&topic=education&work=public-preview'
                 self.assertEqual(self.raw.call('GET', '/discover', query=query)['status'], 200)
-        for query in ('kind=unknown', 'creator=../author', 'creator=original&creator=second', 'sort=popular&creator=author.home'):
+        for query in ('kind=unknown', 'creator=../author', 'creator=original&creator=second', 'sort=popular&creator=author.home',
+                      'topic=../education', 'topic=education&topic=travel'):
             with self.subTest(query=query):
                 self.assertEqual(self.raw.call('GET', '/discover', query=query)['status'], 400)
 
@@ -219,7 +220,7 @@ class SettingsPageTests(unittest.TestCase):
         self.assertGreater(len(asset['body']), 256 * 1024)
 
     def test_discover_reader_modules_load_without_a_session(self):
-        for path in ('/discover/document-reader.mjs', '/shell/markdown.mjs', '/shell/markdown-table.mjs'):
+        for path in ('/discover/document-reader.mjs', '/shell/markdown.mjs', '/shell/markdown-table.mjs', '/shell/work-topics.mjs'):
             with self.subTest(path=path):
                 asset = self.raw.call('GET', path)
                 self.assertEqual(asset['status'], 200)

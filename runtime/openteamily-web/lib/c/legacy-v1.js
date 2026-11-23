@@ -1543,6 +1543,7 @@ function discoverRoutes(host) {
   })
   const workListing = async (bs, artifactId) => ((await bs.get('/v1/ot/listings/mine')).listings || []).find((l) => l.kind === 'work' && l.ref === artifactId)
   const workMeta = (row) => (row && row.listed ? { listed: true, slug: row.slug, updated: unix(row.updated_at), path: row.path,
+    ...(row.category ? {category:row.category} : {}),
     ...(Number.isSafeInteger(row.source_revision) && row.source_revision > 0 ? {published_revision:row.source_revision} : {}),
     ...(row.editable_remix === true ? {editable_remix:true} : {}) } : { listed: false })
   return [
@@ -1642,6 +1643,7 @@ function discoverRoutes(host) {
           const data = await bs.put('/v1/ot/listings', {
             kind: 'work', ref: match[2], slug: body?.slug, title: String(artifact.title || body?.slug).slice(0, 80),
             work_kind: kind,
+            category: body?.category === undefined ? prior?.category : body.category,
             ...(Number.isSafeInteger(artifact.revision) && artifact.revision > 0 ? {source_revision:artifact.revision} : {}),
             ...(siteHtml ? {site_html: siteHtml} : {summary: snapshot.slice(0, 300), snapshot: snapshot.slice(0, 200000)}),
             ...(editableSnapshot ? {editable_snapshot:editableSnapshot} : {}),
@@ -1725,10 +1727,11 @@ function discoverRoutes(host) {
       async handle({ match, query }, call) {
         return wrap(async () => {
           const q = parseQuery(query)
-          if ([...q.keys()].some(key => !['tab', 'q', 'kind', 'sort', 'creator'].includes(key) || q.getAll(key).length !== 1)) {
+          if ([...q.keys()].some(key => !['tab', 'q', 'kind', 'sort', 'creator', 'category'].includes(key) || q.getAll(key).length !== 1)) {
             throw new Fault(400, 'invalid', '无效的作品浏览请求。')
           }
-          const filters = {tab: q.get('tab'), q: q.get('q'), work_kind: q.get('kind'), sort: q.get('sort'), creator: q.get('creator')}
+          const filters = {tab: q.get('tab'), q: q.get('q'), work_kind: q.get('kind'), sort: q.get('sort'),
+            creator: q.get('creator'), category: q.get('category')}
           const data = await client(host).get(`/v1/ot/discover/${match[1]}/detail` + qs(filters))
           if (data?.work?.kind !== 'work' || data.work.listed !== true) throw new Fault(404, 'not_found', '找不到公开作品。')
           const adjacent = row => row ? {slug: row.slug, title: row.title} : null

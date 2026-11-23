@@ -102,6 +102,7 @@ class SettingsPage:
         '/shell/studio-link.mjs': ('shell', 'studio-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/chat-utils.mjs': ('shell', 'chat-utils.mjs', 'text/javascript; charset=utf-8'),
         '/shell/agent-categories.mjs': ('shell', 'agent-categories.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/work-topics.mjs': ('shell', 'work-topics.mjs', 'text/javascript; charset=utf-8'),
         '/shell/action-menu.mjs': ('shell', 'action-menu.mjs', 'text/javascript; charset=utf-8'),
         '/shell/meeting-link.mjs': ('shell', 'meeting-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/call-audio-handoff.mjs': ('shell', 'call-audio-handoff.mjs', 'text/javascript; charset=utf-8'),
@@ -281,10 +282,12 @@ class SettingsPage:
                     return False
                 if key == 'creator' and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{1,79}', value):
                     return False
+                if key == 'topic' and not re.fullmatch(r'[a-z][a-z0-9-]{1,19}', value):
+                    return False
                 if key == 'q':
                     if len(value) > 80 or any(ord(ch) < 32 for ch in value):
                         return False
-                elif key not in ('feed', 'kind', 'sort', 'creator', 'work', 'comments', 'share'):
+                elif key not in ('feed', 'kind', 'sort', 'creator', 'topic', 'work', 'comments', 'share'):
                     return False
             panels = seen.intersection({'comments', 'share'})
             return (bool(seen)

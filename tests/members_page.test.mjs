@@ -682,6 +682,71 @@ test('late invite and approval reads cannot populate another workspace', async (
   assert.equal(elements.get('join-request-list').children.length, 0);
 });
 
+test('returning to Members reconciles role changes and removes a workspace after access is lost', async () => {
+  const {doc, elements} = fakeDocument();
+  setView(doc, '#workspace=' + teamA);
+  let role = 'admin';
+  const selfRow = () => ({...ALICE, role});
+  let sessionReads = 0;
+  let rosterReads = 0;
+  await mount(doc, {fetcher: async path => {
+    if (path === '/v1/auth/session') {
+      sessionReads += 1;
+      return jsonResponse(200, {user:self});
+    }
+    if (path === '/v1/workspaces?limit=100') {
+      return jsonResponse(200, {items:role ? workspaceListing : [workspaceListing[1]]});
+    }
+    if (path === `/v1/workspaces/${teamA}/members`) {
+      rosterReads += 1;
+      return role ? jsonResponse(200, {items:[selfRow(), BOB]})
+        : jsonResponse(409, {error:{code:'membership_migration_required'}});
+    }
+    if (path === `/v1/workspaces/${teamA}/invites`) return jsonResponse(200, {items:[{id:'invite-test', role:'member'}]});
+    return jsonResponse(200, {items:[]});
+  }});
+  assert.equal(elements.get('invite-form').hidden, false);
+  const adminRow = elements.get('member-list').children[0];
+  const inviteRow = elements.get('invite-list').children[0];
+
+  doc.visibilityState = 'hidden';
+  doc.fire('visibilitychange');
+  await settle();
+  assert.equal(rosterReads, 1);
+
+  doc.visibilityState = 'visible';
+  doc.fire('visibilitychange');
+  doc.defaultView.handlers.pageshow({persisted:true});
+  await settle();
+  assert.equal(sessionReads, 2);
+  assert.equal(rosterReads, 2);
+  assert.equal(elements.get('member-list').children[0], adminRow);
+  assert.equal(elements.get('invite-list').children[0], inviteRow);
+
+  role = 'member';
+  doc.fire('visibilitychange');
+  await settle();
+  assert.equal(elements.get('role-note').textContent, '当前角色：成员');
+  assert.equal(elements.get('invite-form').hidden, true);
+  assert.equal(elements.get('invite-list').children.length, 0);
+  assert.equal(elements.get('workspace-chat').getAttribute('href'), '/chat#workspace=' + teamA);
+
+  role = null;
+  doc.defaultView.handlers.pageshow({persisted:true});
+  await settle(40);
+  assert.equal(elements.get('workspace').value, '');
+  assert.equal(doc.defaultView.location.hash, '#workspace=' + teamA);
+  assert.equal(elements.get('member-list').children.length, 0);
+  assert.equal(elements.get('workspace-chat').hidden, true);
+
+  role = 'member';
+  doc.fire('visibilitychange');
+  await settle(40);
+  assert.equal(elements.get('workspace').value, teamA);
+  assert.equal(elements.get('role-note').textContent, '当前角色：成员');
+  assert.equal(elements.get('workspace-chat').getAttribute('href'), '/chat#workspace=' + teamA);
+});
+
 test('adding a member sends once and keeps its success and the other workspace draft separate', async () => {
   const {doc,elements} = fakeDocument();
   setView(doc, '#workspace=' + teamA);

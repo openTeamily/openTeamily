@@ -194,7 +194,14 @@ function fileResponse(request, {data, content_type, filename, inline}) {
 // Session-authenticated /v1 compatibility: the platform forwards a moved route
 // here with the original method and body. The answer is the legacy Flask shape
 // ({...body} at the feature's status), not {ok, value}.
-export function createLegacyDispatch({ endpoints }) {
+function isPersonalChatDirectory(request, feature, path, query) {
+  if (request.method !== 'GET' || feature !== 'teams' || path !== '/v1/workspaces') return false
+  const params = new URLSearchParams(query)
+  return params.get('scope') === 'personal' && params.get('include') === 'chat' &&
+    [...params.keys()].every(key => ['scope', 'include', 'workspace', 'directory'].includes(key) && params.getAll(key).length === 1)
+}
+
+export function createLegacyDispatch({ endpoints, chatDirectory }) {
   const table = typeof endpoints === 'function' ? endpoints : async () => endpoints
   return async (request) => {
     const url = new URL(request.url)
@@ -206,8 +213,10 @@ export function createLegacyDispatch({ endpoints }) {
         status: 400, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
       })
     }
-    const current = await table()
-    const handler = current[`${feature}/v1`]
+    // Transcript entry links can need saved works and meeting sources. Scope
+    // this fast path to the directory and keep the normal request context.
+    const early = chatDirectory && isPersonalChatDirectory(request, feature, path, query) ? await chatDirectory : undefined
+    const handler = early ?? (await table())[`${feature}/v1`]
     if (typeof handler !== 'function') {
       return new Response(JSON.stringify({ error: { code: 'not_moved', message: 'Route is not served by this DS-Bot' } }), {
         status: 404, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },

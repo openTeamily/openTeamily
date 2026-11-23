@@ -832,6 +832,9 @@ class App:
 
     def start_personal_runtime(self, env, now):
         with self.store.connect() as db:
+            # Use one snapshot for readiness and the resumable revision. The
+            # lifecycle write checks that revision after this connection closes.
+            db.execute('BEGIN')
             session = self.authenticated(db, env, now)
             self.csrf_check(env, session)
             self.body(env, [])
@@ -850,6 +853,7 @@ class App:
             refuse(409, 'runtime_unavailable', 'The personal runtime changed; check its current state')
         started, _ = self.lifecycle.start(owner, instance['id'], expected_revision=instance['revision'])
         with self.store.connect() as db:
+            db.execute('BEGIN')
             state = self.runtime_readiness(db, owner)
         return (202 if started else 200), {'state': state}, []
 

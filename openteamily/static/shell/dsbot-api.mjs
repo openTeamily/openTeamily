@@ -34,7 +34,7 @@ export const MOVED = [
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/agents(?:\/[0-9a-f]{32}(?:\/(?:archive|conversations(?:\/[0-9a-f]{32}(?:\/(?:attachments|reply-progress|reply-stop|messages(?:\/[0-9a-f]{32}\/(?:artifact|retry|files\/[0-3]))?))?)?))?)?$/, 'agents'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/meetings(?:\/(?:draft|speech|transcribe|share-recipients|shared(?:\/[0-9a-f]{32}(?:\/(?:revoke|action|discussion))?)?|[0-9a-f]{32}(?:\/(?:remove|export|shares|action|artifact|memory))?))?$/, 'meetings'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/meetings\/from-call\/otcav_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/, 'meetings'],
-  [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory(?:\/[0-9a-f]{32}(?:\/(?:remove|export|share-group|dream(?:\/[0-9a-f]{32})?|versions(?:\/\d{1,8}(?:\/restore)?)?))?)?$/, 'memory'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory(?:\/[0-9a-f]{32}(?:\/(?:remove|export|read|share-group|dream(?:\/[0-9a-f]{32})?|versions(?:\/\d{1,8}(?:\/restore)?)?))?)?$/, 'memory'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory\/actions\/draft(?:\/save)?$/, 'memory'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory\/actions\/from-(?:chat|meeting)$/, 'memory'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory\/(?:candidates(?:\/[0-9a-f]{32})?|profile(?:\/dream)?|graph|(?:actions|links|preferences)(?:\/[0-9a-f]{32}(?:\/remove)?)?)$/, 'memory'],

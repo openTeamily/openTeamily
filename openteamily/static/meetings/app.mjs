@@ -2,7 +2,7 @@ import {mountMeetingAudio} from './audio.mjs';
 import {mountMeetingDiscussion} from './discussion.mjs';
 import {mountTranscriptSearch, renderTranscriptMatch} from './transcript-search.mjs';
 import {readWorkspaceChoices, servedByDsBot} from '../shell/dsbot-api.mjs';
-import {isMeetingCallId, takeMeetingFromChat} from '../shell/meeting-link.mjs';
+import {isMeetingCallId, meetingArchiveHref, takeMeetingFromChat} from '../shell/meeting-link.mjs';
 import {previewCallAudio} from '../shell/call-audio-handoff.mjs';
 import {readMeetingEditor, writeMeetingEditor} from './editor-recovery.mjs';
 
@@ -590,6 +590,7 @@ function mount() {
   const workspaceSelect = document.getElementById('workspace');
   const newButton = document.getElementById('new-meeting');
   const back = document.getElementById('meeting-library');
+  const mobileLibrary = document.getElementById('meeting-library-mobile');
   const mobileBack = document.getElementById('meeting-back-to-list');
   const layout = document.getElementById('meeting-layout');
   const save = document.getElementById('save-meeting');
@@ -633,6 +634,7 @@ function mount() {
   }));
   const native = servedByDsBot(document);
   let workspaceLoad = 0;
+  let libraryOrigin = null;
   let viewer = '';
   let viewerId = '';
   if (!status || !loginPanel || !mainPanel || !form) return;
@@ -1237,7 +1239,13 @@ function mount() {
   }
 
   function rewriteLocation(params, workspace = workspaceId()) {
-    rememberCatalogue('#' + new URLSearchParams(workspace ? {workspace, ...params} : params));
+    const origin = libraryOrigin;
+    const fromLibrary = origin && origin.workspace === workspace && params[origin.kind] === origin.id;
+    if (origin && !fromLibrary) libraryOrigin = null;
+    const location = new URLSearchParams(workspace ? {workspace, ...params} : params);
+    if (fromLibrary) location.set('library', origin.scope);
+    rememberCatalogue('#' + location);
+    syncLibraryLink();
   }
 
   function draftOwner() {
@@ -2057,7 +2065,14 @@ function mount() {
   }
 
   function syncLibraryLink() {
-    if (back) back.href = '/space?view=meetings' + (workspaceId() ? '#workspace=' + encodeURIComponent(workspaceId()) : '');
+    const workspace = workspaceId();
+    const origin = libraryOrigin?.workspace === workspace ? libraryOrigin : null;
+    const href = meetingArchiveHref(workspace, origin ? {scope:origin.scope, focus:origin.kind + ':' + origin.id} : {});
+    if (back) back.href = href;
+    if (mobileLibrary) {
+      mobileLibrary.href = href;
+      mobileLibrary.hidden = !origin;
+    }
     newButton.disabled = !workspaceId();
     search.disabled = !workspaceId();
     openOnly.disabled = !workspaceId();
@@ -2137,6 +2152,10 @@ function mount() {
       (!linked.has('workspace') || (linked.getAll('workspace').length === 1 && meetingIdPattern.test(linkedWorkspace)));
     const exact = !fromCall && meetingIdPattern.test(linkedWorkspace)
       && (linked.has('shared') ? !meetingId && meetingIdPattern.test(shareId) : meetingIdPattern.test(meetingId));
+    const libraryScope = linked.get('library');
+    libraryOrigin = exact && linked.getAll('library').length === 1 && ['joined', 'all'].includes(libraryScope)
+      ? {workspace:linkedWorkspace, kind:shareId ? 'shared' : 'meeting', id:shareId || meetingId, scope:libraryScope}
+      : null;
     const eagerDetail = native && exact
       ? readDetail(`/v1/workspaces/${linkedWorkspace}/meetings/${shareId ? 'shared/' + shareId : meetingId}`) : null;
     const eagerSource = validCallLink && linkedWorkspace
@@ -2750,6 +2769,7 @@ function mount() {
 
   function changeWorkspace(next) {
     workspaceSelect.value = next;
+    libraryOrigin = null;
     const actionView = Boolean(inboxView);
     inboxResume = null;
     setInbox(false, {focus:false});

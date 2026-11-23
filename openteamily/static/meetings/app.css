@@ -185,13 +185,13 @@
 .attendee-matches button[aria-selected="true"] { background: var(--ot-bg-accent); }
 .attendee-matches .note { padding: 0.45rem 0.55rem; font-size: 0.8rem; color: var(--ot-muted); }
 
-#meeting-library {
+:is(#meeting-library, #meeting-library-mobile) {
   color: var(--ot-muted);
   font-size: .85rem;
   font-weight: 600;
   text-decoration: none;
 }
-#meeting-library:hover, #meeting-library:focus-visible { color: var(--ot-accent); }
+:is(#meeting-library, #meeting-library-mobile):is(:hover, :focus-visible) { color: var(--ot-accent); }
 
 #shared-meeting-detail header { margin-bottom: 1.25rem; }
 .meeting-layout.is-reading-receipt {
@@ -380,6 +380,12 @@
     border-bottom: 1px solid var(--ot-line);
     background: var(--ot-surface);
   }
+  #meeting-library-mobile:not([hidden]) {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.75rem;
+  }
+  #meeting-library-mobile:not([hidden]) + #meeting-back-to-list { display: none; }
   #meeting-save-status { grid-row: 1; position: sticky; top: 3.65rem; z-index: 1; background: var(--ot-surface); border: 1px solid var(--ot-line); }
   #meeting-draft-top:not([hidden]) {
     display: flex;
