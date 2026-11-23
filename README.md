@@ -21,11 +21,13 @@
 - **Keep work moving.** Schedule recurring work, review run results, and turn meeting notes into action items.
 - **Explore and manage your team.** Browse public works and agents, and manage team members, agents, and permissions.
 
-| Discover | Work library |
-| --- | --- |
-| <img src="docs/media/discover.png" width="430" alt="Discover page with public works and agents"> | <img src="docs/media/work-library.png" width="430" alt="Work library showing filters and project cards"> |
+The cover shows a real conversation captured in Chromium with a test account and sample data.
 
-These screenshots come from [OpenTeamily's Chromium checks](https://github.com/openTeamily/openTeamily/actions/runs/45196194565) using test accounts and sample content.
+## Use OpenTeamily in English
+
+Choose **English** under **Settings → Language → System language**. Settings home, language preferences, and the main chat controls support English. Chat reply language has its own setting.
+
+<img src="docs/media/language-settings.png" width="480" alt="Language settings showing English as the system language and a separate chat language selector">
 
 ## One DS-Bot container per account
 
