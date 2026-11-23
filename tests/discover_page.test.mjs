@@ -2029,7 +2029,7 @@ test('the native direct excerpt paints before auth and is retained through a mis
   }});
   const el = id => doc.getElementById('work-detail-' + id);
   await flush();
-  assert.deepEqual(requests, ['/v1/auth/session', publicPath, '/v1/discover/works?limit=12']);
+  assert.deepEqual(requests, ['/v1/auth/session', publicPath, privatePath, '/v1/discover/works?limit=12']);
   const [preview] = classHits(el('preview'), 'feed-detail-lines');
   assert.equal(preview.children[0].textContent, '正文预览');
   assert.equal(el('title').textContent, work.title);
@@ -2051,6 +2051,73 @@ test('the native direct excerpt paints before auth and is retained through a mis
   assert.equal(el('like').hidden, false);
   assert.equal(el('like').attributes['aria-pressed'], 'false');
   assert.equal(el('next').disabled, false);
+});
+
+test('a native filtered detail reuses its verified viewer response without waiting for public preview', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const session = Promise.withResolvers();
+  const publicWork = Promise.withResolvers();
+  const work = detailFixture();
+  const next = detailFixture({slug: 'filtered-next'});
+  const requests = [];
+  const privatePath = '/v1/discover/works/' + work.slug + '?kind=document&q=release&tab=following';
+  const loaded = mount(doc, {location: {search: '?feed=following&kind=document&q=release&work=' + work.slug}, fetcher: async path => {
+    requests.push(path);
+    if (path === '/v1/auth/session') return session.promise;
+    if (path.startsWith('/v1/discover/me/works?')) return commentResponse({viewer_username: 'alice', items: []});
+    if (path.startsWith('/w/' + work.slug + '?')) return publicWork.promise;
+    if (path === '/w/' + work.slug + '/preview') return commentResponse({preview: 'Signed preview'});
+    if (path === privatePath) return commentResponse({viewer_username: 'alice', work: {...work, liked: true}, next});
+    throw new Error(path);
+  }});
+  const el = id => doc.getElementById('work-detail-' + id);
+  await flush();
+  assert.equal(requests.filter(url => url === privatePath).length, 1);
+  assert.notEqual(el('title').textContent, work.title);
+  assert.equal(el('like').hidden, true);
+  assert.equal(el('next').disabled, true);
+  session.resolve(commentResponse({user: {id: 'owner', username: 'alice'}}));
+  await loaded;
+
+  assert.equal(requests.filter(url => url === privatePath).length, 1);
+  assert.equal(el('title').textContent, work.title);
+  assert.equal(el('like').hidden, false);
+  assert.equal(el('like').attributes['aria-pressed'], 'true');
+  assert.equal(el('next').disabled, false);
+  publicWork.resolve(commentResponse({...work, title: 'Late public title', preview: 'Late excerpt'}));
+  await flush();
+  assert.equal(el('title').textContent, work.title);
+  assert.equal(classHits(el('preview'), 'feed-detail-lines')[0].children[0].textContent, 'Signed preview');
+});
+
+test('leaving a native deep link aborts its pending work detail reads', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const session = Promise.withResolvers();
+  const details = Promise.withResolvers();
+  const work = detailFixture();
+  const signals = [];
+  const loaded = mount(doc, {location: {search: '?work=' + work.slug}, fetcher: async (path, options) => {
+    if (path === '/v1/auth/session') return session.promise;
+    if (path.startsWith('/v1/discover/works?')) return commentResponse({viewer_username: 'alice', items: []});
+    if (path.startsWith('/w/') || path === '/v1/discover/works/' + work.slug) {
+      signals.push(options.signal);
+      return details.promise;
+    }
+    throw new Error(path);
+  }});
+  await flush();
+  assert.equal(signals.length, 2);
+  doc.getElementById('work-detail-back').handlers.click();
+  assert.ok(signals.every(signal => signal.aborted));
+  session.resolve(commentResponse({user: {id: 'owner', username: 'alice'}}));
+  details.resolve(commentResponse({viewer_username: 'alice', work}));
+  await loaded;
+  assert.equal(doc.getElementById('work-detail').hidden, true);
+  assert.equal(signals.length, 2);
 });
 
 test('a guest detail pages only its filtered feed and a late page cannot reopen the detail after Back', async () => {

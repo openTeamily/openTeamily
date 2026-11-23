@@ -7,6 +7,7 @@ const LIMITS = {minimum: 2, maximum: 8, title: 80, goal: 2000, instruction: 1000
 const DRAFT_PREFIX = 'ot-team-run-draft:';
 const CREATE_KEY = /^team-run-[a-f0-9]{32}$/;
 const REUSABLE = new Set(['succeeded', 'failed', 'cancelled']);
+const HISTORY_STATES = new Set(['running', ...REUSABLE]);
 const STATUS = {
   waiting: '等待前序步骤', queued: '已排队', running: '运行中', succeeded: '已完成',
   failed: '失败', blocked: '前序步骤未完成', cancelled: '已取消',
@@ -197,6 +198,21 @@ function runFromResponse(result, workspace, runId) {
   return result.status === 200 && matchesRun(run, workspace, runId) && Array.isArray(run.steps) ? run : null;
 }
 
+function listFilters(value) {
+  return {
+    query: typeof value?.query === 'string' ? value.query.slice(0, 80) : '',
+    status: HISTORY_STATES.has(value?.status) ? value.status : '',
+    anchor: typeof value?.anchor === 'string' && ID.test(value.anchor) ? value.anchor : '',
+  };
+}
+
+function filterHistory(items, {query, status}) {
+  const normalize = value => value.normalize('NFKC').toLowerCase();
+  const term = normalize(query.trim());
+  return items.filter(item => (!status || item.status === status) && (!term ||
+    normalize(item.title || '').includes(term) || normalize(item.goal || '').includes(term)));
+}
+
 export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalThis)) {
   const native = document.querySelector?.('meta[name="openteamily-served-by"]')?.content === 'ds-bot';
   const view = document.defaultView;
@@ -208,6 +224,11 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   const editor = node('team-run-form');
   const detail = node('team-run-detail');
   const listView = node('team-run-list-panels');
+  const finder = node('team-run-filters');
+  const search = node('team-run-search');
+  const statusFilter = node('team-run-filter-status');
+  const clearFilters = node('team-run-clear-filters');
+  const listedCount = node('team-run-filter-count');
   const cancel = node('team-run-cancel');
   const remove = node('team-run-remove');
   const reuse = node('team-run-reuse');
@@ -227,6 +248,9 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   let personalSpaces = new Set();
   let epoch = 0, reads = 0, auth = 0, serial = 0;
   let current, currentDraft, tasks = [], agents = [];
+  let filters = listFilters();
+  let listReady = false;
+  let historySnapshot;
   let timer, doing = '', question = '', lastList = '', lastSteps = '';
 
   function show(id, text, kind = '') {
@@ -271,6 +295,44 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     pathFor(space) + '/automation-results/' + source.automation_id + '/' + source.run_id;
   const scope = () => ({viewer, workspace, epoch});
   const active = target => target.viewer === viewer && target.workspace === workspace && target.epoch === epoch;
+
+  function listStorageKey() {
+    return ID.test(viewer?.id || '') && ID.test(workspace) ? 'ot-team-run-history:' + viewer.id + ':' + workspace : '';
+  }
+
+  function persistList() {
+    const key = listStorageKey();
+    if (!key) return;
+    try {
+      if (filters.query || filters.status || filters.anchor) view.sessionStorage.setItem(key, JSON.stringify(filters));
+      else view.sessionStorage.removeItem(key);
+    } catch {}
+  }
+
+  function restoreListFilters() {
+    const key = listStorageKey();
+    if (key) {
+      try { filters = listFilters(JSON.parse(view.sessionStorage.getItem(key))); } catch {}
+    }
+    search.value = filters.query;
+    statusFilter.value = filters.status;
+    finder.hidden = false;
+  }
+
+  function resetListFilters() {
+    listReady = false;
+    filters = listFilters();
+    search.value = statusFilter.value = '';
+    finder.hidden = listedCount.hidden = true;
+  }
+
+  function clearTaskHistory() {
+    historySnapshot = undefined;
+    tasks = [];
+    resetListFilters();
+    node('team-run-list').replaceChildren();
+    node('team-runs-empty').hidden = true;
+  }
 
   function beginStartupRead(space, target) {
     const path = target.automationSource ? automationResultPath(space, target.automationSource)
@@ -407,14 +469,12 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
 
   function clearInaccessibleRunData() {
     current = null;
-    tasks = [];
+    clearTaskHistory();
     lastList = lastSteps = '';
     newRun.disabled = true;
     cancel.hidden = remove.hidden = reuse.hidden = true;
     syncExport();
     hideQuestion();
-    node('team-run-list').replaceChildren();
-    node('team-runs-empty').hidden = true;
     previewNodes.clear();
     node('team-run-results').replaceChildren();
     node('team-run-heading').textContent = '任务详情';
@@ -472,13 +532,21 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
 
   function renderList(items) {
     const list = node('team-run-list');
-    node('team-runs-empty').hidden = items.length > 0;
-    const fingerprint = JSON.stringify(items);
+    const visible = filterHistory(items, filters);
+    const filtered = Boolean(filters.status || filters.query.trim());
+    clearFilters.hidden = !filtered;
+    listedCount.hidden = !filtered;
+    show('team-run-filter-count', filtered ? `显示 ${visible.length} / ${items.length} 个任务` : '');
+    const empty = node('team-runs-empty');
+    empty.hidden = visible.length > 0;
+    empty.textContent = filtered ? '没有符合条件的任务。' : '还没有任务。新建任务后，可以在这里跟踪进度。';
+    const showGoals = Boolean(filters.query.trim());
+    const fingerprint = JSON.stringify([visible, showGoals]);
     if (fingerprint === lastList) return;
     lastList = fingerprint;
     const focusedId = document.activeElement?.dataset.runId;
     list.replaceChildren();
-    for (const item of items) {
+    for (const item of visible) {
       const row = make('li');
       const open = button(item.title, 'team-run-row');
       open.dataset.runId = item.id;
@@ -488,10 +556,54 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
       const status = make('span', STATUS[item.status], 'team-run-pill');
       status.dataset.state = item.status;
       open.replaceChildren(name, progress, status);
-      open.addEventListener('click', () => openDetail(item.id));
+      if (showGoals && item.goal) open.append(make('span', item.goal, 'team-run-goal-match'));
+      open.addEventListener('click', () => {
+        filters.anchor = item.id;
+        persistList();
+        return openDetail(item.id);
+      });
       row.append(open);
       list.append(row);
       if (focusedId === item.id) open.focus({preventScroll: true});
+    }
+  }
+
+  function restoreListFocus() {
+    if (!filters.anchor) return;
+    const focused = document.activeElement;
+    if (focused && focused !== document.body && focused !== node('team-runs-list-heading')) return;
+    const row = [...node('team-run-list').children].find(item => item.firstElementChild?.dataset.runId === filters.anchor);
+    const link = row?.firstElementChild;
+    if (link) {
+      link.focus({preventScroll:true});
+      link.scrollIntoView?.({block:'nearest'});
+    }
+  }
+
+  function applyListFilters() {
+    if (!listReady || screen !== 'list') return;
+    filters = listFilters({query:search.value, status:statusFilter.value});
+    persistList();
+    renderList(tasks);
+  }
+
+  function rememberList(items) {
+    tasks = items;
+    const key = listStorageKey();
+    if (key) historySnapshot = {key, items};
+  }
+
+  function syncHistoryRun(run) {
+    if (!historySnapshot || historySnapshot.key !== listStorageKey()) return;
+    const index = historySnapshot.items.findIndex(item => item.id === run.id);
+    if (index < 0) return;
+    const item = historySnapshot.items[index];
+    historySnapshot.items[index] = {...item, status:run.status, progress:run.progress};
+  }
+
+  function forgetHistoryRun(runId) {
+    if (historySnapshot?.key === listStorageKey()) {
+      historySnapshot.items = historySnapshot.items.filter(item => item.id !== runId);
     }
   }
 
@@ -505,27 +617,39 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
       if (cannotRead(result.status)) clearInaccessibleRunData();
       show('status', errorMessage(result, '无法加载任务列表，点击刷新重试。'), 'error');
     } else {
-      tasks = result.body.items.filter(item => matchesRun(item, workspace));
+      rememberList(result.body.items.filter(item => matchesRun(item, workspace)));
+      const firstRead = !listReady;
+      if (firstRead) restoreListFilters();
+      listReady = true;
       newRun.disabled = false;
       showSharedList = true;
       show('status', '');
       syncShareWorkspace();
       renderList(tasks);
+      if (firstRead) restoreListFocus();
     }
     if (tasks.some(item => item.status === 'running')) afterPoll(loadList);
   }
 
   function showList({address = true, focus = false, shared, read = true, reading} = {}) {
+    const cached = read && historySnapshot?.key === listStorageKey() ? historySnapshot.items : null;
     changeScreen('list');
     linkedShare = shared || '';
-    tasks = [];
+    tasks = cached || [];
+    resetListFilters();
     node('team-run-list').replaceChildren();
     node('team-runs-empty').hidden = true;
     if (address) updateLocation(shared ? {shared} : {});
     if (focus) node('team-runs-list-heading').focus();
+    if (cached) {
+      restoreListFilters();
+      listReady = true;
+      renderList(tasks);
+      restoreListFocus();
+    }
     if (workspace && read) {
       showSharedList = true;
-      show('status', '正在读取任务…');
+      if (!cached) show('status', '正在读取任务…');
       syncShareWorkspace();
       return loadList(reading);
     }
@@ -873,6 +997,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   }
 
   function renderDetail(run) {
+    syncHistoryRun(run);
     current = run;
     const counts = run.progress || {};
     show('team-run-heading', run.title);
@@ -979,7 +1104,10 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     const suffix = step ? `/steps/${step.position}/${action}` : '/' + action;
     const result = await request('POST', pathFor(target.workspace) + '/' + runId + suffix, action === 'retry' ? {attempt:step.attempts} : {});
     if (!active(target)) return;
-    if (action === 'remove' && result.status === 200 && result.body.removed === runId) return showList({focus: true});
+    if (action === 'remove' && result.status === 200 && result.body.removed === runId) {
+      forgetHistoryRun(runId);
+      return showList({focus: true});
+    }
     const accepted = [200, 201].includes(result.status);
     const artifact = result.body.artifact;
     if (action === 'artifact' && accepted && artifact?.workspace_id === target.workspace && ID.test(artifact.id || '')) {
@@ -1007,7 +1135,10 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
         const items = listed.body.items;
         if (session.status === 200 && ID.test(target.viewer?.id || '') && session.body.user?.id === target.viewer.id &&
             listed.status === 200 && Array.isArray(items) && items.every(item => matchesRun(item, target.workspace)) &&
-            !items.some(item => item.id === runId)) return showList({focus: true});
+            !items.some(item => item.id === runId)) {
+          rememberList(items);
+          return showList({focus: true});
+        }
       }
     }
 
@@ -1056,7 +1187,9 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
 
   function choose(target, address = false, reading) {
     const allowed = spaces.find(item => item.id === target.workspace);
+    const previousWorkspace = workspace;
     workspace = allowed?.id || (target.workspace || target.invalid ? '' : spaces[0]?.id || '');
+    if (workspace !== previousWorkspace) clearTaskHistory();
     picker.value = workspace;
     if (!workspace) {
       showList({address: false});
@@ -1068,7 +1201,8 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     if (target.automationSource) return openAutomationDraft(target.automationSource, reading);
     if (target.draft) return showEditor({address});
     if (target.run) return openDetail(target.run, null, {address, step:target.step, reading});
-    return showList({address: address && !target.shared, shared: target.shared, reading});
+    return showList({address: address && !target.shared, focus:screen === 'detail' && workspace === previousWorkspace,
+      shared: target.shared, reading});
   }
 
   function fillSpaces(items) {
@@ -1127,6 +1261,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     }
     if (viewer && viewer.id !== session.body.user.id) {
       drafts.clear(); creates.clear();
+      clearTaskHistory();
       workspace = '';
       spaces = [];
       personalSpaces.clear();
@@ -1165,6 +1300,14 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   }
 
   editor.addEventListener('submit', startRun);
+  finder.addEventListener('submit', event => event.preventDefault());
+  search.addEventListener('input', applyListFilters);
+  statusFilter.addEventListener('change', applyListFilters);
+  clearFilters.addEventListener('click', () => {
+    search.value = statusFilter.value = '';
+    applyListFilters();
+    search.focus();
+  });
   title.addEventListener('input', () => {
     currentDraft.title = title.value;
     persistDraft();

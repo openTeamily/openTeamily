@@ -127,6 +127,12 @@ CREATE TABLE artifact_restores (
   PRIMARY KEY (artifact_id, revision),
   UNIQUE (artifact_id, request_key),
   FOREIGN KEY (artifact_id, revision) REFERENCES artifact_versions(artifact_id, revision) ON DELETE CASCADE);
+`, `
+CREATE TABLE artifact_document_parents (
+  artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
+  parent_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+  CHECK (artifact_id <> parent_id));
+CREATE INDEX artifact_document_parent ON artifact_document_parents(parent_id);
 `]
 
 export const IMPORT_TABLES = {

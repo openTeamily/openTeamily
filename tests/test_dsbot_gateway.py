@@ -351,7 +351,7 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('location = /onboarding { return 418; }', conf)
         self.assertIn('location = /artifacts { return 418; }', conf)
         self.assertIn('location ^~ /artifacts/ { return 418; }', conf)
-        self.assertIn('location ~ "^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:activity|shared-copy|studio-personal-copy|(?:spreadsheet|slides)/draft)$" { return 418; }', conf)
+        self.assertIn('location ~ "^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:activity|document-tree|shared-copy|studio-personal-copy|(?:spreadsheet|slides)/draft)$" { return 418; }', conf)
         self.assertIn('location ~ "^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|studio-copy|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/(?:revoke|link))?)?))?)?$" { return 418; }', conf)
         self.assertIn('location = /members { return 418; }', conf)
         self.assertIn('location = /discover { return 418; }', conf)

@@ -2501,6 +2501,23 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
 
 #chat-upload-error { margin: 0 .5rem .25rem; font-size: .8125rem; color: var(--ot-danger); }
 #chat-upload-error:empty, .chat-file [hidden] { display: none; }
+.composer-file-drop {
+  position: absolute;
+  z-index: 2;
+  inset: .25rem;
+  display: grid;
+  place-items: center;
+  padding: .75rem;
+  border: 1px dashed var(--ot-accent);
+  border-radius: .9rem;
+  background: var(--ot-accent-soft);
+  color: var(--ot-ink);
+  font-size: .875rem;
+  font-weight: 600;
+  text-align: center;
+  pointer-events: none;
+}
+.composer-file-drop[hidden] { display: none; }
 .chat-file { display: grid; gap: .5rem; min-width: 0; max-width: min(100%, 23rem); }
 .chat-file img, .chat-file video {
   display: block;

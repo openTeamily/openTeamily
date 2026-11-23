@@ -133,6 +133,47 @@ test("meeting audience migration preserves existing receipts and their cursor co
   } finally { platform.close(); }
 });
 
+test("received action pages include only pending assignments on still-visible receipts", async () => {
+  const [author, reader, unselected] = await Promise.all([
+    member("inbox-author"), member("inbox-reader"), member("inbox-unselected"),
+  ]);
+  await contacts(author, reader);
+  await contacts(author, unselected);
+  const group = await author.ok("POST", ROOT + "/conversations", {kind:"group", account_group:true,
+    title:"Shared actions", members:[reader.handle, unselected.handle]});
+  const shares = ROOT + "/meeting-shares";
+  const older = await author.ok("POST", shares, {
+    ...sharing(group.id, reader.id), client_key:"received-inbox-old",
+    action_items:[{text:"Other receipt task", owner:"inbox-reader"}],
+  });
+  const recent = await author.ok("POST", shares, {
+    ...sharing(group.id, reader.id), client_key:"received-inbox-new",
+    action_items:[
+      {text:"Another owner", owner:"inbox-unselected"},
+      {text:"Follow up with partner", owner:"Inbox-Reader", due_date:"2032-02-29"},
+      {text:"Already done", owner:"inbox-reader", done:true},
+      {text:"Verify proof", owner:"inbox-reader"},
+    ],
+  });
+  const path = shares + "?view=actions&owner=inbox-reader&limit=1";
+  const first = await reader.ok("GET", path);
+  assert.equal(first.cursor, recent.meeting.id + ".1");
+  assert.deepEqual(first.items, [{share_id:recent.meeting.id, meeting_title:recent.meeting.title,
+    revision:1, organizer:author.name, action_index:1, text:"Follow up with partner",
+    due_date:"2032-02-29", owner:"Inbox-Reader"}]);
+  const second = await reader.ok("GET", path + "&cursor=" + first.cursor);
+  assert.equal(second.items[0].action_index, 3);
+  assert.equal(second.cursor, recent.meeting.id + ".3");
+  assert.deepEqual(await unselected.ok("GET", path), {items:[], cursor:null});
+  assert.deepEqual(await unselected.ok("GET", path + "&cursor=" + first.cursor), {items:[], cursor:null});
+  assert.equal((await reader.call("GET", path + "&sent=1")).status, 400);
+  assert.equal((await reader.call("GET", path + "&owner=someone-else")).status, 400);
+  await author.ok("POST", shares + "/" + recent.meeting.id + "/revoke", {});
+  const remaining = await reader.ok("GET", path + "&cursor=" + second.cursor);
+  assert.deepEqual(remaining.items.map((row: {share_id:string}) => row.share_id), [older.meeting.id]);
+  assert.equal(remaining.cursor, null);
+});
+
 test("personal receipts save distinct immutable versions, page privately and revoke by author", async () => {
   const [author, reader, unselected, outsider] = await Promise.all([
     member("note-author"), member("note-reader"), member("note-unselected"), member("note-outsider"),

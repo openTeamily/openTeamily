@@ -11,11 +11,12 @@ export function startChatReads(read, start, allowLocal) {
   const id = /^[a-f0-9]{32}$/;
   if (start.social && id.test(start.workspace)) params.set('directory', '0');
   if (!start.social && id.test(start.workspace) && id.test(start.agent) && (!start.conversation || id.test(start.conversation))) {
-    params.set('entry_agent', start.agent);
-    if (start.conversation) {
-      params.set('entry_conversation', start.conversation);
-      params.set('directory', '0');
+    // A message link opens its own history window after the workspace is verified.
+    if (!start.conversation || !id.test(start.message)) {
+      params.set('entry_agent', start.agent);
+      if (start.conversation) params.set('entry_conversation', start.conversation);
     }
+    if (start.conversation) params.set('directory', '0');
   }
   const localRequest = allowLocal ? read('/v1/workspaces?' + params, AbortSignal.timeout(2200)) : null;
   return {sessionRequest, localRequest};

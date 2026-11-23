@@ -574,6 +574,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const liveCompare = document.getElementById('artifact-live-compare');
   const editorPanels = new Map(['version', 'share', 'discover'].map(name => [name, document.getElementById(name + '-panel')]));
   const discoverSlug = document.getElementById('discover-slug');
+  const treeOpen = document.getElementById('catalog-document-tree');
+  const treeDialog = document.getElementById('document-tree');
+  const treeList = document.getElementById('document-tree-list');
+  const treeStatus = document.getElementById('document-tree-status');
+  const treeRetry = document.getElementById('retry-document-tree');
+  const editorDocumentNav = document.getElementById('editor-document-nav');
+  const editorParentDocument = document.getElementById('editor-parent-document');
+  const newChildDocument = document.getElementById('new-child-document');
+  let treeRead;
   const discoverTopic = document.getElementById('discover-topic');
   const discoverTopicField = document.getElementById('discover-topic-field');
   const discoverEditable = document.getElementById('discover-editable-remix');
@@ -702,7 +711,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   function syncWorkspaceCreation() {
     const enabled = canCreateInWorkspace();
     for (const button of createButtons) button.disabled = !enabled;
-    if (!enabled) newMenu.close();
+    syncDocumentTreeAction();
+    if (!enabled) {
+      newMenu.close();
+      closeDocumentTree();
+    }
   }
 
   const notifications = mountArtifactNotifications(document, {
@@ -1457,6 +1470,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       meetingScope = sync ? 'joined' : meetingArchiveLocation(document.defaultView?.location?.hash).scope;
     }
     syncMeetingScope();
+    syncDocumentTreeAction();
     catalogToolbar(catalogKind !== 'meetings');
     const searchLabel = catalogKind === 'meetings' ? '搜索会议' : '搜索作品';
     search.placeholder = searchLabel;
@@ -2523,7 +2537,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const actor = selection?.account?.id;
     if (!actor || selection.account !== currentUser || !selection.workspace ||
         !['document', 'website'].includes(item?.kind)) return '';
-    return DRAFT_STORAGE_PREFIX + JSON.stringify([actor, selection.workspace, item.kind, item.id || null]);
+    const draftId = item.id || (item.parent?.id ? 'child:' + item.parent.id : null);
+    return DRAFT_STORAGE_PREFIX + JSON.stringify([actor, selection.workspace, item.kind, draftId]);
   }
 
   function readDraft(key) {
@@ -2691,10 +2706,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (mobileMarkdown) mobileMarkdown.hidden = !isDocument;
     if (mobileDelete) mobileDelete.hidden = !saved;
     for (const button of mobilePanels.values()) if (button) button.hidden = !saved;
+    syncDocumentLocation();
     syncStudioCopy();
   }
 
   function hideEditor() {
+    closeDocumentTree();
     workVersion.instance?.close();
     if (pendingDeleteCancel) pendingDeleteCancel();
     closeDuplicateDialog();
@@ -2834,6 +2851,104 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
 
   function editorPath(selection, id = current.id) {
     return `/v1/workspaces/${selection.workspace}/artifacts/${id}`;
+  }
+
+  function syncDocumentTreeAction() {
+    if (treeOpen) treeOpen.hidden = !nativeCatalog || !canCreateInWorkspace() || catalogKind === 'meetings';
+  }
+
+  function documentHref(workspace, id) {
+    return worksPath() + '?' + new URLSearchParams({workspace, artifact:id});
+  }
+
+  function syncDocumentLocation() {
+    if (!editorDocumentNav) return;
+    editorDocumentNav.hidden = !nativeCatalog || current?.kind !== 'document';
+    newChildDocument.hidden = !current?.id;
+    const parent = current?.parent;
+    editorParentDocument.hidden = !CATALOG_CURSOR.test(parent?.id || '');
+    editorParentDocument.textContent = parent ? '上级 · ' + parent.title : '';
+    if (!editorParentDocument.hidden) editorParentDocument.href = documentHref(workspaceId(), parent.id);
+    else editorParentDocument.removeAttribute('href');
+  }
+
+  function discardDocumentTree() {
+    treeRead?.abort();
+    treeRead = null;
+    treeList?.replaceChildren();
+    if (treeStatus) treeStatus.textContent = '';
+  }
+
+  function closeDocumentTree() {
+    discardDocumentTree();
+    if (treeDialog?.open) treeDialog.close();
+  }
+
+  function documentClick(event) {
+    return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+  }
+
+  function openTreeDocument(item) {
+    if (current?.id === item.id) return closeDocumentTree();
+    return openEditor({id:item.id, kind:'document'});
+  }
+
+  function startChildDocument({id, title}) {
+    return openEditor({kind:'document', parent:{id, title}}, {focusTitle:true});
+  }
+
+  async function showDocumentTree() {
+    if (!treeDialog || !nativeCatalog || !canCreateInWorkspace()) return;
+    const workspace = workspaceId(), account = currentUser;
+    discardDocumentTree();
+    const controller = new AbortController();
+    treeRead = controller;
+    treeStatus.textContent = '正在读取文档…';
+    treeRetry.hidden = true;
+    if (!treeDialog.open) treeDialog.showModal();
+    const result = await request('GET', `/v1/workspaces/${workspace}/artifacts/document-tree`, undefined, undefined,
+      AbortSignal.any([controller.signal, AbortSignal.timeout(8000)])).catch(() => ({status:0}));
+    if (treeRead !== controller || !treeDialog.open || workspaceId() !== workspace || currentUser !== account) return;
+    if (result.status !== 200 || !Array.isArray(result.body?.items)) {
+      treeStatus.textContent = '无法读取文档树。';
+      treeRetry.hidden = false;
+      return;
+    }
+    const items = result.body.items.filter(item => CATALOG_CURSOR.test(item?.id || '') && typeof item.title === 'string');
+    const ids = new Set(items.map(item => item.id));
+    const children = new Map();
+    for (const item of items) {
+      const parent = ids.has(item.parent_id) ? item.parent_id : null;
+      const list = children.get(parent) || [];
+      list.push(item);
+      children.set(parent, list);
+    }
+    treeStatus.textContent = items.length ? '' : '这个工作区还没有云文档。';
+    const addRows = (parent, depth) => {
+      for (const item of children.get(parent) || []) {
+        const row = document.createElement('li');
+        row.className = 'document-tree-row';
+        row.style.setProperty('--document-depth', String(Math.min(depth, 6)));
+        const link = document.createElement('a');
+        link.href = documentHref(workspace, item.id);
+        link.textContent = item.title;
+        if (current?.id === item.id) link.setAttribute('aria-current', 'page');
+        link.addEventListener('click', event => {
+          if (!documentClick(event)) return;
+          event.preventDefault();
+          void openTreeDocument(item);
+        });
+        const child = document.createElement('button');
+        child.type = 'button';
+        child.textContent = '新建子文档';
+        child.setAttribute('aria-label', `在「${item.title}」下新建子文档`);
+        child.addEventListener('click', () => void startChildDocument(item));
+        row.append(link, child);
+        treeList.append(row);
+        addRows(item.id, depth + 1);
+      }
+    };
+    addRows(null, 0);
   }
 
   function panelStatus(name, text) {
@@ -4024,6 +4139,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     });
   }
 
+  treeOpen?.addEventListener('click', showDocumentTree);
+  document.getElementById('editor-document-tree')?.addEventListener('click', showDocumentTree);
+  document.getElementById('close-document-tree')?.addEventListener('click', closeDocumentTree);
+  treeRetry?.addEventListener('click', showDocumentTree);
+  treeDialog?.addEventListener('close', () => { if (!treeDialog.open) discardDocumentTree(); });
+  editorParentDocument?.addEventListener('click', event => {
+    if (!documentClick(event) || !current?.parent) return;
+    event.preventDefault();
+    void openTreeDocument(current.parent);
+  });
+  newChildDocument?.addEventListener('click', () => {
+    if (current?.id && current.kind === 'document') void startChildDocument(current);
+  });
+
   for (const [id, kind] of [
     ['new-artifact', 'document'], ['new-slides', 'slides'], ['new-spreadsheet', 'spreadsheet'],
     ['new-dashboard', 'dashboard'], ['new-board', 'whiteboard'], ['new-media', 'media'],
@@ -4369,9 +4498,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}`,
                              {revision: current.revision, changes: {title, body}});
     } else {
+      const payload = {title, body, kind};
+      if (current?.parent) payload.parent_id = current.parent.id;
+      const fingerprint = JSON.stringify(payload);
+      if (selection.createReceipt?.fingerprint !== fingerprint) {
+        selection.createReceipt = {fingerprint, key:idempotencyKey()};
+      }
       result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts`,
-                             {title, body, kind},
-                             {'Idempotency-Key': idempotencyKey()});
+                             payload, {'Idempotency-Key':selection.createReceipt.key});
     }
     if (result.status === 200 || result.status === 201) {
       if (catalog?.workspace === selection.workspace && catalog.account === selection.account) {

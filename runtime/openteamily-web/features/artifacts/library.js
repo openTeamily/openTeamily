@@ -40,6 +40,22 @@ export function load(store, workspaceId, id) {
   return row && named(row, usernames(store))
 }
 
+export function documentTree(store, workspaceId) {
+  return store.all(`SELECT a.id, a.title, rel.parent_id ${ROW_JOINS}
+    LEFT JOIN artifact_document_parents rel ON rel.artifact_id=a.id
+    WHERE a.workspace_id=? AND m.render IS NULL AND md.artifact_id IS NULL AND b.artifact_id IS NULL
+      AND sl.artifact_id IS NULL AND d.artifact_id IS NULL AND x.artifact_id IS NULL
+    ORDER BY a.updated DESC, a.id`, workspaceId)
+}
+
+export function detailView(store, row) {
+  const artifact = view(row)
+  if (artifact.kind !== 'document') return artifact
+  const parent = store.get(`SELECT a.id, a.title FROM artifact_document_parents rel
+    JOIN artifacts a ON a.id=rel.parent_id WHERE rel.artifact_id=? AND a.workspace_id=?`, row.id, row.workspace_id)
+  return parent ? {...artifact, parent} : artifact
+}
+
 function matchesFileTypes(row, kind, types) {
   if (types.has('messages') && row.chat_message_id) return true
   if (kind === 'document' && row.chat_message_id) return false
@@ -219,7 +235,7 @@ export function recordVersion(store, row) {
 export function saved(store, workspaceId, artifactId, status) {
   const row = load(store, workspaceId, artifactId)
   recordVersion(store, row)
-  return { status, body: { artifact: view(row) } }
+  return { status, body: { artifact: detailView(store, row) } }
 }
 
 export function uniqueTitle(store, workspaceId, title, suffix) {
@@ -318,6 +334,10 @@ export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = 
   const content = input.body ?? ''
   const kind = input.kind ?? 'document'
   const source = input.source
+  const parentId = input.parent_id
+  if (parentId !== undefined && (kind !== 'document' || typeof parentId !== 'string' || !HEX32.test(parentId))) {
+    refuse(400, 'invalid', '请选择有效的上级文档。')
+  }
   if (source?.kind === 'agent_message' && source.agent_id && !reuseChatSource) {
     refuse(403, 'forbidden', 'Save private replies from their conversation')
   }
@@ -343,6 +363,7 @@ export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = 
   const bodyText = validBody(content) ? content : ''
   if (!KEY.test(key ?? '')) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
   const payload = { title: trimmed, body: bodyText, kind }
+  if (parentId) payload.parent_id = parentId
   if (board) payload.board = board
   if (slides) payload.slides = slides
   if (dashboard) payload.dashboard = dashboard
@@ -370,9 +391,13 @@ export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = 
         }
       }
       if (prior.request_hash !== requestHash) refuse(409, 'conflict', 'Idempotency key was used for a different request')
-      return { status: 200, body: { artifact: view(row) } }
+      return { status: 200, body: { artifact: detailView(store, row) } }
     }
     if (already) return { status: 200, body: { artifact: view(already) } }
+    if (parentId) {
+      const parent = load(store, workspaceId, parentId)
+      if (!parent || publicKind(parent) !== 'document') refuse(404, 'document_parent_missing', '上级文档已不可用。')
+    }
     const hash = titleHash(trimmed)
     if (store.get('SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=?', workspaceId, hash)) {
       refuse(409, 'conflict', 'A document with this title already exists')
@@ -386,6 +411,7 @@ export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = 
       id, workspaceId, trimmed, hash, 'document', bodyText, now, now, owner, owner, keyHash, requestHash)
     attachKind(store, id, kind, { board, slides, dashboard })
     if (spreadsheet) attachWorkbook(store,id,spreadsheet)
+    if (parentId) store.run('INSERT INTO artifact_document_parents VALUES(?,?)', id, parentId)
     attachSource(store, id, workspaceId, now, source)
     void featureDir
     return saved(store, workspaceId, id, 201)
@@ -577,7 +603,7 @@ export function updateArtifact(ctx, row, changes, revision) {
   else if (kind === 'slides') unchanged = title === row.title && slidesJson(slides) === row.slides_json
   else if (kind === 'dashboard') unchanged = title === row.title && dashboardJson(dashboard) === row.dashboard_json
   else if (kind === 'spreadsheet') unchanged = title === row.title && JSON.stringify(workbook) === row.spreadsheet_json
-  if (unchanged) return { status: 200, body: { artifact: view(row) } }
+  if (unchanged) return { status: 200, body: { artifact: detailView(store, row) } }
   return ctx.store.transaction(() => {
     guardVersions(store, row.id)
     const hash = titleHash(title)
@@ -647,12 +673,12 @@ export function restoreArtifact(ctx, target, revision, to, key) {
       if (prior.revision !== revision + 1 || prior.source_revision !== to) {
         refuse(409, 'idempotency_conflict', 'This request already restored another version')
       }
-      return { status: 200, body: { artifact: view(row), restore: receipt(prior.revision) } }
+      return { status: 200, body: { artifact: detailView(store, row), restore: receipt(prior.revision) } }
     }
     if (revision !== row.revision) refuse(409, 'conflict', 'Document changed elsewhere; reload and retry', view(row))
     const snapshot = store.get('SELECT * FROM artifact_versions WHERE artifact_id=? AND revision=?', row.id, to)
     if (!snapshot) refuse(404, 'not_found', 'Version not found')
-    if (sameAsVersion(row, snapshot)) return { status: 200, body: { artifact: view(row), restore: receipt(revision) } }
+    if (sameAsVersion(row, snapshot)) return { status: 200, body: { artifact: detailView(store, row), restore: receipt(revision) } }
     guardVersions(store, row.id)
     const title = snapshot.title
     const hash = titleHash(title)

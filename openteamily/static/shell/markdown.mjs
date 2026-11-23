@@ -181,7 +181,7 @@ function appendInline(document, parent, tokens) {
   }
 }
 
-export function renderMarkdownBlocks(document, root, blocks, {renderTable, renderCode, headingOffset = 0} = {}) {
+export function renderMarkdownBlocks(document, root, blocks, {renderTable, renderCode, headingOffset = 0, interactiveTasks = false} = {}) {
   for (const block of blocks) {
     let el;
     if (block.type === 'table') {
@@ -197,7 +197,20 @@ export function renderMarkdownBlocks(document, root, blocks, {renderTable, rende
       el = document.createElement(block.type);
       for (const item of block.items) {
         const li = document.createElement('li');
-        appendInline(document, li, inlineTokens(item));
+        const task = /^\[([ xX])\](?:[ \t]+(.*))?$/.exec(item);
+        if (task) {
+          li.className = 'markdown-task-item';
+          const checkbox = document.createElement('input');
+          checkbox.type = 'checkbox';
+          checkbox.setAttribute('data-markdown-task', '');
+          checkbox.setAttribute('contenteditable', 'false');
+          checkbox.disabled = !interactiveTasks;
+          checkbox.defaultChecked = task[1] !== ' ';
+          const label = document.createElement('span');
+          appendInline(document, label, inlineTokens(task[2] || ''));
+          checkbox.setAttribute('aria-label', label.textContent || (document.documentElement?.lang?.startsWith('zh') ? '任务' : 'Task'));
+          li.append(checkbox, label);
+        } else appendInline(document, li, inlineTokens(item));
         el.appendChild(li);
       }
     } else {
@@ -224,15 +237,23 @@ function escapeText(text) {
 
 function tagOf(node) { return node && node.nodeType === 1 ? String(node.tagName || node.nodeName).toLowerCase() : ''; }
 
-function inlineMarkdown(node) {
+function inlineMarkdown(node, cellBreaks = false) {
   let out = '';
   for (const child of Array.from(node.childNodes || [])) {
-    if (child.nodeType === 3) { out += escapeText(child.nodeValue || ''); continue; }
+    if (child.nodeType === 3) {
+      const text = escapeText(child.nodeValue || '');
+      out += cellBreaks ? text.replace(/<(?=br[ \t]*\/?>)/gi, '\\<') : text;
+      continue;
+    }
     if (child.nodeType !== 1) continue;
     const tag = tagOf(child);
     if (tag === 'br') { out += '\n'; continue; }
     if (tag === 'code') { out += '`' + String(child.textContent || '').replace(/`/g, '') + '`'; continue; }
-    const inner = inlineMarkdown(child);
+    const inner = inlineMarkdown(child, cellBreaks);
+    if (cellBreaks && (tag === 'div' || tag === 'p')) {
+      out += (out && !out.endsWith('\n') ? '\n' : '') + inner + '\n';
+      continue;
+    }
     if (!inner.trim()) { out += inner; continue; }
     const lead = inner.match(/^\s*/)[0], trail = inner.match(/\s*$/)[0], core = inner.trim();
     if (tag === 'b' || tag === 'strong') out += lead + '**' + core + '**' + trail;
@@ -250,12 +271,27 @@ function guardLineStart(text) {
   return text.split('\n').map(line => line.replace(/^(\s*)(#{1,6}\s|>|[-+]\s|\d+[.)]\s|```)/, '$1\\$2')).join('\n');
 }
 
-const BLOCK_TAGS = new Set(['p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'blockquote', 'pre', 'hr']);
+const BLOCK_TAGS = new Set(['p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'blockquote', 'pre', 'hr', 'table']);
+
+function tableMarkdown(table) {
+  const [header, ...rows] = Array.from(table.rows || []);
+  const cells = Array.from(header?.cells || []);
+  if (!cells.length) return '';
+  const cellText = cell => {
+    if (!cell) return '';
+    return inlineMarkdown(cell, true).trim().replace(/\n+/g, '<br>').replace(/\|/g, '\\|');
+  };
+  const line = values => '| ' + values.join(' | ') + ' |';
+  const separator = {left:':---', center:':---:', right:'---:'};
+  return [line(cells.map(cellText)), line(cells.map(cell => separator[cell.getAttribute('data-align')] || '---')),
+    ...rows.map(row => line(cells.map((_, i) => cellText(row.cells[i]))))].join('\n');
+}
 
 function blockMarkdown(node) {
   const tag = tagOf(node);
   if (tag === 'hr') return '---';
   if (tag === 'pre') return '```\n' + String(node.textContent || '').replace(/\n$/, '') + '\n```';
+  if (tag === 'table') return tableMarkdown(node);
   if (/^h[1-6]$/.test(tag)) {
     const level = Math.min(3, Number(tag[1]));
     const text = inlineMarkdown(node).replace(/\n+/g, ' ').trim();
@@ -263,7 +299,11 @@ function blockMarkdown(node) {
   }
   if (tag === 'ul' || tag === 'ol') {
     const items = Array.from(node.childNodes || []).filter(child => tagOf(child) === 'li');
-    return items.map((li, index) => (tag === 'ol' ? (index + 1) + '. ' : '- ') + inlineMarkdown(li).replace(/\n+/g, ' ').trim()).join('\n');
+    return items.map((li, index) => {
+      const task = Array.from(li.childNodes).find(child => tagOf(child) === 'input' && child.hasAttribute('data-markdown-task'));
+      const marker = task ? (task.checked ? '[x] ' : '[ ] ') : '';
+      return (tag === 'ol' ? (index + 1) + '. ' : '- ') + marker + inlineMarkdown(li).replace(/\n+/g, ' ').trim();
+    }).join('\n');
   }
   if (tag === 'blockquote') {
     const nested = Array.from(node.childNodes || []).some(child => BLOCK_TAGS.has(tagOf(child)));
