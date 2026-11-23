@@ -476,27 +476,29 @@ async function fromCall(req, workspaceId, callId) {
     ...(existing ? {meeting:view(existing)} : {})}}
 }
 
-async function update(req, row) {
+async function update(req, workspaceId, meetingId) {
   const body = requireBodyKeys(await req.json(LIMITS.BODY), ['revision', 'changes'])
   const { revision, changes } = body
   if (!isInt(revision) || !changes || typeof changes !== 'object' || Array.isArray(changes) || !Object.keys(changes).length
       || Object.keys(changes).some((key) => !FIELDS.includes(key))) refuse(400, 'invalid', 'Provide the current revision and known changes')
-  if (revision !== row.revision) refuse(409, 'conflict', 'Meeting changed elsewhere; reload and retry', view(row))
-  const next = {
-    title: changes.title ?? row.title, started_at: changes.started_at ?? row.started_at,
-    attendees: changes.attendees ?? parse(row.attendees), transcript: changes.transcript ?? row.transcript,
-    summary: changes.summary ?? row.summary, action_items: changes.action_items ?? parse(row.action_items),
-  }
-  validateAll(next)
-  const title = strip(next.title)
-  const attendees = next.attendees.map(strip)
-  const actions = normalizeActions(next.action_items)
-  if (stableJson([title, next.started_at, attendees, next.transcript, next.summary, actions])
-      === stableJson([row.title, row.started_at, parse(row.attendees), row.transcript, row.summary, parse(row.action_items)])) {
-    return { body: { meeting: view(row) } }
-  }
-  const hash = titleHash(title, row.source_call_id)
   return req.store.transaction((store) => {
+    const row = load(store, workspaceId, meetingId)
+    if (!row) refuse(404, 'not_found', 'Meeting not found')
+    if (revision !== row.revision) refuse(409, 'conflict', 'Meeting changed elsewhere; reload and retry', view(row))
+    const next = {
+      title: changes.title ?? row.title, started_at: changes.started_at ?? row.started_at,
+      attendees: changes.attendees ?? parse(row.attendees), transcript: changes.transcript ?? row.transcript,
+      summary: changes.summary ?? row.summary, action_items: changes.action_items ?? parse(row.action_items),
+    }
+    validateAll(next)
+    const title = strip(next.title)
+    const attendees = next.attendees.map(strip)
+    const actions = normalizeActions(next.action_items)
+    if (stableJson([title, next.started_at, attendees, next.transcript, next.summary, actions])
+        === stableJson([row.title, row.started_at, parse(row.attendees), row.transcript, row.summary, parse(row.action_items)])) {
+      return { body: { meeting: view(row) } }
+    }
+    const hash = titleHash(title, row.source_call_id)
     if (title !== row.title && store.get('SELECT id FROM meetings WHERE workspace_id=? AND title_hash=? AND id!=?', row.workspace_id, hash, row.id)) {
       refuse(409, 'conflict', 'A meeting with this title already exists')
     }
@@ -507,26 +509,34 @@ async function update(req, row) {
   })
 }
 
+async function removeMeeting(req, workspaceId, meetingId) {
+  if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid meeting request')
+  const {revision} = requireBodyKeys(await req.json(1024), ['revision'])
+  if (!Number.isSafeInteger(revision) || revision < 1) refuse(400, 'invalid', '请选择已保存的会议版本。')
+  return req.store.transaction(store => {
+    const row = load(store, workspaceId, meetingId)
+    if (!row) refuse(404, 'not_found', 'Meeting not found')
+    if (row.revision !== revision) refuse(409, 'conflict', '会议已更新，请重新打开最新版本。')
+    store.run('DELETE FROM meetings WHERE workspace_id=? AND id=?', workspaceId, meetingId)
+    return {body:{removed:view(row, false), ...(req.ownerUsername ? {viewer_username:req.ownerUsername} : {})}}
+  })
+}
+
 async function dispatch(req, workspaceId, meetingId, removing) {
   if (!meetingId && !removing) {
     if (req.method === 'GET') return req.query.get('view') === 'actions' ? meetingActionPage(req, workspaceId) : meetingPage(req, workspaceId)
     if (req.method === 'POST' && !req.queryString) return create(req, workspaceId)
     refuse(400, 'invalid', 'Invalid meeting request')
   }
+  if (removing === 'remove') return removeMeeting(req, workspaceId, meetingId)
+  if (req.method === 'POST' && !req.queryString) return update(req, workspaceId, meetingId)
   const row = load(req.store, workspaceId, meetingId)
   if (!row) refuse(404, 'not_found', 'Meeting not found')
-  if (removing === 'remove') {
-    if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid meeting request')
-    requireBodyKeys(await req.json(), [])
-    req.store.run('DELETE FROM meetings WHERE id=?', row.id)
-    return { body: { removed: view(row, false) } }
-  }
   if (req.method === 'GET' && !req.queryString) {
     const job = req.ownerUsername && draftReceipt(req.store, workspaceId, meetingId, row.revision)
     return {body:{meeting:view(row), ...(req.ownerUsername ? {viewer_username:req.ownerUsername} : {}),
       ...(job ? {draft_job:draftJobView(job)} : {})}}
   }
-  if (req.method === 'POST' && !req.queryString) return update(req, row)
   refuse(400, 'invalid', 'Invalid meeting request')
 }
 

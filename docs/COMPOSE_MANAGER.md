@@ -72,6 +72,30 @@ With automatic Compose provisioning enabled, workspace instance requests use
 the same account limit and manager assignment as signup. An existing account
 runtime is returned across workspaces where the caller can operate instances.
 
+### Release and restore a stopped reservation
+
+An operator can release the automatic provisioning reservation for a stopped
+account runtime. Its container, volume, owner, and manager assignment are
+preserved. The owner sees a paused status until the reservation is restored.
+The global runtime instance limit still includes paused runtimes.
+
+Run these commands as the management service user with the same data directory
+and private auto-provision policy as the running management service. Use the
+instance ID and current revision from the manager's instance status. Verify the
+container is stopped on the Docker host before releasing a reservation.
+
+```sh
+python3 -m openteamily.runtime_slots --data-dir "$DATA_DIR" --auto-provision "$AUTO_PROVISION" status
+python3 -m openteamily.runtime_slots --data-dir "$DATA_DIR" --auto-provision "$AUTO_PROVISION" park "$INSTANCE_ID" --revision "$REVISION"
+python3 -m openteamily.runtime_slots --data-dir "$DATA_DIR" --auto-provision "$AUTO_PROVISION" restore "$INSTANCE_ID" --revision "$REVISION"
+```
+
+The runtime must be stopped with a confirmed lifecycle revision and no active
+job. Restoring requires a free reservation. Once restored, the owner can start
+the same runtime from the startup page.
+
+### Upgrade existing runtimes
+
 Changing the image for **existing** account volumes is a separate operator
 rollout. Record the current image digest, take consistent volume snapshots,
 and verify health, routing and private-chat continuity on staged upgrades.

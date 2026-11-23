@@ -2762,7 +2762,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       currentUser = session.status === 200 ? session.body?.user || null : null;
       sessionState = currentUser ? 'signed-in' : session.status === 401 ? 'guest' : 'failed';
       whoami.textContent = currentUser?.username || '';
-      workComments.setActor(currentUser?.id || currentUser?.username || '');
+      workComments.setActor(currentUser?.id || currentUser?.username || '', currentUser?.id);
       applyCatalogChrome();
       syncCatalogActions();
     });

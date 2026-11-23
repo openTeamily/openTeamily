@@ -11,11 +11,20 @@ const coldDraftHandoffKey = 'openteamily.cold-chat-draft';
 const signupChatPath = /^\/chat#workspace=([a-f0-9]{32})&agent=([a-f0-9]{32})$/;
 const messageLimit = 4000;
 export const signupSessionError = '账户已创建，但登录会话尚未确认。请使用本实例 HTTPS 地址，允许同源 Cookie，然后尝试登录；不要重复注册。';
-export const runtimeCapacityNotice = {
-  title: '专属智能体名额已满',
-  detail: '你的账户已登录。请联系管理员处理容量，容量恢复后点击重新检查即可继续。',
-  retry: '重新检查',
-};
+export function runtimeHoldNotice(state) {
+  if (state === 'capacity') {
+    return {
+      title: '专属智能体名额已满',
+      detail: '你的账户已登录。请联系管理员处理容量，容量恢复后点击重新检查即可继续。',
+    };
+  }
+  if (state === 'parked') {
+    return {
+      title: '专属智能体已暂停',
+      detail: '你的数据仍保留。请联系管理员恢复，恢复后点击重新检查即可继续。',
+    };
+  }
+}
 const validSignupUser = id => typeof id === 'string' && platformUserId.test(id);
 
 const workspacePage = /^\/(?:agents|artifacts|automations|chat|contacts|meetings|members|memory|messenger|onboarding|profile|settings|skills|team|team-runs)\/?$/;
@@ -148,24 +157,30 @@ function chatDraftMentions(value) {
 }
 
 const pendingTextKey = /^[A-Za-z0-9_-]{16,64}$/;
+const pendingSocialId = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,79}$/;
 
-function pendingTextOwner(scope) {
+function pendingTextScope(scope) {
   try {
     const target = JSON.parse(scope);
     if (!Array.isArray(target) || target.length !== 5) return null;
     const [owner, workspace, source, agent, conversation] = target;
     if (!validSignupUser(owner) || !validSignupUser(workspace)) return null;
-    if (source === 'agent' && validSignupUser(agent) && validSignupUser(conversation)) return owner;
-    if (source === 'social' && agent === null && typeof conversation === 'string' &&
-        /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,79}$/.test(conversation)) return owner;
+    if (source === 'agent' && validSignupUser(agent) && validSignupUser(conversation)) return {owner,source};
+    if (source === 'social' && agent === null && typeof conversation === 'string' && pendingSocialId.test(conversation)) {
+      return {owner,source};
+    }
     return null;
   } catch { return null; }
 }
 
-function pendingTextMessage(value) {
+function pendingTextMessage(value, source) {
   const body = chatDraftBody(value);
-  if (!body.trim() || typeof value !== 'object' || value.reply_to || value.sticker_id) return null;
+  if (!body.trim() || typeof value !== 'object' || value.sticker_id) return null;
   const payload = {body};
+  if (value.reply_to !== undefined) {
+    if (source !== 'social' || typeof value.reply_to !== 'string' || !pendingSocialId.test(value.reply_to)) return null;
+    payload.reply_to = value.reply_to;
+  }
   if (typeof value.chat_language === 'string' && value.chat_language.length <= 64) {
     payload.chat_language = value.chat_language;
   }
@@ -178,11 +193,11 @@ function pendingTextMessage(value) {
   return payload;
 }
 
-function chatDraftPendingText(value) {
+function chatDraftPendingText(value, source) {
   const rows = value?.pendingText ?? value?.pendingPrivateText;
-  if (!Array.isArray(rows)) return [];
+  if (!source || !Array.isArray(rows)) return [];
   return rows.flatMap(row => {
-    const message = pendingTextMessage(row?.message);
+    const message = pendingTextMessage(row?.message, source);
     return message && typeof row.key === 'string' && pendingTextKey.test(row.key) ? [{key:row.key,message}] : [];
   });
 }
@@ -205,7 +220,7 @@ export function writeChatDrafts(view, owner, drafts) {
   const records = new Map(drafts);
   for (const [scope, value] of storedChatDrafts(view, owner)) {
     const agentMentions = chatDraftMentions(value);
-    const pendingText = chatDraftPendingText(value);
+    const pendingText = chatDraftPendingText(value, pendingTextScope(scope)?.source);
     if (agentMentions.length || pendingText.length) {
       records.set(scope, chatDraftRecord(records.get(scope) || '', agentMentions, pendingText));
     }
@@ -222,24 +237,27 @@ export function writeChatDraftMentions(view, scope, agentMentions) {
   if (!owner) return;
   const drafts = storedChatDrafts(view, owner);
   const previous = drafts.get(scope);
-  const updated = chatDraftRecord(chatDraftBody(previous), agentMentions, chatDraftPendingText(previous));
+  const updated = chatDraftRecord(chatDraftBody(previous), agentMentions,
+    chatDraftPendingText(previous, pendingTextScope(scope)?.source));
   if (updated) drafts.set(scope, updated);
   else drafts.delete(scope);
   saveChatDrafts(view, owner, drafts);
 }
 
 export function readPendingChatText(view, scope) {
-  const owner = pendingTextOwner(scope);
-  return owner ? chatDraftPendingText(storedChatDrafts(view, owner).get(scope)) : [];
+  const target = pendingTextScope(scope);
+  return target ? chatDraftPendingText(storedChatDrafts(view, target.owner).get(scope), target.source) : [];
 }
 
 export function savePendingChatText(view, scope, key, message) {
-  const owner = pendingTextOwner(scope);
-  const payload = message && pendingTextMessage(message);
-  if (!owner || typeof key !== 'string' || !pendingTextKey.test(key) || (message && !payload)) return false;
+  const target = pendingTextScope(scope);
+  if (!target || typeof key !== 'string' || !pendingTextKey.test(key)) return false;
+  const {owner,source} = target;
+  const payload = message && pendingTextMessage(message, source);
+  if (message && !payload) return false;
   const drafts = storedChatDrafts(view, owner);
   const previous = drafts.get(scope);
-  const rows = new Map(chatDraftPendingText(previous).map(row => [row.key, row]));
+  const rows = new Map(chatDraftPendingText(previous, source).map(row => [row.key, row]));
   if (payload) rows.set(key, {key,message:payload});
   else if (!rows.delete(key)) return true;
   const updated = chatDraftRecord(chatDraftBody(previous), chatDraftMentions(previous), [...rows.values()]);
@@ -274,7 +292,7 @@ export async function waitForRuntime(read, {
       if (!validSignupUser(user)) continue;
       if (user !== expectedUser) return 'signup-mismatch';
     }
-    if (['ready', 'unmanaged', 'unavailable', 'setup', 'stopped', 'capacity'].includes(state)) return state;
+    if (['ready', 'unmanaged', 'unavailable', 'setup', 'stopped', 'capacity', 'parked'].includes(state)) return state;
   }
   return 'timeout';
 }

@@ -2234,6 +2234,59 @@ test('posting a comment clears the editor and exposes pending text before the re
   assert.equal(toggle.textContent, '评论 · 1');
 });
 
+test('an unconfirmed comment survives a later successful send and can be retried after reload only by its original account', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const work = detailFixture({comment_count: 0});
+  const saved = new Map();
+  const storage = {getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value),
+    removeItem: key => saved.delete(key)};
+  const writes = [];
+  const draft = '尚未确认的评论';
+  const next = '之后发送成功的评论';
+  async function openComments(id) {
+    const doc = feedDocument();
+    doc.defaultView = {sessionStorage: storage};
+    await mount(doc, {location: {search: ''}, async fetcher(path, options) {
+      if (path === '/v1/auth/session') return commentResponse({user: {id, username: 'same-display-name'}});
+      if (path.startsWith('/v1/discover/me/works?')) return commentResponse({items: [work]});
+      if (path.endsWith('/comments?limit=12')) return commentResponse({items: [], comment_count: 0});
+      if (path.endsWith('/comments') && options.method === 'POST') {
+        const {body} = JSON.parse(options.body);
+        writes.push({id, key: options.headers['Idempotency-Key'], body});
+        if (writes.length === 1) return commentResponse({}, 503);
+        return commentResponse({comment: {id: 'posted-' + body, body, parent_id: null}, comment_count: 2});
+      }
+      throw new Error('Unexpected ' + path);
+    }});
+    const [toggle] = classHits(doc.getElementById('feed-grid'), 'feed-comments-toggle');
+    await toggle.handlers.click();
+    return part => doc.getElementById('feed-comments-' + part);
+  }
+
+  const first = await openComments('account-one');
+  first('input').value = draft;
+  first('input').handlers.input();
+  await first('form').handlers.submit({preventDefault() {}});
+  first('input').value = next;
+  first('input').handlers.input();
+  await first('form').handlers.submit({preventDefault() {}});
+  assert.equal(writes[1].body, next);
+  assert.notEqual(writes[0].key, writes[1].key);
+  const otherAccount = await openComments('account-two');
+  assert.equal(otherAccount('input').value, '');
+  assert.equal(otherAccount('retry-post').hidden, true);
+
+  const recovered = await openComments('account-one');
+  assert.equal(recovered('input').value, draft);
+  assert.match(recovered('status').textContent, /未确认/);
+  assert.equal(recovered('submit').textContent, '重试发送');
+  assert.equal(writes.length, 2);
+  await recovered('form').handlers.submit({preventDefault() {}});
+  assert.equal(writes.length, 3);
+  assert.deepEqual(writes[2], writes[0]);
+  assert.equal(saved.size, 0);
+});
+
 test('comment permalinks open a published work missing from the feed without waiting for the feed', async () => {
   const {mount, workDetailFromSearch} = await import('../openteamily/static/discover/app.mjs');
   assert.equal(workDetailFromSearch('?work=../private&comments=1'), null);

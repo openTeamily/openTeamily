@@ -13,9 +13,9 @@ import unittest
 
 from openteamily.app import App, Config
 from openteamily.dsbot_gateway import ensure_schema, record_upstream
-from openteamily.lifecycle import Lifecycle, ManagerAuth, ManagerIdentity, RuntimePolicy
+from openteamily.lifecycle import Lifecycle, ManagerAuth, ManagerIdentity, RuntimeFault, RuntimePolicy
 from openteamily.operator_config import load_auto_provision, load_manager_auth
-from openteamily.runtime_autoprovision import AutoProvisionPolicy
+from openteamily.runtime_autoprovision import AutoProvisionPolicy, capacity_status, set_parked
 from openteamily.security import digest, opaque
 from openteamily.store import Store
 from tests.test_management import Client, ORIGIN, seed_legacy_workspace
@@ -63,10 +63,13 @@ class AutoProvisionTests(unittest.TestCase):
         body = claim['body']['claim']
         self.assertIsNotNone(body)
         lease = {'job_id': body['job']['id'], 'observed_revision': body['job']['revision'], 'lease': body['lease']}
-        bootstrap = self.manager('POST', f'/v1/internal/instances/{iid}/runtime-agent-bootstrap', lease)
-        self.assertEqual(bootstrap['status'], 200, bootstrap)
-        self.assertEqual(set(bootstrap['body']), {'agent_bootstrap'})
-        self.assertEqual(self.manager('POST', f'/v1/internal/instances/{iid}/runtime-agent-key', lease)['status'], 404)
+        agent_bootstrap = None
+        if body['job']['operation_type'] != 'stop':
+            bootstrap = self.manager('POST', f'/v1/internal/instances/{iid}/runtime-agent-bootstrap', lease)
+            self.assertEqual(bootstrap['status'], 200, bootstrap)
+            self.assertEqual(set(bootstrap['body']), {'agent_bootstrap'})
+            self.assertEqual(self.manager('POST', f'/v1/internal/instances/{iid}/runtime-agent-key', lease)['status'], 404)
+            agent_bootstrap = bootstrap['body']['agent_bootstrap']
         payload = {**lease, 'observed': observed}
         if process_ref:
             payload['process_ref'] = process_ref
@@ -75,7 +78,7 @@ class AutoProvisionTests(unittest.TestCase):
         # Receipt is for the claimed job even when the server queues a follow-up start.
         self.assertEqual(result['body']['job']['id'], body['job']['id'])
         self.assertEqual(result['body']['job']['status'], 'succeeded')
-        return bootstrap['body']['agent_bootstrap']
+        return agent_bootstrap
 
     def count(self, sql, *args):
         with self.store.connect() as db:
@@ -271,6 +274,60 @@ class AutoProvisionTests(unittest.TestCase):
         self.ensure(alice)
         self.assertEqual(bob.call('GET', '/v1/auth/runtime-readiness')['body']['state'], 'capacity')
         self.assertEqual(self.ensure(bob)['runtime_provisioning']['state'], 'capacity')
+
+    def test_paused_owner_keeps_runtime_and_releases_one_reservation(self):
+        self.make_app(max_instances=1)
+        policy = self.app.auto_provision
+        with self.store.transaction() as db:
+            ensure_schema(db)
+        alice = self.user('alice', '127.0.0.1')
+        iid = self.ensure(alice)['runtime_provisioning']['instance_id']
+        before = alice.call('GET', f'/v1/instances/{iid}')['body']['instance']
+        with self.assertRaises(RuntimeFault) as pending, self.store.transaction() as db:
+            set_parked(db, policy, iid, before['revision'], True, self.now)
+        self.assertEqual(pending.exception.code, 'conflict')
+        self.run_job(iid, 'stopped')
+        self.run_job(iid, 'running', process_ref='a' * 32)
+        owner_id = alice.call('GET', '/v1/auth/session')['body']['user']['id']
+        self.runtime.stop(owner_id, iid)
+        self.run_job(iid, 'stopped')
+        stopped = alice.call('GET', f'/v1/instances/{iid}')['body']['instance']
+        rev = stopped['revision']
+
+        with self.store.transaction() as db:
+            self.assertEqual(capacity_status(db, policy), {'limit': 1, 'reserved': 1, 'parked': 0, 'available': 0})
+            with self.assertRaises(RuntimeFault) as stale:
+                set_parked(db, policy, iid, rev - 1, True, self.now)
+            self.assertEqual(stale.exception.current['revision'], rev)
+            self.assertTrue(set_parked(db, policy, iid, rev, True, self.now))
+            self.assertFalse(set_parked(db, policy, iid, rev, True, self.now))
+            self.assertEqual(capacity_status(db, policy), {'limit': 1, 'reserved': 0, 'parked': 1, 'available': 1})
+        self.assertEqual(alice.call('GET', '/v1/auth/runtime-readiness')['body']['state'], 'parked')
+        self.assertEqual(alice.call('GET', '/v1/auth/session?include=home')['body']['home'],
+                         {'runtime_state': 'parked', 'personal_agent': None})
+        for path in ('/v1/auth/runtime-start', f'/v1/instances/{iid}/start', f'/v1/instances/{iid}/restart'):
+            result = alice.call('POST', path, {})
+            self.assertEqual(result['status'], 409, result)
+            self.assertEqual(result['body']['error']['code'], 'runtime_parked')
+        self.assertEqual(self.ensure(alice)['runtime_provisioning'],
+                         {'state': 'existing', 'instance_id': iid, 'readiness': 'parked', 'error_code': 'runtime_parked'})
+        self.assertEqual(alice.call('GET', f'/v1/instances/{iid}')['body']['instance'], stopped)
+        self.assertEqual({item['id'] for item in self.listed()}, {iid})
+
+        with self.store.transaction() as db:
+            self.assertTrue(set_parked(db, policy, iid, rev, False, self.now))
+            self.assertFalse(set_parked(db, policy, iid, rev, False, self.now))
+            self.assertTrue(set_parked(db, policy, iid, rev, True, self.now))
+        bob = self.user('bob', '127.0.0.2')
+        self.assertEqual(bob.call('GET', '/v1/auth/runtime-readiness')['body']['state'], 'setup')
+        other = self.ensure(bob)['runtime_provisioning']
+        self.assertEqual(other['state'], 'provisioned')
+        self.assertNotEqual(other['instance_id'], iid)
+        self.assertEqual(bob.call('GET', f'/v1/instances/{iid}')['status'], 404)
+        with self.assertRaises(RuntimeFault) as full, self.store.transaction() as db:
+            set_parked(db, policy, iid, rev, False, self.now)
+        self.assertEqual((full.exception.status, full.exception.code), (429, 'runtime_capacity'))
+        self.assertEqual(alice.call('GET', f'/v1/instances/{iid}')['body']['instance'], stopped)
 
     def test_operator_enrolled_owner_runtime_is_respected_not_duplicated(self):
         self.make_app(enabled=False)

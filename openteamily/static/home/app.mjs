@@ -1,7 +1,7 @@
 import '../shell/dsbot-api.mjs';
 import { meetingCodeFromHash, meetingHref } from '../shell/meeting-link.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
-import { confirmSignupSession, csrfCookie, runtimeCapacityNotice, signupSessionError, waitForRuntime, workspaceLoginHash, workspaceLoginTarget, workspacePageTarget } from './runtime-readiness.mjs';
+import { confirmSignupSession, csrfCookie, runtimeHoldNotice, signupSessionError, waitForRuntime, workspaceLoginHash, workspaceLoginTarget, workspacePageTarget } from './runtime-readiness.mjs';
 
 export const KIND_LABELS = {
   document: '文档', website: '网站', slides: '幻灯片', dashboard: '看板',
@@ -366,12 +366,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
   function showPersonalRuntimeRetry(state) {
     loginPanel.hidden = true;
     mainPanel.hidden = true;
-    const capacity = state === 'capacity';
-    const message = capacity ? runtimeCapacityNotice.title + '。' + runtimeCapacityNotice.detail
+    const notice = runtimeHoldNotice(state);
+    const message = notice ? notice.title + '。' + notice.detail
       : state === 'timeout' ? '你的专属智能体仍在启动，请稍后再试。'
         : '暂时无法打开你的工作区，请重试。';
-    show(document, capacity ? '' : 'error', message);
-    const retry = element('button', 'public-agent-action', capacity ? runtimeCapacityNotice.retry : '重试');
+    show(document, notice ? '' : 'error', message);
+    const retry = element('button', 'public-agent-action', notice ? '重新检查' : '重试');
     retry.type = 'button';
     retry.id = 'runtime-startup-retry';
     retry.addEventListener('click', () => void load());
@@ -400,7 +400,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       view.location.replace(resumePath);
       return null;
     }
-    showPersonalRuntimeRetry(provisioning?.state === 'capacity' || provisioning?.readiness === 'capacity' ? 'capacity' : state);
+    showPersonalRuntimeRetry(state || provisioning?.readiness || provisioning?.state);
     return null;
   }
 
@@ -498,8 +498,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       document.body?.classList.add('home-signed-in', 'app-primary');
       loginPanel.hidden = true;
       const startup = session.body.home;
-      if (startup?.runtime_state === 'capacity') {
-        showPersonalRuntimeRetry('capacity');
+      if (runtimeHoldNotice(startup?.runtime_state)) {
+        showPersonalRuntimeRetry(startup.runtime_state);
         return;
       }
       const ready = ['ready', 'unmanaged'].includes(startup?.runtime_state);
