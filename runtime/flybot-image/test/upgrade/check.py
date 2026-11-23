@@ -180,6 +180,9 @@ def run(args):
             httpd = make_server(bridge,0,lambda env,response:None,handler_class=base.QuietHandler,
                                  server_class=base.ThreadedWSGIServer)
             conf = base.gw.nginx_config(base.gw.load_routes(),f'{bridge}:{httpd.server_port}',8081,key=gateway_key)
+            # The runner uses an ephemeral public port. Preserve it in the
+            # Host forwarded to the platform's exact same-origin check.
+            conf = conf.replace('proxy_set_header Host $host;', 'proxy_set_header Host $http_host;')
             conf_file = temp/'nginx.conf'
             conf_file.write_text(conf)
             conf_file.chmod(0o644)
@@ -195,7 +198,13 @@ def run(args):
             httpd.set_app(base.gw.mount(app,base.gw.GatewayApp(store,origin,base.COOKIE,gateway_key)))
             threading.Thread(target=httpd.serve_forever,daemon=True).start()
             serving = True
-            base.wait_for(lambda: base.request(mapping,'GET','/login')[0]==200,'edge login')
+
+            def login_response():
+                status, _, content = base.request(mapping,'GET','/login')
+                return (status, content) if status not in (502, 503) else None
+
+            status, content = base.wait_for(login_response,'edge login')
+            require(status==200,f'edge login returned {status}: {base.redact(content[:200])}')
 
             def api(account, method, path, data=None, expected=200):
                 headers = {'Host':urlsplit(origin).netloc,'Origin':origin,'Cookie':f"{base.COOKIE}={account['platformToken']}"}
