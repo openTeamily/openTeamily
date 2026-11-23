@@ -1,6 +1,20 @@
 # Evidence and acceptance status
 
-Full functionality is the goal; a merged slice does not close #1 or #2. Every product acceptance requires a real Teamily comparison. No mock HTTP test, fake backend, guide excerpt or screenshot of a handmade mock UI counts as equivalent product behavior.
+Record release verification and product comparison separately. Release verification covers the OpenTeamily build and environment named in its evidence. A Teamily comparison requires the same operation in both products with equivalent roles and relevant settings.
+
+## Verified DS-Bot v0.3.10 upgrade
+
+The [DS-Bot conversation upgrade job](https://github.com/openTeamily/openTeamily/actions/runs/45196194368/job/137767160854) passed on 2026-11-23 for [#566](https://github.com/openTeamily/openTeamily/pull/566) at `9ca6fe1598f5cbb81519aa5d401470e1f19216b4`. It built the v0.3.9 baseline from `3389c421ac3d567e84cee0d30f6507c9591dc4cf` and the v0.3.10 candidate as separate images, then replaced and restarted the runtimes on the same two test volumes. The workflow uploaded Chromium screenshots under `ds-bot-conversation-upgrade-browser`.
+
+| Check | Verified result |
+|---|---|
+| Per-account routing | Two independent Chromium contexts signed in through the real platform and gateway. Each account reached its own DS-Bot, and the other account's private conversation returned `404`. |
+| Upgrade and restart | Both accounts retained their two private conversations and native session roots. The earlier segment stayed in its own conversation, and the separate background task stayed outside the private transcripts. |
+| New messages | Both conversations per account accepted new sends and streamed replies through the upgraded DS-Bot. Their messages and history remained available after restart. |
+
+The [runtime image checks](https://github.com/openTeamily/openTeamily/actions/runs/45196194354) also passed on the same PR head. They cover the Compose lifecycle and retained volume, owner-specific gateway routing and two DS-Bots sharing state through Bot Social. The upgrade uses a deterministic local model and disposable accounts. It covers runtime migration and browser behavior on the test volumes. An operator rollout and a Teamily comparison each require their own evidence.
+
+Reproduce the upgrade check with the [workflow](../.github/workflows/ds-bot-conversation-upgrade.yml) and [test runner](../runtime/flybot-image/test/upgrade/check.py). See [Compose manager](COMPOSE_MANAGER.md) for deployment and existing-volume boundaries.
 
 ## Record per check
 
@@ -27,15 +41,15 @@ Preserve these fields even when empty, using `pending-verification` rather than 
 
 Do not place secrets, cookie values, personal data or access-bearing URLs into public evidence. A guide-only or unavailable gray rollout stays `pending-verification`; it is not evidence of absence or a parity pass. Independently verify negative/permission/error paths where possible and record differences instead of erasing them.
 
-## PR16 foundation snapshot (not the later runtime follow-up)
+## Historical PR16 foundation snapshot
 
-Current lifecycle implementation/gaps are separately recorded in [RUNTIME_IMPLEMENTATION.md](RUNTIME_IMPLEMENTATION.md). PR16 retains24 tests; the expanded branch adds simulation/manager/planner coverage, never real container or product parity acceptance.
+PR16 documented the initial 24 management tests. The table below records that slice at the time of its review. See [Compose manager](COMPOSE_MANAGER.md) for the current operator path.
 
 | Check | OpenTeamily evidence/status | Teamily evidence/status | Overall status |
 |---|---|---|---|
 | Auth, CSRF, private persistence, owner-only workspace records | 24 executable self-authored in-process WSGI/SQLite tests passed locally; test source in `tests/test_management.py` | Real same-role/page/action/result comparison not performed in this slice; pending-verification | Self-hosting foundation tested, not independent product acceptance |
 | Browser signup/login/workspace interaction | No frontend or browser test in this slice; not-executed | pending-verification | pending-verification |
 | Lifecycle/manager/volumes/jobs | Not implemented; no fake/runtime test pass claimed | Internal Teamily implementation unknown, not assumed identical | Pending self-hosting implementation and real deployment acceptance |
-| Full13 product domains | Not implemented by this PR | Existing partial inventory cannot replace real operation evidence | Not accepted |
+| Full product scope | Not implemented by this PR | Existing partial inventory cannot replace real operation evidence | Not accepted |
 
-CI status must come from actual GitHub checks; a workflow file is not proof CI passed. Independent reviewer acceptance is pending. No real server, browser, Docker container, public ingress, firewall change or deployment was run for these local tests. The development runner was invoked with `--help` only.
+PR16's evidence was limited to local management tests and the development runner's `--help`. Use the linked GitHub job results for newer runtime verification.
