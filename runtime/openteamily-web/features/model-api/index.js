@@ -13,7 +13,7 @@ export default function modelApi(host) {
   const dir = host.featureDir()
   const sealKey = loadSealKey({ fallbackFile: join(dir, 'seal.key'), preferFallback: true })
   const api = createModelApi({ dir, sealKey })
-  const imported = importJsonBundles({ dataDir: host.dataDir, feature: { name: 'model-api', importTables: IMPORT_TABLES }, store: api.store, sealKey: loadImportSealKey(), apply: importApplier(sealKey), log: host.log })
+  const imported = importJsonBundles({ host, feature: { name: 'model-api', importTables: IMPORT_TABLES }, store: api.store, sealKey: loadImportSealKey(), apply: importApplier(sealKey), log: host.log })
   globalThis[OVERRIDE] = () => api.resolveForProxy()
   return {
     imported,

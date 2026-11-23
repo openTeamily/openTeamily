@@ -114,7 +114,7 @@ export async function reconcileStartupSkills(rt, dataDir, boundName) {
 
 export function skillLibrary(host, { boundName }) {
   const {store, serial} = libraryEntry(host.featureDir())
-  importJsonBundles({ dataDir: host.dataDir, feature: { name:'skills', importTables:{ imported_skill_heads:[], imported_skill_versions:[], skill_bindings:[], skill_installs:[] } }, store,
+  importJsonBundles({ host, feature: { name:'skills', importTables:{ imported_skill_heads:[], imported_skill_versions:[], skill_bindings:[], skill_installs:[] } }, store,
     apply(d,t) {
       for (const h of t.imported_skill_heads || []) {
         if (d.packages[h.skill_id]) continue

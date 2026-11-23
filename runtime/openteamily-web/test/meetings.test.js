@@ -861,5 +861,19 @@ test('legacy meetings of one test account import into that account\'s DS-Bot, id
   const evil = volume()
   deliverBundle(evil, 'x.bundle', JSON.stringify(tampered))
   const rejected = await boot(evil)
-  assert.equal((await rejected.endpoint('meetings/routes')).value.imported[0].status, 'rejected')
+  const badDigest = (await rejected.endpoint('meetings/routes')).value.imported[0]
+  assert.equal(badDigest.status, 'rejected')
+  assert.match(badDigest.reason, /digest mismatch/)
+
+  const foreign = volume()
+  deliverBundle(foreign, 'foreign.bundle', JSON.stringify({
+    ...JSON.parse(bundles.meetings),
+    instance_id: bot.identity.routingInstanceId ?? bot.identity.instanceId,
+  }))
+  const other = await boot(foreign)
+  assert.deepEqual((await other.endpoint('meetings/routes')).value.imported, [
+    { name: 'foreign.bundle', status: 'rejected', reason: 'import target mismatch' },
+  ])
+  assert.equal((await other.call('meetings', 'GET', base(expect.meetings.meeting_id, wid))).status, 404)
+  assert.equal(existsSync(join(foreign.data, 'openteamily', 'import', 'foreign.bundle')), true)
 })

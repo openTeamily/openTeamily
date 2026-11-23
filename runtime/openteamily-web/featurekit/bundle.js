@@ -15,6 +15,12 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.bundle$/
 const IDENT = /^[a-z_][a-z0-9_]{0,63}$/
 const sha256 = (text) => createHash('sha256').update(text, 'utf8').digest('hex')
 
+export function requireBundleTarget(bundle, instanceId) {
+  if (typeof instanceId !== 'string' || !/^[0-9a-f]{32}$/.test(instanceId) || bundle?.instance_id !== instanceId) {
+    throw new Error('import target mismatch')
+  }
+}
+
 export function verifyBundle(bundle, feature) {
   if (!bundle || bundle.format !== BUNDLE_FORMAT || bundle.version !== 1) throw new Error('unsupported bundle format')
   if (bundle.feature !== feature.name) throw new Error('bundle feature mismatch')
@@ -33,6 +39,7 @@ export function verifyBundle(bundle, feature) {
 }
 
 export function importBundle(store, feature, bundle, digest, paths = {}) {
+  requireBundleTarget(bundle, paths.instanceId)
   const tables = verifyBundle(bundle, feature)
   // Media objects (and any other side files) are written first: they are
   // content-addressed, and a failed row import must not already be marked done.
@@ -73,7 +80,7 @@ function importRows(store, feature, tables, digest) {
 }
 
 // Import pending bundles for one feature; bundles for other features stay put.
-export function importBundles({ store, dataDir, feature }) {
+export function importBundles({ store, dataDir, feature, instanceId }) {
   store.exec('CREATE TABLE IF NOT EXISTS ot_imports (digest TEXT PRIMARY KEY, feature TEXT NOT NULL, rows INTEGER NOT NULL, imported INTEGER NOT NULL)')
   const dir = join(dataDir, 'openteamily', 'import')
   let names = []
@@ -85,7 +92,9 @@ export function importBundles({ store, dataDir, feature }) {
       const text = readFileSync(file, 'utf8')
       const bundle = JSON.parse(text)
       if (bundle?.feature !== feature.name) continue
-      const result = importBundle(store, feature, bundle, sha256(text), { dataDir, featureDir: join(dataDir, 'openteamily', 'features', feature.name) })
+      const result = importBundle(store, feature, bundle, sha256(text), {
+        instanceId, dataDir, featureDir: join(dataDir, 'openteamily', 'features', feature.name),
+      })
       unlinkSync(file)
       results.push({ name, status: result.skipped ? 'already-imported' : 'imported', rows: result.rows })
     } catch (error) {

@@ -11,7 +11,7 @@ import { sharedBotSocial } from '../../lib/c/bot-social.js'
 const sha=x=>createHash('sha256').update(x).digest('hex')
 export default async function messageAssists(host){
  const store=openJsonStore(host.featureDir(),'assists',()=>({items:[]}))
- const imported=importJsonBundles({dataDir:host.dataDir,feature:{name:'message-assists',importTables:{message_assists:[]}},store,sealKey:loadImportSealKey(),log:host.log,
+ const imported=importJsonBundles({host,feature:{name:'message-assists',importTables:{message_assists:[]}},store,sealKey:loadImportSealKey(),log:host.log,
   apply(draft,tables){
    for(const r of tables.message_assists || []){
     if(draft.items.some(x=>x.id===r.id))continue

@@ -717,6 +717,45 @@ test('the feed only presents available filters', () => {
   assert.equal(feedQuery('中文', '1.site-one', 'website'), 'limit=12&q=%E4%B8%AD%E6%96%87&cursor=1.site-one&kind=website');
 });
 
+test('a failed Discover feed shows retry before a successful empty result', async t => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const cases = [
+    {name: 'public feed', search: '', path: '/v1/discover/works?limit=12', note: FEED_ACTIVITY_EMPTY_NOTE},
+    {name: 'public search', search: '?q=notes', path: '/v1/discover/works?limit=12&q=notes', note: FEED_SEARCH_EMPTY_NOTE},
+    {name: 'following feed', search: '?feed=following', path: '/v1/discover/me/works?limit=12&tab=following',
+      note: FEED_FOLLOWING_NOTE, viewer: 'alice'},
+  ];
+  for (const {name, search, path, note, viewer} of cases) {
+    await t.test(name, async () => {
+      const doc = fakeDocument();
+      doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+      const reads = [];
+      await mount(doc, {location: {search}, fetcher: async requested => {
+        if (requested === '/v1/auth/session') {
+          return viewer ? commentResponse({user: {id: 'owner', username: viewer}}) : commentResponse({}, 401);
+        }
+        reads.push(requested);
+        if (reads.length === 1) return commentResponse({}, 503);
+        return commentResponse({items: [], viewer_username: viewer || null});
+      }});
+      const el = id => doc.getElementById(id);
+      assert.deepEqual(reads, [path]);
+      assert.equal(el('feed-error').hidden, false);
+      assert.match(el('feed-error').textContent, /无法加载公开作品/);
+      assert.equal(el('feed-note').textContent, '');
+      assert.equal(el('feed-following-empty').hidden, true);
+      assert.equal(el('feed-retry').hidden, false);
+
+      await el('feed-retry').handlers.click();
+      assert.deepEqual(reads, [path, path]);
+      assert.equal(el('feed-error').hidden, true);
+      assert.equal(el('feed-retry').hidden, true);
+      assert.equal(el('feed-note').textContent, note);
+      assert.equal(el('feed-following-empty').hidden, !viewer);
+    });
+  }
+});
+
 test('selecting the active feed category refreshes once and preserves its items and cursor on failure', async () => {
   const {mount} = await import('../openteamily/static/discover/app.mjs');
   const doc = fakeDocument();

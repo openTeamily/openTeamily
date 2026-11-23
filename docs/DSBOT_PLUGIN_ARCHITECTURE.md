@@ -239,6 +239,9 @@ sequenced by the deploy owner).
 * **Delivery:** a manager job (`import-openteamily-state`) writes the bundle into the user's volume as
   `/data/openteamily/import/<version>.bundle`; the plugin imports idempotently at start (version marker
   table, upsert by original id), verifies the manifest, then deletes the bundle.
+  Each import also requires the manager-supplied instance ID to match this DS-Bot's
+  routing identity. Bundles with a missing or different target remain on disk for
+  operator review.
 * **Cut per feature:** each batch PR migrates only its own tables; on success the platform flips that
   feature for that user in `dsbot_routes` state and marks its legacy rows `migrated_at` (read-only, kept).
 * **Shared (S) data:** teams, members, invites, social conversations, discover entries are published into
