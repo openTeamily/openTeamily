@@ -130,6 +130,13 @@
       <form id="create-form" method="post" action="/v1/workspaces" hidden>
         <fieldset>
           <legend>新建智能体</legend>
+          <section id="agent-draft-assist" class="agent-draft-assist" hidden>
+            <label class="stack" for="agent-draft-prompt">描述你需要的智能体
+              <textarea id="agent-draft-prompt" rows="3" maxlength="1600" placeholder="如：整理客户访谈，提取需求并列出待确认的问题"></textarea>
+            </label>
+            <button type="button" id="agent-draft-generate">生成草稿</button>
+            <p id="agent-draft-status" class="note" role="status" hidden></p>
+          </section>
           <label>名称 <input type="text" name="name" required maxlength="80" autocomplete="off"></label>
           <label class="stack">简介 <input type="text" name="summary" maxlength="500" autocomplete="off"></label>
           <label class="stack">说明 <textarea name="instructions" maxlength="16000"></textarea></label>

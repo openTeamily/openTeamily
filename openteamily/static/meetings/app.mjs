@@ -1,5 +1,6 @@
 import {mountMeetingAudio} from './audio.mjs';
 import {mountMeetingDiscussion} from './discussion.mjs';
+import {mountMeetingPrint} from './print.mjs';
 import {mountTranscriptSearch, renderTranscriptMatch} from './transcript-search.mjs';
 import {readWorkspaceChoices, servedByDsBot} from '../shell/dsbot-api.mjs';
 import {isMeetingCallId, meetingArchiveHref, takeMeetingFromChat} from '../shell/meeting-link.mjs';
@@ -669,17 +670,25 @@ function mount() {
     historyWorkspace: () => servedByDsBot(document) && !document.getElementById('meeting-list-pane')?.hidden
       ? workspaceId() : '',
   });
+  function notesContext() {
+    const workspace = workspaceId();
+    if (!native || !meetingIdPattern.test(viewerId)) return null;
+    if (receivedMeeting?.workspace === workspace && !sharedDetail.hidden) {
+      return {owner:viewerId, workspace, meeting:receivedMeeting.meeting, shared:true};
+    }
+    return current?.id && current.workspace_id === workspace && !form.hidden &&
+      layout?.dataset.view !== 'catalogue' ? {owner:viewerId, workspace, meeting:current, shared:false} : null;
+  }
+  const printing = mountMeetingPrint(document, {
+    context: () => {
+      const notes = notesContext();
+      return form.inert && !notes?.shared ? null : notes;
+    },
+    formatTime,
+  });
   const discussion = mountMeetingDiscussion(document, {
     request,
-    context: () => {
-      const workspace = workspaceId();
-      if (!native || !meetingIdPattern.test(viewerId)) return null;
-      if (receivedMeeting?.workspace === workspace && !sharedDetail.hidden) {
-        return {owner:viewerId, workspace, meeting:receivedMeeting.meeting, shared:true};
-      }
-      return current?.id && current.workspace_id === workspace && !form.hidden && layout?.dataset.view !== 'catalogue'
-        ? {owner:viewerId, workspace, meeting:current} : null;
-    },
+    context: notesContext,
     isDirty: hasUnsavedChanges,
     openChat: href => document.defaultView.location.assign(href),
   });
@@ -1100,6 +1109,7 @@ function mount() {
 
   function syncSavedActions(pending) {
     discussion.sync(pending);
+    printing.sync(pending);
     const saved = native && Boolean(current?.id);
     for (const {button} of copyDestinations) {
       button.hidden = !saved;
@@ -1842,6 +1852,7 @@ function mount() {
     if (!receipt && sharedDetail) sharedDetail.hidden = true;
     sharing.sync();
     discussion.sync();
+    printing.sync();
   }
 
   function syncRecord() {
@@ -1992,6 +2003,7 @@ function mount() {
   }
 
   async function openMeeting(id, read, transcriptQuery, actionReference) {
+    printing.close();
     const pendingSave = writing?.kind === 'save' && active(writing) ? writing
       : saveRetry && active(saveRetry) ? saveRetry : null;
     const owner = viewer;
@@ -2095,6 +2107,7 @@ function mount() {
     renderSharedMeeting(document, meeting, {copy, saved:result.body.saved_actions});
     if (result.body.received === true) receivedMeeting = {workspace:target.workspace, meeting};
     discussion.sync();
+    printing.sync();
     show('', '');
     if (actionReference && result.body.received === true && sharedInboxReturn && inboxSource) {
       const item = meeting.action_items?.[actionReference.index];
@@ -2176,6 +2189,7 @@ function mount() {
   }
 
   async function load() {
+    printing.close();
     const seq = ++workspaceLoad;
     clearOpenRetry();
     inboxResume = null;

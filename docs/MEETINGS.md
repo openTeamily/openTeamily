@@ -42,7 +42,10 @@ schema `user_version` stays 1. No existing tables or chrome change.
 summary, transcript and action-item rows (text, owner, done). The editor previews the generated
 summary and action items before adding them to the form. Existing completed actions keep their
 status. Open a new record in the current workspace from the chat create menu, or return to a saved
-record through its link. The editor exports the selected meeting as Markdown.
+record through its link. The editor exports the selected meeting as Markdown. Saved meetings
+and received meeting notes also offer a print preview for the selected revision. It includes
+the summary and action items with their owners, deadlines, and status. Use the browser print
+dialog to print or save the preview as PDF.
 
 The container launch overlay activates DSH's local SenseVoice recognizer. Profiles with the
 official Voice Input bundle use its configured local recognizer. The first preparation downloads
@@ -56,4 +59,4 @@ The Compose manager allows 1.5 GiB per user runtime for DS-Bot and the speech wo
 
 - Live calls, streaming captions and speaker separation.
 - Automatically creating tasks/automations from action items.
-- PDF/DOCX export, saved audio/video attachments, or server-side HTML rendering.
+- Direct PDF or DOCX downloads, saved audio/video attachments, and server-side HTML rendering.

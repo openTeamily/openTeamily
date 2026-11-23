@@ -144,7 +144,9 @@ button.pill[aria-pressed="true"] {
   top: 0;
   right: 0;
   bottom: 0;
+  box-sizing: border-box;
   width: min(28rem, 100vw);
+  grid-template-columns: minmax(0, 1fr);
   overflow: auto;
   padding: 1.25rem;
   background: var(--ot-surface);
@@ -314,3 +316,31 @@ body.app-workspace:not(.chat-open) > main > #main-panel:has(> .directory-top) { 
 #agent-share-status:empty { display: none; }
 #agent-share-dialog button { min-height: 2.75rem; }
 #agent-share-open-chat { display: inline-flex; align-items: center; min-height: 2.75rem; }
+
+.agent-draft-assist {
+  display: grid;
+  justify-items: start;
+  gap: .625rem;
+  margin-bottom: .75rem;
+  padding: .875rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .75rem;
+  background: var(--ot-surface-2);
+}
+.agent-draft-assist[hidden] { display: none; }
+.agent-draft-assist label { width: 100%; margin: 0; }
+.agent-draft-assist .note { margin: 0; }
+#manage-drawer :is(form, fieldset) { min-width: 0; }
+#manage-drawer :is(#create-form, #edit-form) :is(input, textarea, select) {
+  box-sizing: border-box;
+  max-inline-size: 100%;
+}
+#create-form fieldset > .actions:last-child {
+  position: sticky; inset-block-end: 0; z-index: 1;
+  padding-block: .5rem; background: var(--ot-surface);
+}
+#create-form #agent-draft-prompt { min-height: 5.5rem; }
+#create-form textarea[name="quick_starts"] { min-height: 4.75rem; }
+@media (max-width: 480px) {
+  #manage-drawer:not([hidden]) { padding: .875rem; }
+}

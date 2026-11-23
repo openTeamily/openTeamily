@@ -345,6 +345,71 @@
 #meeting-discussion-dialog .meeting-actions { justify-content: flex-end; }
 #meeting-discussion-dialog button, #meeting-discussion, #shared-meeting-discussion { min-height: 2.75rem; }
 
+#meeting-print-dialog {
+  box-sizing: border-box;
+  width: min(42rem, calc(100% - 1.5rem));
+  max-height: calc(100dvh - 1.5rem);
+  padding: 0;
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius);
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+}
+#meeting-print-dialog::backdrop { background: rgb(0 0 0 / 38%); }
+.meeting-print-controls {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: .65rem;
+  padding: .85rem 1rem;
+  border-bottom: 1px solid var(--ot-line);
+  background: var(--ot-surface);
+}
+.meeting-print-controls :is(h2, p) { margin: 0; }
+.meeting-print-controls h2 { font-size: 1rem; }
+.meeting-print-controls button, #print-meeting, #print-shared-meeting { min-height: 2.75rem; }
+#print-shared-meeting { margin-block: .6rem; }
+#meeting-print-preview { padding: clamp(.9rem, 4vw, 2.25rem); }
+.meeting-minutes-paper { line-height: 1.5; overflow-wrap: anywhere; }
+.meeting-minutes-paper :is(h2, h3, p) { margin-block: 0; }
+.meeting-minutes-header { padding-bottom: .8em; border-bottom: 1px solid var(--ot-line); }
+.meeting-minutes-paper h2 { font-size: 1.6em; margin-block: .25em; }
+.meeting-minutes-paper h3 { font-size: 1.1em; margin-bottom: .45em; }
+.meeting-minutes-paper section { margin-top: 1em; }
+.meeting-minutes-kicker, .meeting-minutes-meta { color: var(--ot-muted); font-size: .85em; }
+.meeting-minutes-meta time { display: inline-block; white-space: nowrap; }
+.meeting-minutes-kicker { font-weight: 600; }
+.meeting-minutes-text { white-space: pre-wrap; }
+.meeting-minutes-paper ol { margin-block: 0; padding-inline-start: 1.65em; }
+.meeting-minutes-paper li { padding: .35em 0 .45em .2em; }
+
+@page meeting-minutes { size: A4; margin: 17mm; }
+
+@media print {
+  body.app-workspace[data-meeting-print] {
+    display: block;
+    min-height: 0;
+    overflow: visible;
+    background: white;
+    color: #18212e;
+    color-scheme: light;
+  }
+  body.app-workspace[data-meeting-print] > :not(#meeting-print-paper),
+  body[data-meeting-print] #meeting-print-dialog::backdrop { display: none !important; }
+  body.app-workspace[data-meeting-print] > #meeting-print-paper {
+    --ot-line: #c5ccd6;
+    --ot-muted: #3e4c5c;
+    display: block !important;
+    page: meeting-minutes;
+    font-size: 11pt;
+  }
+  #meeting-print-paper :is(.meeting-minutes-header, li) { break-inside: avoid; }
+  #meeting-print-paper :is(h2, h3) { break-after: avoid; }
+}
+
 @media (max-width: 700px) {
   .meeting-page-top {
     display: grid;

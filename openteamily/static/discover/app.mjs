@@ -785,6 +785,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   ].map(name => [name, document.getElementById('work-detail-' + name)]));
   const share = Object.fromEntries(['dialog', 'url', 'status', 'copy', 'native', 'close']
     .map(name => [name, document.getElementById('work-share-' + name)]));
+  const chatSharePanel = document.getElementById('work-chat-share-panel');
+  chatSharePanel.hidden = true;
+  let chatShareReady;
   const workRemix = Object.fromEntries(['dialog','form','source','name','name-field','status','close','refresh','submit','open']
     .map(name => [name,document.getElementById('work-remix-'+name)]));
   const detailPanel = document.getElementById('work-detail');
@@ -1056,6 +1059,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     } else syncGuestWorkNavigation(entry);
     if (entry.intent.comments) return Promise.all([entry.preview, workComments.open(entry.item, detail.comments)]);
     if (entry.intent.share) openWorkShare();
+    else if (share.dialog.open) syncWorkChatShare(entry);
     return entry.preview;
   }
 
@@ -1336,6 +1340,22 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     setWorkEngagement(entry);
   }
 
+  async function syncWorkChatShare(entry) {
+    const viewer = currentUser;
+    if (!nativeCatalog || !viewer?.id || !entry.ready || entry.viewer !== viewer) return;
+    const url = share.url.value;
+    const isCurrent = () => activeWorkEntry(entry) && currentUser === viewer;
+    try {
+      chatShareReady ??= import('./work-chat-share.mjs')
+        .then(({mountWorkChatShare}) => mountWorkChatShare(document, share.dialog, request));
+      const controller = await chatShareReady;
+      if (share.dialog.open && isCurrent()) controller.prepare({viewer, url, isCurrent});
+    } catch {
+      chatShareReady = null;
+      if (share.dialog.open && isCurrent()) share.status.textContent = '无法加载聊天分享，可复制链接。';
+    }
+  }
+
   function openWorkShare() {
     if (!activeWork?.item) return;
     const slug = activeWork.slug;
@@ -1345,6 +1365,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const navigator = window?.navigator;
     share.native.hidden = !navigator?.share || (navigator.canShare && !navigator.canShare({url: share.url.value}));
     if (!share.dialog.open) share.dialog.showModal();
+    return syncWorkChatShare(activeWork);
   }
 
   async function copyWorkShare() {

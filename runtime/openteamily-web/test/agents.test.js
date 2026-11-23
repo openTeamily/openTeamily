@@ -29,6 +29,41 @@ test('categories stay in step with the Python source', () => {
   assert.deepEqual([...block.matchAll(/'([a-z-]+)'/g)].map((m) => m[1]), CATEGORIES)
 })
 
+test('an agent description drafts with the owner model, without creating an agent', async () => {
+  const foreign = 'b'.repeat(32)
+  const db = new DatabaseSync(':memory:')
+  const generated = {name:'访谈整理员', summary:'整理用户访谈', instructions:'列出需求和待确认问题。', quick_starts:['整理下面的访谈']}
+  const output = Promise.withResolvers()
+  let modelOutput = output.promise
+  const started = Promise.withResolvers()
+  let modelCalls = 0
+  const host = {
+    currentRuntime: () => ({backgroundTextOnly: async (prompt, {system}) => {
+      modelCalls += 1
+      assert.equal(prompt, '帮我整理用户访谈')
+      assert.match(system, /Return only a JSON object/)
+      started.resolve()
+      return modelOutput
+    }}),
+    call: async name => name === 'agents/personal-binding' ? {workspace_id: W} : [{id:foreign,role:'member'}],
+  }
+  const {endpoints:e} = createAgents({db,host})
+  const draft = (workspace, prompt) => e.v1({method:'POST',path:`/v1/workspaces/${workspace}/agents/draft`,body:{prompt}})
+  assert.equal((await draft(foreign,'帮我整理用户访谈')).status,403)
+  assert.equal((await draft(W,'  ')).status,400)
+  const first = draft(W,'帮我整理用户访谈')
+  await started.promise
+  assert.equal((await draft(W,'帮我整理用户访谈')).status,429)
+  output.resolve(JSON.stringify({...generated,tools:['extra']}))
+  assert.deepEqual((await first).body,{draft:generated})
+  assert.equal(modelCalls,1)
+  modelOutput = Promise.resolve(JSON.stringify({...generated,instructions:''}))
+  assert.equal((await draft(W,'帮我整理用户访谈')).status,502)
+  modelOutput = Promise.resolve(JSON.stringify(generated))
+  assert.deepEqual((await draft(W,'帮我整理用户访谈')).body,{draft:generated})
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM agents').get().count,0)
+})
+
 test('agent CRUD: idempotent create, unique names, revisions, archive, search', async () => {
   const { e } = fixture()
   const body = { workspace_id: W, name: '研究员', summary: '查资料', instructions: '只给有出处的结论', category: 'research', quick_starts: ['帮我查'], idempotency_key: 'k'.repeat(16) }

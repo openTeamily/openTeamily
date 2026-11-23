@@ -5205,7 +5205,7 @@ test('an exact team workspace private chat opens before personal startup and kee
 test('group settings adds an owned workspace agent alongside a teammate with the same agent ID', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
   const {doc, el, routes, fetcher, calls, restore} = linkedChatFixture(
-    `#workspace=${linkTeam}&social=${linkSocial}`, {narrow:true});
+    `#workspace=${linkTeam}&social=${linkSocial}&message=${linkSocialOlder}`, {narrow:true});
   const settingsAdd = id => el('group-info-add-agent' + (id ? `-${id}` : ''));
   const dialog = settingsAdd('dialog');
   dialog.showModal = () => { dialog.open = true; };
@@ -5216,20 +5216,20 @@ test('group settings adds an owned workspace agent alongside a teammate with the
   const mine = {id:'mine', name:'Already added', owner_id:alice, mine:true};
   const peer = {id:'shared-id', name:'Teammate agent', owner_id:bob, mine:false};
   const selected = {id:peer.id, name:'My workspace agent', owner_id:alice, mine:true};
-  const roster = [mine, peer];
+  const older = {id:linkSocialOlder, conversation_id:linkSocial, user_id:bob, seq:2, body:'Earlier group text'};
+  const before = {id:linkSocial, kind:'group', workspace_id:linkTeam, title:'Release group', members:[linkMember],
+    activity_version:'5.2.0.0', agent_members:[mine,peer], group_agent_requests:true, group_management:{role:'owner',revision:1}};
   let reads = 0;
   let writes = 0;
-  routes.set(groupPath, () => json(200, {conversation:{id:linkSocial, kind:'group', workspace_id:linkTeam,
-    title:'Release group', members:[linkMember], agent_members:roster, group_agent_requests:true,
-    group_management:{role:'owner', revision:1}}, items:[]}));
+  routes.set(groupPath + '?around=' + linkSocialOlder, () => json(200,{conversation:before,items:[older],has_newer:true}));
+  routes.set(groupPath, () => json(200,{conversation:before,items:[]}));
   routes.set(cataloguePath, () => ++reads === 1 ? json(503, {}) : json(200,
     {items:[mine,{id:'archived',name:'Archived',archived:true}], cursor:'more'}));
   routes.set(cataloguePath + '&cursor=more', () => json(200, {items:[selected]}));
   routes.set(groupPath + '/agents', ({method}) => {
     assert.equal(method, 'POST');
     if (++writes === 1) return json(503, {});
-    roster.push(selected);
-    return json(201, {});
+    return json(201, {roster:{id:linkSocial,workspace_id:linkTeam,activity_version:'5.3.0.0',agent_members:[mine,peer,selected]}});
   });
   try {
     await mount(doc, {fetcher});
@@ -5263,6 +5263,11 @@ test('group settings adds an owned workspace agent alongside a teammate with the
     assert.equal(settingsAdd().focused, true);
     assert.match(settingsAdd('feedback').textContent, /已添加/);
     assert.equal(el('group-info-agents').children.length, 3);
+    assert.equal(el('message-list').children[0].dataset.messageId,linkSocialOlder);
+    assert.equal(calls.filter(call=>call.path===groupPath).length,0);
+    await fire(el('chat-back-to-latest'),'click');
+    await settle();
+    assert.equal(el('group-info-agents').children.length, 3, 'a stale transcript snapshot cannot undo the accepted roster');
     assert.deepEqual(calls.filter(call => call.path === groupPath + '/agents').map(call => call.body),
       [{agent_ids:[peer.id]}, {agent_ids:[peer.id]}]);
   } finally {

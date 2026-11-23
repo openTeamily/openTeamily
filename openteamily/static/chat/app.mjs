@@ -2158,6 +2158,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   const agentRosterCurrent = view => agentRosterView === view && view?.scope === sendScope() && !sendClosed();
 
+  function rosterActivityRevision(version) {
+    // Bot Social places the monotonic activity revision after the message sequence.
+    return typeof version === 'string' ? Number(/^\d+\.(\d+)\.[01]\.\d+$/.exec(version)?.[1] ?? -1) : -1;
+  }
+
+  function rosterAfterRead(conversation) {
+    const saved = agentRosterView?.scope === sendScope() ? agentRosterView.roster : null;
+    if (!saved || conversation?.id !== saved.id || conversation.workspace_id !== saved.workspace_id) return conversation;
+    const revision = rosterActivityRevision(conversation.activity_version);
+    return revision < rosterActivityRevision(saved.activity_version)
+      ? {...conversation, agent_members:saved.agent_members, group_agent_routing:saved.group_agent_routing}
+      : conversation;
+  }
+
   function directAgentStatus(text) {
     const node = document.getElementById('direct-agent-status');
     node.textContent = text;
@@ -2206,6 +2220,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       agentRosterSheet.open = false;
       agentRosterView = {scope, direct};
     }
+    agentRosterView.requests = requests;
     const label = direct ? uiLabel('私聊智能体', 'Chat agents') : uiLabel('群内智能体', 'Group agents');
     document.getElementById('conversation-agents-text').textContent = label;
     document.getElementById('conversation-agents-heading').textContent = label;
@@ -5764,6 +5779,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function reportGroupChange(conversation, target) {
     if (!groupWorkspaceMatches(target) || conversation.id !== target.conversationId ||
         conversation.workspace_id !== target.workspace || !Number.isSafeInteger(conversation.group_management?.revision)) return;
+    conversation = rosterAfterRead(conversation);
     const key = groupReceiptKey(target.owner,target.workspace,conversation.id);
     const fields = Object.fromEntries(['title','members','agent_members','group_management','group_agent_routing','updated']
       .filter(name => Object.hasOwn(conversation, name)).map(name => [name,conversation[name]]));
@@ -6653,7 +6669,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (currentSource === 'social') { syncGroupReplyProgress(); scheduleSocialPoll(currentConversation); }
       return false;
     }
-    const updated = mergeGroupRead(mergePinRead(result.body.conversation, owner?.id, wid, readPinReceipt), owner?.id, wid);
+    const updated = rosterAfterRead(mergeGroupRead(mergePinRead(result.body.conversation, owner?.id, wid, readPinReceipt), owner?.id, wid));
     if (updated?.id !== conversationId || ((link || initialRead || message) && updated.workspace_id && updated.workspace_id !== wid)) {
       if (link) show('error', '无法打开会话。');
       return false;
@@ -9130,6 +9146,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function writeAgentRoster(view, suffix, body, adding, notify = (kind, text) => show(kind, text)) {
     if (!agentRosterCurrent(view) || view.busy) return false;
     const cid = currentConversation.id;
+    const wid = workspaceId();
     const failure = adding ? uiLabel('无法添加智能体。', 'Could not add the agent.')
       : uiLabel('无法移除智能体。', 'Could not remove the agent.');
     view.busy = true;
@@ -9147,7 +9164,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         else notify('error', text, result.status);
         return false;
       }
-      const refreshed = await openSocialConversation(cid, {acknowledge:false});
+      const roster = result.body.roster;
+      const revision = rosterActivityRevision(roster?.activity_version);
+      const receivedRoster = roster?.id === cid && roster.workspace_id === wid && Array.isArray(roster.agent_members) && revision >= 0;
+      let refreshed = true;
+      if (receivedRoster) {
+        const shownRevision = Math.max(rosterActivityRevision(view.roster?.activity_version),
+          rosterActivityRevision(currentConversation.activity_version));
+        if (revision >= shownRevision) {
+          view.roster = roster;
+          currentConversation.agent_members = roster.agent_members;
+          currentConversation.group_agent_routing = roster.group_agent_routing;
+          setGroupInfo(currentConversation);
+          if (!view.direct) {
+            applyChatAvatarStack(document, currentConversation);
+            setChatSubtitle(groupHeaderSubtitle(currentConversation));
+          }
+          renderGroupReplyAction(view.requests);
+          agentMentions.refresh();
+          renderGroupComposerRouting();
+        }
+      } else refreshed = await openSocialConversation(cid, {acknowledge:false});
       if (!agentRosterCurrent(view)) return false;
       const text = refreshed ? (adding ? uiLabel('已添加智能体。', 'Agent added.') : uiLabel('已移除智能体。', 'Agent removed.'))
         : uiLabel('变更已保存，重新打开对话可查看最新成员。', 'Change saved. Reopen the conversation to see the current members.');

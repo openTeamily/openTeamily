@@ -4,6 +4,7 @@ import { mergeMeetingFields, mountMeetingShares, parseAttendees, renderSharedMee
 import { discussionContext, mountMeetingDiscussion } from '../openteamily/static/meetings/discussion.mjs';
 import { mountTranscriptSearch } from '../openteamily/static/meetings/transcript-search.mjs';
 import { mountMeetingAudio } from '../openteamily/static/meetings/audio.mjs';
+import { mountMeetingPrint } from '../openteamily/static/meetings/print.mjs';
 
 test('meeting version review merges disjoint edits and flags overlapping fields', () => {
   const actions = [['核对报告', 'Alice', false, '2026-12-01']];
@@ -57,6 +58,11 @@ function meetingDocument() {
       get options() { return this.children; },
       append(...nodes) { for (const node of nodes) { node.parent = this; this.children.push(node); } },
       replaceChildren(...nodes) { this.children = []; this.append(...nodes); },
+      cloneNode(deep) {
+        const clone = Object.assign(createElement(this.tag), {textContent:this.textContent, className:this.className});
+        if (deep) clone.append(...this.children.map(child => child.cloneNode(true)));
+        return clone;
+      },
       querySelectorAll(selector) {
         return this.children.flatMap(child => [ ...(child.tag === selector ? [child] : []), ...child.querySelectorAll(selector)]);
       },
@@ -76,6 +82,57 @@ function meetingDocument() {
   };
   return document;
 }
+
+test('print preview uses the saved notes and clears output when its view changes', () => {
+  const document = meetingDocument();
+  const get = id => document.getElementById(id);
+  const dialog = get('meeting-print-dialog');
+  const owned = get('print-meeting');
+  const shared = get('print-shared-meeting');
+  const approval = get('meeting-print-confirm');
+  const attributes = new Map();
+  dialog.showModal = () => { dialog.open = true; };
+  dialog.close = () => { dialog.open = false; dialog.fire('close'); };
+  document.body = {
+    setAttribute: (key, value) => attributes.set(key, value),
+    removeAttribute: key => attributes.delete(key),
+  };
+  document.title = 'Meetings';
+  let prints = 0;
+  document.defaultView = {print: () => { prints += 1; }};
+  const meeting = {title:'Delivery', summary:'<img src="unexpected">', transcript:'Private transcript',
+    revision:4, action_items:[{text:'Inspect the delivery', owner:'Alice', due_date:'2027-02-01', done:true}]};
+  let context = {owner:'account', workspace:'work', meeting, shared:false};
+  const printer = mountMeetingPrint(document, {context:() => context, formatTime:() => '2026/11/24'});
+  printer.sync(true);
+  owned.fire('click');
+  assert.equal(dialog.open, undefined);
+  printer.sync();
+  owned.fire('click');
+  assert.equal(document.title, meeting.title);
+  const report = get('meeting-print-paper');
+  const content = report.querySelectorAll('p').map(node => node.textContent).join('\n');
+  assert.match(content, /<img src="unexpected">/);
+  assert.match(content, /Inspect the delivery/);
+  assert.match(content, /已完成.*Alice/);
+  assert.equal(report.querySelectorAll('time')[0].textContent, ' · 截止日期 2027-02-01');
+  assert.doesNotMatch(content, /Private transcript/);
+  assert.equal(report.querySelectorAll('img').length, 0);
+  approval.fire('click');
+  assert.equal(prints, 1);
+  context = {...context, workspace:'another'};
+  approval.fire('click');
+  assert.equal(prints, 1);
+  assert.equal(dialog.open, false);
+  assert.equal(document.title, 'Meetings');
+  assert.deepEqual(report.children, []);
+  assert.equal(attributes.size, 0);
+
+  context = {...context, shared:true};
+  printer.sync();
+  assert.equal(owned.hidden, true);
+  assert.equal(shared.hidden, false);
+});
 
 test('a received meeting revoked during draft preparation cannot become a chat draft', async () => {
   const document = meetingDocument();

@@ -163,7 +163,7 @@
         <input type="search" id="catalog-query" placeholder="搜索智能体…" maxlength="80" autocomplete="off">
         <button type="button" id="catalog-clear">清除</button>
       </form>
-      <a class="catalog-create" id="catalog-create-agent" href="/agents">+ 创建智能体</a>
+      <a class="catalog-create" id="catalog-create-agent" href="/agents?new=1">+ 创建智能体</a>
       <a class="catalog-create" id="catalog-create-team" href="/team" hidden>+ 创建团队</a>
       <a class="catalog-create catalog-create-secondary" id="catalog-create-agent-team" href="/agents?tab=teams&amp;new=1" hidden>+ 创建 AI 智能体团队</a>
     </header>
@@ -248,6 +248,25 @@
       <button type="button" id="work-share-native" hidden>更多分享方式</button>
       <button type="button" id="work-share-copy" autofocus>复制链接</button>
     </div>
+    <details id="work-chat-share-panel" hidden>
+      <summary>分享到聊天</summary>
+      <form id="work-chat-share-form">
+        <div>
+          <label for="work-chat-share-workspace">工作区</label>
+          <select id="work-chat-share-workspace" required disabled></select>
+        </div>
+        <div>
+          <label for="work-chat-share-conversation">接收会话</label>
+          <select id="work-chat-share-conversation" required disabled></select>
+        </div>
+        <p id="work-chat-share-status" role="status"></p>
+        <div class="catalog-dialog-actions">
+          <button type="button" id="work-chat-share-retry" hidden>重试</button>
+          <a id="work-chat-share-receipt" hidden>在聊天中查看</a>
+          <button type="submit" id="work-chat-share-send" disabled>发送链接</button>
+        </div>
+      </form>
+    </details>
   </dialog>
   <dialog id="feed-comments-dialog" class="feed-comments-dialog" aria-labelledby="feed-comments-title">
     <header class="feed-comments-header">

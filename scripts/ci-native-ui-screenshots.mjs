@@ -198,6 +198,33 @@ async function meetingActionContinuity(page, account, name) {
   await waitForRows(0);
 }
 
+async function agentDraftFromCatalog(page, account, name) {
+  const workspace = account.instanceId;
+  const path = '/v1/workspaces/'+workspace+'/agents';
+  const list = async () => (await account.rpc('agents/v1',{method:'GET',path})).body.items;
+  const before = (await list()).length;
+  await openNative(page,'/discover?tab=agents',workspace,'#catalog-create-agent');
+  await page.locator('#catalog-create-agent').click();
+  const form = page.locator('#create-form');
+  await form.getByLabel('描述你需要的智能体').fill('整理客户访谈，归纳需求和待确认的问题。');
+  await form.getByRole('button',{name:'生成草稿'}).click();
+  await form.getByText('草稿已填入下方设置，请核对后创建。',{exact:true}).waitFor();
+  assert.equal(await form.locator('[name="name"]').inputValue(),'访谈整理员');
+  assert.equal(await form.locator('[name="instructions"]').inputValue(),'按主题归纳访谈，列出待确认问题。');
+  assert.equal((await list()).length,before);
+  assert.equal(await form.locator('fieldset').evaluate(el=>{
+    const box=el.getBoundingClientRect();
+    const fields = [...el.querySelectorAll('input:not([type="hidden"]), textarea, select')];
+    return box.left >= 0 && box.right <= innerWidth + 1 && fields.every(field=>{
+      const fieldBox = field.getBoundingClientRect();
+      return fieldBox.left >= box.left && fieldBox.right <= box.right + 1;
+    });
+  }),true);
+  await screenshot(page,name);
+  await form.getByRole('button',{name:'取消',exact:true}).click();
+  await form.waitFor({state:'hidden'});
+}
+
 async function agentApiKey(page, account) {
   await openNative(page,'/agents',account.instanceId,'#agent-search');
   const open = page.locator('#agent-list button[data-id="'+account.agent.id+'"]');
@@ -434,6 +461,7 @@ try {
   await agentApiKey(page,fixture.owner);
   await spaceCatalogQueryReturn(page,fixture.owner);
   await memoryGraphReturn(page,fixture.owner);
+  await agentDraftFromCatalog(page,fixture.owner,'desktop-agent-draft');
   await memoryHistory(page,fixture.owner,'desktop-memory-history');
   await memoryTableEditing(page,fixture.owner,'desktop-memory-table');
   await connectors(page);
@@ -477,6 +505,7 @@ try {
   await meetingActionContinuity(peer.page,fixture.peer,'mobile-meeting-actions');
   await spaceCatalogQueryReturn(peer.page,fixture.peer);
   await memoryGraphReturn(peer.page,fixture.peer);
+  await agentDraftFromCatalog(peer.page,fixture.peer,'mobile-agent-draft');
   await memoryHistory(peer.page,fixture.peer,'mobile-memory-history');
   await memoryTableEditing(peer.page,fixture.peer,'mobile-memory-table');
   await peer.context.close();

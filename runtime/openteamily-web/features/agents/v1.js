@@ -79,6 +79,11 @@ export function agentsV1({ endpoints, chatDirectory, host, log }) {
 
   const routes = [
     ...agentCopyRoutes(host,endpoints),
+    { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/draft$`), handle: wrap(async (req, workspaceId) => {
+      if (req.method !== 'POST' || req.query.size) throw new FeatureError(405, 'method', 'Only POST is supported')
+      const {prompt} = requireBodyKeys(await req.json(8192), ['prompt'])
+      return {body:await call('draft', {workspace_id:workspaceId,prompt})}
+    }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/reply-stop$`),
       handle: wrap(async (req, workspaceId, id, conversationId) => {
         if (req.method !== 'POST') throw new FeatureError(405, 'method', 'Only POST is supported')

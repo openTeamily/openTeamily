@@ -156,6 +156,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const workspaceSelect = document.getElementById('workspace');
   const createForm = document.getElementById('create-form');
   const createStatus = document.getElementById('agent-create-status');
+  const draftAssist = document.getElementById('agent-draft-assist');
+  const draftPrompt = document.getElementById('agent-draft-prompt');
+  const draftGenerate = document.getElementById('agent-draft-generate');
+  const draftProgress = document.getElementById('agent-draft-status');
+  let activeDraftGeneration;
   const cancelCreate = document.getElementById('cancel-create');
   const editForm = document.getElementById('edit-form');
   const editConflict = document.getElementById('agent-edit-conflict');
@@ -210,7 +215,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (apiKeyValue) apiKeyValue.textContent = '';
   }
 
+  function clearDraftGeneration() {
+    activeDraftGeneration?.controller.abort();
+    activeDraftGeneration = null;
+    if (draftGenerate) draftGenerate.removeAttribute('aria-busy');
+    if (draftProgress) draftProgress.hidden = true;
+  }
+
   function hideDrawer() {
+    clearDraftGeneration();
     sharing?.close();
     currentAgent = null;
     draftKey = '';
@@ -395,6 +408,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function paintCreateControls(attempt) {
     if (openCreate) openCreate.textContent = attempt ? '继续创建智能体' : '创建我的智能体';
     if (createForm.hidden) return;
+    if (draftAssist) draftAssist.hidden = !nativeSharing || Boolean(attempt);
+    if (draftGenerate) draftGenerate.disabled = Boolean(attempt || activeDraftGeneration);
     for (const field of editFields) {
       if (createForm.elements[field]) createForm.elements[field].disabled = Boolean(attempt);
     }
@@ -556,6 +571,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     await restoreDirectory();
+    if (seq === sessionLoad && directorySearch === '?new=1' && directoryLoaded && !currentAgent && !openCreate?.hidden) {
+      openCreate?.click?.();
+    }
     if (seq !== sessionLoad || !teamsTabSelected) return;
     await loadTeamTemplates();
     if (seq === sessionLoad && teamsTabSelected && focusTemplates) {
@@ -1013,6 +1031,53 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return true;
   }
 
+  draftGenerate?.addEventListener('click', async () => {
+    const scope = createScope();
+    if (!scope || !nativeSharing || createForm.hidden || !canManage(actor) || archivedOnly ||
+        activeDraftGeneration || readCreateReceipt(scope)) return;
+    const prompt = draftPrompt.value.trim();
+    if (!prompt) {
+      draftProgress.textContent = '先描述想让智能体做什么。';
+      draftProgress.hidden = false;
+      draftPrompt.focus();
+      return;
+    }
+    const fields = ['name', 'summary', 'instructions', 'quick_starts'];
+    const before = Object.fromEntries(fields.map(key => [key, createForm.elements[key].value]));
+    const controller = new AbortController();
+    const generation = {controller};
+    activeDraftGeneration = generation;
+    draftGenerate.disabled = true;
+    draftGenerate.setAttribute('aria-busy', 'true');
+    draftProgress.textContent = '正在生成草稿…';
+    draftProgress.hidden = false;
+    const result = await request('POST', `/v1/workspaces/${workspaceId()}/agents/draft`, {prompt}, {},
+      AbortSignal.any([controller.signal, AbortSignal.timeout(120000)])).catch(() => ({status:0}));
+    if (activeDraftGeneration !== generation || scope !== createScope() || createForm.hidden) return;
+    activeDraftGeneration = null;
+    draftGenerate.disabled = false;
+    draftGenerate.removeAttribute('aria-busy');
+    const draft = result.body?.draft;
+    if (result.status !== 200 || !draft || !['name', 'summary', 'instructions'].every(key =>
+      typeof draft[key] === 'string' && draft[key].length <= editLimits[key]) ||
+      !Array.isArray(draft.quick_starts) || draft.quick_starts.length > 5 ||
+      draft.quick_starts.some(line => typeof line !== 'string' || line.length > 80)) {
+      draftProgress.textContent = messageFor(result.body?.error, '无法生成草稿，可以重试或手动填写。');
+      return;
+    }
+    if (draftPrompt.value.trim() !== prompt) {
+      draftProgress.textContent = '描述已修改，请生成新的草稿。';
+      return;
+    }
+    let keptEdits = false;
+    for (const key of fields) {
+      const element = createForm.elements[key];
+      if (element.value !== before[key]) keptEdits = true;
+      else element.value = key === 'quick_starts' ? draft[key].join('\n') : draft[key];
+    }
+    draftProgress.textContent = keptEdits ? '已填入草稿，并保留你刚刚修改的字段。' : '草稿已填入下方设置，请核对后创建。';
+  });
+
   createForm.addEventListener('submit', async event => {
     event.preventDefault();
     if (createForm.hidden || !canManage(actor) || archivedOnly) return;
@@ -1035,6 +1100,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         attempt.saved = true;
       } catch {}
     }
+    clearDraftGeneration();
     attempt.sending = true;
     paintCreateControls(attempt);
     const result = await request('POST', `/v1/workspaces/${id}/agents`, attempt.values,
@@ -1180,6 +1246,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     paintCreateControls(attempt);
     if (attempt) createForm.querySelector('button[type="submit"]').focus?.();
+    else if (nativeSharing && draftPrompt) draftPrompt.focus();
     else createForm.elements.name.focus?.();
   });
   directoryStatus?.addEventListener('change', () => {
