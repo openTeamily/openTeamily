@@ -65,7 +65,7 @@ try {
     assert.ok(cookies.every(cookie=>!cookie.name.startsWith('dsh-auth-')),'runtime cookie stays behind the gateway');
 
     for (const [slot, conversation] of account.conversations.slice(0,2).entries()) {
-      const navigation = await page.goto(origin+chatUrl(account,conversation));
+      const navigation = await page.goto(origin+chatUrl(account,conversation)) ?? await page.reload();
       assert.equal(navigation.status(),200);
       assert.equal(navigation.headers()['x-openteamily-served-by'],'ds-bot; instance='+account.instanceId);
       assert.equal(await page.locator('meta[name=openteamily-instance]').getAttribute('content'),account.instanceId);

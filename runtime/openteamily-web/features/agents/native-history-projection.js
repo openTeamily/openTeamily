@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { livePrivateChat, privateChatThread } from '../../lib/native-chat.js'
+import { livePrivateChat, ownsPrivateChatPart, privateChatThread } from '../../lib/native-chat.js'
 import { NATIVE_EVENT_LEDGER } from './history.js'
 
 const MAX_TURN_EVENTS = 2048
@@ -88,7 +88,7 @@ export function nativeHistoryProjection({host,db}) {
     const old = rt.pastOwners?.get(sessionId)
     if (old && (!allowPast || old.roomId !== undefined)) return null
     const botId = old?.botId ?? rt.chatOwners?.get(sessionId)
-    if (typeof botId !== 'string') return null
+    if (typeof botId !== 'string' || !ownsPrivateChatPart(rt,botId,sessionId)) return null
     const bot = rt.botOf(botId)
     const identity = bot?.openteamily
     if (bot?.hidden || !ID.test(identity?.agent_id || '') || !ID.test(identity?.workspace_id || '')) return null
@@ -145,9 +145,8 @@ export function nativeHistoryProjection({host,db}) {
     return {rows, through}
   }
 
-  async function recoverStored(storage, sessionId, next) {
+  async function recoverStored(storage, sessionId, next, signal = AbortSignal.timeout(STORAGE_READ_MS)) {
     if (!storage) return null
-    const signal = AbortSignal.timeout(STORAGE_READ_MS)
     const snapshot = await storage.stat(sessionId,{signal})
     if (!snapshot || snapshot.header?.id !== sessionId || snapshot.eventCount <= next) return null
     const reached = coldRevisions.get(sessionId)
@@ -176,8 +175,17 @@ export function nativeHistoryProjection({host,db}) {
     const current = livePrivateChat(rt,mapping.native_bot_id,exact)
     if (!current) return
     const job = enqueue(conversationId,async () => {
-      for (const sessionId of new Set([exact,current])) {
+      const bot = rt.botOf(mapping.native_bot_id)
+      const previous = privateChatThread(bot,exact)?.segments ?? []
+      const ids = new Set([exact,current,...previous.map(part=>part.sessionId)])
+      let previousBudget
+      for (const sessionId of ids) {
         if (ownedConversation(rt,sessionId,true)?.id !== conversationId) continue
+        // Give additional sealed parts one shared read budget per open.
+        if (sessionId !== exact && sessionId !== current) {
+          previousBudget ??= AbortSignal.timeout(STORAGE_READ_MS)
+          if (previousBudget.aborted) break
+        }
         const next = checkpoint.get(sessionId,conversationId)?.next_seq ?? 0
         const session = ctx.sessions.get(sessionId)
         let recovered
@@ -189,7 +197,7 @@ export function nativeHistoryProjection({host,db}) {
           recovered = recoverRows(session,Math.max(floor,next),floor)
           if (recovered) await ctx.sessions.flush(session)
         } else {
-          const stored = await recoverStored(ctx.get?.('sessionPersistence'),sessionId,next)
+          const stored = await recoverStored(ctx.get?.('sessionPersistence'),sessionId,next,previousBudget)
           recovered = stored?.recovered
           revision = stored?.revision
         }
