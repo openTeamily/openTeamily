@@ -736,7 +736,7 @@ function groupAgentRouting(ot: OtContext, conv: Group, viewer: string, agents: C
 
 function unaddressedGroupTurn(agents: ConversationAgent[], quote: ReturnType<typeof replyOriginal>,
   policy: ReturnType<typeof readGroupReplyPolicy>) {
-  if (!agents.length) return {agents, discretionary: false};
+  if (policy.mode === "mentions" || !agents.length) return {agents: [], discretionary: false};
   if (quote?.author_kind === "agent") {
     return {agents: agents.filter(agent => agent.owner_id === quote.author_id && agent.agent_ref === quote.agent_ref), discretionary: false};
   }

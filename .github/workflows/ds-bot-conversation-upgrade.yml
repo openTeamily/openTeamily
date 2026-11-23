@@ -8,6 +8,7 @@ on:
       - runtime/flybot-image/native-ds-bot*
       - runtime/flybot-image/ds-bot-bridge.mjs
       - runtime/flybot-image/plugin/**
+      - runtime/flybot-image/test/container-gateway-isolation.py
       - runtime/flybot-image/test/upgrade/**
       - runtime/openteamily-web/features/agents/**
   workflow_dispatch:

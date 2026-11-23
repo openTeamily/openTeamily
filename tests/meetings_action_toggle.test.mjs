@@ -22,7 +22,7 @@ class FakeElement {
   get textContent() { return this._text; }
   set textContent(value) {
     this._text = String(value);
-    if (this._text === '') this.children = [];
+    this.children = [];
   }
   get innerText() { return this._text; }
   addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }
@@ -179,6 +179,34 @@ test('meeting catalogue restores filtered pagination only for the matching accou
       assert.equal(doc.getElementById('meeting-search').value, matches ? 'shipping review' : '');
       assert.equal(doc.getElementById('meeting-open-only').checked, matches);
       assert.equal(globalThis.location.href.includes('shipping'), false);
+    } finally { restore(); }
+  }
+});
+
+test('a transient meeting read can be retried in place but an access denial cannot', async () => {
+  const detail = `/v1/workspaces/${WORKSPACE}/meetings/${MEETING_ID}`;
+  for (const status of [503, 404]) {
+    let attempts = 0;
+    const {doc, state, restore} = await mountPage(`meeting-detail-retry-${status}`, {
+      native: true,
+      intercept: ({method, path, json}) => {
+        if (method === 'GET' && path === detail && ++attempts === 1) return json(status, {});
+      },
+    });
+    try {
+      const feedback = doc.getElementById('status');
+      const retry = feedback.children.find(child => child.id === 'meeting-open-retry');
+      assert.equal(attempts, 1);
+      assert.equal(Boolean(retry), status === 503);
+      if (retry) {
+        retry.click();
+        await settle();
+        assert.equal(attempts, 2);
+        assert.equal(doc.getElementById('meeting-title').value, state.body.title);
+        assert.equal(feedback.textContent, '');
+        assert.deepEqual(feedback.children, []);
+      }
+      assert.deepEqual(state.posted, []);
     } finally { restore(); }
   }
 });

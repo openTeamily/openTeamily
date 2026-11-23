@@ -1,7 +1,7 @@
 const WORKSPACE_ID = /^[a-f0-9]{32}$/;
 const CONVERSATION_ID = /^(?!\.{1,2}$)[A-Za-z0-9._-]{1,80}$/;
 const MEMBER_ID = /^[A-Za-z0-9_-]{1,80}$/;
-const REPLY_MODES = new Set(['default','everyone','lead']);
+const REPLY_MODES = new Set(['default','mentions','everyone','lead']);
 const leadKey = lead => lead?.owner_id && lead.agent_id ? JSON.stringify([lead.owner_id,lead.agent_id]) : '';
 
 function managedGroup(context) {
@@ -128,8 +128,8 @@ export function mountGroupManagement(document, {request, context, onChanged, onL
     }[mode];
     const description = {
       rename: '',
-      reply_policy: text('选择哪些智能体来判断是否回复普通群消息。用 @ 指定智能体，或用 @所有人请求全部智能体回复。',
-        'Choose which agents decide whether to reply to ordinary messages. Use @ to ask one agent or @all to ask every agent.'),
+      reply_policy: text('设置智能体是否主动回复普通群消息。用 @ 指定智能体，或用 @所有人请求全部智能体回复。',
+        'Choose whether agents reply proactively to ordinary group messages. Use @ to ask an agent or @all to ask every agent.'),
       member: '',
       remove: text(`将 ${memberName} 移出群聊？群消息及对方的工作区成员身份会保留。`,
         `Remove ${memberName} from this group? Group messages and their workspace membership will remain.`),
@@ -236,7 +236,8 @@ export function mountGroupManagement(document, {request, context, onChanged, onL
   dialog.addEventListener('close', () => { if (!dialog.open) view = null; });
   dialog.addEventListener('keydown', event => { if (event.key === 'Escape') event.stopPropagation(); });
   node('rename').addEventListener('click', () => open('rename'));
-  node('reply-policy').addEventListener('click', () => open('reply_policy'));
+  const openReplyPolicy = () => { if (!dialog.open) open('reply_policy'); };
+  node('reply-policy').addEventListener('click', openReplyPolicy);
   replyMode.addEventListener('change', () => {
     if (view?.mode !== 'reply_policy' || replyMode.disabled || !REPLY_MODES.has(replyMode.value)) return;
     view.policyDraft.mode = replyMode.value;
@@ -347,5 +348,5 @@ export function mountGroupManagement(document, {request, context, onChanged, onL
     } else say(text('暂时无法确认结果，可以重试。', 'Could not confirm the result. You can try again.'));
   });
 
-  return {sync, decorateMember};
+  return {sync, decorateMember, openReplyPolicy};
 }

@@ -86,7 +86,25 @@ body.app-workspace #main-panel {
   width: 100%;
   box-sizing: border-box;
   padding-left: 2rem;
+  padding-inline-end: 2.5rem;
 }
+
+.pill-search input::-webkit-search-cancel-button { appearance: none; }
+
+#automation-search-clear:not([hidden]) {
+  position: absolute;
+  inset: 0 .25rem 0 auto;
+  width: 2rem;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ot-muted);
+  font-size: 1.125rem;
+}
+
+#automation-search-clear:hover { color: var(--ot-ink); }
+#automation-search-clear:focus-visible { outline: 2px solid var(--ot-accent); outline-offset: -2px; }
 
 .tabs {
   display: flex;

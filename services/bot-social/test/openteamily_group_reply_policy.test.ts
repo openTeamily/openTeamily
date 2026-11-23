@@ -88,7 +88,22 @@ test("named group reply policy is owner-only and revisioned, with authoritative 
     assert.ok(jobs.every((job: any) => job.discretionary));
   }
   assert.deepEqual(targets(await send(owner,"再解释一项", {reply_to:reply.id})),[[teammateId,"shared"]]);
-  const last = (await change(owner,{revision:everyone.group_management.revision,mode:"lead",lead:selected})).data.conversation;
+  const mentions = {revision:everyone.group_management.revision,mode:"mentions"};
+  assert.equal((await change(teammate, mentions)).status,403);
+  assert.equal((await change(owner, {...mentions,lead:selected})).status,400);
+  const quiet = (await change(owner,mentions)).data.conversation;
+  assert.deepEqual((await teammate.ok("GET",room)).group_agent_routing.policy,{mode:"mentions"});
+  const plain = await send(owner,"请看看这条没有提及的消息");
+  const quoteWithoutMention = await send(owner,"再解释一项", {reply_to:reply.id});
+  assert.deepEqual(targets(plain),[]);
+  assert.deepEqual(targets(quoteWithoutMention),[]);
+  assert.ok(!(await owner.ok("GET",queue)).items.some((item: any) => [plain.id,quoteWithoutMention.id].includes(item.message.id)));
+  assert.equal((await owner.call("POST",room+"/agent-messages",{
+    agent_ref:"auto",body:"旧自动回复流程也不能回复",mode:"auto",reply_to:plain.id,
+  })).data.error.code,"reply_job_unavailable");
+  assert.deepEqual(targets(await send(owner,"@Teammate helper 请确认", {reply_to:reply.id})),[[teammateId,"shared"]]);
+  assert.equal(targets(await send(teammate,"@所有人 请确认")).length,4);
+  const last = (await change(owner,{revision:quiet.group_management.revision,mode:"lead",lead:selected})).data.conversation;
   assert.deepEqual(last.group_agent_routing.policy,{mode:"lead",lead:selected});
 
   await owner.ok("PATCH", `/v1/ot/teams/${team.id}/members/${teammate.handle}`, {suspended:true});
@@ -113,6 +128,7 @@ test("named group reply policy is owner-only and revisioned, with authoritative 
   const inbox = await owner.ok("GET",queue);
   assert.ok(inbox.items.some((item: any) => item.message.id === autoOptIn.id && item.agent_ref === "auto"));
   assert.ok(!inbox.items.some((item: any) => item.message.id === quotedUnavailable.id));
+  assert.ok(!inbox.items.some((item: any) => item.message.id === plain.id));
 });
 
 test("the personal group retains unavailable-lead metadata with an empty roster and transfers edit authority with ownership", async () => {

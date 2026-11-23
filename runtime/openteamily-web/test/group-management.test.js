@@ -266,14 +266,14 @@ test('native shared group policy projects exact remote leads and saves through t
   assert.equal(policy().lead_unavailable,true,'A delayed roster snapshot cannot revive an unavailable lead')
 
   workspaceAvailable = false
-  const named = {openteamilyReplyPolicy:{mode:'default',revision:4}}
+  const named = {openteamilyReplyPolicy:{mode:'mentions',revision:4}}
   await assert.rejects(rt.updateRoom(id,named),/workspace is unavailable/)
   assert.equal(out.length,2)
   workspaceAvailable = true
   await rt.updateRoom(id,named)
-  assert.deepEqual(out[2],{action:'reply_policy',mode:'default',revision:4,workspace:teamWorkspace})
+  assert.deepEqual(out[2],{action:'reply_policy',mode:'mentions',revision:4,workspace:teamWorkspace})
   assert.equal(policy().revision,5)
-  assert.equal(policy().mode,'default')
+  assert.equal(policy().mode,'mentions')
 
   const selected = {openteamilyReplyPolicy:{mode:'lead',revision:5,lead}}
   await rt.updateRoom(id,selected)

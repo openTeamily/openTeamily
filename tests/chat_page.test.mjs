@@ -4975,7 +4975,7 @@ test('group settings adds an owned workspace agent alongside a teammate with the
   }
 });
 
-test('group reply policy readback updates the settings and composer from the same saved revision', async t => {
+test('group reply policy opens from the header and updates settings and composer from the saved revision', async t => {
   t.mock.timers.enable({apis:['setTimeout']});
   const fixture = linkedChatFixture(`#workspace=${linkTeam}&social=${linkSocial}`, {narrow:true});
   const {doc, el, routes, restore} = fixture;
@@ -4995,18 +4995,18 @@ test('group reply policy readback updates the settings and composer from the sam
   routes.set(path + '/management', ({method,body}) => {
     assert.equal(method, 'POST');
     writes.push(body);
-    const updated = {...conversation, group_management:{revision:5},
+    const updated = {...conversation, group_management:{revision:body.revision + 1},
       group_agent_routing:{...conversation.group_agent_routing, policy:{mode:body.mode,lead:body.lead}}};
     return json(200, {conversation:updated});
   });
   try {
     await mount(doc, {fetcher:fixture.fetcher});
-    await fire(el('group-info-toggle'),'click');
-    await settle();
-    assert.equal(el('group-reply-policy').hidden, false);
-    assert.match(el('group-reply-policy-summary').textContent, /跟随群组默认/);
-    assert.equal(control('reply-policy').hidden, false);
-    await fire(control('reply-policy'),'click');
+    assert.equal(el('group-info-panel').hidden, true);
+    assert.equal(el('group-reply-shortcut').hidden, false);
+    assert.match(el('group-reply-shortcut').getAttribute('aria-description'), /跟随群组默认/);
+    await fire(el('group-reply-shortcut'),'click');
+    assert.equal(dialog.open, true);
+    assert.equal(el('group-info-panel').hidden, true);
     control('reply-mode').value = 'lead';
     await fire(control('reply-mode'),'change');
     control('reply-lead').value = JSON.stringify([bob, linkAgent]);
@@ -5014,9 +5014,25 @@ test('group reply policy readback updates the settings and composer from the sam
     await fire(control('form'),'submit',{preventDefault() {}});
     assert.deepEqual(writes,[{action:'reply_policy',revision:4,mode:'lead',lead:{owner_id:bob,agent_id:linkAgent}}]);
     assert.equal(dialog.open, false);
-    assert.equal(el('group-info-tab-agents').getAttribute('aria-selected'), 'true');
     assert.match(el('group-reply-policy-summary').textContent, /优先.*文案助手.*小周/);
     assert.match(el('group-composer-routing-text').textContent, /文案助手.*优先判断是否回复/);
+
+    await fire(el('group-info-toggle'),'click');
+    await fire(el('group-info-tab-people'),'click');
+    assert.equal(el('group-reply-policy').hidden, false);
+    assert.equal(control('reply-policy').hidden, false);
+    await fire(control('reply-policy'),'click');
+    assert.equal(control('reply-mode').value, 'lead');
+    control('reply-mode').value = 'mentions';
+    await fire(control('reply-mode'),'change');
+    assert.equal(control('reply-lead-row').hidden, true);
+    await fire(control('form'),'submit',{preventDefault() {}});
+    assert.deepEqual(writes[1],{action:'reply_policy',revision:5,mode:'mentions'});
+    assert.equal(el('group-reply-policy-summary').textContent, '仅在被 @ 时回复');
+    assert.match(el('group-composer-routing-text').textContent, /仅在被 @ 时回复/);
+    el('chat-body').value = '@所有人 请确认';
+    await fire(el('chat-body'),'input');
+    assert.match(el('group-composer-routing-text').textContent, /提及所有人，并请群内智能体回复/);
   } finally {restore();}
 });
 

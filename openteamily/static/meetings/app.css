@@ -18,6 +18,7 @@
 }
 .meeting-page-top h1 { margin: 0; }
 .meeting-mobile-toolbar { display: none; }
+#meeting-open-retry { margin-inline-start: .55rem; min-height: 2.75rem; }
 .meeting-list-head {
   display: flex;
   align-items: center;

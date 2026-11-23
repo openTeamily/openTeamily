@@ -917,7 +917,7 @@ function messengerRoutes(host, wakeReplies) {
             throw new Fault(400, 'invalid', '群聊管理请求无效。')
           }
           if (policy) {
-            if (!['default','everyone','lead'].includes(mode) || (mode !== 'lead' && Object.hasOwn(body,'lead'))) {
+            if (!['default','everyone','lead','mentions'].includes(mode) || (mode !== 'lead' && Object.hasOwn(body,'lead'))) {
               throw new Fault(400, 'invalid', '请选择有效的智能体回复策略。')
             }
             if (mode === 'lead') sharedAgentTargets([lead])

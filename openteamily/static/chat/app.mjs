@@ -11,7 +11,8 @@ import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContin
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 import {mountWorkspaceInvite} from './workspace-invite.mjs';
 import { studioDocumentHref, studioDocumentHrefInMessage } from '../shell/studio-link.mjs';
-import { chatStartFromHash, startChatReads, takeChatReads } from './startup.mjs';
+import { chatStartFromHash, historyPageSize as HISTORY_PAGE_SIZE, ownedChatStartup,
+  startChatReads, startupTranscriptAge, takeChatReads } from './startup.mjs';
 import { confirmSignupSession, personalDraftScope, readPendingChatText, savePendingChatText,
   signupDraftScope, signupSessionError, takeColdDraftHandoff } from '../home/runtime-readiness.mjs';
 import { mountActionMenus } from '../shell/action-menu.mjs';
@@ -981,6 +982,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const loadGroupManagement = deferModule('./group-management.mjs');
   let groupManagement;
   let lastGroupInfo = '';
+  let groupInfoOpener;
   const groupManagementReceipts = new Map();
   const loadStickers = deferModule('./stickers.mjs');
   let stickerPicker;
@@ -1282,6 +1284,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       text = agents.length
         ? uiLabel('用 @ 请智能体根据附言回复', 'Use @ to ask agents to reply to the caption')
         : uiLabel('附件将发送给群成员', 'The files will be shared with the group');
+    } else if (policy?.mode === 'mentions' && agents.length) {
+      text = uiLabel('仅在被 @ 时回复 · 可用 @所有人', 'Agents reply only when mentioned · Use @all to ask them all');
     } else if (quote) {
       kind = 'targeted';
       text = uiLabel(`将请 ${quote.name} 回复这条引用`, `${quote.name} will be asked to reply to this quote`);
@@ -4079,7 +4083,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   });
 
-  const HISTORY_PAGE_SIZE = '50';
   let socialHistory = null;
   let privateHistory = null;
   let privateRefresh = 0;
@@ -5717,43 +5720,58 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return true;
   }
 
-  async function initializeGroupManagement() {
-    if (groupManagement) return;
+  async function initializeGroupManagement({fromShortcut = false} = {}) {
+    if (groupManagement) return groupManagement;
     const target = groupManagementContext();
-    if (!target) return;
+    if (!target) return null;
     const {mountGroupManagement} = await loadGroupManagement();
-    if (groupManagement || !groupMatches({...target,conversationId:target.conversation.id}) ||
-        document.getElementById('group-info-panel').hidden) return;
-    groupManagement = mountGroupManagement(document, {
-      request, context:groupManagementContext, notify:show,
-      onChanged:reportGroupChange, onLeft:forgetGroup,
-      onRefresh:refreshGroupManagement,
-    });
-    setGroupInfo(currentConversation);
+    if (!groupMatches({...target,conversationId:target.conversation.id}) ||
+        (!fromShortcut && document.getElementById('group-info-panel').hidden)) return null;
+    if (!groupManagement) {
+      groupManagement = mountGroupManagement(document, {
+        request, context:groupManagementContext, notify:show,
+        onChanged:reportGroupChange, onLeft:forgetGroup,
+        onRefresh:refreshGroupManagement,
+      });
+      setGroupInfo(currentConversation);
+    }
+    return groupManagement;
   }
 
   function renderGroupReplyPolicy(conversation) {
     const section = document.getElementById('group-reply-policy');
     const summary = document.getElementById('group-reply-policy-summary');
+    const shortcut = document.getElementById('group-reply-shortcut');
     const routing = conversation?.group_agent_routing;
     const policy = routing?.policy;
-    section.hidden = conversation?.kind !== 'group' || Boolean(conversation.public_agent) ||
-      document.getElementById('group-info-tab-agents').getAttribute('aria-selected') !== 'true';
+    section.hidden = conversation?.kind !== 'group' || Boolean(conversation.public_agent);
+    if (shortcut) shortcut.hidden = section.hidden || !servedByDsbot || !routing;
     if (section.hidden) return;
-    if (policy?.mode === 'everyone') summary.textContent = uiLabel('由所有群内智能体判断是否回复', 'All group agents decide whether to reply');
+    if (policy?.mode === 'mentions') summary.textContent = uiLabel('仅在被 @ 时回复', 'Only when mentioned');
+    else if (!conversation.agent_members?.some(agent => !agent.archived && !agent.native_deleted)) {
+      summary.textContent = uiLabel('群里暂无可回复的智能体', 'There are no group agents available to reply');
+    } else if (policy?.mode === 'everyone') summary.textContent = uiLabel('由所有群内智能体判断是否回复', 'All group agents decide whether to reply');
     else if (policy?.mode === 'lead') {
       const lead = !policy.lead_unavailable && activeGroupAgent(conversation, policy.lead);
       if (lead) {
         const name = groupAgentName(lead.name, groupAgentOwnerLabel(lead), lead.owner_id, lead.mine === false ? lead.owner_handle : '');
         summary.textContent = uiLabel(`指定智能体优先 · ${name}`, `Preferred agent · ${name}`);
-      } else if (conversation.agent_members?.some(agent => !agent.archived && !agent.native_deleted)) {
+      } else {
         summary.textContent = uiLabel('优先智能体不可用，由其他群内智能体判断是否回复。',
           'The preferred agent is unavailable. Other group agents decide whether to reply.');
-      } else summary.textContent = uiLabel('群里暂无可回复的智能体', 'There are no group agents available to reply');
+      }
     } else if (conversation.agent_members?.some(agent => !agent.archived && !agent.native_deleted && agent.auto_reply)) {
       summary.textContent = uiLabel('跟随群组默认 · 由开启自动回复的智能体判断',
         'Group default · Agents with auto-reply enabled decide');
     } else summary.textContent = uiLabel('跟随群组默认 · 由群内智能体判断', 'Group default · Group agents decide');
+    if (shortcut && !shortcut.hidden) {
+      const canEdit = routing.can_edit === true;
+      shortcut.title = summary.textContent;
+      shortcut.setAttribute('aria-description', summary.textContent);
+      shortcut.setAttribute('aria-controls', canEdit ? 'group-management-dialog' : 'group-info-panel');
+      if (canEdit) shortcut.setAttribute('aria-haspopup', 'dialog');
+      else shortcut.removeAttribute('aria-haspopup');
+    }
   }
 
   function setGroupInfoTab(which) {
@@ -5768,7 +5786,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (autoNote) autoNote.hidden = which !== 'agents';
     document.getElementById('group-info-people').hidden = which !== 'people';
     document.getElementById('group-info-invite').hidden = which !== 'people';
-    renderGroupReplyPolicy(currentConversation);
   }
 
   const groupInfoAddOpener = document.getElementById('group-info-add-agent');
@@ -6177,13 +6194,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }));
   }
 
-  function setGroupInfoOpen(open) {
+  function setGroupInfoOpen(open, opener) {
     const toggle = document.getElementById('group-info-toggle');
     const panel = document.getElementById('group-info-panel');
     if (!toggle || !panel) return;
     panel.hidden = !open;
     toggle.setAttribute('aria-expanded', String(open));
     if (open) {
+      groupInfoOpener = opener || toggle;
       const group = groupManagementContext()?.conversation;
       if (group && group.id !== lastGroupInfo) {
         lastGroupInfo = group.id;
@@ -6307,15 +6325,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return () => ({status: 200, body});
   }
 
-  function readStartupSnapshot(wid, aid, cid) {
+  function readStartupSnapshot(wid, aid, cid, desktopTranscript) {
     if (![wid, aid, cid].every(id => /^[a-f0-9]{32}$/.test(id))) return null;
-    const maxAge = 1800;
-    const expires = performance.now() + maxAge;
+    const owner = currentUser?.id;
+    let expires = performance.now() + startupTranscriptAge;
     const path = agentConversationPath(wid, aid, cid);
-    const pending = request('GET', `${path}?limit=${HISTORY_PAGE_SIZE}&snapshot=1`,
-      undefined, undefined, AbortSignal.timeout(maxAge)).then(result => {
-        return result.status === 200 && validStartupTranscript(result.body, wid, aid, cid) ? result : null;
-      }).catch(() => null);
+    const pending = Promise.resolve(desktopTranscript).then(prepared => {
+      if (prepared?.owner === owner && prepared.workspace === wid && prepared.agent === aid &&
+          prepared.conversation === cid && performance.now() < prepared.expires) {
+        expires = prepared.expires;
+        return prepared.result;
+      }
+      return request('GET', `${path}?limit=${HISTORY_PAGE_SIZE}&snapshot=1`,
+        undefined, undefined, AbortSignal.timeout(startupTranscriptAge));
+    }).then(result => {
+      return result.status === 200 && validStartupTranscript(result.body, wid, aid, cid) ? result : null;
+    }).catch(() => null);
     return async () => {
       if (performance.now() >= expires) return null;
       const result = await pending;
@@ -7480,19 +7505,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   let loadRequest = 0;
 
-  function ownedChatStartup(result, user) {
-    const body = result?.body;
-    const space = body?.items?.length === 1 ? body.items[0] : null;
-    if (result?.status !== 200 || space?.kind !== 'personal'
-      || !/^[0-9a-f]{32}$/.test(space.id) || !/^[0-9a-f]{32}$/.test(body.personal_agent_id)) return null;
-    const viewer = body.viewer_username;
-    if ((!space.owner_id && !viewer) || (space.owner_id && space.owner_id !== user.id)
-      || (viewer && viewer !== user.username)) return null;
-    const directory = body.chat;
-    return {space, agentId: body.personal_agent_id, entry: body.entry,
-      directory: Array.isArray(directory?.items) && Array.isArray(directory?.conversations) ? directory : null};
-  }
-
   function fillChatWorkspaces(items, preferred, personal) {
     workspaces = items;
     workspaceSelect.replaceChildren();
@@ -7559,7 +7571,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const loadCurrent = () => sequence === loadRequest && location.hash === hash && location.pathname === pathname;
     const bootCurrent = () => loadCurrent() && socialOpen === navigation;
     const read = (path, signal) => request('GET', path, undefined, undefined, signal).catch(() => ({status: 0, body: {}}));
-    const {sessionRequest, localRequest} = takeChatReads(document)
+    const {sessionRequest, localRequest, sharedRequest: preparedDirectory, desktopTranscript} = takeChatReads(document)
       || startChatReads(read, start, servedByDsbot && !publicIntent);
     const session = await sessionRequest;
     if (!bootCurrent()) return;
@@ -7637,7 +7649,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('whoami').textContent = currentUser.username;
     if (!sessions.length) setSessionsStatus('正在加载对话…');
     const listWorkspaces = () => read('/v1/workspaces?limit=100');
-    const sharedRequest = servedByDsbot ? listWorkspaces() : null;
+    const sharedRequest = servedByDsbot
+      ? preparedDirectory?.then(result => result.status === 200 && Array.isArray(result.body?.items)
+        ? result : listWorkspaces()) || listWorkspaces()
+      : null;
     const localReady = Promise.resolve(localRequest).then(result => ownedChatStartup(result, owner));
     let personalRequest;
     const readPersonal = () => personalRequest ??= read('/v1/workspaces?scope=personal&include=personal-agent').then(result => {
@@ -7802,7 +7817,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         if (start.agent) {
           openingAgent = openStartingAgent();
         } else if (recent && (!socialReady || sessions[0] === recent)) {
-          firstSnapshot = {row: recent, read: readStartupSnapshot(workspaceId(), recent.agent_id, recent.id)};
+          firstSnapshot = {row: recent, read: readStartupSnapshot(workspaceId(), recent.agent_id, recent.id, desktopTranscript)};
         }
       } : null,
     });
@@ -8517,7 +8532,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (open) closeInChatSearch({restoreScroll: false, focus: false});
       setGroupInfoOpen(open);
     });
-    document.getElementById('group-info-close').addEventListener('click', () => { setGroupInfoOpen(false); groupInfoToggle.focus(); });
+    document.getElementById('group-info-close').addEventListener('click', () => {
+      setGroupInfoOpen(false);
+      (groupInfoOpener || groupInfoToggle).focus();
+    });
+    const replyShortcut = document.getElementById('group-reply-shortcut');
+    replyShortcut?.addEventListener('click', async () => {
+      if (replyShortcut.hidden) return;
+      if (currentConversation?.group_agent_routing?.can_edit !== true) {
+        closeInChatSearch({restoreScroll:false, focus:false});
+        setGroupInfoOpen(true, replyShortcut);
+        document.getElementById('group-reply-policy').focus();
+        return;
+      }
+      const target = groupManagementContext();
+      if (!target) return;
+      const scope = {...target, conversationId:target.conversation.id};
+      try {
+        const controls = await initializeGroupManagement({fromShortcut:true});
+        if (groupMatches(scope)) controls?.openReplyPolicy();
+      } catch {
+        if (groupMatches(scope)) show('error', uiLabel('无法打开群回复规则，请重试。', 'Could not open the group reply policy. Try again.'));
+      }
+    });
     document.getElementById('group-agent-manage').addEventListener('click', () => {
       if (!agentRosterCurrent(agentRosterView) || agentRosterView.direct) return;
       agentRosterSheet.open = false;
@@ -8535,8 +8572,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('group-info-tab-people').addEventListener('click', () => setGroupInfoTab('people'));
     groupPin?.addEventListener('click', toggleConversationPin);
     document.addEventListener('keydown', event => {
-      if (event.key === 'Escape' && !groupInfoAddDialog.open && !document.getElementById('group-management-dialog')?.open &&
-          !document.getElementById('group-info-panel').hidden) setGroupInfoOpen(false);
+      const panel = document.getElementById('group-info-panel');
+      if (event.key !== 'Escape' || panel.hidden || groupInfoAddDialog.open || document.getElementById('group-management-dialog')?.open) return;
+      const returnFocus = panel.contains(document.activeElement);
+      setGroupInfoOpen(false);
+      if (returnFocus) (groupInfoOpener || groupInfoToggle).focus();
     });
   }
   let searchScrollSnapshot = null;
@@ -9790,7 +9830,77 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   return load();
 }
 
+function mountSessionResize(document) {
+  const handle = document.getElementById('session-resize');
+  const pane = document.getElementById('session-pane');
+  const view = document.defaultView;
+  if (!handle || !pane || !view?.matchMedia) return;
+  const desktop = view.matchMedia('(min-width: 901px)');
+  const key = 'openteamily.chat.session-width';
+  const width = () => Math.round(pane.getBoundingClientRect().width);
+  const min = 256;
+  const max = () => Math.min(540, Math.floor(view.innerWidth * 0.38));
+  let preferred = 0;
+  try { preferred = Number(view.localStorage.getItem(key)) || 0; } catch {}
+  let drag;
+
+  function render(value) {
+    const clamped = Math.max(min, Math.min(max(), value));
+    if (value) document.body.style.setProperty('--ot-session-width', clamped + 'px');
+    else document.body.style.removeProperty('--ot-session-width');
+    handle.setAttribute('aria-valuemin', min);
+    handle.setAttribute('aria-valuemax', max());
+    handle.setAttribute('aria-valuenow', value ? clamped : width());
+  }
+  function remember(value) {
+    preferred = value;
+    try {
+      if (value) view.localStorage.setItem(key, value);
+      else view.localStorage.removeItem(key);
+    } catch {}
+    render(value);
+  }
+  handle.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || drag) return;
+    event.preventDefault();
+    handle.focus();
+    handle.setPointerCapture(event.pointerId);
+    const initial = width();
+    drag = {id: event.pointerId, start: event.clientX, width: initial, value: initial};
+    handle.setAttribute('data-dragging', '');
+    document.body.setAttribute('data-chat-resizing', '');
+  });
+  handle.addEventListener('pointermove', event => {
+    if (drag?.id !== event.pointerId) return;
+    drag.value = Math.max(min, Math.min(max(), drag.width + event.clientX - drag.start));
+    render(drag.value);
+  });
+  function finish(event) {
+    if (drag?.id !== event.pointerId) return;
+    const {value, width: initial} = drag;
+    drag = null;
+    handle.removeAttribute('data-dragging');
+    document.body.removeAttribute('data-chat-resizing');
+    if (event.type === 'pointerup' && value !== initial) remember(value);
+    else render(preferred);
+  }
+  for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) handle.addEventListener(name, finish);
+  handle.addEventListener('keydown', event => {
+    const widths = {ArrowLeft:width() - 16, ArrowRight:width() + 16, Home:min, End:max(), Enter:0};
+    if (!Object.hasOwn(widths, event.key) || drag) return;
+    event.preventDefault();
+    const next = widths[event.key];
+    remember(next ? Math.max(min, Math.min(max(), next)) : 0);
+  });
+  handle.addEventListener('dblclick', () => remember(0));
+  // The saved preference stays intact while the viewport limits its rendered width.
+  view.addEventListener('resize', () => { if (desktop.matches && !drag) render(preferred); });
+  handle.hidden = false;
+  if (desktop.matches) render(preferred);
+}
+
 if (globalThis.document && globalThis.document.getElementById('session-pane')) {
+  mountSessionResize(globalThis.document);
   mount(globalThis.document);
 }
 
