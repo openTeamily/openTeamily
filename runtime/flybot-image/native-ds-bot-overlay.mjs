@@ -10,8 +10,8 @@ const sourceDir = fileURLToPath(new URL('../ds-bot-upstream/ds-bot/', import.met
 const patch = fileURLToPath(new URL('./native-ds-bot.patch', import.meta.url))
 const files = {
   'client.js': [
-    'cf6f9ddbf898ded9429c6895c43eea8175c9b57e2777f4800c8c4f89acd97035',
-    'e62dccc37a0c02e962468eab381fd8b5e8334f1ee6b51f3bd94fae3fba904f8a',
+    '98713d86c6cbf85adab1d0a2d303140778d9ed85fb2220abdadfab377a5f539f',
+    '3d2fc1487229b3a17b31c07e9a7c361c4735e703cb48a4a89422bd7250ab5209',
   ],
   'src/client/at-menu.js': [
     'a0feee8fdb684324e7160f422c7930ec4ae032ef214d5d4651a7f6ede3c82124',
@@ -22,26 +22,27 @@ const files = {
     'bc23ba5a3fa351d83c1714441055a022fb1d4f813479908777519b0b191b240b',
   ],
   'src/client/i18n.js': [
-    '1124fb90ac4409c3bfff7f092800e98aa5590437c5372d3823a446ee427a2506',
-    '19825b82add7d5cc4ff5e2393d8826786c8f1209c36fce411c6fd2411467e5fb',
+    '6b9e5157267f10cf8cdb554a770c3672ae5dcfef722d4a3730c65ea8a18ab83c',
+    '97bb88c1cf06681066c81c2a8d2ede4bee59ad7c9956b1602cd25bea27da2d97',
   ],
   'src/client/new-chat.js': [
-    '1086a6d2a199959cb73f088f8c19492dd2ad654425eb324688a0ae8b6c2d5176',
-    'f3baacd31e58247a3da295ed73062afb6c2357cfc11f50d2b3420eff1911128a',
+    '3f98f6db4cf84f6a9ad9aaef9228a6332970e0ce5bfa1533cda100faf570bf06',
+    'cc44ddde3947c8ca20c6c0a8806366f57a4b2f6b86f22ef21dde63cc97d8d6c9',
   ],
   'src/client/team-actions.js': [
-    '2c7bb430115cc4bc44d714c1c7f12ec0965049774b6785d5434d20379ce714a6',
-    'a20d9cc15385d826a8fd4cb2d06421763ae65885f2cfa7717afdb563f8bc8a4a',
+    '90f2dd67f80cea35d08c0a8553891b03e44cab5929130d364bbff87c9a1389dd',
+    'c09d6d8de803d46a8ca1346cc16f866561d13acb8e2fb67bfb9809618dc4f066',
   ],
   'src/host/capabilities.js': [
-    'de00bf540137da28f4bd3e28cec2af87b95a5f9672e4f5461da9c9e94a1cc1c3',
-    '39669aba5c52ffc9ae505c6bf52e8494c443a4d2f5f84206213962a8b5c2cba8',
+    '656fcc0b0fb7fd597dfd0f62bd49522d92becd4ed1c77dd53ba016f045614c89',
+    '321be0845446f49d8e0a8a2c6fc6acc95e178042b33a5c37e93aa7f2e6c079ca',
   ],
   'src/host/channel.js': [
-    '705ef779835e55100f3eaa04cd7e995e4fcc7a02eb3ad9fd976cedbd904d6aa4',
-    '02138c12a8659d79117847925c8e37039af78ce15dea1954abf4156bac04df7a',
+    '34b2a23af48a7c90984cca4050d3187816a9873fd513005cfb4663a6b8a33cb8',
+    'a24c9c2421c93aaacb5f50b58bbf3733883976908b8ee64866d9ef4e3f32cd0f',
   ],
 }
+
 
 const digest = (root, path) => createHash('sha256').update(readFileSync(join(root, path))).digest('hex')
 
