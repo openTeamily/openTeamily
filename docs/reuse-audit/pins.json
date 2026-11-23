@@ -143,9 +143,9 @@
       },
       "runtime/ds-bot-upstream": {
         "source": "Fei2411/DS-Bot",
-        "tag": "v0.3.8",
-        "commit": "5e9b7da8882da3b68d8a0624342708c2150a9156",
-        "via": "PR #21, updated to v0.3.8 by the upstream tracking PR",
+        "tag": "v0.3.9",
+        "commit": "881b57b54046fb355095e9c11f7918bd62b8bf1e",
+        "via": "PR #21, updated to v0.3.9 by PR #565",
         "license": "Apache-2.0",
         "unmodified_pinned_copy": true,
         "LICENSE": {
@@ -154,10 +154,10 @@
           "note": "Same LICENSE blob as the #18 FlyBot / historical DS-Bot pin"
         },
         "NOTICE": {
-          "git_blob_sha": "07f9cd2bbd4880a4001677e9e0b81c0e170483d5",
-          "sha256": "9950f67d1743a33a420581e44e8f7473e6ab78b69c7e55ea8a84b476c3cf2a39",
-          "bytes": 15675,
-          "note": "Different from the FlyBot / DS-Bot@2b10c70 NOTICE (94f05bc4..., 3835 bytes). v0.3.6 added further DSH-derived file attributions plus Simple Icons (CC0), Context7 (MIT) and Playwright (Apache-2.0) notices. v0.3.8 only extends the Agent logos trademark paragraph (Antigravity, GitHub Copilot, Kimi, MiniMax, Mistral AI; Antigravity marks attributed to the vendor application icon). Recorded by sha256; not a complete legal re-read of every attribution."
+          "git_blob_sha": "d9618dc66b0ac5e0e15b2e29cc4bd9a86259b0b0",
+          "sha256": "7183b18ec5bd153cb7b207c0c0d8c9c8d83dc5f0add15c116f13027b5dd95050",
+          "bytes": 15883,
+          "note": "Different from the FlyBot / DS-Bot@2b10c70 NOTICE (94f05bc4..., 3835 bytes). v0.3.6 added further DSH-derived file attributions plus Simple Icons (CC0), Context7 (MIT) and Playwright (Apache-2.0) notices. v0.3.8 only extends the Agent logos trademark paragraph (Antigravity, GitHub Copilot, Kimi, MiniMax, Mistral AI; Antigravity marks attributed to the vendor application icon). v0.3.9 adds DSH FishLogo attribution and narrows the description of the remote link key helpers. Recorded by sha256 with a review of those changes."
         },
         "dsh_pin_in_runtime": {
           "version": "0.2.2-rc.1",

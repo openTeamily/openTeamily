@@ -79,7 +79,7 @@ export function describeAppearance(values, now = new Date(), media) {
   if (appearance === 'dark') return '当前为深色。';
   if (appearance === 'auto') {
     const until = nextSwitchLabel(values, theme);
-    return until ? '当前为' + look + '，直到 ' + until + '。' : '当前为' + look + '。';
+    return until ? look + '，直到 ' + until + '。' : '当前为' + look + '。';
   }
   return '当前为' + look + '（跟随系统）。';
 }
@@ -343,10 +343,30 @@ export function composioMessage(error, fallback) {
   return error && Object.hasOwn(COMPOSIO_ERRORS, error.code) ? COMPOSIO_ERRORS[error.code] : fallback;
 }
 
+function placeAppearanceStatus(document, auto) {
+  const status = document.getElementById('appearance-status');
+  const scheduleCard = document.getElementById('appearance-schedule-card');
+  const appearance = document.getElementById('appearance');
+  if (!status || !status.parentNode) return;
+  if (auto && scheduleCard && typeof scheduleCard.insertBefore === 'function') {
+    const notes = typeof scheduleCard.querySelectorAll === 'function'
+      ? scheduleCard.querySelectorAll(':scope > .note')
+      : [];
+    const lastNote = notes[notes.length - 1];
+    if (lastNote) scheduleCard.insertBefore(status, lastNote);
+    else if (typeof scheduleCard.appendChild === 'function') scheduleCard.appendChild(status);
+    return;
+  }
+  if (appearance && appearance.parentNode && typeof appearance.parentNode.insertBefore === 'function') {
+    appearance.parentNode.insertBefore(status, scheduleCard || appearance.nextSibling);
+  }
+}
+
 export function syncAppearanceExtras(document, values) {
   const scheduleCard = document.getElementById('appearance-schedule-card');
   const customFields = document.getElementById('custom-period-fields');
-  if (scheduleCard) scheduleCard.hidden = !values || values.appearance !== 'auto';
+  const auto = Boolean(values && values.appearance === 'auto');
+  if (scheduleCard) scheduleCard.hidden = !auto;
   if (customFields) {
     customFields.hidden = !(values && values.appearance === 'auto' && values.appearance_schedule === 'custom');
   }
@@ -358,6 +378,7 @@ export function syncAppearanceExtras(document, values) {
       zone.textContent = 'Asia/Shanghai';
     }
   }
+  placeAppearanceStatus(document, auto);
 }
 
 export function readModelForm(form) {

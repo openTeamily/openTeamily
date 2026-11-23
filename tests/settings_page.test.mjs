@@ -54,25 +54,25 @@ test('describeAppearance names the current look and next switch without inventin
   const night = new Date(2026, 10, 18, 23, 0, 0);
   assert.equal(
     describeAppearance({appearance: 'auto', appearance_schedule: 'sunset_sunrise'}, afternoon),
-    '当前为浅色，直到 22:00。',
+    '浅色，直到 22:00。',
   );
   assert.equal(
     describeAppearance({appearance: 'auto', appearance_schedule: 'sunset_sunrise'}, night),
-    '当前为深色，直到 06:00。',
+    '深色，直到 06:00。',
   );
   assert.equal(
     describeAppearance({
       appearance: 'auto', appearance_schedule: 'custom',
       appearance_start: '18:00', appearance_end: '07:00',
     }, afternoon),
-    '当前为浅色，直到 18:00。',
+    '浅色，直到 18:00。',
   );
   assert.equal(
     describeAppearance({
       appearance: 'auto', appearance_schedule: 'custom',
       appearance_start: '18:00', appearance_end: '07:00',
     }, new Date(2026, 10, 18, 20, 0, 0)),
-    '当前为深色，直到 07:00。',
+    '深色，直到 07:00。',
   );
   const auto = describeAppearance({appearance: 'auto', appearance_schedule: 'sunset_sunrise'}, afternoon);
   assert.doesNotMatch(auto, /日落|日出/);
@@ -192,6 +192,63 @@ test('syncAppearanceExtras hides schedule controls until auto is selected', () =
   syncAppearanceExtras(document, {appearance: 'auto', appearance_schedule: 'custom'});
   assert.equal(scheduleCard.hidden, false);
   assert.equal(customFields.hidden, false);
+});
+
+test('appearance choices keep the radio beside the title when the hint wraps', () => {
+  const html = readFileSync(new URL('../openteamily/static/settings/index.html', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../openteamily/static/settings/app.css', import.meta.url), 'utf8');
+  const autoHint = html.match(/value="auto">\s*<span>自动<span class="hint">([^<]+)<\/span>/);
+  assert.ok(autoHint, 'auto option has a title and hint');
+  assert.match(autoHint[1], /白天浅色、夜间深色。按下面的时段或你设定的时间切换。/);
+  assert.doesNotMatch(autoHint[1], /22:00|日落/);
+  const appearanceStart = html.indexOf('fieldset id="appearance"');
+  const scheduleStart = html.indexOf('id="appearance-schedule-card"');
+  const statusStart = html.indexOf('id="appearance-status"');
+  assert.ok(appearanceStart > 0 && scheduleStart > appearanceStart);
+  assert.ok(statusStart > scheduleStart);
+  assert.ok(statusStart < html.indexOf('</fieldset>', scheduleStart));
+  assert.match(css, /#appearance \.choice,\s*#appearance-schedule-card \.choice,\s*#message-display \.choice \{\s*display: grid;/);
+  assert.match(css, /grid-template-columns: auto minmax\(0, 1fr\)/);
+});
+
+test('syncAppearanceExtras moves the status into the schedule card only for auto', () => {
+  const parent = { children: [] };
+  const timezoneNote = { className: 'note' };
+  const laterNote = { className: 'note' };
+  const status = { id: 'appearance-status', parentNode: parent };
+  const appearance = { id: 'appearance', parentNode: parent };
+  const scheduleCard = {
+    hidden: false,
+    notes: [timezoneNote, laterNote],
+    querySelectorAll(selector) {
+      assert.equal(selector, ':scope > .note');
+      return this.notes;
+    },
+    insertBefore(node, before) {
+      this.inserted = { node, before };
+      node.parentNode = this;
+    },
+  };
+  parent.insertBefore = (node, before) => {
+    parent.moved = { node, before };
+    node.parentNode = parent;
+  };
+  const nodes = {
+    'appearance-status': status,
+    'appearance-schedule-card': scheduleCard,
+    appearance,
+    'custom-period-fields': { hidden: false },
+    'appearance-time-zone': { textContent: '' },
+  };
+  const document = { getElementById: (id) => nodes[id] || null };
+  syncAppearanceExtras(document, { appearance: 'auto', appearance_schedule: 'sunset_sunrise' });
+  assert.equal(scheduleCard.hidden, false);
+  assert.equal(scheduleCard.inserted.node, status);
+  assert.equal(scheduleCard.inserted.before, laterNote);
+  syncAppearanceExtras(document, { appearance: 'light' });
+  assert.equal(scheduleCard.hidden, true);
+  assert.equal(parent.moved.node, status);
+  assert.equal(parent.moved.before, scheduleCard);
 });
 
 test('newlineBinding complements the recorded send shortcut', () => {

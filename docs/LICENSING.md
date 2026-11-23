@@ -9,7 +9,7 @@ relicense imported upstream trees.
 | New OpenTeamily code and docs (`openteamily/`, `manager/`, `tests/`, `docs/` except copied upstream docs, `scripts/` authored here, `runtime/flybot-social-host/`, `runtime/flybot-web-slots/`, `runtime/flybot-image/`) | MIT | [`LICENSE`](../LICENSE) | OpenTeamily contributors |
 | `runtime/flybot/` (except `ORIGIN.md` and `OPENTEAMILY.md`) | Apache License 2.0 | [`runtime/flybot/LICENSE`](../runtime/flybot/LICENSE), [`runtime/flybot/NOTICE`](../runtime/flybot/NOTICE) | NOTICE: DS Bot, Copyright 2026 Fei2411 and the DS Bot contributors |
 | `services/bot-social/` (except `ORIGIN.md` and `OPENTEAMILY.md`) | MIT | [`services/bot-social/LICENSE`](../services/bot-social/LICENSE) | Copyright (c) 2026 Birfy |
-| `runtime/ds-bot-upstream/` (except `UPSTREAM.md`) | Apache License 2.0 | [`runtime/ds-bot-upstream/LICENSE`](../runtime/ds-bot-upstream/LICENSE), [`runtime/ds-bot-upstream/NOTICE`](../runtime/ds-bot-upstream/NOTICE) | Unmodified pinned copy of [Fei2411/DS-Bot](https://github.com/Fei2411/DS-Bot) v0.3.8 (`5e9b7da8882da3b68d8a0624342708c2150a9156`); LICENSE and NOTICE retained |
+| `runtime/ds-bot-upstream/` (except `UPSTREAM.md`) | Apache License 2.0 | [`runtime/ds-bot-upstream/LICENSE`](../runtime/ds-bot-upstream/LICENSE), [`runtime/ds-bot-upstream/NOTICE`](../runtime/ds-bot-upstream/NOTICE) | Unmodified pinned copy of [Fei2411/DS-Bot](https://github.com/Fei2411/DS-Bot) v0.3.9 (`881b57b54046fb355095e9c11f7918bd62b8bf1e`); LICENSE and NOTICE retained |
 
 `ORIGIN.md` and `OPENTEAMILY.md` files inside imported FlyBot and Bot Social
 trees, and `UPSTREAM.md` inside `runtime/ds-bot-upstream/`, are OpenTeamily
