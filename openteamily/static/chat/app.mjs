@@ -551,14 +551,20 @@ function writeHash(values, {push = false} = {}) {
   else history.replaceState(null, '', path);
 }
 
+let messageTimeFormatter;
+let sessionTodayFormatter;
+let sessionWeekdayFormatter;
+let sessionDateFormatter;
+
 function formatTime(value) {
   if (!value) return '';
   const date = new Date(Number(value) * 1000);
   if (Number.isNaN(date.getTime())) return '';
-  return new Intl.DateTimeFormat('zh-CN', {
+  messageTimeFormatter ??= new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric',
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-  }).format(date);
+  });
+  return messageTimeFormatter.format(date);
 }
 
 export function sessionDisplayGroup(item) {
@@ -576,10 +582,21 @@ export function formatSessionTime(value, now = Date.now()) {
   if (Number.isNaN(date.getTime())) return '';
   const day = ms => Math.floor((ms + 8 * 3600000) / 86400000);
   const days = day(now) - day(timestamp);
-  if (days === 0) return new Intl.DateTimeFormat('zh-CN', {timeZone: 'Asia/Hong_Kong', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'}).format(date);
+  if (days === 0) {
+    sessionTodayFormatter ??= new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Hong_Kong', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    });
+    return sessionTodayFormatter.format(date);
+  }
   if (days === 1) return '昨天';
-  if (days > 1 && days < 7) return new Intl.DateTimeFormat('zh-CN', {timeZone: 'Asia/Hong_Kong', weekday: 'short'}).format(date);
-  return new Intl.DateTimeFormat('zh-CN', {timeZone: 'Asia/Hong_Kong', year: 'numeric', month: 'numeric', day: 'numeric'}).format(date);
+  if (days > 1 && days < 7) {
+    sessionWeekdayFormatter ??= new Intl.DateTimeFormat('zh-CN', {timeZone: 'Asia/Hong_Kong', weekday: 'short'});
+    return sessionWeekdayFormatter.format(date);
+  }
+  sessionDateFormatter ??= new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Hong_Kong', year: 'numeric', month: 'numeric', day: 'numeric',
+  });
+  return sessionDateFormatter.format(date);
 }
 
 // Six original pastel tones so neighbouring avatars are distinguishable; stable per name.
@@ -2788,6 +2805,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const items = [];
     let lastGroup = '';
+    const now = Date.now();
     for (const session of groupSessionsForDisplay(visible)) {
       const li = document.createElement('li');
       const button = document.createElement('button');
@@ -2822,7 +2840,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       copy.append(title, preview);
       const time = document.createElement('span');
       time.className = 'time';
-      time.textContent = formatSessionTime(session.updated);
+      time.textContent = formatSessionTime(session.updated, now);
       time.title = formatTime(session.updated);
       button.append(avatar, copy, time);
       if (session.muted) button.classList.add('is-muted');

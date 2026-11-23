@@ -164,8 +164,8 @@ test('explicit group mentions keep native silence out of progress and history', 
   assert.deepEqual(posted, ['I have one suggestion.'])
 })
 
-test('a finished reply or pass survives a worker restart without rerunning the native turn', async t => {
-  for (const outcome of ['reply', 'pass']) {
+test('a finished reply, pass, or failure survives a worker restart without rerunning the native turn', async t => {
+  for (const outcome of ['reply', 'pass', 'fail']) {
     await t.test(outcome, {timeout:4000}, async t => {
       const root = await mkdtemp(join(tmpdir(), 'openteamily-pending-reply-'))
       t.after(() => rm(root, {recursive:true, force:true}))
@@ -174,7 +174,7 @@ test('a finished reply or pass survives a worker restart without rerunning the n
       const job = {job_id:'pending', attempt:3, conversation_id:'room', mode:'mention', discretionary,
         agent_ref:'local', agent_name:'Local', message:{id:'source', revision:4, body:'Review the proposal'}}
       const startPath = '/v1/ot/agent-reply-jobs/pending'
-      const completedPath = discretionary ? startPath : '/v1/ot/conversations/room/agent-messages'
+      const completedPath = outcome === 'reply' ? '/v1/ot/conversations/room/agent-messages' : startPath
       const transfers = [], heartbeats = [], turns = [], reads = [], committed = []
       const firstHeartbeat = Promise.withResolvers()
       let claimed, available = false
@@ -202,7 +202,7 @@ test('a finished reply or pass survives a worker restart without rerunning the n
           assert.equal(path,completedPath)
           assert.equal(data.attempt,3)
           assert.equal(data.claim_id,claimed)
-          if (discretionary) assert.deepEqual(data,{action:'pass',attempt:3,claim_id:claimed})
+          if (outcome !== 'reply') assert.deepEqual(data,{action:outcome,attempt:3,claim_id:claimed})
           else {
             assert.equal(data.job_id,job.job_id)
             assert.equal(data.reply_to,job.message.id)
@@ -221,6 +221,7 @@ test('a finished reply or pass survives a worker restart without rerunning the n
           turns.push([endpoint,request.request_id])
           assert.equal(endpoint,'agents/groupTurn')
           await Promise.all([firstHeartbeat.promise,delay(30)])
+          if (outcome === 'fail') throw new Error('Native turn could not complete')
           return {text:discretionary?'[PASS]':'Completed native analysis'}
         },
       }
