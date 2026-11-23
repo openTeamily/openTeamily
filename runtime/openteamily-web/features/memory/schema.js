@@ -99,6 +99,11 @@ CREATE TABLE IF NOT EXISTS memory_chat_action_sources (
 CREATE TABLE memory_owned_meeting_action_sources (
   action_id TEXT PRIMARY KEY REFERENCES memory_actions(id) ON DELETE CASCADE,
   workspace_id TEXT NOT NULL, meeting_id TEXT NOT NULL, revision INTEGER NOT NULL, action_index INTEGER NOT NULL);
+`, `
+CREATE TABLE memory_page_reads (
+ page_id TEXT NOT NULL REFERENCES memory_pages(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision >= 1),
+ PRIMARY KEY(page_id, user_id));
 `]
 
 export const IMPORT_TABLES = {

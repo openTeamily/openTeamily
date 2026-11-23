@@ -32,6 +32,40 @@ export function parseMeetingCode(value, origin) {
   } catch { return ''; }
 }
 
+const ARCHIVE = 'openteamily.meeting-archive';
+const MEETING_FOCUS = /^(?:meeting|shared):[a-f0-9]{32}$/;
+
+export function meetingArchiveLocation(hash) {
+  const params = new URLSearchParams(hash?.slice(1));
+  const scope = params.get('meetingScope') === 'all' ? 'all' : 'joined';
+  const focus = params.get('meetingFocus') || '';
+  return {scope, focus: MEETING_FOCUS.test(focus) ? focus : ''};
+}
+
+export function meetingArchiveHref(workspace, {scope = 'joined', focus = ''} = {}) {
+  if (!WORKSPACE_ID.test(workspace)) return '/space?view=meetings';
+  const params = new URLSearchParams({workspace});
+  if (scope === 'all') params.set('meetingScope', 'all');
+  if (MEETING_FOCUS.test(focus)) params.set('meetingFocus', focus);
+  return '/space?view=meetings#' + params;
+}
+
+export function saveMeetingArchive(view, {owner, workspace, scope, focus, depth}) {
+  try {
+    view?.sessionStorage.setItem(ARCHIVE, JSON.stringify({owner, workspace, scope, focus, depth}));
+  } catch {}
+}
+
+export function meetingArchiveDepth(view, {owner, workspace, scope, focus}) {
+  if (!WORKSPACE_ID.test(owner) || !WORKSPACE_ID.test(workspace) || !MEETING_FOCUS.test(focus)) return 0;
+  try {
+    const saved = JSON.parse(view?.sessionStorage.getItem(ARCHIVE));
+    if (saved?.owner === owner && saved.workspace === workspace && saved.scope === scope && saved.focus === focus &&
+        Number.isSafeInteger(saved.depth) && saved.depth > 0) return Math.min(480, saved.depth);
+  } catch {}
+  return 0;
+}
+
 const CHAT_DRAFT = 'openteamily.meeting-draft-from-chat';
 
 export function stageMeetingFromChat(storage, draft) {

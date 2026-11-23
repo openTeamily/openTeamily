@@ -888,6 +888,8 @@ li[data-unread="true"] > .artifact-notification-row::before {
   border-radius: 999px;
 }
 
+#more-shared-meetings, #meetings-show-all { min-height: 2.75rem; }
+
 #main-panel.is-meetings .artifact-scopes,
 #main-panel.is-meetings .filter-wrap,
 #main-panel.is-meetings #layout-toggle,
@@ -1193,8 +1195,10 @@ body.app-workspace:not(.chat-open) > main > #main-panel { padding: .65rem .75rem
 .artifact-scopes { gap: .125rem; }
 .artifact-scopes button { height: 1.875rem; min-height: 0; padding: 0 .875rem; border: 0; background: transparent; color: var(--ot-ink); font-size: .8125rem; box-shadow: none; }
 .artifact-scopes button:hover { background: var(--ot-bg-accent); }
-:is(.artifact-kinds, .artifact-scopes, .meeting-scopes) button[aria-current="page"],
-:is(.artifact-kinds, .artifact-scopes, .meeting-scopes) button[aria-current="page"]:hover {
+:is(.artifact-kinds, .artifact-scopes) button[aria-current="page"],
+:is(.artifact-kinds, .artifact-scopes) button[aria-current="page"]:hover,
+.meeting-scopes button[aria-selected="true"],
+.meeting-scopes button[aria-selected="true"]:hover {
   background: var(--ot-accent-soft);
   color: var(--ot-accent-hover);
   font-weight: 650;

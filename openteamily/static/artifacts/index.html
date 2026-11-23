@@ -108,8 +108,8 @@
         <a id="new-meeting-in-space" href="/meetings" hidden>新建会议</a>
         <p id="meetings-caption">这个工作区的会议纪要，最新的在前。</p>
         <div class="meeting-scopes" role="tablist" aria-label="会议范围">
-          <button type="button" data-meeting-scope="joined">我参加的</button>
-          <button type="button" data-meeting-scope="all" aria-current="page">全部</button>
+          <button type="button" id="meeting-scope-joined" role="tab" data-meeting-scope="joined" aria-selected="true" aria-controls="space-results-panel">我参加的</button>
+          <button type="button" id="meeting-scope-all" role="tab" data-meeting-scope="all" aria-selected="false" aria-controls="space-results-panel" tabindex="-1">全部</button>
         </div>
       </div>
       <div class="workspace-picker">
@@ -242,7 +242,7 @@
           <button type="button" data-kind="meetings"><span class="kind-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M5 10h2.2v4H5v-4zm4-3h2.2v10H9V7zm4-3h2.2v16H13V4zm4 5h2.2v6H17V9z"/></svg></span>会议</button>
         </nav>
       </aside>
-      <section class="artifact-main">
+      <section class="artifact-main" id="space-results-panel">
         <div id="artifact-list-status" hidden>
           <span id="artifact-list-note" class="note" role="status"></span>
           <button type="button" id="retry-artifact-list" hidden>重试</button>
@@ -256,7 +256,7 @@
           <p id="artifact-pagination-note" class="note" role="status" hidden></p>
           <button type="button" id="more-artifacts" class="secondary" aria-controls="artifact-list">加载更多作品</button>
         </div>
-        <button type="button" id="more-shared-meetings" class="secondary" hidden>加载更多共享纪要</button>
+        <button type="button" id="more-shared-meetings" class="secondary" aria-controls="artifact-list" hidden>加载更多会议</button>
         <div id="list-empty" hidden>
           <div id="empty-no-match" hidden>
             <p class="note" role="status">没有找到符合条件的作品。</p>
@@ -324,6 +324,7 @@
           <button type="button" id="retry-meetings" hidden>重新加载</button>
           <p id="meetings-loading" class="note" role="status" hidden>正在加载会议…</p>
           <p id="meetings-no-match" class="note" hidden>没有符合当前条件的会议。</p>
+          <button type="button" id="meetings-show-all" class="secondary" hidden>查看全部会议</button>
           <div id="empty-meetings" hidden>
             <div class="empty-hero" aria-hidden="true"><span class="empty-cta-icon" data-tone="wave" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M11 7h2v10h-2V7z"/><path fill="currentColor" d="M8.1 9.2c1.15 1.05 1.15 4.55 0 5.6l-1.25-1.05c.7-.8.7-2.7 0-3.5l1.25-1.05zm7.8 0 1.25 1.05c-.7.8-.7 2.7 0 3.5l-1.25 1.05c-1.15-1.05-1.15-4.55 0-5.6zM5.6 7.3c2.05 1.85 2.05 7.55 0 9.4l-1.35-1.1c1.55-1.55 1.55-5.65 0-7.2l1.35-1.1zm12.8 0 1.35 1.1c-1.55 1.55-1.55 5.65 0 7.2l-1.35 1.1c-2.05-1.85-2.05-7.55 0-9.4z"/></svg></span></div>
             <h2>还没有会议纪要</h2>

@@ -4259,6 +4259,49 @@ function linkedChatSnapshot(fixture, owner = alice, conversations = [fixture.nat
   });
 }
 
+for (const removed of [false, true]) {
+  test(`global message search ${removed ? 'opens the latest window if the target disappeared' : 'opens the exact group window on the first read'}`, async t => {
+    t.mock.timers.enable({apis:['setTimeout']});
+    const fixture = linkedChatFixture('#workspace=' + linkWork);
+    const base = linkBase(linkWork);
+    const path = base + linkSocialPath;
+    const exact = path + '?around=' + linkSocialOlder;
+    const target = {id:linkSocialOlder, conversation_id:linkSocial, user_id:bob, seq:2, body:'Historical target'};
+    const conversation = {id:linkSocial, workspace_id:linkWork, kind:'group', title:'Linked group',
+      members:[linkMember], unread_count:3};
+    fixture.routes.set(base + '/search/messages?q=historical&limit=20', () => json(200, {items:[
+      {kind:'social', conversation_id:linkSocial, message_id:linkSocialOlder, title:'Linked group', snippet:'Historical target'},
+    ]}));
+    fixture.routes.set(exact, () => removed
+      ? json(404, {error:{code:'history_anchor_missing'}})
+      : json(200, {conversation, items:[target], cursor:null, has_newer:true}));
+    try {
+      await mount(fixture.doc, {fetcher:fixture.fetcher});
+      const input = fixture.el('session-search');
+      await fire(input, 'focus');
+      input.value = 'historical';
+      await fire(input, 'input');
+      await settle();
+      const result = descendants(fixture.el('search-results')).find(node => node.tagName === 'BUTTON' &&
+        node.children.some(child => child.textContent === 'Historical target'));
+      assert.ok(result);
+      const offset = fixture.calls.length;
+      await fire(result, 'click');
+      await settle();
+      const reads = fixture.calls.slice(offset).filter(call => call.path === path || call.path.startsWith(path + '?') ||
+        call.path.startsWith(path + '/messages') || call.path === path + '/read');
+      assert.deepEqual(reads.map(call => [call.method, call.path]), removed
+        ? [['GET', exact], ['GET', path]]
+        : [['GET', exact]]);
+      assert.deepEqual(fixture.messages(), [removed ? linkSocialLatest : linkSocialOlder]);
+      assert.equal(fixture.el('message-list').children[0].dataset.searchJump, removed ? undefined : 'true');
+      assert.equal(fixture.el('status').textContent, removed ? '找不到这条来源消息。' : '');
+    } finally {
+      fixture.restore();
+    }
+  });
+}
+
 test('pending private text keeps its send key alongside an independent newer draft', () => {
   const {view} = publicOpeningView();
   const scope = JSON.stringify([alice,linkWork,'agent',linkAgent,linkThread]);

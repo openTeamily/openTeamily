@@ -2723,7 +2723,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     syncSessionTransition();
     show('', '');
     const position = !target.message && readingPositions.get(readingPositionKey(target.source, workspaceId(), target.cid, target.agent));
-    const options = {acknowledge: !target.message, startUnread: target.unread && !target.message, transition, position,
+    const exactMessage = target.source === 'agent' ? PRIVATE_THREAD_ID.test(target.message || '') : chatPathId(target.message);
+    const message = servedByDsbot && exactMessage ? target.message : '';
+    const options = {acknowledge: !target.message, startUnread: target.unread && !target.message, transition, position, message,
       signal:AbortSignal.any([controller.signal, AbortSignal.timeout(12000)])};
     const opened = target.source === 'social' ? await openSocialConversation(target.cid, options)
       : await openAgentConversation(target.agent, target.cid, options);
@@ -2735,8 +2737,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return false;
     }
     clearSessionTransition();
-    if (target.message) await jumpToMessage(target.message, status);
-    else if (narrowScreen() && !document.body.classList.contains('sessions-open')
+    if (target.message) {
+      const open = socialOpen;
+      const scope = sendScope();
+      const isCurrent = () => open === socialOpen && scope === sendScope() && !sessionTransition?.pending;
+      const located = await jumpToMessage(target.message, null, isCurrent, {readWindow: !message});
+      if (!located && isCurrent()) show('error', uiLabel('找不到这条来源消息。', 'The original message is unavailable.'));
+      if (located || !isCurrent()) return true;
+    }
+    if (narrowScreen() && !document.body.classList.contains('sessions-open')
       && document.activeElement === document.body) document.getElementById('chat-title').focus();
     return true;
   }
@@ -6385,7 +6394,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openAgentConversation(agentId, conversationId, {
-    refresh = false, acknowledge = true, link, transition, startupSnapshot, foreground = false, signal, position,
+    refresh = false, acknowledge = true, link, transition, startupSnapshot, foreground = false, signal, position, message,
   } = {}) {
     if (sessionTransition?.pending && transition !== sessionTransition) return false;
     if (refresh && openingStartupLink()) return false;
@@ -6414,17 +6423,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const stillOpen = () => sameScope() && (!link || link.current());
     const path = agentConversationPath(wid, agentId, conversationId);
     if (!PRIVATE_THREAD_ID.test(position?.id || '')) position = null;
-    const snapshot = startupSnapshot && !position ? await startupSnapshot() : null;
-    if (startupSnapshot && !position && !stillOpen()) return false;
+    let around = position?.id || message;
+    const snapshot = startupSnapshot && !around ? await startupSnapshot() : null;
+    if (startupSnapshot && !around && !stillOpen()) return false;
     const latestPath = servedByDsbot ? `${path}?limit=${HISTORY_PAGE_SIZE}` : path;
     const read = url => request('GET', url,
       undefined, undefined, signal || (foreground ? AbortSignal.timeout(5000) : undefined))
       .catch(() => ({status: 0, body: {}}));
-    let result = snapshot || await read(position ? latestPath + '&around=' + position.id : latestPath);
-    if (position && stillOpen() && (result.status === 404 ||
-        (result.status === 200 && !result.body.items?.some(item => item.id === position.id)))) {
-      readingPositions.delete(position.key);
+    let result = snapshot || await read(around ? latestPath + '&around=' + around : latestPath);
+    if (around && stillOpen() && (result.status === 404 ||
+        (result.status === 200 && !result.body.items?.some(item => item.id === around)))) {
+      if (position) readingPositions.delete(position.key);
       position = null;
+      around = null;
       result = await read(latestPath);
     }
     if (!stillOpen() || (nativeRefresh && history !== privateHistory)) return false;
@@ -6447,7 +6458,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const listedAgent = agents.find(item => item.id === agentId);
     const agent = servedByDsbot ? detailAgent || listedAgent : listedAgent || detailAgent;
     const conversation = threadAfterRead(result.body.conversation, {owner: owner?.id, wid, aid: agentId, cid: conversationId}, readThreadReceipt);
-    if (!agent || conversation?.id !== conversationId || ((link || foreground) && (
+    if (!agent || conversation?.id !== conversationId || ((link || foreground || message) && (
       (agent.workspace_id && agent.workspace_id !== wid) || (conversation.workspace_id && conversation.workspace_id !== wid)
       || (conversation.agent_id && conversation.agent_id !== agentId)))) {
       if (!refresh) show('error', '无法打开对话。');
@@ -6492,13 +6503,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     currentConversation = conversation;
     renderStudioDiscussionSource(conversation.studio_source);
-    let items = position ? result.body.items : privateHistoryAfterSends(result.body.items || [], sends);
+    let items = around ? result.body.items : privateHistoryAfterSends(result.body.items || [], sends);
     if (servedByDsbot) {
       const state = nativeRefresh && history ? history : {wid, aid: agentId, cid: conversationId, owner: owner?.id,
-        readingHistory: Boolean(position) || !acknowledge};
+        readingHistory: Boolean(around) || !acknowledge};
       state.cursor = result.body.cursor ?? null;
-      if (position && result.body.has_newer && PRIVATE_THREAD_ID.test(items.at(-1)?.id || '')) state.after = items.at(-1).id;
-      if (!position && sends?.length && items.length > Number(HISTORY_PAGE_SIZE)) {
+      if (around && result.body.has_newer && PRIVATE_THREAD_ID.test(items.at(-1)?.id || '')) state.after = items.at(-1).id;
+      if (!around && sends?.length && items.length > Number(HISTORY_PAGE_SIZE)) {
         items = items.slice(-Number(HISTORY_PAGE_SIZE));
         state.cursor = items[0].id;
       }
@@ -6526,7 +6537,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openSocialConversation(conversationId, {acknowledge = true, startUnread = false, preserveUnread = false,
-    refresh = false, publicStartCurrent, link, transition, quiet = false, initialRead, signal, finishing, position} = {}) {
+    refresh = false, publicStartCurrent, link, transition, quiet = false, initialRead, signal, finishing, position, message} = {}) {
     if (sessionTransition?.pending && transition !== sessionTransition) return false;
     if (refresh && (openingStartupLink() || currentSource !== 'social'
       || currentConversation?.id !== conversationId)) return false;
@@ -6542,14 +6553,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const readPinReceipt = pinReceipt;
     const unreadEntry = servedByDsbot && acknowledge && startUnread && !refresh;
     if (!chatPathId(position?.id)) position = null;
+    let around = position?.id || message;
     const path = `${socialBase()}/${conversationId}`;
     const latestPath = path + (unreadEntry ? '?start=unread' : '');
     const read = url => request('GET', url, undefined, undefined, signal).catch(() => ({status: 0, body: {}}));
-    let result = initialRead || await read(position ? path + '?around=' + encodeURIComponent(position.id) : latestPath);
-    if (position && stillOpen() && ((result.status === 404 && result.body?.error?.code === 'history_anchor_missing') ||
-        (result.status === 200 && !result.body.items?.some(item => item.id === position.id)))) {
-      readingPositions.delete(position.key);
+    let result = initialRead || await read(around ? path + '?around=' + encodeURIComponent(around) : latestPath);
+    if (around && stillOpen() && ((result.status === 404 && result.body?.error?.code === 'history_anchor_missing') ||
+        (result.status === 200 && !result.body.items?.some(item => item.id === around)))) {
+      if (position) readingPositions.delete(position.key);
       position = null;
+      around = null;
       result = await read(latestPath);
     }
     if (!stillOpen() || (publicStartCurrent && !publicStartCurrent())) return false;
@@ -6570,7 +6583,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return false;
     }
     const updated = mergeGroupRead(mergePinRead(result.body.conversation, owner?.id, wid, readPinReceipt), owner?.id, wid);
-    if (updated?.id !== conversationId || ((link || initialRead) && updated.workspace_id && updated.workspace_id !== wid)) {
+    if (updated?.id !== conversationId || ((link || initialRead || message) && updated.workspace_id && updated.workspace_id !== wid)) {
       if (link) show('error', '无法打开会话。');
       return false;
     }
@@ -6614,8 +6627,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       : preserveUnread && Number.isSafeInteger(lastSeq) && updated.unread_count > 0
         ? {committed:0, latest:lastSeq, seen:new Set()} : null;
     setSocialHistory({wid, cid: conversationId, owner: owner?.id, cursor: result.body.cursor ?? null,
-      readingHistory: Boolean(position || unread?.firstId), unread,
-      after: position && result.body.has_newer && Number.isSafeInteger(lastSeq) && lastSeq > 0 ? lastSeq : null});
+      readingHistory: Boolean(around || unread?.firstId), unread,
+      after: around && result.body.has_newer && Number.isSafeInteger(lastSeq) && lastSeq > 0 ? lastSeq : null});
     if (snapshot?.first === null && Number.isSafeInteger(snapshot.last_seq)) applyOpenedRead('social', updated, 0, link, snapshot.last_seq);
     chatCalls.sync();
     agentMentions.refresh();
@@ -8241,7 +8254,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return result.body;
   }
   async function jumpToMessage(messageId, notice = document.getElementById('conversation-search-status'),
-    isCurrent = () => true, {signal, onLocated, attachmentPath} = {}) {
+    isCurrent = () => true, {signal, onLocated, attachmentPath, readWindow = true} = {}) {
     if (!isCurrent()) return false;
     const list = document.getElementById('message-list');
     const findTarget = () => Array.from(list.children || []).find(node => node.dataset.messageId === messageId);
@@ -8254,7 +8267,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const privateChat = currentSource === 'agent';
     const currentHistory = () => privateChat ? privateHistory : socialHistory;
     const state = currentHistory();
-    if (!anchor && state && (!privateChat || (/^[0-9a-f]{32}$/.test(messageId) && !state.restoring))) {
+    if (readWindow && !anchor && state && (!privateChat || (/^[0-9a-f]{32}$/.test(messageId) && !state.restoring))) {
       if (privateChat) {
         state.jumping = jump;
         stopReplyProgress();

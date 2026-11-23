@@ -835,7 +835,8 @@ html[data-theme-resolved="dark"] .filter-count {
   .memory-dir .dir-search input:has(+ button:not([hidden])) { padding-right: 2.5rem; }
   .memory-dir .dir-search button { width: 2.5rem; }
 }
-.memory-filters { display: flex; gap: .25rem; align-items: center; }
+.memory-filters { display: flex; flex-wrap: wrap; gap: .25rem; align-items: center; }
+.memory-unread-badge { flex: none; font-size: .625rem; font-weight: 650; color: var(--ot-ink); background: var(--ot-bg-accent); border-radius: .25rem; padding: .0625rem .25rem; }
 .memory-filters button { display: inline-flex; align-items: center; justify-content: center; white-space: nowrap; height: 1.5rem; min-height: 0; padding: 0 .5rem; border: 0; border-radius: 999px; background: transparent; font-size: .75rem; color: var(--ot-muted); box-shadow: none; }
 .memory-filters button[aria-pressed="true"] { background: var(--ot-bg-accent); color: var(--ot-ink); font-weight: 600; }
 .memory-filters .filter-count:not([hidden]) { display: inline-grid; place-items: center; min-width: 1rem; height: 1rem; padding: 0 .25rem; border-radius: 999px; background: var(--ot-surface); color: var(--ot-muted); font-size: .625rem; }

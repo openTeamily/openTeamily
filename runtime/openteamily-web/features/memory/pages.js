@@ -19,6 +19,13 @@ function recordVersion(store, workspaceId, pageId, revision, title, body, now, u
 
 const directoryText = text => String(text ?? '').trim().replace(/\s+/gu, ' ')
 const directoryCursor = /^(-?\d{1,16})\.([0-9a-f]{32})\.([0-9a-f]{24})$/
+const pageReadJoin = ' LEFT JOIN memory_page_reads r ON r.page_id=memory_pages.id AND r.user_id=?'
+const unreadPage = 'memory_pages.revision>COALESCE(r.revision,0)'
+
+function unreadTotal(store, workspace, owner) {
+  return store.get(`SELECT COUNT(*) AS count FROM memory_pages ${pageReadJoin} WHERE workspace_id=? AND ${unreadPage}`,
+    owner, workspace).count
+}
 
 function unfoldedRange(text, from, to) {
   let offset = 0
@@ -73,18 +80,20 @@ function listRecent(req, workspaceId) {
   const cursor = args.get('cursor')
   if (args.getAll('cursor').length > 1) refuse(400, 'invalid', 'Invalid memory cursor')
   args.delete('cursor')
-  const { limit } = pagination(args, ['order', 'q', 'topic', 'updated_after'])
+  const { limit } = pagination(args, ['order', 'q', 'topic', 'updated_after', 'unread'])
   const needle = casefold(directoryText(args.get('q')))
   const topic = (args.get('topic') ?? '').trim()
   const after = args.get('updated_after')
   const updatedAfter = after === null ? null : Number(after)
+  const unread = args.get('unread')
   if (needle.length > 80 || CONTROL.test(needle) || topic.length > TOPIC_MAX || CONTROL.test(topic) ||
+      args.getAll('unread').length > 1 || (unread !== null && unread !== '1') ||
       (after !== null && (!/^\d{1,16}$/.test(after) || !Number.isSafeInteger(updatedAfter)))) {
     refuse(400, 'invalid', 'Invalid memory request')
   }
 
   const topicHash = topic ? digest(casefold(topic)) : null
-  const scope = digest(stableJson([workspaceId, needle, topicHash, updatedAfter])).slice(0, 24)
+  const scope = digest(stableJson([workspaceId, needle, topicHash, updatedAfter, ...(unread ? [unread] : [])])).slice(0, 24)
   const parsed = cursor ? directoryCursor.exec(cursor) : null
   const anchor = parsed ? { updated: Number(parsed[1]), id: parsed[2] } : null
   if (cursor && (!anchor || !Number.isSafeInteger(anchor.updated) || parsed[3] !== scope)) {
@@ -92,8 +101,10 @@ function listRecent(req, workspaceId) {
   }
 
   const store = req.store
+  const owner = actor(req)
   let where = 'WHERE workspace_id=?'
-  const values = [workspaceId]
+  const values = [owner, workspaceId]
+  if (unread) where += ' AND ' + unreadPage
   if (topicHash) {
     where += ' AND EXISTS (SELECT 1 FROM memory_page_topics t WHERE t.page_id=memory_pages.id AND t.workspace_id=memory_pages.workspace_id AND t.name_hash=?)'
     values.push(topicHash)
@@ -103,11 +114,11 @@ function listRecent(req, workspaceId) {
     values.push(updatedAfter)
   }
   const recent = ' ORDER BY updated DESC,id'
-  const select = 'SELECT * FROM memory_pages ' + where
+  const select = 'SELECT memory_pages.*, COALESCE(r.revision,0) AS read_revision FROM memory_pages ' + pageReadJoin
   let total, rows, topics
   const matches = new Map()
   if (needle) {
-    const candidates = store.all(select + recent, ...values)
+    const candidates = store.all(select + where + recent, ...values)
     topics = topicsFor(store, candidates.map(row => row.id), workspaceId)
     rows = []
     total = 0
@@ -121,12 +132,12 @@ function listRecent(req, workspaceId) {
       matches.set(row.id, match)
     }
   } else {
-    total = store.get('SELECT COUNT(*) AS count FROM memory_pages ' + where, ...values).count
+    total = store.get('SELECT COUNT(*) AS count FROM memory_pages ' + pageReadJoin + where, ...values).count
     if (anchor) {
       where += ' AND (updated<? OR (updated=? AND id>?))'
       values.push(anchor.updated, anchor.updated, anchor.id)
     }
-    rows = store.all('SELECT * FROM memory_pages ' + where + recent + ' LIMIT ?', ...values, limit + 1)
+    rows = store.all(select + where + recent + ' LIMIT ?', ...values, limit + 1)
   }
 
   const page = rows.slice(0, limit)
@@ -134,11 +145,29 @@ function listRecent(req, workspaceId) {
   const user = usernames(store)
   const items = page.map(row => {
     const item = pageView(store, row, { includeBody: false, topics: topics[row.id], user })
+    item.unread = row.revision > row.read_revision
     if (needle) item.match = matches.get(row.id)
     return item
   })
   const tail = page.at(-1)
-  return { body: { items, cursor: rows.length > limit ? `${tail.updated}.${tail.id}.${scope}` : null, total } }
+  return { body: { items, cursor: rows.length > limit ? `${tail.updated}.${tail.id}.${scope}` : null, total,
+    unread_total: unreadTotal(store, workspaceId, owner) } }
+}
+
+async function readPage(req, workspace, pageId) {
+  if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid memory request')
+  const { revision } = requireBodyKeys(await req.json(), ['revision'])
+  if (!Number.isInteger(revision) || revision < 1 || revision > 2 ** 31) refuse(400, 'invalid', 'Invalid memory revision')
+  const owner = actor(req)
+  return req.store.transaction(store => {
+    const page = loadPage(store, workspace, pageId)
+    if (!page) refuse(404, 'not_found', 'Memory page not found')
+    if (revision > page.revision) refuse(409, 'conflict', 'Memory revision is unavailable')
+    store.run(`INSERT INTO memory_page_reads(page_id,user_id,revision) VALUES(?,?,?)
+      ON CONFLICT(page_id,user_id) DO UPDATE SET revision=MAX(memory_page_reads.revision,excluded.revision)`, pageId, owner, revision)
+    const seen = store.get('SELECT revision FROM memory_page_reads WHERE page_id=? AND user_id=?', pageId, owner).revision
+    return { body: { page_id: pageId, read_revision: seen, unread_total: unreadTotal(store, workspace, owner) } }
+  })
 }
 
 async function list(req, workspaceId) {
@@ -397,6 +426,7 @@ async function dream(req, workspaceId, pageId, suggestionId) {
 }
 
 export const routes = [
+  { pattern: new RegExp(`^/v1/workspaces/${W}/memory/${W}/read$`), handle: readPage },
   { pattern: new RegExp(`^/v1/workspaces/${W}/memory/${W}/dream(?:/${W})?$`.replace(/\//g, '\\/')), handle: dream },
   { pattern: new RegExp(`^/v1/workspaces/${W}/memory/${W}/export$`.replace(/\//g, '\\/')), handle: exportPage },
   { pattern: new RegExp(`^/v1/workspaces/${W}/memory/${W}/versions(?:/(\\d{1,8})(?:/(restore))?)?$`.replace(/\//g, '\\/')), handle: versions },

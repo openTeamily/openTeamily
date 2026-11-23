@@ -23,6 +23,8 @@ import { runtime, currentRuntime } from './host.js'
 
 export const FEATURE_NAME = /^[a-z][a-z0-9-]{0,39}$/
 export const OP_NAME = /^[a-z][a-zA-Z0-9-]{0,63}$/
+export const CHAT_DIRECTORY_FEATURES = ['chat', 'agents', 'personal', 'teams']
+const startupFeatures = ['settings', ...CHAT_DIRECTORY_FEATURES]
 
 export function featureHost({ name, identity, dataDir, log = () => {}, table = {} }) {
   const host = Object.freeze({
@@ -70,9 +72,9 @@ export async function loadFeatures({ dir, identity, dataDir, log = console.error
   try {
     names = readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort()
   } catch { return { table, loaded, failed } }
-  // HTML only needs the saved locale. Agents still load after Chat, which adopts
-  // retained private-chat rows before the Agents bundle can be accepted.
-  const priority = name => name === 'settings' ? 0 : name === 'chat' ? 1 : 2
+  // Serve the shell and owned Chat directory before unrelated feature migrations.
+  // Chat supplies the retained private-chat rows that Agents adopts on import.
+  const priority = name => startupFeatures.includes(name) ? startupFeatures.indexOf(name) : startupFeatures.length
   names.sort((a,b) => priority(a) - priority(b) || a.localeCompare(b))
   for (const name of names) {
     if (!FEATURE_NAME.test(name)) { failed.push({ name, error: 'invalid name' }); continue }
@@ -83,7 +85,7 @@ export async function loadFeatures({ dir, identity, dataDir, log = console.error
       const host = featureHost({ name, identity, dataDir, log, table })
       registerFeature(table, name, await factory(host))
       loaded.push(name)
-      onRegistered(name, table)
+      onRegistered(name, table, loaded)
     } catch (error) {
       failed.push({ name, error: String(error?.message ?? error).slice(0, 200) })
       log(`openteamily-web: feature ${name} not loaded: ${String(error?.message ?? error).slice(0, 200)}`)
