@@ -13,6 +13,8 @@ const CREATOR_HANDLE = /^[a-z0-9][a-z0-9._-]{1,79}$/i;
 const MATCH_KINDS = new Set(['title', 'summary', 'body', 'creator']);
 const MEDIA_LABELS = {image: '图片', audio: '音频', video: '视频'};
 const SEARCH_DELAY = 300;
+const WORK_REMIX_KINDS = new Set(['document','website','media','slides','whiteboard']);
+const WORK_REMIX_PENDING = '上次复制结果尚未确认。可以重试原请求。';
 const BROWSE_RESTORE_PAGES = 12;
 const CATALOG_RETURN_LINKS = ['catalog-profile', 'catalog-chat', 'catalog-author'];
 
@@ -66,8 +68,9 @@ export const FEED_CATEGORIES = ['网页', '文档', '图片', '音乐', '幻灯�
 
 export const CATALOG_CATEGORIES = AGENT_CATEGORIES.map(({label}) => label);
 
-const TEAM_DIRECTORY_LIMIT = 100;
+const TEAM_DIRECTORY_LIMIT = 24;
 const TEAM_DIRECTORY_ID = /^[A-Za-z0-9_-]{1,80}$/;
+const directoryTeamId = team => team?.team_id || team?.workspace_id || '';
 const TEAM_MEMBERSHIP = {member: '已加入', pending: '等待审批', suspended: '已暂停'};
 const TEAM_SEARCH_LIMIT = 60;
 
@@ -103,7 +106,7 @@ export function feedStateFromSearch(search) {
   const requestedKind = params.get('kind');
   const kind = FEED_KINDS.includes(requestedKind) ? requestedKind : '';
   const requestedCreator = params.get('creator');
-  const creator = CREATOR_HANDLE.test(requestedCreator || '') ? requestedCreator : '';
+  const creator = CREATOR_HANDLE.test(requestedCreator || '') ? requestedCreator.toLowerCase() : '';
   return {
     tab,
     kind,
@@ -120,7 +123,7 @@ export function feedSearchText(state) {
   if (state && state.kind && FEED_KINDS.includes(state.kind)) params.set('kind', state.kind);
   if (tab === 'activity' && !state.kind && !state.creator && state.sort === 'popular') params.set('sort', 'popular');
   if (state && state.query) params.set('q', state.query);
-  if (state && CREATOR_HANDLE.test(state.creator || '')) params.set('creator', state.creator);
+  if (state && CREATOR_HANDLE.test(state.creator || '')) params.set('creator', state.creator.toLowerCase());
   const text = params.toString();
   return text ? '?' + text : '';
 }
@@ -388,9 +391,10 @@ export function isTeamsCatalog(location) {
   return params.get('tab') === 'agents' && params.get('section') === 'groups';
 }
 
-function teamDirectoryQuery(text) {
+function teamDirectoryQuery(text, cursor = '') {
   const params = new URLSearchParams({limit: String(TEAM_DIRECTORY_LIMIT)});
   if (text) params.set('q', text);
+  if (cursor) params.set('cursor', cursor);
   return '/v1/team-directory?' + params.toString();
 }
 
@@ -435,7 +439,7 @@ export function renderTeamCard(document, team, {joining = false, onJoin} = {}) {
       open.setAttribute('aria-label', '打开工作区：' + team.name);
       foot.append(open);
     }
-  } else if (onJoin && TEAM_DIRECTORY_ID.test(team.workspace_id || '')) {
+  } else if (onJoin && TEAM_DIRECTORY_ID.test(directoryTeamId(team))) {
     const join = document.createElement('button');
     join.type = 'button';
     join.className = 'team-join';
@@ -486,10 +490,11 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   let remix = null;
   let manageRequest = 0;
   let catalogRequest = 0;
-  let directoryItems = [];
-  let directoryLoading = false;
   let activeTeamQuery = '';
   const joiningTeams = new Set();
+  const directoryItems = new Map();
+  const directoryRows = new Map();
+  const directoryReceipts = new Map();
   const agentsView = isAgentsCatalog(location);
   const manageParams = new URLSearchParams(location?.search || '');
   const requestedAuthor = agentsView && manageParams.get('creator');
@@ -558,6 +563,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (agentFilters) agentFilters.hidden = !agentsView;
     const createAgent = document.getElementById('catalog-create-agent');
     const createTeam = document.getElementById('catalog-create-team');
+    const createAgentTeam = document.getElementById('catalog-create-agent-team');
+    if (createAgentTeam) createAgentTeam.hidden = !teamsView || !currentUser;
     if (createAgent) createAgent.hidden = !agentsView || !currentUser;
     if (createTeam) createTeam.hidden = !teamsView;
     const query = document.getElementById('catalog-query');
@@ -578,25 +585,30 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
   }
 
-  function renderTeamDirectory() {
-    const list = document.getElementById('discover-list');
-    list.replaceChildren();
-    for (const team of directoryItems) {
-      const row = document.createElement('li');
-      row.append(renderTeamCard(document, team, {
-        joining: joiningTeams.has(team.workspace_id),
-        onJoin: applyTeam,
-      }));
-      list.append(row);
+  function renderTeamRow(team) {
+    const id = directoryTeamId(team);
+    let row = directoryRows.get(id);
+    if (!row) {
+      row = document.createElement('li');
+      row.dataset.teamDirectoryRef = id;
+      directoryRows.set(id, row);
+      document.getElementById('discover-list').append(row);
     }
+    row.replaceChildren(renderTeamCard(document, team, {
+      joining: joiningTeams.has(id),
+      onJoin: applyTeam,
+    }));
   }
 
   async function applyTeam(team) {
-    const id = team.workspace_id;
+    const id = directoryTeamId(team);
     const user = currentUser;
     if (!user || joiningTeams.has(id) || !TEAM_DIRECTORY_ID.test(id)) return;
+    const row = directoryRows.get(id);
+    const button = row?.querySelector?.('.team-join');
+    const hadFocus = button && document.activeElement === button;
     joiningTeams.add(id);
-    renderTeamDirectory();
+    renderTeamRow(team);
     show('', '');
     try {
       const response = await request('POST', '/v1/team-directory/' + encodeURIComponent(id) + '/join', {});
@@ -606,66 +618,126 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         show('error', messageFor(response.body.error, '无法提交加入申请，请重试。'));
         return;
       }
-      directoryItems = directoryItems.map(item => item.workspace_id === id ? {...item, membership: next} : item);
-      show('ok', next === 'pending' ? '已提交申请，等待团队管理员审批。' : TEAM_MEMBERSHIP[next]);
-      // A search started before the write can return pre-application membership.
-      if (directoryLoading) void loadTeams(activeTeamQuery);
+      const current = directoryItems.get(id);
+      const keepStatus = current?.membership === 'suspended' || (current?.membership === 'member' && next === 'pending');
+      const membership = keepStatus ? current.membership : next;
+      const workspace = response.body.workspace_id;
+      const changes = {membership, ...(membership === 'member' && /^[a-f0-9]{32}$/.test(workspace || '') ? {workspace_id:workspace} : {})};
+      directoryReceipts.set(id, {changes, read:catalogRequest});
+      if (current) directoryItems.set(id, {...current, ...changes});
+      show('ok', membership === 'pending' ? '已提交申请，等待团队管理员审批。' : TEAM_MEMBERSHIP[membership]);
     } catch {
       if (currentUser === user) show('error', '连接失败，暂时无法确认申请结果。可刷新重试。');
     } finally {
       joiningTeams.delete(id);
-      if (currentUser === user) renderTeamDirectory();
+      const current = directoryItems.get(id);
+      if (currentUser === user && current) {
+        renderTeamRow(current);
+        if (hadFocus && document.activeElement === document.body) {
+          const target = directoryRows.get(id)?.querySelector?.('.team-join, .team-membership');
+          if (target) {
+            if (target.matches('.team-membership')) target.tabIndex = -1;
+            target.focus({preventScroll:true});
+          }
+        }
+      }
     }
   }
 
-  async function loadTeams(query = document.getElementById('catalog-query').value.trim().slice(0, TEAM_SEARCH_LIMIT)) {
-    const seq = ++catalogRequest;
+  async function loadTeams(append = false) {
     const panel = document.getElementById('catalog-panel');
+    if (append && (!cursor || panel.getAttribute('aria-busy') === 'true')) return;
+    const seq = ++catalogRequest;
+    const user = currentUser;
     const empty = document.getElementById('discover-empty');
     const error = document.getElementById('catalog-error');
     const retry = document.getElementById('teams-retry');
     const count = document.getElementById('catalog-count');
-    activeTeamQuery = query;
-    directoryItems = [];
-    renderTeamDirectory();
-    document.getElementById('catalog-more').hidden = true;
+    const more = document.getElementById('catalog-more');
+    const shouldFocus = append && (document.activeElement === more || document.activeElement === retry);
+    if (!append) {
+      activeTeamQuery = catalogSearch.value.trim().slice(0, TEAM_SEARCH_LIMIT);
+      directoryItems.clear();
+      directoryRows.clear();
+      directoryReceipts.clear();
+      document.getElementById('discover-list').replaceChildren();
+      cursor = '';
+      catalogPages = 0;
+      catalogDeparture = null;
+    }
+    more.hidden = !append;
+    more.disabled = true;
+    more.textContent = '加载更多';
     empty.hidden = true;
     error.hidden = true;
     retry.hidden = true;
-    if (!currentUser) {
-      directoryLoading = false;
+    if (!user) {
       panel.setAttribute('aria-busy', 'false');
       count.textContent = '';
       empty.textContent = '登录后可查看并申请加入公开团队。';
       empty.hidden = false;
       return;
     }
-    directoryLoading = true;
     panel.setAttribute('aria-busy', 'true');
-    count.textContent = '正在加载团队…';
+    count.textContent = append ? '正在加载更多团队…' : '正在加载团队…';
+    const requested = cursor;
+    const isCurrent = () => seq === catalogRequest && user === currentUser;
     try {
-      const result = await request('GET', teamDirectoryQuery(query));
-      if (seq !== catalogRequest) return;
+      const result = await request('GET', teamDirectoryQuery(activeTeamQuery, requested));
+      if (!isCurrent()) return;
       if (result.status !== 200) throw new Error(messageFor(result.body.error, '无法加载团队目录。'));
-      directoryItems = catalogItems(result.body);
-      renderTeamDirectory();
-      count.textContent = directoryItems.length >= TEAM_DIRECTORY_LIMIT
-        ? `已显示前 ${TEAM_DIRECTORY_LIMIT} 个团队，可用搜索缩小范围。`
-        : directoryItems.length ? `${directoryItems.length} 个团队` : '';
-      empty.textContent = query ? '没有匹配的团队。' : '暂无公开团队。';
-      empty.hidden = directoryItems.length > 0;
+      let firstAdded;
+      for (const item of catalogItems(result.body)) {
+        const id = directoryTeamId(item);
+        if (!TEAM_DIRECTORY_ID.test(id) || directoryItems.has(id)) continue;
+        const receipt = directoryReceipts.get(id);
+        const newerMembership = item.membership === 'suspended' ||
+          (item.membership === 'member' && receipt?.changes.membership === 'pending');
+        const team = receipt?.read === seq && !newerMembership ? {...item, ...receipt.changes} : item;
+        directoryItems.set(id, team);
+        renderTeamRow(team);
+        firstAdded ??= directoryRows.get(id);
+      }
+      const next = result.body.cursor;
+      cursor = typeof next === 'string' && next !== requested ? next : '';
+      catalogPages += 1;
+      more.hidden = !cursor;
+      more.disabled = false;
+      if (shouldFocus && [document.body, more, retry].includes(document.activeElement)) {
+        const first = firstAdded?.querySelector?.('h3');
+        const last = !cursor && document.getElementById('discover-list').lastElementChild?.querySelector?.('h3');
+        const heading = first || last;
+        if (heading) {
+          heading.tabIndex = -1;
+          heading.focus();
+        } else if (cursor) more.focus({preventScroll:true});
+      }
+      count.textContent = directoryItems.size ? `已显示 ${directoryItems.size} 个团队` : '';
+      empty.textContent = activeTeamQuery ? '没有匹配的团队。'
+        : '暂无公开团队。创建团队后，可在成员页的「团队目录」中公开。';
+      empty.hidden = directoryItems.size > 0;
+      return seq;
     } catch (failure) {
-      if (seq !== catalogRequest) return;
-      count.textContent = '';
+      if (!isCurrent()) return;
+      count.textContent = directoryItems.size ? `已显示 ${directoryItems.size} 个团队` : '';
       error.textContent = failure.message || '无法加载团队目录。';
       error.hidden = false;
-      retry.hidden = false;
+      retry.hidden = append;
+      if (append) {
+        more.textContent = '重试加载更多';
+        more.disabled = false;
+        if (shouldFocus && document.activeElement === document.body) more.focus({preventScroll:true});
+      }
     } finally {
-      if (seq === catalogRequest) {
-        directoryLoading = false;
+      if (isCurrent()) {
+        more.disabled = false;
         panel.setAttribute('aria-busy', 'false');
       }
     }
+  }
+
+  async function loadMoreTeams() {
+    if (await loadTeams(true) === catalogRequest) rememberCatalogPosition();
   }
 
   function showDiscoverView() {
@@ -693,7 +765,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const clearSearch = document.getElementById('feed-clear');
   const retryFeed = document.getElementById('feed-retry');
   const detail = Object.fromEntries([
-    'back', 'paper', 'title', 'meta', 'status', 'retry', 'preview', 'actions', 'open', 'download',
+    'back', 'paper', 'title', 'meta', 'status', 'retry', 'resume-remix', 'preview', 'reader', 'actions', 'open', 'download',
     'like', 'collect', 'follow', 'comments', 'share', 'remix', 'previous', 'next',
   ].map(name => [name, document.getElementById('work-detail-' + name)]));
   const share = Object.fromEntries(['dialog', 'url', 'status', 'copy', 'native', 'close']
@@ -703,6 +775,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const detailPanel = document.getElementById('work-detail');
   const initialView = document.getElementById('main');
   const engagement = [['like', 'liked', '点赞'], ['collect', 'collected', '收录'], ['follow', 'following', '关注作者']];
+  const workRemixAttempts = new Map();
   let activeWork;
   let activeRemix;
   let feedReturn;
@@ -730,6 +803,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   function disposeWorkPreview() {
+    activeWork?.disposeReader?.();
+    detail.reader.replaceChildren();
     activeWork?.model?.setSource('');
     if (activeWork?.media) {
       const player = activeWork.media;
@@ -844,6 +919,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     renderWorkMeta(item);
     detail.status.textContent = '正在加载作品…';
     detail.retry.hidden = true;
+    detail['resume-remix'].hidden = true;
     detail.actions.hidden = true;
     detail.comments.hidden = true;
     detail.paper.setAttribute('aria-busy', 'true');
@@ -864,6 +940,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       if (!entry.item) return failWorkDetail(entry, result.status);
       return finishWorkDetail(entry, null);
     }
+    showWorkRemixRecovery(entry);
 
     const path = '/v1/discover/works/' + intent.slug + workDetailQuery(feedState);
     const readScopedWork = () => request('GET', path).catch(() => ({status: 0}));
@@ -980,7 +1057,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   function setWorkEngagement(entry) {
     const canEngage = Boolean(entry.viewer && entry.viewer === currentUser);
-    if (detail.remix) detail.remix.hidden = !nativeCatalog || !canEngage || entry.item?.remix_available !== true;
+    const recoverable = showWorkRemixRecovery(entry);
+    if (detail.remix) detail.remix.hidden = !nativeCatalog || !canEngage ||
+      entry.item?.remix_available !== true || recoverable;
     for (const [action, flag, label] of engagement) {
       const button = detail[action];
       button.hidden = !canEngage || (action === 'follow' && entry.item.own_work);
@@ -990,6 +1069,39 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         button.setAttribute('aria-pressed', String(Boolean(entry.item[flag])));
       }
     }
+  }
+
+  function workRemixScope(entry, viewer = currentUser) {
+    return typeof viewer?.id === 'string' && viewer.id && validSlug(entry.slug)
+      ? 'openteamily.work-remix.' + JSON.stringify([viewer.id, entry.slug]) : '';
+  }
+
+  function readWorkRemixAttempt(scope) {
+    if (!scope) return null;
+    if (workRemixAttempts.has(scope)) return workRemixAttempts.get(scope);
+    try {
+      const attempt = JSON.parse(window.sessionStorage.getItem(scope));
+      if (typeof attempt?.title === 'string' && attempt.title.trim() && attempt.title.length <= 80 &&
+          WORK_REMIX_KINDS.has(attempt.kind) && /^[0-9a-f]{64}$/.test(attempt.revision) &&
+          /^[A-Za-z0-9_-]{16,64}$/.test(attempt.key)) return attempt;
+    } catch { /* Storage is optional. */ }
+    return null;
+  }
+
+  function storeWorkRemixAttempt(scope, attempt) {
+    if (!scope) return;
+    if (attempt) workRemixAttempts.set(scope, attempt);
+    else workRemixAttempts.delete(scope);
+    try {
+      if (attempt) window.sessionStorage.setItem(scope, JSON.stringify(attempt));
+      else window.sessionStorage.removeItem(scope);
+    } catch { /* The open page retains the request if storage is unavailable. */ }
+  }
+
+  function showWorkRemixRecovery(entry) {
+    const recoverable = Boolean(nativeCatalog && readWorkRemixAttempt(workRemixScope(entry)));
+    detail['resume-remix'].hidden = !recoverable;
+    return recoverable;
   }
 
   function closeWorkRemix() {
@@ -1014,7 +1126,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (!sameWorkRemix(state) || state.read !== controller) return;
     const template = result.body?.template;
     if (result.status !== 200 || !matchesNativeViewer(result.body?.viewer_username,state.viewer) ||
-        !['document','website','media','slides','whiteboard'].includes(template?.kind) || typeof template.title !== 'string' ||
+        !WORK_REMIX_KINDS.has(template?.kind) || typeof template.title !== 'string' ||
         !/^[0-9a-f]{64}$/.test(template.revision || '')) {
       workRemix.status.textContent = messageFor(result.body?.error,'无法读取公开版本。');
       workRemix.refresh.hidden = result.status === 404;
@@ -1032,44 +1144,53 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   function openWorkRemix() {
     const entry = activeWork;
-    if (!nativeCatalog || !entry?.ready || entry.viewer !== currentUser || !entry.viewer || entry.item?.remix_available !== true ||
-        !workRemix.dialog || workRemix.dialog.open) return;
-    const state = {entry,viewer:entry.viewer,path:`/v1/discover/works/${entry.slug}/remix`,keys:new Map()};
+    if (!nativeCatalog || !entry || !currentUser || !workRemix.dialog || workRemix.dialog.open) return;
+    const scope = workRemixScope(entry);
+    const attempt = readWorkRemixAttempt(scope);
+    if (!attempt && (!entry.ready || entry.viewer !== currentUser || entry.item?.remix_available !== true)) return;
+    const state = {entry,viewer:currentUser,path:`/v1/discover/works/${entry.slug}/remix`,scope,attempt};
     activeRemix = state;
     workRemix.source.textContent = '';
-    workRemix.name.value = '';
-    workRemix.name.disabled = false;
+    workRemix.name.value = attempt?.title || '';
+    workRemix.name.disabled = Boolean(attempt);
     workRemix['name-field'].hidden = false;
     workRemix.open.hidden = true;
     workRemix.open.removeAttribute('href');
     workRemix.close.disabled = workRemix.submit.hidden = false;
     workRemix.close.textContent = '取消';
-    workRemix.submit.textContent = '创建副本';
+    workRemix.submit.textContent = attempt ? '确认副本' : '创建副本';
+    workRemix.submit.disabled = !attempt;
+    workRemix.refresh.hidden = true;
+    workRemix.status.textContent = attempt ? WORK_REMIX_PENDING : '';
     workRemix.dialog.showModal();
-    void readWorkRemix(state);
+    if (attempt) workRemix.submit.focus();
+    else void readWorkRemix(state);
   }
 
   async function submitWorkRemix(event) {
     event.preventDefault();
     const state = activeRemix;
     const title = workRemix.name.value.trim();
-    if (!state || !sameWorkRemix(state) || !state.template || state.pending || !title) return;
-    const {revision} = state.template;
-    const stamp = JSON.stringify([revision,title]);
-    const key = state.keys.get(stamp) || reuseKey();
-    state.keys.set(stamp,key);
+    if (!state || !sameWorkRemix(state) || state.pending || (!state.attempt && (!state.template || !title))) return;
+    const recovering = Boolean(state.attempt);
+    const attempt = state.attempt ||= {title,revision:state.template.revision,kind:state.template.kind,key:reuseKey()};
+    storeWorkRemixAttempt(state.scope, attempt);
+    setWorkEngagement(state.entry);
     state.pending = true;
     workRemix.submit.disabled = workRemix.close.disabled = workRemix.name.disabled = true;
-    workRemix.status.textContent = '正在创建副本…';
-    const result = await request('POST',state.path,{title,revision},{'Idempotency-Key':key},AbortSignal.timeout(12000))
+    workRemix.status.textContent = recovering ? '正在确认副本…' : '正在创建副本…';
+    const result = await request('POST',state.path,{title:attempt.title,revision:attempt.revision},
+      {'Idempotency-Key':attempt.key},AbortSignal.timeout(12000))
       .catch(() => ({status:0}));
     if (!sameWorkRemix(state)) return;
     state.pending = false;
-    workRemix.close.disabled = workRemix.name.disabled = false;
+    workRemix.close.disabled = false;
     const artifact = result.body?.artifact;
     if ([200,201].includes(result.status) && matchesNativeViewer(result.body?.viewer_username,state.viewer)
         && /^[a-f0-9]{32}$/.test(artifact?.workspace_id || '') && /^[a-f0-9]{32}$/.test(artifact?.id || '')
-        && artifact.kind === state.template.kind) {
+        && artifact.kind === attempt.kind) {
+      storeWorkRemixAttempt(state.scope, null);
+      setWorkEngagement(state.entry);
       state.template = null;
       workRemix['name-field'].hidden = workRemix.submit.hidden = true;
       workRemix.open.href = spaceHref(artifact.workspace_id,artifact.id);
@@ -1079,11 +1200,22 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       workRemix.open.focus();
       return;
     }
+    if (!result.status || result.status >= 500 || [200,201,401,408].includes(result.status)) {
+      workRemix.submit.textContent = '确认副本';
+      workRemix.submit.disabled = false;
+      workRemix.status.textContent = WORK_REMIX_PENDING;
+      return;
+    }
+    storeWorkRemixAttempt(state.scope, null);
+    setWorkEngagement(state.entry);
+    state.attempt = null;
+    workRemix.name.disabled = false;
+    workRemix.submit.textContent = '创建副本';
     const unavailable = result.status === 404 || result.body?.error?.code === 'listing_changed';
     workRemix.status.textContent = result.status === 404 ? '这个作品已下架或没有可复制的公开版本。'
       : messageFor(result.body?.error,'暂时无法确认是否已创建副本，可以重试。');
-    workRemix.submit.disabled = unavailable;
-    workRemix.refresh.hidden = result.body?.error?.code !== 'listing_changed';
+    workRemix.submit.disabled = unavailable || !state.template;
+    workRemix.refresh.hidden = unavailable ? result.body?.error?.code !== 'listing_changed' : Boolean(state.template);
     if (unavailable) state.template = null;
     if (result.body?.error?.code === 'title_conflict') { workRemix.name.focus(); workRemix.name.select(); }
   }
@@ -1172,6 +1304,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   });
   detail.share.addEventListener('click', openWorkShare);
   detail.remix?.addEventListener('click',openWorkRemix);
+  detail['resume-remix']?.addEventListener('click',openWorkRemix);
   workRemix.form?.addEventListener('submit',submitWorkRemix);
   workRemix.close?.addEventListener('click',closeWorkRemix);
   workRemix.refresh?.addEventListener('click',() => activeRemix && readWorkRemix(activeRemix));
@@ -1399,6 +1532,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return;
     }
     if (feedState.tab !== 'activity' && !currentUser) note.textContent = '请先登录，再查看关注或收录作品。';
+    else if (feedState.tab === 'activity' && feedState.creator && !feedState.query && !feedState.kind && !feedState.items.length)
+      note.textContent = '该作者还没有公开作品。';
     else if (feedState.query && !feedState.items.length) note.textContent = FEED_SEARCH_EMPTY_NOTE;
     else if (feedState.tab === 'following') note.textContent = FEED_FOLLOWING_NOTE;
     else if (feedState.tab === 'collected') note.textContent = '这里只展示你收录且仍公开的作品。';
@@ -1548,6 +1683,22 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return;
     }
     detail.preview.textContent = FEED_DETAIL_LOADING;
+    if (item.kind === 'document') {
+      void import('./document-reader.mjs').then(({mountDocumentReader}) => {
+        if (!stillShowing()) return;
+        entry.disposeReader = mountDocumentReader(document, detail.reader, {
+          stillShowing,
+          async read(signal) {
+            const result = await request('GET', '/w/' + item.slug, undefined, {}, signal);
+            const work = result.body;
+            if (result.status !== 200 || work?.kind !== 'work' || work.slug !== item.slug || work.work_kind !== 'document') {
+              return {status:result.status};
+            }
+            return {status:200, source:work.snapshot ?? ''};
+          },
+        });
+      }).catch(() => {});
+    }
     const result = inlinePreview === undefined ? await cachedPreview(item) : {ok: true, preview: inlinePreview};
     if (!stillShowing()) return;
     if (!result.ok) { detail.preview.textContent = FEED_DETAIL_UNREADABLE; return; }
@@ -2300,22 +2451,29 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
   }
 
+  const returnLinks = teamsView ? ['team-open'] : CATALOG_RETURN_LINKS;
+  const validCatalogReturn = slug => teamsView ? TEAM_DIRECTORY_ID.test(slug || '') : validSlug(slug);
+
   function catalogPositionKey() {
     const viewer = currentUser?.id;
     if (sessionState !== 'guest' && typeof viewer !== 'string') return '';
-    return JSON.stringify([sessionState, viewer || null, catalogQuery(activeQuery, '', activeCategory, activeCreator?.handle)]);
+    const path = teamsView ? teamDirectoryQuery(activeTeamQuery) : catalogQuery(activeQuery, '', activeCategory, activeCreator?.handle);
+    return JSON.stringify([sessionState, viewer || null, path]);
   }
 
   function rememberCatalogPosition(trigger) {
     const key = catalogPositionKey();
     if (!key || !catalogPages || !history?.replaceState) return;
-    const slug = trigger?.closest?.('[data-catalog-slug]')?.dataset.catalogSlug;
-    const link = CATALOG_RETURN_LINKS.find(name => trigger?.classList?.contains(name));
+    const slug = teamsView ? trigger?.closest?.('[data-team-directory-ref]')?.dataset.teamDirectoryRef
+      : trigger?.closest?.('[data-catalog-slug]')?.dataset.catalogSlug;
+    const link = returnLinks.find(name => trigger?.classList?.contains(name));
     const offset = link && trigger.getBoundingClientRect().top - initialView.getBoundingClientRect().top;
+    const saved = history.state?.discoverAgentDirectory;
+    const pages = saved?.key === key && Number.isInteger(saved.pages) ? Math.max(catalogPages, saved.pages) : catalogPages;
     try {
       history.replaceState({...history.state, discoverAgentDirectory:{
-        key, pages:Math.min(catalogPages, BROWSE_RESTORE_PAGES), scroll:initialView.scrollTop || 0,
-        ...(link && validSlug(slug) ? {slug, link, offset} : {}),
+        key, pages:Math.min(pages, BROWSE_RESTORE_PAGES), scroll:initialView.scrollTop || 0,
+        ...(link && validCatalogReturn(slug) ? {slug, link, offset} : {}),
       }}, '');
     } catch { /* The browser may disable history changes while leaving. */ }
   }
@@ -2327,10 +2485,12 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         !Number.isInteger(saved.pages) || saved.pages < 1 || saved.pages > BROWSE_RESTORE_PAGES ||
         !Number.isFinite(saved.scroll) || saved.scroll < 0) return;
     while (catalogPages < saved.pages && cursor) {
-      if (await loadCatalog(true) !== catalogRequest || saved.key !== catalogPositionKey()) return;
+      const loadPage = teamsView ? loadTeams : loadCatalog;
+      if (await loadPage(true) !== catalogRequest || saved.key !== catalogPositionKey()) return;
     }
-    const target = validSlug(saved.slug) && CATALOG_RETURN_LINKS.includes(saved.link)
-      ? document.querySelector(`#discover-list [data-catalog-slug="${saved.slug}"] .${saved.link}`) : null;
+    const attribute = teamsView ? 'data-team-directory-ref' : 'data-catalog-slug';
+    const target = validCatalogReturn(saved.slug) && returnLinks.includes(saved.link)
+      ? document.querySelector(`#discover-list [${attribute}="${saved.slug}"] .${saved.link}`) : null;
     target?.focus({preventScroll: true});
     initialView.scrollTop = saved.scroll;
     if (target && Number.isFinite(saved.offset)) {
@@ -2584,23 +2744,25 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       if (manage.open) void loadManage();
       else if (location?.hash === '#catalog-manage') manage.open = true;
     }
-    if (teamsView) await loadTeams();
+    if (teamsView) await restoreCatalogPosition(loadTeams());
     await Promise.all([directoryReturn, sharedPreview]);
   }
 
   workspaceSelect.addEventListener('change', loadManage);
   const manage = document.getElementById('catalog-manage');
   manage.addEventListener('toggle', () => { if (manage.open) void loadManage(); });
-  if (agentsView) {
+  if (catalogView) {
     document.getElementById('discover-list').addEventListener('click', event => {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       const link = event.target.closest?.('a');
-      if (!link || !CATALOG_RETURN_LINKS.some(name => link.classList.contains(name))) return;
+      if (!link || !returnLinks.some(name => link.classList.contains(name))) return;
       catalogDeparture = link;
       rememberCatalogPosition(link);
     });
     window?.addEventListener?.('pagehide', () => rememberCatalogPosition(catalogDeparture || document.activeElement));
     window?.addEventListener?.('pageshow', () => { catalogDeparture = null; });
+  }
+  if (agentsView) {
     for (const chip of document.querySelectorAll('[data-catalog-category]')) {
       chip.addEventListener('click', () => setCategory(chip.dataset.catalogCategory));
     }
@@ -2648,9 +2810,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (agentsView) return loadCatalog();
     if (teamsView) return loadTeams();
   });
-  document.getElementById('teams-retry').addEventListener('click', () => loadTeams(activeTeamQuery));
+  document.getElementById('teams-retry').addEventListener('click', () => cursor ? loadMoreTeams() : loadTeams());
   document.getElementById('catalog-more').addEventListener('click', () => {
     if (agentsView) return loadCatalog(true);
+    if (teamsView) return loadMoreTeams();
   });
   for (const kind of FEED_KINDS) {
     const button = document.getElementById('feed-kind-' + (kind || 'all'));

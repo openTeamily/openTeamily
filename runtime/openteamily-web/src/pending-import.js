@@ -3,6 +3,7 @@
 import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
+import { requireBundleTarget } from '../featurekit/bundle.js'
 
 export async function importPending({ host, db, migrate }) {
   db.exec('CREATE TABLE IF NOT EXISTS ot_boot_imports (digest TEXT PRIMARY KEY, imported INTEGER NOT NULL)')
@@ -16,9 +17,7 @@ export async function importPending({ host, db, migrate }) {
     try {
       const text = readFileSync(path, 'utf8'), bundle = JSON.parse(text)
       if (bundle.feature !== host.name) continue
-      // New manager deliveries are target-bound. Existing v1 files without a
-      // target remain readable only via this private-volume import surface.
-      if (bundle.instance_id && bundle.instance_id !== (host.identity.routingInstanceId || host.identity.instanceId)) throw new Error('import target mismatch')
+      requireBundleTarget(bundle, host.identity?.routingInstanceId ?? host.identity?.instanceId)
       const digest = createHash('sha256').update(text).digest('hex')
       if (!db.prepare('SELECT 1 FROM ot_boot_imports WHERE digest=?').get(digest)) {
         await migrate(bundle)

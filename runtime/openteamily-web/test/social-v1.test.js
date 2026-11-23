@@ -158,6 +158,7 @@ test('directory and messenger v1 keep workspace ids and unix-second timestamps',
   const { host } = setup()
   const directory = await teams(host).endpoints.v1({ method: 'GET', path: '/v1/team-directory', query: 'q=studio' })
   assert.equal(directory.status, 200)
+  assert.equal(directory.body.items[0].team_id, 'ott_1')
   assert.equal(directory.body.items[0].workspace_id, WS)
   assert.equal(directory.body.items[1].workspace_id, 'ott_2')
   const join = path => teams(host).endpoints.v1({method: 'POST', path: '/v1/team-directory/' + path + '/join'})

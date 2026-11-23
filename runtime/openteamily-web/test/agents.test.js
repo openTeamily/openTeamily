@@ -7,15 +7,20 @@ import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { createAgents, composePrompt, CATEGORIES } from '../features/agents/index.js'
 import { loadFeatures } from '../src/features.js'
+import { nativeAgentFixture } from './native-agent-fixture.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const W = 'a'.repeat(32)
 
-function fixture(chatTurn) {
-  const turns = []
-  const host = { runtime: async () => ({ rt: {}, ctx: {}, chatTurn: chatTurn ?? (async (key, text, rid) => { turns.push({ key, text, rid }); return { text: `DS-Bot reply ${turns.length}`, sessionId: 's-' + key, turnId: 't' } }) }) }
+function fixture(options) {
+  const runtime = nativeAgentFixture({reply: (_turn, count) => `DS-Bot reply ${count}`, ...options})
+  const host = { runtime: async () => runtime.services, call: async (name) => {
+    if (name === 'skills/materialForScope') return {items: []}
+    if (name === 'agents/personal-binding') return {workspace_id: W}
+    throw new Error('Unexpected endpoint: ' + name)
+  } }
   const created = createAgents({ db: new DatabaseSync(join(mkdtempSync(join(tmpdir(), 'ot-agents-')), 'a.sqlite3')), host })
-  return { e: created.endpoints, turns, migrate: created.migrate }
+  return { e: created.endpoints, migrate: created.migrate, ...runtime }
 }
 
 test('categories stay in step with the Python source', () => {
@@ -64,7 +69,9 @@ test('concurrent settings changes share one native roster revision', async () =>
     },
     save: async () => {},
   }
-  const host = {runtime: async () => ({rt, mainBot: async () => 'main'})}
+  const host = {runtime: async () => ({rt, mainBot: async () => 'main'}), call: async name => {
+    if (name === 'agents/personal-binding') return {workspace_id: W}
+  }}
   const {endpoints:e} = createAgents({db:new DatabaseSync(':memory:'), host})
   const created = await e.create({workspace_id:W, name:'原始名称', summary:'原始简介',
     instructions:'原始说明', idempotency_key:'settings-race-001'})
@@ -105,14 +112,17 @@ test('concurrent settings changes share one native roster revision', async () =>
 })
 
 test('messages to an agent are native DS-Bot turns on that conversation\'s own session', async () => {
-  const { e, turns } = fixture()
+  const { e, turns, bots } = fixture()
   const { agent } = await e.create({ workspace_id: W, name: '助手', summary: '', instructions: 'Keep answers to one sentence.', idempotency_key: 'a'.repeat(16) })
   const { conversation } = await e['conversation-create']({ workspace_id: W, id: agent.id })
   const sent = await e.send({ workspace_id: W, id: agent.id, conversation_id: conversation.id, text: '你好' })
   assert.equal(sent.reply.text, 'DS-Bot reply 1')
   assert.equal(sent.reply.meta.engine, 'ds-bot')
   assert.equal(turns[0].key, `agent:${agent.id}:${conversation.id}`)
-  assert.match(turns[0].text, /^You are 助手\.\nKeep answers to one sentence\.\n\nUser: 你好$/)
+  assert.equal(turns[0].bot, agent.native_bot_id)
+  assert.equal(turns[0].sessionId, conversation.native_session_id)
+  assert.equal(turns[0].text, '你好')
+  assert.equal(bots[agent.native_bot_id].instructions, 'Keep answers to one sentence.')
   assert.equal(turns[0].rid, `ot-agent:${sent.message.id}`)
   assert.equal((await e.messages({ workspace_id: W, id: agent.id, conversation_id: conversation.id })).items.length, 2)
   await e.archive({ workspace_id: W, id: agent.id })
@@ -120,13 +130,13 @@ test('messages to an agent are native DS-Bot turns on that conversation\'s own s
 })
 
 test('without the DS-Bot chat service a send fails closed and is recorded', async () => {
-  const host = { runtime: async () => ({ rt: {}, ctx: {} }) }
-  const { endpoints: e } = createAgents({ db: new DatabaseSync(':memory:'), host })
+  const { e, turns } = fixture({ available: false })
   const { agent } = await e.create({ workspace_id: W, name: 'A', idempotency_key: 'b'.repeat(16) })
   const { conversation } = await e['conversation-create']({ workspace_id: W, id: agent.id })
   await assert.rejects(e.send({ workspace_id: W, id: agent.id, conversation_id: conversation.id, text: 'x' }), (err) => err.code === 'agents/runtime-unavailable')
   const items = (await e.messages({ workspace_id: W, id: agent.id, conversation_id: conversation.id })).items
   assert.deepEqual(items.map((m) => m.status), ['sent', 'failed'])
+  assert.equal(turns.length, 0)
 })
 
 test('legacy import is idempotent; persona header order matches the server', async () => {
@@ -191,11 +201,14 @@ test('official agents bundle imports once including history', async () => {
   const bundle = { format: 'openteamily-dsbot-import', version: 1, feature: 'agents', created: 1,
     tables: { workspace_agents: agents.text, agent_conversations: convos.text, agent_messages: messages.text },
     manifest: { workspace_agents: agents.manifest, agent_conversations: convos.manifest, agent_messages: messages.manifest } }
-  const { e, migrate } = fixture()
+  const { e, migrate, sessions, turns } = fixture()
   const first = await migrate(bundle)
   assert.equal(first.imported, 1)
   assert.equal((await e.list({ workspace_id: W })).items[0].name, '旧助手')
   assert.equal((await e.messages({ workspace_id: W, id: aid, conversation_id: cid })).items[0].text, '你好')
+  assert.deepEqual([...sessions.values()].flatMap(({events}) => events.map(event => [event.type, event.data.source?.openteamilyMessageId])),
+    [['user/message', mid]])
+  assert.equal(turns.length, 0, 'history import never starts a model turn')
   assert.equal((await migrate(bundle)).imported, 0)
 })
 

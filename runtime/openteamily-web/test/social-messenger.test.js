@@ -562,6 +562,35 @@ test('member history forwards older, around and search cursors to Bot Social', a
   }
 })
 
+test('opening a saved reading position returns one workspace-scoped history window with pins', async () => {
+  const dir = fixture()
+  const personal = 'a'.repeat(32)
+  const team = 'b'.repeat(32)
+  const upstream = '/v1/ot/conversations/otc_1/messages'
+  const f = fake({
+    [`GET /v1/ot/teams/by-workspace/${team}`]: () => ({id:'ott_1'}),
+    'GET /v1/ot/conversations/otc_1': () => ({id:'otc_1',kind:'group',team_id:'ott_1'}),
+    [`GET ${upstream}`]: () => ({messages:[{id:'otm_old',seq:9,body:'Previous reading position'}],
+      pinned_messages:[{id:'otm_pin'}],next_before:9,has_newer:true}),
+  })
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:join(dir,'bot','flybot-social.json'),fetch:f.fetch}))
+  const feature = messenger({dataDir:dir, async call() {return {workspace_id:personal}}}).endpoints
+  const path = `/v1/workspaces/${team}/social/conversations/otc_1`
+  const page = await feature.v1({method:'GET',path:path+'?around=otm_old'})
+  assert.equal(page.status,200)
+  assert.equal(page.body.items[0].id,'otm_old')
+  assert.deepEqual(page.body.pinned_messages,[{id:'otm_pin'}])
+  assert.equal(page.body.cursor,9)
+  assert.equal(page.body.has_newer,true)
+  const requests = f.calls.filter(call => call.path.startsWith(upstream))
+  assert.equal(requests.length,1)
+  assert.deepEqual(Object.fromEntries(new URL(requests[0].path,SERVER).searchParams),
+    {limit:'50',pins:'1',around:'otm_old',workspace_id:team})
+  assert.equal((await feature.v1({method:'GET',path:path+'?around=otm_old&start=unread'})).status,400)
+  assert.equal((await feature.v1({method:'GET',path:path+'?around=otm_old&around=other'})).status,400)
+  assert.ok(f.calls.every(call => call.method === 'GET'))
+})
+
 test('attachment search uses the owner binding and existing chat download metadata', async () => {
   const dir = fixture()
   const workspace = 'a'.repeat(32)

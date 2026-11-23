@@ -1,5 +1,3 @@
-import {readChatDrafts, writeChatDrafts} from '../home/runtime-readiness.mjs';
-
 const ID = /^[a-f0-9]{32}$/;
 const ATTEMPT_KEY = 'openteamily.studio-discussion-attempt';
 const QUESTION_LIMIT = 1000;
@@ -96,10 +94,11 @@ export function mountStudioDiscussion(document, {request, source, openChat}) {
     status.textContent = '正在准备个人智能体草稿…';
     try {
       const signal = AbortSignal.any([operation.controller.signal, AbortSignal.timeout(15000)]);
-      const [version, session, binding] = await Promise.all([
+      const [version, session, binding, {readChatDrafts, writeChatDrafts}] = await Promise.all([
         request('GET', `/v1/workspaces/${workspace}/studio/documents/${saved.id}`, undefined, {signal}),
         request('GET', '/v1/auth/session', undefined, {signal}),
         request('GET', '/v1/workspaces?scope=personal&include=chat&directory=0', undefined, {signal}),
+        import('../home/runtime-readiness.mjs'),
       ]);
       if (target !== operation) return;
       const latest = version.body.document;

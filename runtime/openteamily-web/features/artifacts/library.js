@@ -234,6 +234,7 @@ export function uniqueTitle(store, workspaceId, title, suffix) {
 export function versionView(row, includeBody = true, user = (id) => id) {
   let kind = row.kind
   const data = { revision: row.revision, title: row.title, kind, created: row.created, created_by: row.created_by_username ?? user(row.created_by) }
+  if (Number.isSafeInteger(row.restored_from)) data.restored_from = row.restored_from
   if (kind === 'media') {
     data.media = { mime: row.mime, bytes: row.byte_count, filename: row.filename }
   } else {
@@ -630,16 +631,28 @@ function guardVersions(store, artifactId) {
   }
 }
 
-export function restoreArtifact(ctx, row, revision, to) {
+export function restoreArtifact(ctx, target, revision, to, key) {
   const { store, owner } = ctx
   if (!Number.isInteger(revision) || !Number.isInteger(to) || to < 1 || to > 2 ** 31 || revision < 0 || revision > 2 ** 31) {
     refuse(400, 'invalid', 'Provide the current revision and a version to restore')
   }
-  if (revision !== row.revision) refuse(409, 'conflict', 'Document changed elsewhere; reload and retry', view(row))
-  const snapshot = store.get('SELECT * FROM artifact_versions WHERE artifact_id=? AND revision=?', row.id, to)
-  if (!snapshot) refuse(404, 'not_found', 'Version not found')
-  if (sameAsVersion(row, snapshot)) return { status: 200, body: { artifact: view(row) } }
+  if (key != null && !KEY.test(key)) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+  const requestKey = key == null ? null : digest('artifact-restore:' + key)
+  const receipt = (resultRevision) => ({ base_revision: revision, source_revision: to, result_revision: resultRevision })
   return store.transaction(() => {
+    const row = load(store, target.workspace_id, target.id)
+    if (!row) refuse(404, 'not_found', 'Artifact not found')
+    const prior = requestKey && store.get('SELECT revision,source_revision FROM artifact_restores WHERE artifact_id=? AND request_key=?', row.id, requestKey)
+    if (prior) {
+      if (prior.revision !== revision + 1 || prior.source_revision !== to) {
+        refuse(409, 'idempotency_conflict', 'This request already restored another version')
+      }
+      return { status: 200, body: { artifact: view(row), restore: receipt(prior.revision) } }
+    }
+    if (revision !== row.revision) refuse(409, 'conflict', 'Document changed elsewhere; reload and retry', view(row))
+    const snapshot = store.get('SELECT * FROM artifact_versions WHERE artifact_id=? AND revision=?', row.id, to)
+    if (!snapshot) refuse(404, 'not_found', 'Version not found')
+    if (sameAsVersion(row, snapshot)) return { status: 200, body: { artifact: view(row), restore: receipt(revision) } }
     guardVersions(store, row.id)
     const title = snapshot.title
     const hash = titleHash(title)
@@ -676,7 +689,10 @@ export function restoreArtifact(ctx, row, revision, to) {
     } else {
       clear('artifact_media', 'artifact_boards', 'artifact_slides', 'artifact_dashboards')
     }
-    return saved(store, row.workspace_id, row.id, 200)
+    const result = saved(store, row.workspace_id, row.id, 200)
+    store.run('INSERT INTO artifact_restores VALUES(?,?,?,?)', row.id, row.revision + 1, to, requestKey)
+    result.body.restore = receipt(row.revision + 1)
+    return result
   })
 }
 

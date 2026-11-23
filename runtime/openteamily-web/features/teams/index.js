@@ -11,7 +11,7 @@ export default function teams(host) {
       activeWorkspaces: async (_payload,call) => {
         if (!call?.internal) throw Object.assign(new Error('Internal endpoint'),{code:'teams/not-found'})
         const data = await bs().get('/v1/ot/workspaces',{signal:AbortSignal.timeout(2000)})
-        return (data.workspaces ?? []).map(({workspace_id,name}) => ({id:workspace_id,name}))
+        return (data.workspaces ?? []).map(({workspace_id,name,role}) => ({id:workspace_id,name,role}))
       },
       list: async () => bs().get('/v1/ot/teams'),
       create: async (p) => bs().post('/v1/ot/teams', { name: p?.name, slug: p?.slug, summary: p?.summary }),
@@ -19,7 +19,7 @@ export default function teams(host) {
       update: async (p) => bs().patch(`/v1/ot/teams/${seg(p?.team_id, 'team_id')}`, { name: p?.name, summary: p?.summary }),
       remove: async (p) => bs().del(`/v1/ot/teams/${seg(p?.team_id, 'team_id')}`),
       setListing: async (p) => bs().put(`/v1/ot/teams/${seg(p?.team_id, 'team_id')}/listing`, { listed: p?.listed, summary: p?.summary }),
-      directory: async (p) => bs().get('/v1/ot/directory' + qs({ q: p?.q, limit: p?.limit })),
+      directory: async (p) => bs().get('/v1/ot/directory' + qs({ q: p?.q, limit: p?.limit, cursor: p?.cursor })),
       joinListed: async (p) => bs().post(`/v1/ot/directory/${seg(p?.team_id, 'team_id')}/join`),
     },
   }

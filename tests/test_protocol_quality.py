@@ -69,7 +69,7 @@ class ProtocolQualityTests(unittest.TestCase):
             self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 1)
         self.assertEqual(before, after)
         self.assertEqual(self.client.call('GET', '/v1/auth/session')['status'], 200)
-        self.assertEqual(self.client.call('GET', '/v1/workspaces')['body']['items'][0]['id'], self.wid)
+        self.assertEqual(self.client.call('GET', f'/v1/workspaces/{self.wid}')['body']['workspace']['id'], self.wid)
 
     def test_separate_python_processes_share_one_durable_idempotent_instance(self):
         script = """

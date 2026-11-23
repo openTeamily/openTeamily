@@ -118,6 +118,14 @@ export function createAgents({ db, host }) {
   const all = (sql, ...a) => db.prepare(sql).all(...a)
   const run = (sql, ...a) => db.prepare(sql).run(...a)
   const ws = (p) => { if (typeof p?.workspace_id !== 'string' || !ID.test(p.workspace_id)) fail('invalid', 'workspace_id required', 400); return p.workspace_id }
+  async function requireArchiveManager(workspaceId) {
+    const binding = await host.call('agents/personal-binding', {})
+    if (binding?.workspace_id === workspaceId) return
+    const workspaces = await host.call('teams/activeWorkspaces', {}).catch(() => null)
+    if (!Array.isArray(workspaces)) fail('unavailable', 'Unable to verify workspace management access', 503)
+    const role = workspaces.find(workspace => workspace.id === workspaceId)?.role
+    if (role !== 'owner' && role !== 'admin') fail('forbidden', 'Only workspace owners and admins can manage archived agents', 403)
+  }
   const load = (workspaceId, id) => {
     const row = typeof id === 'string' && ID.test(id) ? one('SELECT * FROM agents WHERE id=? AND workspace_id=?', id, workspaceId) : undefined
     if (!row) fail('not-found', 'Agent not found', 404)
@@ -708,6 +716,7 @@ export function createAgents({ db, host }) {
       const workspaceId = ws(p)
       const needle = String(p.q ?? '').trim().toLowerCase()
       const archived = p.archived === true ? 1 : 0
+      if (archived) await requireArchiveManager(workspaceId)
       let rows = all('SELECT * FROM agents WHERE workspace_id=? AND archived=? ORDER BY id', workspaceId, archived)
       if (p.category) rows = rows.filter((r) => r.category === p.category)
       if (needle) rows = rows.filter((r) => r.name.toLowerCase().includes(needle) || r.summary.toLowerCase().includes(needle))
@@ -806,7 +815,9 @@ export function createAgents({ db, host }) {
       return { agent: view({...load(row.workspace_id, row.id), ...mapping}) }
     }),
     archive: p => native.write(async ({ensure, update}) => {
-      const row = await ensure(load(ws(p), p.id))
+      const workspaceId = ws(p)
+      await requireArchiveManager(workspaceId)
+      const row = await ensure(load(workspaceId, p.id))
       const archived = p.archived === false ? 0 : 1
       if (p.revision !== undefined && p.revision !== row.revision) fail('revision-conflict', 'Agent changed elsewhere; reload and retry', 409)
       if (row.native_deleted) fail('native-deleted', 'The native agent was deleted and cannot be restored', 409)
@@ -840,6 +851,19 @@ export function createAgents({ db, host }) {
       return { items: [...new Set(ids)].flatMap(id => list.all(id, workspaceId)).map(row => ({
         ...row, archived: false, title_edited: !!row.title_edited,
       })) }
+    },
+    workspaceExportRows(p, call) {
+      if (!call?.internal) fail('not-found', 'Internal endpoint', 404)
+      const workspaceId = ws(p)
+      const {limit} = p
+      if (!Number.isInteger(limit) || limit < 1 || limit > 1000) fail('invalid', 'Invalid export limit', 400)
+      const items = []
+      for (const agent of workspaceAgents(workspaceId)) {
+        if (agent.archived) continue
+        if (items.length === limit) return {items, truncated:true}
+        items.push({id:agent.id,name:agent.name,updated:agent.updated})
+      }
+      return {items,truncated:false}
     },
     workspaceOverview(p, call) {
       if (!call?.internal) fail('not-found', 'Internal endpoint', 404)
@@ -1435,6 +1459,7 @@ export default async function agents(host) {
   wrapped.templateRoles = endpoints.templateRoles
   wrapped.createTemplateRoles = endpoints.createTemplateRoles
   wrapped.workspaceOverview = endpoints.workspaceOverview
+  wrapped.workspaceExportRows = endpoints.workspaceExportRows
   wrapped.groupTextTurn = async (payload, call) => {
     if (!call?.internal || typeof payload?.onProgress !== 'function') fail('not-found', 'Internal endpoint', 404)
     return endpoints.groupTextTurn(payload)

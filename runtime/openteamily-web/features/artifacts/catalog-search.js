@@ -1,5 +1,5 @@
 import { casefold, publicKind, unescapeHtml } from './model.js'
-import { decodeBoard, decodeDashboard, decodeSlides } from './structured.js'
+import { decodeBoard, decodeDashboard, decodeSlides, decodeStructured } from './structured.js'
 import { decodeWorkbook, workbookText } from './workbook.js'
 
 const EXCERPT_LENGTH = 160
@@ -147,7 +147,9 @@ export function artifactContextExcerpt(row, kind, saved) {
 
 export function catalogContentMatch(row, needle) {
   if (!row) return null
-  for (const text of artifactText(row)) {
+  const kind = publicKind(row)
+  const [legacyKind, structure] = kind === 'document' ? decodeStructured(row.body) : [null, null]
+  for (const text of artifactText(row, legacyKind ?? kind, structure)) {
     const match = catalogMatch('body', text, needle)
     if (match) return match
   }

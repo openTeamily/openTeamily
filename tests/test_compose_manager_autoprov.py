@@ -243,7 +243,7 @@ class AutoProvisionPollTests(unittest.TestCase):
         by_id = {r['instance_id']: r for r in result['results']}
         self.assertEqual(by_id[auto]['status'], 'skipped')
 
-    def test_cold_signup_starts_ahead_of_restart_and_busy_inventory(self):
+    def test_poll_prioritizes_cold_signup_in_results_and_skips_stopped_instance(self):
         client = self.start_http()
         _, cold = self.auto_instance(static=True)
         _, stopped = self.auto_instance('dana', peer='127.0.0.10', static=True)
@@ -270,7 +270,15 @@ class AutoProvisionPollTests(unittest.TestCase):
               patch.object(dsbot_route, 'publish', side_effect=publish)):
             code, result = self.poll()
         self.assertEqual(code, 0, result)
-        self.assertEqual(events, [('claim', cold), ('route', cold), ('claim', self.iid)])
+        # The restart runs in a separate worker. Only operations for the same
+        # instance have a guaranteed order of execution.
+        self.assertCountEqual(events, [('claim', cold), ('route', cold), ('claim', self.iid)])
+        self.assertLess(events.index(('claim', cold)), events.index(('route', cold)))
+        self.assertEqual([(row['instance_id'], row['status']) for row in result['results']], [
+            (cold, 'observed'), (cold, 'published'),
+            (self.iid, 'no_claim'), (self.iid, 'not_running'),
+            (stopped, 'no_claim'), (stopped, 'not_running'),
+        ])
 
     def test_recent_route_skips_repeat_claim_and_docker_publish_until_due(self):
         client = self.start_http()

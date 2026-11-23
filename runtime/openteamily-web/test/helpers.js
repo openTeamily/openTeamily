@@ -8,6 +8,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { apply } from '../index.js'
 import { API_PATH } from '../src/dispatch.js'
+import { loadIdentity } from '../src/identity.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 export const REPO_ROOT = resolve(HERE, '..', '..', '..')
@@ -58,8 +59,11 @@ export function legacyBundles(features) {
 
 export function deliverBundle(vol, name, text) {
   const dir = join(vol.data, 'openteamily', 'import')
+  const {routingInstanceId, instanceId} = loadIdentity({env:process.env, dataDir:vol.data})
+  const bundle = JSON.parse(text)
+  bundle.instance_id ??= routingInstanceId ?? instanceId
   mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, name), text)
+  writeFileSync(join(dir, name), JSON.stringify(bundle))
 }
 
 export const WS = 'a'.repeat(32)

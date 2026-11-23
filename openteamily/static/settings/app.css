@@ -49,20 +49,27 @@
 
 #appearance .choice,
 #appearance-schedule-card .choice,
-#message-display .choice,
-#appearance .choice span,
-#appearance-schedule-card .choice span,
-#message-display .choice span {
-  align-items: flex-start;
-}
-
-#appearance .choice,
-#appearance-schedule-card .choice,
 #message-display .choice {
-  display: flex;
-  gap: 0.55rem;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  column-gap: 0.55rem;
   padding: 0.7rem 0;
   border-bottom: 1px solid var(--ot-line);
+}
+
+#appearance .choice > input,
+#appearance-schedule-card .choice > input,
+#message-display .choice > input {
+  width: auto;
+  margin: 0.2em 0 0;
+}
+
+#appearance .choice > span,
+#appearance-schedule-card .choice > span,
+#message-display .choice > span {
+  min-width: 0;
+  display: block;
 }
 
 #appearance .choice:last-of-type,
@@ -92,6 +99,10 @@
   margin: 0.65rem 0 1rem;
   color: var(--ot-text);
   font-size: 0.95rem;
+}
+
+#appearance-schedule-card > #appearance-status {
+  margin: 0.75rem 0 0.35rem;
 }
 
 
@@ -246,15 +257,64 @@ a.settings-row:focus-visible {
   border-bottom: 0;
 }
 
-.channel-row button {
-  margin: 0;
+.channel-row .channel-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding-inline: .35rem;
+  color: var(--ot-accent);
   white-space: nowrap;
+}
+
+.channel-row .channel-link:focus-visible {
+  outline: 2px solid var(--ot-accent);
+  outline-offset: 2px;
+  border-radius: .25rem;
 }
 
 .settings-empty {
   padding: 0.85rem 0.9rem;
   color: var(--ot-muted);
 }
+
+.connectors-overview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .35rem .75rem;
+  margin-bottom: .75rem;
+  padding: 0 .125rem;
+  color: var(--ot-muted);
+  font-size: .8125rem;
+}
+.connectors-overview p { margin: 0; }
+.connectors-overview [role="status"]::before { content: " · "; }
+.connectors-overview a { color: var(--ot-accent-hover); font-weight: 600; }
+
+.connectors-filters:not([hidden]) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem;
+  margin-bottom: .75rem;
+}
+#settings-panel .connectors-filters button {
+  min-height: 2.75rem;
+  margin: 0;
+  padding: .25rem .7rem;
+  border-radius: 999px;
+  color: var(--ot-ink);
+  font-size: .75rem;
+  white-space: nowrap;
+}
+.connectors-filters button span { margin-left: .15rem; color: var(--ot-muted); }
+#settings-panel .connectors-filters button[aria-pressed="true"] {
+  border-color: var(--ot-accent);
+  background: var(--ot-accent-soft);
+  color: var(--ot-accent-hover);
+  font-weight: 600;
+}
+.connectors-filters button[aria-pressed="true"] span { color: inherit; }
 
 .connectors-toolbar {
   display: flex;

@@ -8,26 +8,27 @@ import { fileURLToPath } from 'node:url'
 import { createAgents } from '../features/agents/index.js'
 import { createAgentApi } from '../features/agent-api/index.js'
 import { loadFeatures } from '../src/features.js'
+import { nativeAgentFixture } from './native-agent-fixture.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const W = 'a'.repeat(32)
 const INSTANCE = 'f'.repeat(32)
 
-async function fixture({ chatTurn } = {}) {
-  const turns = []
-  const runtime = async () => ({ rt: {}, ctx: {}, chatTurn: chatTurn ?? (async (key, text, rid) => { turns.push({ key, text, rid }); return { text: 'DS-Bot answer', sessionId: 's', turnId: 't' } }) })
+async function fixture({ reply = () => 'DS-Bot answer' } = {}) {
+  const runtime = nativeAgentFixture({reply})
   const table = {}
-  const host = { identity: { instanceId: INSTANCE }, runtime, call: async (name, payload) => table[name](payload) }
+  const host = { identity: { instanceId: INSTANCE }, runtime: async () => runtime.services,
+    call: async (name, payload) => name === 'skills/materialForScope' ? {items: []} : table[name](payload) }
   const agents = createAgents({ db: new DatabaseSync(':memory:'), host }).endpoints
   for (const [k, v] of Object.entries(agents)) table[`agents/${k}`] = v
   const clock = { now: 1_800_000_000 }
   const api = createAgentApi({ db: new DatabaseSync(':memory:'), host, clock: () => clock.now })
   const { agent } = await agents.create({ workspace_id: W, name: '客服', instructions: 'Be brief.', idempotency_key: 'a'.repeat(16) })
-  return { api, e: api.endpoints, agent, agents, turns, clock }
+  return { api, e: api.endpoints, agent, agents, clock, ...runtime }
 }
 
 test('a key is shown once, stored as a digest, and invokes its agent as a DS-Bot turn', async () => {
-  const { e, api, agent, turns } = await fixture()
+  const { e, api, agent, turns, bots } = await fixture()
   const made = await e['key-create']({ workspace_id: W, agent_id: agent.id, name: 'ci', rate_per_minute: 2 })
   assert.equal(made.status, 201)
   assert.match(made.token, new RegExp(`^ota_${INSTANCE}_[A-Za-z0-9_-]{43}$`))
@@ -40,7 +41,9 @@ test('a key is shown once, stored as a digest, and invokes its agent as a DS-Bot
   assert.equal(done.invocation.reply, 'DS-Bot answer')
   assert.equal(done.invocation.engine, 'ds-bot')
   assert.match(turns[0].key, new RegExp(`^agent:${agent.id}:api:`))
-  assert.match(turns[0].text, /^You are 客服\.\nBe brief\.\n\nUser: 你好$/)
+  assert.equal(turns[0].bot, agent.native_bot_id)
+  assert.equal(turns[0].text, '你好')
+  assert.equal(bots[agent.native_bot_id].instructions, 'Be brief.')
   assert.equal((await e.invoke({ token: made.token, agent_id: agent.id, prompt: '你好', idempotency_key: 'i'.repeat(16) })).status, 200)
   await assert.rejects(e.invoke({ token: made.token, agent_id: agent.id, prompt: '别的', idempotency_key: 'i'.repeat(16) }), (err) => err.status === 409)
 })
@@ -61,7 +64,7 @@ test('rate limit, wrong agent, revoked and forged keys are refused', async () =>
 })
 
 test('a DS-Bot failure is recorded on the invocation', async () => {
-  const { e, api, agent } = await fixture({ chatTurn: async () => { throw new Error('DS-Bot turn timed out') } })
+  const { e, api, agent } = await fixture({ reply: async () => { throw new Error('DS-Bot turn timed out') } })
   const { token } = await e['key-create']({ workspace_id: W, agent_id: agent.id, name: 'k' })
   const inv = await e.invoke({ token, agent_id: agent.id, prompt: 'x', idempotency_key: 'x'.repeat(16) })
   await Promise.all(api.inflight.values())

@@ -567,6 +567,17 @@ function teamsRoutes(host) {
               }
               return [200, result]
             }
+            if (include === 'personal-agent') {
+              Object.assign(result, platformViewer(call))
+              const workspace = q.getAll('workspace')
+              if (personal && (personal.owner_id || result.viewer_username) && q.getAll('include').length === 1
+                  && (!workspace.length || (workspace.length === 1 && workspace[0] === personal.id))) {
+                result.personal_agent_id = localBinding.agent_id
+                const settings = await host.call('settings/look', {}).catch(() => null)
+                result.personal_look = settings?.look ?? null
+              }
+              return [200, result]
+            }
             if (include === 'artifacts' || include === 'chat') {
               Object.assign(result, platformViewer(call))
               if (personal && (personal.owner_id || result.viewer_username)) {
@@ -671,15 +682,17 @@ function teamsRoutes(host) {
         return wrap(async () => {
           const bs = client(host)
           const q = parseQuery(query)
-          const data = await bs.get('/v1/ot/directory' + qs({ q: q.get('q'), limit: q.get('limit') }))
+          const data = await bs.get('/v1/ot/directory' + qs({ q: q.get('q'), limit: q.get('limit'), cursor: q.get('cursor') }))
           return [200, {
             items: (data.teams || []).map((t) => ({
               name: t.name,
               summary: t.summary || '',
               member_count: t.member_count ?? 0,
+              team_id: t.id,
               workspace_id: t.workspace_id || t.id,
               membership: t.membership || null,
             })),
+            cursor: data.cursor || null,
           }]
         })
       },
@@ -849,17 +862,29 @@ function messengerRoutes(host, wakeReplies) {
           const scope = await messengerScope(host, bs, match[1], match[2])
           const me = await meOf(bs, env)
           const conv = scope.conversation || await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}`)
-          const unread = parseQuery(query).get('start') === 'unread' && !conv.public_agent
+          const q = parseQuery(query)
+          const around = q.get('around') ?? undefined
+          const startUnread = q.get('start') === 'unread'
+          const unread = startUnread && !conv.public_agent
+          if (around !== undefined && (startUnread || q.getAll('around').length !== 1)) {
+            throw new Fault(400, 'invalid', 'Choose one message cursor')
+          }
           const page = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages` + qs({
-            limit: unread ? 50 : 100, pins: 1, unread: unread ? 1 : undefined,
-            workspace_id: !scope.personal && (unread || conv.kind === 'dm') ? match[1] : undefined,
-          }))
+            limit: unread || around !== undefined ? 50 : 100, pins: 1, unread: unread ? 1 : undefined, around,
+            workspace_id: !scope.personal && (unread || around !== undefined || conv.kind === 'dm') ? match[1] : undefined,
+          })).catch(error => {
+            if (around !== undefined && error?.code === 'social/message_not_found') {
+              throw new Fault(404, 'history_anchor_missing', '找不到原来的阅读位置。')
+            }
+            throw error
+          })
           return [200, {
             conversation: conversationItem(conv, me, env, match[1]),
             items: (page.messages || []).map((m) => messageItem({ ...m, conversation_id: conv.id }, me, env, match[1])),
             agent_replies: [],
             pinned_messages: page.pinned_messages || [],
             cursor: page.next_before ?? null,
+            ...(around !== undefined ? {has_newer:page.has_newer === true} : {}),
             ...(unread ? {unread_window: {first:page.first_unread, read_seq:page.read_seq, last_seq:page.last_seq,
               has_newer:page.has_newer === true}} : {}),
           }]

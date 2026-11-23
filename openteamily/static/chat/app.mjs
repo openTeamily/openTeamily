@@ -9,6 +9,7 @@ import { workNotificationSummary, workNotificationTarget } from '../shell/work-n
 import { mountPublicDraft } from './public-draft.mjs';
 import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinuation, publicAgentOpening } from '../shell/public-agent-link.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
+import {mountWorkspaceInvite} from './workspace-invite.mjs';
 import { studioDocumentHref, studioDocumentHrefInMessage } from '../shell/studio-link.mjs';
 import { chatStartFromHash, startChatReads, takeChatReads } from './startup.mjs';
 import { confirmSignupSession, personalDraftScope, readPendingPrivateText, savePendingPrivateText,
@@ -16,6 +17,8 @@ import { confirmSignupSession, personalDraftScope, readPendingPrivateText, saveP
 import { mountActionMenus } from '../shell/action-menu.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 const loadGroupInviteModule = deferModule('./group-invite-link.mjs');
+const loadRichContent = deferModule('./rich-content.mjs');
+let richContent;
 import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, memberChoices, validMessage,
   agentDirectoryHref, chatPathId, socialMessageHref, socialMessageFromHash, directAgentAccessFromHash } from '../shell/chat-utils.mjs';
 import { createLookAvatar } from '../look/app.mjs';
@@ -341,10 +344,90 @@ export function meetingCallHrefInMessage(text, origin) {
   return '';
 }
 
-function renderMessageBody(doc, node, text, prefs) {
+function mayContainChatMarkdown(text, assistantReply) {
+  if (/^[ \t]*(?:```|~~~)/m.test(text) ||
+      (text.includes('|') && text.includes('\n') && /^[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\||$)/m.test(text))) return true;
+  return assistantReply && (/[\\`*_~]/.test(text) || /\]\(|\n[ \t]*\n/.test(text) ||
+    /^(?:#{1,6}\s|[ \t]*(?:>|[-+]\s|\d+[.)]\s|-{3,}$))/m.test(text));
+}
+
+function appendMessageMarkdown(doc, parent, source, assistantReply, updatePreview) {
+  const node = doc.createElement('div');
+  node.textContent = source;
+  parent.append(node);
+  const format = module => {
+    if (!assistantReply && !module.hasExplicitRichContent(source)) return;
+    const scroller = node.closest?.('#message-scroller');
+    const following = scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32;
+    module.renderChatMarkdown(doc, node, source);
+    updatePreview?.();
+    if (following) scroller.scrollTop = scroller.scrollHeight;
+  };
+  if (richContent) format(richContent);
+  else {
+    void loadRichContent().then(module => {
+      richContent = module;
+      if (node.isConnected !== false) format(module);
+    }).catch(() => {
+      // The message text and transcript remain usable if formatting fails to load.
+    });
+  }
+}
+
+const streamingReplies = new WeakMap();
+const streamingReplySource = node => streamingReplies.get(node)?.source || '';
+
+function paintStreamingReply(doc, node, source) {
+  const view = streamingReplies.get(node) || {};
+  view.source = source;
+  streamingReplies.set(node, view);
+  node.hidden = !source;
+  if (!source || (!view.markdown && !mayContainChatMarkdown(source, true))) {
+    view.markdown = null;
+    node.textContent = source;
+    return;
+  }
+
+  const format = module => {
+    if (!view.markdown) {
+      view.markdown = doc.createElement('div');
+      view.markdown.className = 'chat-markdown';
+      node.replaceChildren(view.markdown);
+    }
+    module.renderStreamingMarkdown(doc, view.markdown, view.source);
+  };
+  if (richContent) {
+    format(richContent);
+    return;
+  }
+
+  node.textContent = source;
+  view.loading ??= loadRichContent().then(module => {
+    richContent = module;
+    if (node.isConnected === false || !mayContainChatMarkdown(view.source, true)) return;
+    const scroller = node.closest?.('#message-scroller');
+    const following = scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32;
+    format(module);
+    if (following) scroller.scrollTop = scroller.scrollHeight;
+  }).catch(() => {}).finally(() => { view.loading = null; });
+}
+
+function renderMessageBody(doc, node, text, prefs, assistantReply = false, preview) {
   const source = String(text || '');
-  // Bold markers are ours; everything else keeps the shared folding and link preview path.
-  if (inlineBold(source).some(part => part.bold)) fillBold(doc, node, source);
+  const rich = mayContainChatMarkdown(source, assistantReply) &&
+    (!richContent || assistantReply || richContent.hasExplicitRichContent(source));
+  if (rich) {
+    renderMessageText(doc, node, source, prefs.message_folding, prefs.link_previews, (parent, value, updatePreview) => {
+      const streamed = assistantReply && streamingReplies.get(preview);
+      if (!streamed?.markdown || !value.startsWith(streamed.source.trimEnd())) {
+        appendMessageMarkdown(doc, parent, value, assistantReply, updatePreview);
+        return;
+      }
+      richContent.renderStreamingMarkdown(doc, streamed.markdown, value, {complete:true});
+      parent.append(streamed.markdown);
+      if (parent.tagName === 'DETAILS') parent.open = true;
+    });
+  } else if (inlineBold(source).some(part => part.bold)) fillBold(doc, node, source);
   else renderMessageText(doc, node, source, prefs.message_folding, prefs.link_previews);
   const origin = doc.defaultView?.location?.origin;
   const references = [
@@ -364,6 +447,7 @@ function renderMessageBody(doc, node, text, prefs) {
     link.title = '';
     if (!existing) node.append(link);
   }
+  return rich || node.children[0]?.tagName === 'DETAILS';
 }
 
 export function highlightParts(text, query) {
@@ -452,7 +536,7 @@ function messageFor(error, fallback) {
   return fallback;
 }
 
-function writeHash(values) {
+function writeHash(values, {push = false} = {}) {
   const params = new URLSearchParams();
   if (values.workspace) params.set('workspace', values.workspace);
   if (values.agent) params.set('agent', values.agent);
@@ -461,7 +545,10 @@ function writeHash(values) {
   if (values.message) params.set('message', values.message);
   const next = params.toString();
   const hash = next ? '#' + next : '';
-  if (location.hash !== hash) history.replaceState(null, '', location.pathname + hash);
+  if (location.hash === hash) return;
+  const path = location.pathname + hash;
+  if (push) history.pushState(null, '', path);
+  else history.replaceState(null, '', path);
 }
 
 function formatTime(value) {
@@ -864,6 +951,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let pinReceipt = 0;
   let sessionTransition = null;
   let currentSource = 'agent';
+  const workspaceInvite = mountWorkspaceInvite(document, {
+    request,
+    context() {
+      if (!servedByDsbot || !currentUser || !currentConversation || currentConversation.public_agent) return null;
+      const space = workspaces.find(item => item.id === workspaceId());
+      if (!space || space.kind === 'personal' || !canManage(space.role)) return null;
+      if (currentConversation.workspace_id && currentConversation.workspace_id !== space.id) return null;
+      return {workspace:space.id,scope:sendScope()};
+    },
+  });
   const loadGroupManagement = deferModule('./group-management.mjs');
   let groupManagement;
   let lastGroupInfo = '';
@@ -872,7 +969,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let stickerPicker;
   const stickerSaves = new Map();
   const messageUtilities = mountMessageUtilities(document, {
-    request, notify: show,
+    request, notify: show, formatAnnouncementTime: value => formatTime(value / 1000),
     composerContext: () => {
       if (!currentConversation && !(currentSource === 'agent' && currentAgent)) return null;
       const wid = workspaceId();
@@ -1058,6 +1155,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let replyWatch = null;
   const sendScope = (conversation = currentConversation?.id) =>
     JSON.stringify([currentUser?.id, workspaceId(), currentSource, currentAgent?.id, conversation]);
+  const readingPositions = new Map();
   const sessionRows = new Map();
   const publicDraft = mountPublicDraft(document, {onChange: sessionDraftChanged});
   const starterPanel = document.getElementById('agent-quick-starts');
@@ -1646,6 +1744,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       (!item.conversation_id || item.conversation_id === target.conversationId);
     return message?.role === 'user' && reply?.role === 'assistant' && scoped(message) && scoped(reply) && message.id !== reply.id
       ? {message, reply} : null;
+  }
+
+  function privateHistoryAfterSends(items, sends) {
+    if (!sends?.length) return items;
+    const delivered = new Map();
+    for (const {delivery} of sends) {
+      if (!delivery) continue;
+      delivered.set(delivery.message.id, delivery.message);
+      delivered.set(delivery.reply.id, delivery.reply);
+    }
+    if (!delivered.size) return items;
+    const reconciled = items.map(item => {
+      const receipt = delivered.get(item.id);
+      delivered.delete(item.id);
+      return receipt && waitingAgentReply(item) && !waitingAgentReply(receipt) ? receipt : item;
+    });
+    return [...reconciled, ...delivered.values()];
   }
 
   async function privateSendReceipt(target, key, current, accept = () => true, delays = [0, 350, 800]) {
@@ -2552,9 +2667,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return true;
   }
 
+  function readingPositionKey(source, wid, cid, aid) {
+    return JSON.stringify([currentUser?.id, wid, source, cid, aid || '']);
+  }
+
+  function rememberReadingPosition() {
+    const state = currentSource === 'agent' ? privateHistory : socialHistory;
+    if (!servedByDsbot || !state || state.owner !== currentUser?.id || state.cid !== currentConversation?.id ||
+        !historyScroller.clientHeight) return;
+    const key = readingPositionKey(currentSource, state.wid, state.cid, state.aid);
+    readingPositions.delete(key);
+    if (!state.readingHistory && messageScrollerAtBottom(historyScroller)) return;
+    const {id, offset} = chatHistoryAnchor();
+    if (!id || !Number.isFinite(offset)) return;
+    readingPositions.set(key, {key, id, offset:offset - historyScroller.getBoundingClientRect().top, top:0});
+    if (readingPositions.size > 50) readingPositions.delete(readingPositions.keys().next().value);
+  }
+
+  function readingPositionAnchor(position) {
+    return position && {...position, offset:position.offset + historyScroller.getBoundingClientRect().top};
+  }
+
   async function openSessionTarget(target, {resume = false} = {}) {
     if (sessionTransition?.pending && sessionTransition.cid === target.cid && sessionTransition.source === target.source) return false;
     if (resume && resumeOpenSession(target)) return true;
+    rememberReadingPosition();
     sessionTransition?.controller.abort();
     const controller = new AbortController();
     const transition = {...target, pending: true, controller};
@@ -2562,7 +2699,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (narrowScreen()) setSessionsOpen(true);
     syncSessionTransition();
     show('', '');
-    const options = {acknowledge: !target.message, startUnread: target.unread && !target.message, transition,
+    const position = !target.message && readingPositions.get(readingPositionKey(target.source, workspaceId(), target.cid, target.agent));
+    const options = {acknowledge: !target.message, startUnread: target.unread && !target.message, transition, position,
       signal:AbortSignal.any([controller.signal, AbortSignal.timeout(12000)])};
     const opened = target.source === 'social' ? await openSocialConversation(target.cid, options)
       : await openAgentConversation(target.agent, target.cid, options);
@@ -2588,7 +2726,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return JSON.stringify([currentUser?.id, workspaceId(), session.source, session.agent_id, session.id]);
   }
 
+  const visibleSessionUnread = session => session.muted ? 0 : session.unread_count;
+
   function paintSessionPreview({button, preview, session}, value) {
+    const unread = visibleSessionUnread(session);
     const draft = value.trim().replace(/\s+/g, ' ').slice(0, 160);
     if (draft) {
       const mark = document.createElement('span');
@@ -2597,7 +2738,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       preview.replaceChildren(mark, document.createTextNode(draft));
     } else fillBold(document, preview, session.preview || '');
     button.setAttribute('aria-label', sessionDisplayGroup(session) + '：' + session.title +
-      (session.unread_count ? uiLabel(`，${session.unread_count} 条未读消息`, `, ${session.unread_count} unread`) : '') +
+      (unread ? uiLabel(`，${unread} 条未读消息`, `, ${unread} unread`) : '') +
       (session.muted ? '，免打扰' : '') + (draft ? uiLabel('，有未发送的草稿', ', unsent draft') : ''));
   }
 
@@ -2629,7 +2770,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       || (filter === 'personal' && item.source === 'agent' && item.agent_id === personalAgentId)
       || (filter === 'pinned' && item.pinned)
       || (filter === 'drafts' && Boolean(draftFor(item).trim()))
-      || (filter === 'unread' && item.unread_count > 0)
+      || (filter === 'unread' && visibleSessionUnread(item) > 0)
       || (filter === 'read' && !item.unread_count)
       || (filter === 'group' && item.kind === 'group') || (filter === 'dm' && item.kind === 'dm'));
     const heading = filter === 'drafts' ? uiLabel('草稿', 'Drafts') : uiLabel('对话', 'Conversations');
@@ -2640,7 +2781,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       ? '还没有对话。用右上角的 + 新建群组或前往智能体目录。' : '当前筛选下没有对话。';
     const readAll = document.getElementById('conversations-read-all');
     if (readAll) {
-      readAll.hidden = !sessions.some(item => item.source === 'social' && item.unread_count > 0);
+      readAll.hidden = !sessions.some(item => item.source === 'social' && visibleSessionUnread(item) > 0);
       readAll.disabled = markingConversationsRead;
     }
     const items = [];
@@ -2683,11 +2824,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       time.title = formatTime(session.updated);
       button.append(avatar, copy, time);
       if (session.muted) button.classList.add('is-muted');
-      if (session.unread_count > 0) {
+      const count = visibleSessionUnread(session);
+      if (count > 0) {
         button.classList.add('is-unread');
         const unread = document.createElement('span');
         unread.className = 'unread-badge';
-        unread.textContent = String(session.unread_count);
+        unread.textContent = String(count);
         unread.setAttribute('aria-hidden', 'true');
         time.append(unread);
       }
@@ -3015,18 +3157,67 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
 
-  function makeAgentMessage(item) {
+  // Message controls can change while the reader is still using the same body.
+  const interactiveMessageBodies = new WeakMap();
+
+  function captureMessageBodies(list, scope) {
+    const bodies = new Map();
+    const previews = new Map();
+    const scroll = [];
+    const focused = document.activeElement;
+    let restoreFocus = false;
+    if (list.dataset.messageBodyScope === scope) {
+      for (const row of list.children) {
+        const body = Array.from(row.children).find(child =>
+          interactiveMessageBodies.has(child) || streamingReplies.get(child)?.markdown);
+        if (!body) continue;
+        if (interactiveMessageBodies.has(body) && row.dataset.messageId) bodies.set(row.dataset.messageId, body);
+        else if (row.dataset.replyProgress) previews.set(row.dataset.replyProgress, body);
+        restoreFocus ||= Boolean(focused && body.contains?.(focused));
+        for (const node of body.querySelectorAll?.('.chat-markdown-table-scroll, .chat-flowchart, .chat-code-block pre') || []) {
+          const left = node.scrollLeft;
+          if (left) scroll.push([node, left]);
+        }
+      }
+    }
+    list.dataset.messageBodyScope = scope;
+    return {
+      bodies, previews,
+      restoreView() {
+        for (const [node, left] of scroll) if (node.isConnected) node.scrollLeft = left;
+        if (restoreFocus && focused?.isConnected && document.activeElement === document.body) focused.focus({preventScroll:true});
+      },
+    };
+  }
+
+  function transcriptMessageBody(previous, text, assistantReply = false, preview) {
+    const rendered = interactiveMessageBodies.get(previous);
+    const language = document.documentElement?.lang;
+    if (rendered && rendered.text === text && rendered.assistantReply === assistantReply &&
+        rendered.prefs === chatPreferences && rendered.language === language) return previous;
+
+    const body = document.createElement('div');
+    if (renderMessageBody(document, body, text, chatPreferences, assistantReply, preview)) {
+      interactiveMessageBodies.set(body, {text, assistantReply, prefs:chatPreferences, language});
+    }
+    return body;
+  }
+
+  function makeAgentMessage(item, previousBody, preview) {
     const bubble = document.createElement('li');
     if (item.id) bubble.dataset.messageId = item.id;
     bubble.className = item.role === 'user' ? 'user' : 'assistant';
     const role = document.createElement('p');
     role.className = item.role === 'user' ? 'role visually-hidden' : 'role';
     role.textContent = item.role === 'user' ? uiLabel('你', 'You') : (currentAgent?.name || uiLabel('智能体', 'Agent'));
-    const body = document.createElement('div');
     const waiting = waitingAgentReply(item);
     const failed = item.role === 'assistant' && item.status === 'failed';
     const cancelled = item.role === 'assistant' && item.status === 'cancelled';
     const partial = waiting && servedByDsbot && item.client_key;
+    const body = partial || (failed && item.error_code !== 'session/attachment-invalid')
+      ? document.createElement('div')
+      : transcriptMessageBody(previousBody, (cancelled || item.role === 'user') ? (item.body || '') : statusLabel(item),
+        servedByDsbot && item.role === 'assistant' && item.status === 'succeeded', preview);
     body.className = 'body' + (partial ? ' reply-preview' : waiting ? ' pending' : failed ? ' failed' : '');
     if (partial) {
       bubble.dataset.replyProgress = item.client_key;
@@ -3042,10 +3233,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else if (item.role === 'assistant' && item.status === 'failed' && item.error_code !== 'session/attachment-invalid') {
       body.textContent = item.can_retry === true ? uiLabel('回复未完成，可以重试。', 'The reply didn’t finish. You can retry.')
         : uiLabel('回复未完成。', 'The reply didn’t finish.');
-    } else {
-      renderMessageBody(document, body, (cancelled || item.role === 'user') ? (item.body || '') : statusLabel(item), chatPreferences);
-      if ((cancelled || item.attachments?.length) && !item.body) body.hidden = true;
-    }
+    } else body.hidden = Boolean((cancelled || item.attachments?.length) && !item.body);
     if (waiting || failed || cancelled) bubble.dataset.state = item.status;
     bubble.append(role);
     let replyView;
@@ -3091,6 +3279,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const top = anchor?.top ?? scroller.scrollTop;
     const follow = anchor?.follow ?? (followLatest || messageScrollerAtBottom(scroller));
     const list = document.getElementById('message-list');
+    const bodyViews = captureMessageBodies(list, sendScope());
     list.replaceChildren();
     agentReplyViews.clear();
     lastAgentItems = items || [];
@@ -3113,7 +3302,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         list.append(view.bubble);
         continue;
       }
-      const {bubble, replyView} = makeAgentMessage(item);
+      const {bubble, replyView} = makeAgentMessage(item, bodyViews.bodies.get(item.id), bodyViews.previews.get(item.client_key));
       if (replyView) agentReplyViews.set(item.client_key, replyView);
       list.append(bubble);
     }
@@ -3123,6 +3312,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const anchoredMessage = anchor?.id && Array.from(list.children).find(node => node.dataset.messageId === anchor.id);
     scroller.scrollTop = follow ? scroller.scrollHeight : top;
     if (anchoredMessage) scroller.scrollTop += anchoredMessage.getBoundingClientRect().top - anchor.offset;
+    bodyViews.restoreView();
     updateLatestMessageControl();
     return lastAgentItems.some(waitingAgentReply) && !tracking;
   }
@@ -3153,11 +3343,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       : state === 'queued' || (snapshot.phase === 'preparing' && !snapshot.text) ? uiLabel('正在准备回复', 'Preparing a reply')
       : uiLabel('正在生成回复', 'Writing a reply');
     if (view.heading.textContent !== label) view.heading.textContent = label;
-    if (typeof snapshot.text !== 'string' || view.body.textContent === snapshot.text) return;
+    if (typeof snapshot.text !== 'string' || streamingReplySource(view.body) === snapshot.text) return;
     const scroller = document.getElementById('message-scroller');
     const follow = messageScrollerAtBottom(scroller);
-    view.body.textContent = snapshot.text;
-    view.body.hidden = !snapshot.text;
+    paintStreamingReply(document, view.body, snapshot.text);
     if (follow) scroller.scrollTop = scroller.scrollHeight;
     else updateLatestMessageControl();
   }
@@ -4236,6 +4425,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return snapshot?.message_id === view.messageId && snapshot.attempt === view.attempt;
   }
 
+  function visibleGroupReply(id) {
+    const view = groupReplyViews.get(id);
+    if (!view || view.row.hidden || !streamingReplySource(view.preview)) return false;
+    const viewport = document.getElementById('message-scroller').getBoundingClientRect();
+    const reply = view.row.getBoundingClientRect();
+    return reply.bottom > viewport.top && reply.top < viewport.bottom;
+  }
+
   function withGroupReplyScroll(update) {
     const scroller = document.getElementById('message-scroller');
     const top = scroller.scrollTop;
@@ -4264,9 +4461,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         changes.push({id, view, passed:true});
         continue;
       }
+      const previousText = streamingReplySource(view.preview);
+      // The progress feed can drop a reply before the transcript receives it.
+      // Keep the same attempt readable until its durable result replaces it.
+      if (preserveMissing && previousText && !snapshot?.text && (!item || snapshot)) continue;
       const text = typeof snapshot?.text === 'string' ? snapshot.text : '';
       const state = snapshot?.status === 'running' || text ? 'running' : view.job.status;
-      if (view.preview.textContent !== text || view.row.dataset.state !== state) changes.push({view, text, state});
+      if (previousText !== text || view.row.dataset.state !== state) changes.push({view, text, state});
     }
     if (!changes.length) return;
     withGroupReplyScroll(() => {
@@ -4276,8 +4477,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           groupReplyViews.delete(id);
           continue;
         }
-        view.preview.textContent = text;
-        view.preview.hidden = !text;
+        if (streamingReplySource(view.preview) !== text) paintStreamingReply(document, view.preview, text);
         view.row.dataset.state = state;
         view.note.textContent = groupReplyLabel(state, view.job, compactGroupReplies() && !text.trim());
       }
@@ -4334,6 +4534,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       // durable transcript even when this watch never saw an active snapshot.
       if (missing.length) {
         if (readingSocialContext()) {
+          // A long preview can put the reader above the bottom of the timeline.
+          // Reconcile that visible reply without interrupting history or a draft edit.
+          const finishing = new Set(missing.filter(([id]) => !items.has(id) && visibleGroupReply(id)).map(([id]) => id));
+          if (finishing.size && !readingSocialContext(undefined, {allowScrolled:true}) &&
+              !watch.reconciling && (transitioned || Date.now() >= watch.nextReconcileAt)) {
+            watch.nextReconcileAt = Date.now() + 8000;
+            watch.reconciling = true;
+            void openSocialConversation(currentConversation.id, {refresh:true, finishing})
+              .finally(() => { watch.reconciling = false; });
+          }
           if (liveBanner) liveBanner.hidden = false;
         } else if (!pollTimer && (transitioned || Date.now() >= watch.nextReconcileAt)) {
           // The progress feed is bounded. Throttle repeated reads for any
@@ -4388,7 +4598,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!row.classList.contains('group-reply-job')) continue;
       const state = row.dataset.state;
       const waiting = state === 'queued' || state === 'running';
-      const hasText = Boolean(groupReplyViews.get(row.dataset.replyJobId)?.preview.textContent.trim());
+      const preview = groupReplyViews.get(row.dataset.replyJobId)?.preview;
+      const hasText = Boolean(streamingReplySource(preview).trim());
       row.classList.toggle('group-reply-thinking', waiting && !hasText);
       if (waiting && !hasText) {
         pending.push(row);
@@ -4459,14 +4670,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (servedByDsbot && waitingGroupReply(job) && Number.isSafeInteger(job.attempt) && job.attempt > 0) {
       const preview = previewBefore || document.createElement('div');
       preview.className = 'group-reply-preview body';
-      preview.hidden = !preview.textContent;
+      preview.hidden = !streamingReplySource(preview);
       preview.setAttribute('aria-live', 'off');
       if (wasRunning) row.dataset.state = 'running';
       groupReplyViews.set(job.id, {messageId: item.id, attempt: job.attempt, job, row, note, preview,
         missingSince: sameAttempt ? previous?.missingSince : null});
       row.append(preview);
     } else groupReplyViews.delete(job.id);
-    note.textContent = groupReplyLabel(row.dataset.state, job, compactGroupReplies() && !previewBefore?.textContent.trim());
+    note.textContent = groupReplyLabel(row.dataset.state, job, compactGroupReplies() && !streamingReplySource(previewBefore).trim());
     if (job.can_retry) {
       const button = document.createElement('button');
       button.type = 'button';
@@ -4660,6 +4871,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     clearVoicePlayers();
     const list = document.getElementById('message-list');
     const scope = sendScope();
+    const bodyViews = captureMessageBodies(list, scope);
     const sameReplyScope = list.dataset.groupReplyScope === scope;
     list.dataset.groupReplyScope = scope;
     const existingGroupReplies = new Map();
@@ -4741,14 +4953,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const role = document.createElement('p');
       role.className = mine && item.role !== 'agent' && !item.forwarded_from ? 'role visually-hidden' : 'role';
       role.textContent = socialMessageAuthor(item, people);
-      const body = document.createElement('div');
+      const body = transcriptMessageBody(bodyViews.bodies.get(item.id), item.retracted ? '此消息已撤回' : (item.body || ''),
+        servedByDsbot && item.role === 'agent' && !item.retracted, previousGroupViews.get(groupReplyID)?.preview);
       body.className = 'body';
-      if (item.attachment?.bytes !== undefined && item.body === item.attachment.title) body.hidden = true;
-      renderMessageBody(document, body, item.retracted ? '此消息已撤回' : (item.body || ''), chatPreferences);
+      body.hidden = item.attachment?.bytes !== undefined && item.body === item.attachment.title;
       if (item.forwarded_from && !item.retracted) {
         body.dataset.forwarded = '1';
         body.title = '转发自 ' + item.forwarded_from.author;
         role.textContent += ' · 转发自 ' + item.forwarded_from.author;
+      } else if (body.dataset.forwarded) {
+        delete body.dataset.forwarded;
+        body.removeAttribute('title');
       }
       const time = document.createElement('p');
       time.className = 'time';
@@ -4918,6 +5133,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (anchored) scroller.scrollTop += anchored.getBoundingClientRect().top - anchor.offset;
     } else if (keepScroll) scroller.scrollTop = Math.max(0, oldTop + scroller.scrollHeight - oldHeight);
     else scroller.scrollTop = refresh && !wasAtLatest ? oldTop : scroller.scrollHeight;
+    bodyViews.restoreView();
     updateLatestMessageControl();
     return false;
   }
@@ -5167,12 +5383,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return !narrowScreen() || !document.body.classList.contains('sessions-open');
   }
 
-  function readingSocialContext(viewportHeight) {
+  function readingSocialContext(viewportHeight, {allowScrolled = false} = {}) {
     const scroller = document.getElementById('message-scroller');
     const unread = socialHistory?.unread;
     return socialHistory?.readingHistory || socialHistory?.loading || selecting
       || (unread && unread.committed < unread.latest)
-      || !messageScrollerAtBottom(scroller, viewportHeight)
+      || (!allowScrolled && !messageScrollerAtBottom(scroller, viewportHeight))
       || document.activeElement?.closest?.('.message-edit-controls')
       || [...(scroller.querySelectorAll?.('audio') || [])].some(audio => !audio.paused);
   }
@@ -5223,8 +5439,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     else if (currentSource === 'agent' && privateHistory) await restorePrivateLatest(privateHistory);
   });
   let sessionsRequest = 0, sessionsWorkspace = null, sessionsUser = null;
+  let startingInboxDirectory = null;
   let membersStatus = '';
-  async function loadSessions(link, {nativeDirectory, onPrivate} = {}) {
+  async function loadSessions(link, {nativeDirectory, pendingNativeDirectory, onPrivate} = {}) {
     const sequence = ++sessionsRequest;
     const user = currentUser;
     loadNotifications();
@@ -5239,8 +5456,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       renderSessions();
     }
     if (!id) return;
+    const startupRead = pendingNativeDirectory || (currentSource === 'social' && startingInboxDirectory?.owner === user &&
+      startingInboxDirectory.workspace === id ? startingInboxDirectory.read : null);
     const isLocalPersonal = inPersonalWorkspace();
-    const readThreadReceipt = nativeDirectory ? 0 : privateThreadReceipt;
+    const threadReceiptAtStart = privateThreadReceipt;
     const current = () => sequence === sessionsRequest && id === workspaceId() && user === currentUser;
     const path = `/v1/workspaces/${id}`;
     const read = suffix => request('GET', path + suffix).catch(() => ({status: 0, body: {}}));
@@ -5283,7 +5502,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       return social;
     });
-    const listed = nativeDirectory ? {status: 200, body: nativeDirectory}
+    const startupDirectory = nativeDirectory || (startupRead ? await startupRead : null);
+    if (!current()) return;
+    const readThreadReceipt = startupDirectory ? 0 : threadReceiptAtStart;
+    const listed = startupDirectory ? {status: 200, body: startupDirectory}
       : await read('/agents?limit=100&include=conversations');
     if (!current()) return;
     const nextAgents = listed.status === 200 ? listed.body.items || [] : [];
@@ -5325,7 +5547,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!socialReady) renderSessions();
     }
     if (isLocalPersonal && listed.status === 200) {
-      onPrivate?.(listedPrivate.length ? sessions.find(row => row.source === 'agent') : null);
+      onPrivate?.(listedPrivate.length ? sessions.find(row => row.source === 'agent') : null, socialReady);
     }
     const social = await socialRequest;
     if (!current()) return;
@@ -5632,6 +5854,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const groupInvite = document.getElementById('group-invite-dialog');
   const groupInviteQuery = document.getElementById('group-invite-query');
   const groupInviteChoices = document.getElementById('group-invite-choices');
+  const groupInviteSelection = document.getElementById('group-invite-selection');
+  const groupInviteSelectedCount = document.getElementById('group-invite-selected-count');
+  const groupInviteReview = document.getElementById('group-invite-review');
   const groupInviteStatus = document.getElementById('group-invite-status');
   const groupInviteSubmit = document.getElementById('group-invite-submit');
   let inviteTarget = null;
@@ -5669,24 +5894,35 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!showGroupInviteLink && inviteTarget) void prepareGroupInviteLink(inviteTarget, currentConversation);
   });
   const selectedInviteMembers = () => [...groupInviteChoices.querySelectorAll('input:checked')].map(box => box.value);
+  const inviteSearchText = value => value.normalize('NFKC').trim().toLocaleLowerCase();
+  const reviewingGroupInvite = () => groupInviteReview.getAttribute('aria-pressed') === 'true';
 
   function syncGroupInviteSubmit(count = selectedInviteMembers().length) {
     groupInviteSubmit.disabled = invitingMembers || count < 1 || count > 50;
+    groupInviteReview.disabled = invitingMembers;
+    groupInviteQuery.disabled = invitingMembers || reviewingGroupInvite();
+    groupInviteChoices.inert = invitingMembers;
   }
 
   function syncGroupInvite() {
-    const needle = groupInviteQuery.value.trim().toLocaleLowerCase();
+    const count = selectedInviteMembers().length;
+    const wasReviewing = reviewingGroupInvite();
+    const reviewing = count > 0 && wasReviewing;
+    groupInviteReview.setAttribute('aria-pressed', String(reviewing));
+    groupInviteSelection.hidden = !count;
+    groupInviteSelectedCount.textContent = count
+      ? uiLabel(`已选 ${count} 位成员`, `${count} ${count === 1 ? 'member' : 'members'} selected`) : '';
+    const needle = inviteSearchText(groupInviteQuery.value).replace(/^@/, '');
     let visible = 0;
     for (const choice of groupInviteChoices.children) {
-      choice.hidden = !choice.textContent.toLocaleLowerCase().includes(needle);
+      choice.hidden = reviewing ? !choice.children[0].checked : !choice.dataset.search.includes(needle);
       if (!choice.hidden) visible++;
     }
-    const count = selectedInviteMembers().length;
     syncGroupInviteSubmit(count);
+    if (wasReviewing && !reviewing) groupInviteQuery.focus({preventScroll:true});
     if (groupInviteChoices.children.length) {
-      groupInviteStatus.textContent = count > 50 ? '一次最多添加 50 位成员。'
-        : !visible ? '没有匹配的成员。'
-        : count ? `已选 ${count} 位成员` : '';
+      groupInviteStatus.textContent = count > 50 ? uiLabel('一次最多添加 50 位成员。', 'You can add up to 50 members at once.')
+        : !visible ? uiLabel('没有匹配的成员。', 'No matching members.') : '';
     }
   }
 
@@ -5697,10 +5933,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     inviteTarget = target;
     groupInviteQuery.value = '';
     groupInviteChoices.replaceChildren();
-    groupInviteSubmit.disabled = true;
+    groupInviteChoices.scrollTop = 0;
+    groupInviteReview.setAttribute('aria-pressed', 'false');
+    groupInviteReview.textContent = uiLabel('仅显示已选', 'Show selected only');
+    syncGroupInvite();
     const personal = Boolean(conversation.account_group);
     const roster = personal ? '联系人' : '工作区成员';
-    const searchLabel = personal ? uiLabel('搜索联系人', 'Search contacts') : uiLabel('搜索工作区成员', 'Search workspace members');
+    const searchLabel = personal ? uiLabel('搜索联系人姓名或 @用户名', 'Search contacts by name or @handle')
+      : uiLabel('搜索工作区成员姓名或 @用户名', 'Search workspace members by name or @handle');
     groupInviteQuery.placeholder = searchLabel;
     groupInviteQuery.setAttribute('aria-label', searchLabel);
     groupInviteStatus.textContent = '正在加载' + roster + '…';
@@ -5717,12 +5957,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const joined = new Set((currentConversation.members || []).map(member => personal ? member.handle : member.user_id));
     const candidates = memberChoices(personal ? contactMembers(result) : result.body.items, currentUser?.id)
       .filter(member => member.user_id && !member.suspended && !joined.has(member.user_id));
-    for (const member of candidates) {
+    for (const [index, member] of candidates.entries()) {
       const label = document.createElement('label');
       const box = document.createElement('input');
       box.type = 'checkbox';
       box.value = member.handle || member.user_id;
-      label.append(box, document.createTextNode(member.username || box.value));
+      const identity = document.createElement('span');
+      identity.className = 'group-invite-identity';
+      const name = document.createElement('span');
+      name.id = `group-invite-member-name-${index}`;
+      name.textContent = member.username || box.value;
+      box.setAttribute('aria-labelledby', name.id);
+      identity.append(name);
+      const handle = member.handle ? '@' + member.handle.replace(/^@/, '') : '';
+      if (handle) {
+        const descriptor = document.createElement('small');
+        descriptor.id = `group-invite-member-handle-${index}`;
+        descriptor.textContent = handle;
+        box.setAttribute('aria-describedby', descriptor.id);
+        identity.append(descriptor);
+      }
+      label.dataset.search = inviteSearchText(`${name.textContent} ${handle}`);
+      label.append(box, identity);
       groupInviteChoices.append(label);
     }
     groupInviteStatus.textContent = candidates.length ? '' : '没有可添加的' + roster + '。';
@@ -5740,6 +5996,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
   groupInvite.addEventListener('cancel', event => { if (invitingMembers) event.preventDefault(); });
   groupInviteQuery.addEventListener('input', syncGroupInvite);
+  groupInviteReview.addEventListener('click', () => {
+    groupInviteReview.setAttribute('aria-pressed', String(!reviewingGroupInvite()));
+    groupInviteChoices.scrollTop = 0;
+    syncGroupInvite();
+  });
   groupInviteChoices.addEventListener('change', syncGroupInvite);
   document.getElementById('group-invite-form').addEventListener('submit', async event => {
     event.preventDefault();
@@ -5749,7 +6010,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     invitingMembers = true;
     const cancel = document.getElementById('group-invite-cancel');
     cancel.disabled = true;
-    groupInviteSubmit.disabled = true;
+    syncGroupInviteSubmit(memberIds.length);
     groupInviteSubmit.textContent = '添加中…';
     try {
       const path = `/v1/workspaces/${target.workspace}/social/conversations/${target.conversation}/members`;
@@ -5927,7 +6188,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function setSocialHeaderTools(social) {
     renderStudioDiscussionSource(null);
     if (social && captureButton) captureButton.hidden = true;
-    const invite = document.getElementById('chat-invite');
     const publicChat = social ? currentConversation?.public_agent : null;
     showPublicChatState(publicChat);
     const group = social && currentConversation?.kind === 'group' && !publicChat;
@@ -5942,13 +6202,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     document.getElementById('chat-group-invite').hidden = !group;
     const multi = document.getElementById('multi-select-toggle');
-    if (invite) invite.hidden = !social || group || Boolean(publicChat);
+    workspaceInvite.sync();
     if (multi) multi.hidden = !social || Boolean(publicChat);
-    if (!social || group || publicChat) {
-      const panel = document.getElementById('chat-invite-panel');
-      if (panel) panel.hidden = true;
-      invite?.setAttribute('aria-expanded', 'false');
-    }
     if (!social || publicChat) {
       selecting = false; selectedMessages.clear(); syncForwardBar();
       if (!social) renderPinned([]);
@@ -6032,7 +6287,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openAgentConversation(agentId, conversationId, {
-    refresh = false, acknowledge = true, link, transition, startupSnapshot, foreground = false, signal,
+    refresh = false, acknowledge = true, link, transition, startupSnapshot, foreground = false, signal, position,
   } = {}) {
     if (sessionTransition?.pending && transition !== sessionTransition) return false;
     if (refresh && openingStartupLink()) return false;
@@ -6052,16 +6307,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const readThreadReceipt = startupSnapshot ? 0 : privateThreadReceipt;
     const wid = workspaceId();
     const owner = currentUser;
+    // A send can finish after the returning read was taken and before it reaches this view.
+    const sends = servedByDsbot && !refresh
+      ? pendingSends.get(JSON.stringify([owner?.id, wid, 'agent', agentId, conversationId]))?.jobs.slice() : null;
     const sameScope = () => open === socialOpen && workspaceId() === wid && currentUser === owner
       && (!foreground || (foreground === foregroundPrivateRead && canRefreshForegroundPrivate()))
       && (!nativeRefresh || (refreshId === privateRefresh && !readingPrivateContext()));
     const stillOpen = () => sameScope() && (!link || link.current());
     const path = agentConversationPath(wid, agentId, conversationId);
-    const snapshot = startupSnapshot ? await startupSnapshot() : null;
-    if (startupSnapshot && !stillOpen()) return false;
-    const result = snapshot || await request('GET', servedByDsbot ? `${path}?limit=${HISTORY_PAGE_SIZE}` : path,
+    if (!PRIVATE_THREAD_ID.test(position?.id || '')) position = null;
+    const snapshot = startupSnapshot && !position ? await startupSnapshot() : null;
+    if (startupSnapshot && !position && !stillOpen()) return false;
+    const latestPath = servedByDsbot ? `${path}?limit=${HISTORY_PAGE_SIZE}` : path;
+    const read = url => request('GET', url,
       undefined, undefined, signal || (foreground ? AbortSignal.timeout(5000) : undefined))
       .catch(() => ({status: 0, body: {}}));
+    let result = snapshot || await read(position ? latestPath + '&around=' + position.id : latestPath);
+    if (position && stillOpen() && (result.status === 404 ||
+        (result.status === 200 && !result.body.items?.some(item => item.id === position.id)))) {
+      readingPositions.delete(position.key);
+      position = null;
+      result = await read(latestPath);
+    }
     if (!stillOpen() || (nativeRefresh && history !== privateHistory)) return false;
     if (result.status !== 200) {
       if (refresh && [403, 404, 410].includes(result.status)) renderAgentQuickStarts();
@@ -6127,19 +6394,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     currentConversation = conversation;
     renderStudioDiscussionSource(conversation.studio_source);
+    let items = position ? result.body.items : privateHistoryAfterSends(result.body.items || [], sends);
     if (servedByDsbot) {
       const state = nativeRefresh && history ? history : {wid, aid: agentId, cid: conversationId, owner: owner?.id,
-        readingHistory: !acknowledge};
+        readingHistory: Boolean(position) || !acknowledge};
       state.cursor = result.body.cursor ?? null;
+      if (position && result.body.has_newer && PRIVATE_THREAD_ID.test(items.at(-1)?.id || '')) state.after = items.at(-1).id;
+      if (!position && sends?.length && items.length > Number(HISTORY_PAGE_SIZE)) {
+        items = items.slice(-Number(HISTORY_PAGE_SIZE));
+        state.cursor = items[0].id;
+      }
       setPrivateHistory(state);
     } else setPrivateHistory(null);
     publicDraft.enter(sendScope());
     renderAgentQuickStarts(detailAgent);
     if (!link) writeHash({workspace: wid, agent: agentId, conversation: conversationId});
     setSessionsOpen(false);
-    const pending = renderAgentMessages(result.body.items, {followLatest: !refresh});
-    const finished = (result.body.items || []).filter(item => item.role === 'assistant' && item.status === 'succeeded');
-    if (acknowledge && currentConversation.unread_count > 0 && finished.length && document.visibilityState !== 'hidden') {
+    const pending = renderAgentMessages(items, {followLatest: !refresh, anchor:readingPositionAnchor(position)});
+    const finished = items.filter(item => item.role === 'assistant' && item.status === 'succeeded');
+    if (!position && acknowledge && currentConversation.unread_count > 0 && finished.length && document.visibilityState !== 'hidden') {
       const read = request('POST', `${path}/read`,
         {message_id: finished[finished.length - 1].id}).then(acknowledged => {
         if (!sameScope() || acknowledged.status !== 200) return;
@@ -6155,7 +6428,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openSocialConversation(conversationId, {acknowledge = true, startUnread = false, preserveUnread = false,
-    refresh = false, publicStartCurrent, link, transition, quiet = false, initialRead, signal} = {}) {
+    refresh = false, publicStartCurrent, link, transition, quiet = false, initialRead, signal, finishing, position} = {}) {
     if (sessionTransition?.pending && transition !== sessionTransition) return false;
     if (refresh && (openingStartupLink() || currentSource !== 'social'
       || currentConversation?.id !== conversationId)) return false;
@@ -6170,8 +6443,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const stillOpen = () => sameScope() && (!link || link.current());
     const readPinReceipt = pinReceipt;
     const unreadEntry = servedByDsbot && acknowledge && startUnread && !refresh;
-    const path = `${socialBase()}/${conversationId}${unreadEntry ? '?start=unread' : ''}`;
-    const result = initialRead || await request('GET', path, undefined, undefined, signal).catch(() => ({status: 0, body: {}}));
+    if (!chatPathId(position?.id)) position = null;
+    const path = `${socialBase()}/${conversationId}`;
+    const latestPath = path + (unreadEntry ? '?start=unread' : '');
+    const read = url => request('GET', url, undefined, undefined, signal).catch(() => ({status: 0, body: {}}));
+    let result = initialRead || await read(position ? path + '?around=' + encodeURIComponent(position.id) : latestPath);
+    if (position && stillOpen() && ((result.status === 404 && result.body?.error?.code === 'history_anchor_missing') ||
+        (result.status === 200 && !result.body.items?.some(item => item.id === position.id)))) {
+      readingPositions.delete(position.key);
+      position = null;
+      result = await read(latestPath);
+    }
     if (!stillOpen() || (publicStartCurrent && !publicStartCurrent())) return false;
     if (result.status !== 200) {
       if (refresh) {
@@ -6195,7 +6477,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return false;
     }
     if (publicStartCurrent && (!updated.public_agent || updated.public_agent.open === false)) return false;
-    if (refresh && servedByDsbot && (!viewingSocialMessages() || readingSocialContext() || pendingSends.get(sendScope())?.active)) {
+    const finishedVisibleReply = finishing?.size && !readingSocialContext(undefined, {allowScrolled:true}) &&
+      (result.body.items || []).some(item => (finishing.has(item.reply_job_id) && visibleGroupReply(item.reply_job_id))
+        || item.reply_jobs?.some(job => !waitingGroupReply(job) && finishing.has(job.id) && visibleGroupReply(job.id)));
+    if (refresh && servedByDsbot && (!viewingSocialMessages() || (readingSocialContext() && !finishedVisibleReply)
+        || pendingSends.get(sendScope())?.active)) {
       if (viewingSocialMessages() && liveBanner && updated.activity_version !== currentConversation?.activity_version) liveBanner.hidden = false;
       scheduleSocialPoll(currentConversation);
       return false;
@@ -6221,7 +6507,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderReplyDraft();
     if (liveBanner) liveBanner.hidden = true;
     const lastSeq = shown.at(-1)?.seq;
-    const snapshot = unreadEntry ? result.body.unread_window : null;
+    const snapshot = !position && unreadEntry ? result.body.unread_window : null;
     const first = snapshot?.first;
     const unread = first && Number.isSafeInteger(first.seq) && Number.isSafeInteger(snapshot.read_seq) &&
       Number.isSafeInteger(snapshot.last_seq) && Number.isSafeInteger(lastSeq) && shown.some(item => item.id === first.id)
@@ -6230,7 +6516,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       : preserveUnread && Number.isSafeInteger(lastSeq) && updated.unread_count > 0
         ? {committed:0, latest:lastSeq, seen:new Set()} : null;
     setSocialHistory({wid, cid: conversationId, owner: owner?.id, cursor: result.body.cursor ?? null,
-      readingHistory: Boolean(unread?.firstId), unread});
+      readingHistory: Boolean(position || unread?.firstId), unread,
+      after: position && result.body.has_newer && Number.isSafeInteger(lastSeq) && lastSeq > 0 ? lastSeq : null});
     if (snapshot?.first === null && Number.isSafeInteger(snapshot.last_seq)) applyOpenedRead('social', updated, 0, link, snapshot.last_seq);
     chatCalls.sync();
     agentMentions.refresh();
@@ -6253,7 +6540,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     setChatSubtitle(publicChat ? '公开智能体 · 发布者可查看此对话'
       : currentConversation.kind === 'group' ? groupHeaderSubtitle(currentConversation)
         : '单聊 · ' + ((currentConversation.members || []).length) + ' 人');
-    renderSocialMessages(result.body.items, {refresh});
+    renderSocialMessages(result.body.items, {refresh, anchor:readingPositionAnchor(position)});
     renderGroupReplyAction(result.body.agent_replies || []);
     if (unread?.firstId) {
       const divider = document.getElementById('chat-first-unread');
@@ -6266,7 +6553,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     // Acknowledge only the last message actually rendered, not messages that
     // arrived after this snapshot, and never consume unread in a hidden tab.
-    if (acknowledge && !unread && currentConversation.unread_count > 0 && shown.length && document.visibilityState !== 'hidden') {
+    if (!position && acknowledge && !unread && currentConversation.unread_count > 0 && shown.length && document.visibilityState !== 'hidden') {
       const last = shown[shown.length - 1];
       const cursor = Number.isSafeInteger(last.seq) ? {seq:last.seq} : {message_id:last.id};
       const read = request('POST', `${socialBase()}/${conversationId}/read`, cursor).then(acknowledged => {
@@ -7113,9 +7400,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const message = start.social
       ? (chatPathId(start.message) ? start.message : '')
       : (/^[0-9a-f]{32}$/.test(start.message) ? start.message : '');
+    const position = !start.message && !start.directAccess && readingPositions.get(start.social
+      ? readingPositionKey('social', workspace, start.social)
+      : readingPositionKey('agent', workspace, start.conversation, start.agent));
     const opened = start.social
-      ? openSocialConversation(start.social, {acknowledge: !start.message, startUnread: !start.message, link})
-      : openAgentConversation(start.agent, start.conversation, {acknowledge: !message, link, startupSnapshot});
+      ? openSocialConversation(start.social, {acknowledge: !start.message, startUnread: !start.message, link, position})
+      : openAgentConversation(start.agent, start.conversation, {acknowledge: !message, link, startupSnapshot, position});
     link.open = socialOpen;
     if (parallelDirectory) link.directory = loadSessions(link, {nativeDirectory});
     try {
@@ -7176,6 +7466,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     workspaceSelect.value = (items.find(space => space.id === preferred)
       || items.find(space => space.id === personal) || items[0])?.id || '';
+    workspaceInvite.sync();
   }
 
   function setPersonalChat(personal) {
@@ -7240,6 +7531,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (session.status !== 200 || !session.body?.user?.id || unconfirmedSignup) {
       if (banner) banner.hidden = true;
       currentUser = null;
+      readingPositions.clear();
       chatSettings = null;
       clearSessionTransition();
       currentAgent = null;
@@ -7271,6 +7563,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (currentUser && currentUser.id !== session.body.user.id) {
+      readingPositions.clear();
       clearSessionTransition();
       currentAgent = null;
       currentConversation = null;
@@ -7309,21 +7602,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const sharedRequest = servedByDsbot ? listWorkspaces() : null;
     const localReady = Promise.resolve(localRequest).then(result => ownedChatStartup(result, owner));
     let personalRequest;
-    const readPersonal = () => personalRequest ??= read('/v1/personal-agent').then(result =>
-      result.status === 200 ? result.body.personal_agent : null);
-    const exactTarget = start.social ? chatPathId(start.social) : chatPathId(start.agent) && chatPathId(start.conversation);
-    const scopedLink = sharedRequest && !publicIntent && /^[0-9a-f]{32}$/.test(start.workspace) && exactTarget;
-    // An authenticated workspace list can open an exact team conversation while the personal snapshot is pending.
-    const {local, shared, personalSpace} = scopedLink ? await Promise.any([
+    const readPersonal = () => personalRequest ??= read('/v1/workspaces?scope=personal&include=personal-agent').then(result => {
+      const identity = ownedChatStartup(result, owner);
+      return identity ? {workspace: identity.space, agent: {id: identity.agentId}, look: result.body.personal_look ?? null} : null;
+    });
+    const socialTarget = start.social && chatPathId(start.social);
+    const exactTarget = start.social ? socialTarget : chatPathId(start.agent) && chatPathId(start.conversation);
+    const workspaceOnly = !start.social && !start.agent && !start.conversation;
+    const validWorkspace = /^[0-9a-f]{32}$/.test(start.workspace);
+    const inboxEntry = workspaceOnly && (!start.workspace || validWorkspace);
+    const scopedEntry = sharedRequest && !publicIntent && (inboxEntry || (validWorkspace && exactTarget));
+    // The signed workspace list authorizes scoped entries while the personal snapshot is pending.
+    const {local, shared, personalSpace} = scopedEntry ? await Promise.any([
       localReady.then(async local => {
         if (!local && bootCurrent()) await readPersonal();
         return {local};
       }),
       sharedRequest.then(shared => {
         const items = shared.status === 200 && Array.isArray(shared.body?.items) ? shared.body.items : [];
-        const personalSpace = items.find(space => space.kind === 'personal');
-        return personalSpace && items.some(space => space.id === start.workspace && ['team', 'workspace'].includes(space.kind))
-          ? {shared, personalSpace} : Promise.reject();
+        const personalSpace = items.find(space => space.kind === 'personal' && (!space.owner_id || space.owner_id === owner.id));
+        const target = start.workspace ? items.find(space => space.id === start.workspace) : personalSpace;
+        const authorized = target && (['team', 'workspace'].includes(target.kind) ||
+          ((socialTarget || inboxEntry) && target === personalSpace));
+        return personalSpace && authorized ? {shared, personalSpace} : Promise.reject();
       }),
     ]).catch(() => ({})) : {local: await localReady};
     if (!bootCurrent()) return;
@@ -7443,14 +7744,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     };
     let openingAgent;
     let firstSnapshot;
-    const snapshotOnStartup = openLocal && local.directory && !hash && !narrowScreen();
+    // A partial inbox can be used immediately, while the same native request
+    // still supplies private sessions and the final default session order.
+    const pendingNativeDirectory = shared && inboxEntry && workspaceId() === personalWorkspace
+      ? localReady.then(local => local?.space.id === personalWorkspace ? local.directory : null) : null;
+    if (pendingNativeDirectory) {
+      const opening = {owner, workspace: personalWorkspace, read: pendingNativeDirectory};
+      startingInboxDirectory = opening;
+      void pendingNativeDirectory.then(() => {
+        if (startingInboxDirectory === opening) startingInboxDirectory = null;
+      });
+    }
+    const snapshotOnStartup = (openLocal && local.directory || pendingNativeDirectory) && !hash && !narrowScreen();
     await loadSessions(undefined, {
       nativeDirectory: openLocal ? local.directory : null,
-      onPrivate: !hasLink && (start.agent || snapshotOnStartup) ? recent => {
+      pendingNativeDirectory,
+      onPrivate: !hasLink && (start.agent || snapshotOnStartup) ? (recent, socialReady) => {
         if (!bootCurrent()) return;
         if (start.agent) {
           openingAgent = openStartingAgent();
-        } else if (recent) {
+        } else if (recent && (!socialReady || sessions[0] === recent)) {
           firstSnapshot = {row: recent, read: readStartupSnapshot(workspaceId(), recent.agent_id, recent.id)};
         }
       } : null,
@@ -7718,33 +8031,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       syncForwardBar();
     }
   });
-  const chatInvite = document.getElementById('chat-invite');
-  if (chatInvite) chatInvite.addEventListener('click', () => {
-    const panel = document.getElementById('chat-invite-panel');
-    panel.hidden = !panel.hidden;
-    chatInvite.setAttribute('aria-expanded', panel.hidden ? 'false' : 'true');
-    document.getElementById('chat-invite-result').textContent = '';
-  });
-  const inviteClose = document.getElementById('chat-invite-close');
-  if (inviteClose) inviteClose.addEventListener('click', () => {
-    document.getElementById('chat-invite-panel').hidden = true;
-    if (chatInvite) chatInvite.setAttribute('aria-expanded', 'false');
-  });
-  const chatInviteForm = document.getElementById('chat-invite-form');
-  if (chatInviteForm) chatInviteForm.addEventListener('submit', async event => {
-    event.preventDefault();
-    const out = document.getElementById('chat-invite-result');
-    const result = await request('POST', `/v1/workspaces/${workspaceId()}/invites`, {
-      role: 'member', expires_in: 7 * 86400, max_uses: 1,
-      requires_approval: document.getElementById('chat-invite-approval').checked,
-    });
-    if (result.status !== 201) {
-      out.textContent = result.status === 404 || result.status === 403
-        ? '只有工作区所有者或管理员可以生成邀请。' : messageFor(result.body.error, '无法生成邀请。');
-      return;
-    }
-    out.textContent = `邀请令牌只显示一次：${result.body.token}`;
-  });
   notificationKind?.addEventListener('change', () => {
     if (notificationSnapshot) renderNotifications(notificationSnapshot.body, notificationSnapshot.scope);
   });
@@ -7783,6 +8069,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadNotifications();
   });
   function clearChatScope() {
+    rememberReadingPosition();
     closePrivateThreadDialogs();
     if (messageLinkDialog?.open) messageLinkDialog.close();
     resetStickerSurface();
@@ -7824,7 +8111,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   workspaceSelect.addEventListener('change', async () => {
     clearChatScope();
-    writeHash({workspace: workspaceId()});
+    // The selected conversation updates this workspace entry as usual.
+    writeHash({workspace: workspaceId()}, {push: true});
     await loadSessions();
   });
 
@@ -8298,7 +8586,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   inChatRetry.addEventListener('click', () => searchCurrentConversation(inChatView?.retryAppend || false));
   function renderDeliveredSocialMessage(scope, message) {
     if (message && scope === sendScope()) {
-      if (socialHistory?.readingHistory) liveBanner.hidden = false;
+      // Only append to a history window when the receipt cannot skip a message.
+      const tail = lastSocialItems.at(-1)?.seq;
+      const nextInView = Number.isSafeInteger(tail) && message.seq === tail + 1;
+      if (socialHistory?.readingHistory && !nextInView) liveBanner.hidden = false;
       else {
         const without = lastSocialItems.filter(item => item.id !== message.id);
         renderSocialMessages([...without, message].sort((a,b) => a.seq - b.seq), {refresh:true});
@@ -8370,7 +8661,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('conversations-read-all')?.addEventListener('click', async () => {
     if (markingConversationsRead) return;
     const wid = workspaceId();
-    const unread = sessions.filter(item => item.source === 'social' && item.unread_count > 0);
+    const unread = sessions.filter(item => item.source === 'social' && visibleSessionUnread(item) > 0);
     if (!wid || !unread.length) return;
     markingConversationsRead = true;
     renderSessions();
@@ -8403,31 +8694,39 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (muteButton) {
       muteButton.hidden = !conversation || (conversation.kind === 'group' && !conversation.public_agent);
       muteButton.setAttribute('aria-pressed', String(muted));
-      muteButton.textContent = muted ? '取消免打扰' : '免打扰';
+      muteButton.textContent = muted ? uiLabel('取消免打扰', 'Unmute') : uiLabel('免打扰', 'Mute');
     }
     groupMute?.setAttribute('aria-checked', String(muted));
   }
   async function toggleMute() {
     if (currentSource !== 'social' || !currentConversation || savingMute) return;
     const conversation = currentConversation;
-    const wid = workspaceId();
+    const scope = notificationScope();
     savingMute = true;
     if (muteButton) muteButton.disabled = true;
     if (groupMute) groupMute.disabled = true;
     try {
       const result = await request('POST', `${socialBase()}/${conversation.id}/preferences`, {muted: !conversation.muted});
       if (result.status !== 200) throw new Error('Mute preference unavailable');
-      if (workspaceId() !== wid) return;
+      if (!currentNotificationScope(scope)) return;
       const muted = Boolean(result.body.muted);
       const row = sessions.find(item => item.source === 'social' && item.id === conversation.id);
       if (row) row.muted = muted;
+      const listed = socialConversations.find(item => item.id === conversation.id);
+      if (listed) listed.muted = muted;
       if (currentSource === 'social' && currentConversation?.id === conversation.id) {
         currentConversation.muted = muted;
         syncMuteButton(currentConversation);
       }
       renderSessions();
+      notificationEpoch += 1;
+      if (notificationSnapshot) {
+        notificationSnapshot = {...notificationSnapshot, scope:notificationScope(),
+          body:{...notificationSnapshot.body, items:[]}};
+      }
+      void loadNotifications({interactive: !document.getElementById('notifications-panel')?.hidden});
     } catch {
-      if (workspaceId() === wid) show('error', '免打扰设置保存失败，请重试。');
+      if (currentNotificationScope(scope)) show('error', '免打扰设置保存失败，请重试。');
     } finally {
       savingMute = false;
       if (muteButton) muteButton.disabled = false;
@@ -8439,6 +8738,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   pinButton?.addEventListener('click', toggleConversationPin);
   document.getElementById('search-close').addEventListener('click', () => closeSearchPanel({focus: true}));
   document.getElementById('chat-back').addEventListener('click', () => {
+    rememberReadingPosition();
     cancelStartupLink();
     stopReplyProgress();
     stopGroupReplyProgress();
@@ -9113,7 +9413,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
               : code === 'attachment_type_blocked' ? '请确认附件的格式与扩展名一致。'
                 : messageFor(result.body.error, '未能确认发送结果，请重试。'));
           }
-          if (nativePrivate && isCurrent() && currentConversation?.deferred && privateReplyPair(result.body, queue, job.key)) {
+          if (nativePrivate) job.delivery = privateReplyPair(result.body, queue, job.key);
+          if (job.delivery && isCurrent() && currentConversation?.deferred) {
             // The first message and reply are committed with the discussion.
             delete currentConversation.deferred;
           }
@@ -9167,6 +9468,34 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (isCurrent()) renderPendingSend();
       if (queue.jobs.some(job => !job.failed && !job.accepted)) void drainSends(queue);
     }
+  }
+
+  const templateButton = document.getElementById('chat-prompt-templates');
+  if (servedByDsbot && templateButton && document.getElementById('chat-prompt-dialog')?.showModal) {
+    const composer = document.getElementById('chat-body');
+    const scope = () => currentUser && !sendClosed() && !composer.disabled &&
+      (currentSource === 'agent' ? currentAgent : currentConversation) ? sendScope() : null;
+    const loadTemplates = deferModule('./prompt-templates.mjs');
+    let templates;
+    const label = uiLabel('提示词模板', 'Prompt templates');
+    templateButton.title = label;
+    templateButton.setAttribute('aria-label', label);
+    templateButton.hidden = false;
+    templateButton.addEventListener('click', async () => {
+      const opening = scope();
+      if (!opening) {
+        show('error', uiLabel('请先打开可发送消息的对话。', 'Open a conversation you can send to first.'));
+        return;
+      }
+      try {
+        const {mountPromptTemplates} = await loadTemplates();
+        if (scope() !== opening) return;
+        templates ||= mountPromptTemplates(document, {request, composer, scope, uiLabel});
+        templates.open();
+      } catch {
+        if (scope() === opening) show('error', uiLabel('无法打开提示词模板。请重试。', 'Could not open prompt templates. Try again.'));
+      }
+    });
   }
 
   const formatButton = document.getElementById('chat-format');

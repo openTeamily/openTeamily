@@ -13,7 +13,7 @@ from openteamily.fake_runtime import FakeRuntimeBackend
 from openteamily.operator_config import OperatorAdmin
 from openteamily.security import digest
 from openteamily.store import Store
-from tests.test_management import Client, ORIGIN
+from tests.test_management import Client, ORIGIN, seed_legacy_workspace
 
 TOKEN = 'A' * 43
 
@@ -53,7 +53,7 @@ class BotSocialAPITests(unittest.TestCase):
         )
         self.alice = Client(self.app)
         self.alice.register('alice')
-        self.wid = self.alice.workspace()['body']['workspace']['id']
+        self.wid = seed_legacy_workspace(self.alice)['id']
         self.bob = Client(self.app)
         self.bob.register('bob')
 

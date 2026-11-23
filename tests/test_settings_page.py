@@ -67,7 +67,7 @@ class SettingsPageTests(unittest.TestCase):
         self.assertEqual(head['body'], b'')
 
     def test_static_validators_revalidate_get_and_head_without_a_body(self):
-        for path in ('/shell/app.css', '/shell/agent-categories.mjs', '/look/app.mjs'):
+        for path in ('/shell/app.css', '/shell/agent-categories.mjs', '/look/app.mjs', '/artifacts/entry.mjs'):
             first = self.raw.call('GET', path)
             self.assertEqual(first['status'], 200)
             self.assertEqual(first['headers']['Cache-Control'], 'private, no-cache')
@@ -218,6 +218,13 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('javascript', asset['headers']['Content-Type'])
         self.assertGreater(len(asset['body']), 256 * 1024)
 
+    def test_discover_reader_modules_load_without_a_session(self):
+        for path in ('/discover/document-reader.mjs', '/shell/markdown.mjs', '/shell/markdown-table.mjs'):
+            with self.subTest(path=path):
+                asset = self.raw.call('GET', path)
+                self.assertEqual(asset['status'], 200)
+                self.assertIn('javascript', asset['headers']['Content-Type'])
+
     def test_chat_entry_can_load_from_the_platform_shell(self):
         asset = self.raw.call('GET', '/chat/app.mjs')
         self.assertEqual(asset['status'], 200)
@@ -292,6 +299,24 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('href="/settings/shortcuts"', html)
         self.assertIn('href="/settings/message-folding"', html)
         self.assertIn('href="/settings/privacy"', html)
+        prefs = html[html.find('id="group-prefs"'):html.find('id="group-notification-prefs"')]
+        folding = prefs.find('href="/settings/message-folding"')
+        appearance = prefs.find('href="/settings/appearance"')
+        privacy = prefs.find('href="/settings/privacy"')
+        shortcuts = prefs.find('href="/settings/shortcuts"')
+        self.assertTrue(-1 < folding < appearance < privacy < shortcuts)
+        self.assertIn('id="folding-current"', prefs)
+        self.assertIn('id="appearance-current"', prefs)
+        self.assertIn('隐私设置', prefs)
+        support = html[html.find('id="group-support"'):html.find('id="settings-form"')]
+        help_center = support.find('href="/help"')
+        guide = support.find('href="/guide"')
+        terms = support.find('href="/terms"')
+        policy = support.find('href="/privacy"')
+        about = support.find('href="/about"')
+        issues = support.find('href="https://github.com/openTeamily/openTeamily/issues"')
+        self.assertTrue(-1 < help_center < guide < terms < policy < about < issues)
+        self.assertNotIn('退款政策', support)
         self.assertIn('系统语言', html)
         self.assertIn('始终使用浅色主题。', html)
         self.assertIn('选择长消息在对话里最先展示多少内容。', html)
@@ -353,8 +378,13 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('Slack', html)
         self.assertIn('WhatsApp', html)
         channels = html[html.find('data-settings-page="channels"'):html.find('data-settings-page="agent-access"')]
-        self.assertEqual(channels.count('+ 连接'), 4)
-        self.assertEqual(html.count('title="未实现：OpenTeamily 还没有接入'), 4)
+        help_page = self.raw.call('GET', '/help')
+        self.assertEqual(help_page['status'], 200)
+        help_html = help_page['body'].decode()
+        for channel in ('wechat', 'imessage', 'slack', 'whatsapp'):
+            self.assertIn(f'href="/help#channel-{channel}"', channels)
+            self.assertIn(f'id="channel-{channel}"', help_html)
+        self.assertNotIn('+ 连接', channels)
         self.assertIn('disabled', html)
         self.assertNotIn('Teamily Agent', html)
         agent = self.raw.call('GET', '/settings/agent-access')['body'].decode()
@@ -408,9 +438,15 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('可选用「自定义时段」', html)
         self.assertIn('id="appearance-status"', html)
         self.assertIn('class="settings-appearance-status"', html)
-        self.assertLess(html.find('id="appearance"'), html.find('id="appearance-status"'))
-        self.assertLess(html.find('id="appearance-status"'), html.find('id="appearance-schedule-card"'))
-        self.assertLess(html.find('</fieldset>', html.find('id="appearance"')), html.find('id="appearance-status"'))
+        self.assertIn('白天浅色、夜间深色。按下面的时段或你设定的时间切换。', html)
+        self.assertNotIn('夜间取 22:00 至次日 06:00，或用你设定的时段。', html)
+        css = self.raw.call('GET', '/settings/app.css')['body'].decode()
+        self.assertIn('grid-template-columns: auto minmax(0, 1fr)', css)
+        schedule = html.find('id="appearance-schedule-card"')
+        status = html.find('id="appearance-status"')
+        self.assertLess(html.find('id="appearance"'), schedule)
+        self.assertLess(schedule, status)
+        self.assertLess(status, html.find('</fieldset>', schedule))
         self.assertNotIn('可能相差一小时以上', html)
         self.assertNotIn('可能偏差一小时以上', html)
         self.assertNotIn('按系统浅色或深色偏好估算', html)

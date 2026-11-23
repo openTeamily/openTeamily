@@ -88,20 +88,25 @@ export function mountWorkVersion(document, {read, closeAddress}) {
   const title = get('title'), meta = get('meta'), preview = get('preview'), status = get('status');
   const tools = get('tools'), format = get('format'), download = get('download');
   const field = get('link'), copy = get('copy'), retry = get('retry');
+  const closeButton = get('close'), restore = get('restore'), review = get('restore-review');
+  const restoreSummary = get('restore-summary'), cancelRestore = get('restore-cancel'), confirmRestore = get('restore-confirm');
   const view = document.defaultView;
   let state;
 
   function close({user = false} = {}) {
     const previous = state;
+    if (user && previous?.restoring) return;
     state = null;
     previous?.controller.abort();
     if (dialog.open) dialog.close();
     preview.replaceChildren();
     field.value = status.textContent = '';
     field.hidden = true;
+    review.hidden = true;
     if (user && previous?.current()) {
       closeAddress(previous);
-      previous.trigger?.focus({preventScroll:true});
+      const focus = previous.trigger?.isConnected ? previous.trigger : document.getElementById('editor-title');
+      focus?.focus({preventScroll:true});
     }
   }
 
@@ -124,6 +129,7 @@ export function mountWorkVersion(document, {read, closeAddress}) {
     }
     title.textContent = version.title;
     meta.textContent = '只读 · 修订 ' + version.revision + ' · ' + artifactKindLabel(version.kind,version.media?.mime);
+    if (Number.isSafeInteger(version.restored_from)) meta.textContent += ' · 恢复自修订 ' + version.restored_from;
     format.replaceChildren();
     const choices = Object.hasOwn(FORMATS,version.kind) ? FORMATS[version.kind] : [];
     for (const [value, label] of [['original','原格式'],...choices]) {
@@ -134,9 +140,10 @@ export function mountWorkVersion(document, {read, closeAddress}) {
     syncExport(target);
     status.textContent = '';
     tools.hidden = false;
+    restore.hidden = !target.canRestore?.();
   }
 
-  get('close').addEventListener('click',()=>close({user:true}));
+  closeButton.addEventListener('click',()=>close({user:true}));
   dialog.addEventListener('cancel',event=>{
     event.preventDefault();
     close({user:true});
@@ -157,12 +164,65 @@ export function mountWorkVersion(document, {read, closeAddress}) {
       status.textContent = '已选中版本链接，可手动复制。';
     }
   });
+  restore.addEventListener('click',() => {
+    const target = state;
+    if (!target?.current() || target.restoring || !target.canRestore?.()) return;
+    const initial = target.reviewRestore();
+    if (typeof initial === 'string') {
+      status.textContent = initial;
+      return;
+    }
+    target.restoreReview ??= initial;
+    restoreSummary.textContent = `从修订 ${target.revision} 创建新修订。当前修订 ${target.restoreReview.revision} 会保留在版本历史中。`;
+    review.hidden = false;
+    status.textContent = '';
+    confirmRestore.textContent = '确认恢复';
+    confirmRestore.focus();
+  });
+  cancelRestore.addEventListener('click', () => {
+    if (!state || state.restoring) return;
+    if (!state.uncertainRestore) state.restoreReview = null;
+    review.hidden = true;
+    restore.focus();
+  });
+  confirmRestore.addEventListener('click', async () => {
+    const target = state;
+    if (!target?.current() || target.restoring || !target.restoreReview || review.hidden) return;
+    target.restoring = true;
+    closeButton.disabled = restore.disabled = confirmRestore.disabled = cancelRestore.disabled = true;
+    status.textContent = '正在恢复已选版本…';
+    let result;
+    try {
+      result = await target.submitRestore(target.restoreReview);
+    } catch {
+      result = {uncertain:true, message:'暂未确认服务器是否已恢复。可重试确认或重新打开作品查看。'};
+    } finally {
+      target.restoring = false;
+      if (state === target || !state) {
+        closeButton.disabled = restore.disabled = confirmRestore.disabled = cancelRestore.disabled = false;
+      }
+    }
+    if (state !== target || !target.current()) return;
+    if (result.saved) return close({user:true});
+    target.uncertainRestore = result.uncertain;
+    status.textContent = result.message;
+    if (result.uncertain) {
+      confirmRestore.textContent = '重试确认';
+      confirmRestore.focus();
+      return;
+    }
+    target.restoreReview = null;
+    review.hidden = true;
+    restore.hidden = result.conflict || !target.canRestore();
+    (restore.hidden ? closeButton : restore).focus();
+  });
 
   return {
     close,
     open(target) {
       close();
       state = {...target,controller:new AbortController()};
+      closeButton.disabled = restore.disabled = confirmRestore.disabled = cancelRestore.disabled = false;
       title.textContent = target.title;
       meta.textContent = '只读 · 修订 ' + target.revision;
       field.value = new URL(target.href, view.location.origin).href;

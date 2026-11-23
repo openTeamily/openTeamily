@@ -112,6 +112,75 @@ test('a failed step blocks dependants; retry resets them and finishes the run', 
   await assert.rejects(e.retry({ workspace_id: W, id: run.id, position: 1 }), (err) => err.status === 409)
 })
 
+test('reused tasks keep only local lineage and remove links to deleted tasks', async () => {
+  const {feature, e, a, b, agents} = await fixture(null, {runWorkspace:TEAM})
+  const plan = body(a, b, {workspace_id:TEAM})
+  const original = (await e.create(plan)).run
+  await settle(feature)
+  const first = {...plan, title:'第一次复用', idempotency_key:'r1'.repeat(12), reused_from:original.id}
+  const second = {...plan, title:'第二次复用', idempotency_key:'r2'.repeat(12), reused_from:original.id}
+  const one = (await e.create(first)).run
+  const two = (await e.create(second)).run
+  await settle(feature)
+  assert.equal(one.reused_from, original.id)
+  assert.equal(two.reused_from, original.id)
+  const read = id => e.get({workspace_id:TEAM, id}).then(result => result.run)
+  assert.equal((await read(original.id)).latest_reuse, two.id)
+  const own = (await agents.create({workspace_id:W, name:'个人复核员', idempotency_key:'private-agent-1xx'})).agent
+  await assert.rejects(e.create(body(own, own, {reused_from:original.id})), error =>
+    error.status === 404 && error.code === 'team-runs/reuse_unavailable')
+  await e.remove({workspace_id:TEAM, id:two.id})
+  assert.equal((await read(original.id)).latest_reuse, one.id)
+  await e.remove({workspace_id:TEAM, id:original.id})
+  assert.equal((await read(one.id)).reused_from, undefined)
+  const replay = await e.create(first)
+  assert.equal(replay.status, 200)
+  assert.equal(replay.run.id, one.id)
+})
+
+test('automation follow-up projects an authorized result and rechecks it before execution', async () => {
+  const {feature, e, a, b, table, turns, state} = await fixture(null, {runWorkspace:TEAM})
+  const automation_id = 'd'.repeat(32), run_id = 'e'.repeat(32)
+  const source = {kind:'automation_run', automation_id, run_id}
+  const report = 'Authorized automation output\n' + 'x'.repeat(4000) + ' outside-context-budget'
+  let status = 'succeeded'
+  table['automations/get'] = async ({workspace_id, id}) => {
+    assert.equal(workspace_id, TEAM)
+    assert.equal(id, automation_id)
+    return {automation:{workspace_id, id, title:'Daily brief', prompt:'private original settings'}}
+  }
+  table['automations/run'] = async ({workspace_id, id, run_id:current}) => {
+    assert.equal(workspace_id, TEAM)
+    assert.equal(id, automation_id)
+    assert.equal(current, run_id)
+    if (!status) throw Object.assign(new Error('Removed'), {status:404})
+    return {run:{workspace_id, automation_id:id, id:current, status, result:{text:report}}}
+  }
+  const path = `/v1/workspaces/${TEAM}/team-runs/automation-results/${automation_id}/${run_id}`
+  const preview = () => e.v1({method:'GET', path})
+  const result = await preview()
+  assert.equal(result.status, 200)
+  assert.deepEqual(result.body, {source, title:'Daily brief'})
+  assert.equal(turns.length, 0)
+  status = 'cancelled'
+  assert.equal((await preview()).status, 409)
+  await assert.rejects(e.create(body(a, b, {workspace_id:TEAM, source})), error => error.status === 409)
+  status = 'succeeded'
+  const params = body(a, b, {workspace_id:TEAM, source})
+  const created = await e.create(params)
+  await settle(feature)
+  assert.equal(created.status, 201)
+  assert.deepEqual((await e.get({workspace_id:TEAM, id:created.run.id})).run.source, source)
+  assert.equal(turns.length, 3)
+  assert.ok(turns.every(turn => turn.text.includes('Authorized automation output') &&
+    !turn.text.includes('private original settings') && !turn.text.includes('outside-context-budget')))
+  status = null
+  assert.equal((await preview()).status, 404)
+  assert.equal((await e.create(params)).run.id, created.run.id)
+  state.teams = []
+  assert.equal((await preview()).status, 404)
+})
+
 test('private team runs export every finished result intact and fence literal text', async () => {
   const long = '首行\n~~~~\n<script>text only</script>\n' + '长文本'.repeat(3000) + '\n最后一行'
   const {feature, e, a, b, state} = await fixture(key => ({text:key.includes(':0:') ? long : '第二项结果'}), {runWorkspace:TEAM})

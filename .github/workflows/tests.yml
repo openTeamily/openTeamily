@@ -1,7 +1,9 @@
 name: Management API tests
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -31,8 +33,20 @@ jobs:
       - run: node --test tests/chat_language.test.mjs
       - run: node --test tests/chat_page.test.mjs
       - run: node --test tests/chat_dsbot.test.mjs
-      - run: node --test tests/dsbot_skills.test.mjs
       - run: node --test tests/chat_reminder.test.mjs
+      - run: node --test tests/agent_private_sharing.test.mjs
+      - run: node --test tests/chat_call_recording.test.mjs
+      - run: node --test tests/chat_calls_handoff.test.mjs
+      - run: node --test tests/chat_flowchart.test.mjs
+      - run: node --test tests/chat_group_management.test.mjs
+      - run: node --test tests/chat_stickers.test.mjs
+      - run: node --test tests/markdown_table.test.mjs
+      - run: node --test tests/meeting_editor_recovery.test.mjs
+      - run: node --test tests/public_agent_share.test.mjs
+      - run: node --test tests/studio_merge.test.mjs
+      - run: node --test tests/system_locale.test.mjs
+      - run: node --test tests/system_locale_chat.test.mjs
+      - run: node --test tests/team_runs_page.test.mjs
       - run: node --test tests/ci_test_list.test.mjs
       - run: node --test tests/guide_page.test.mjs
       - run: node --test tests/members_page.test.mjs
@@ -58,7 +72,6 @@ jobs:
       - run: node --test tests/onboarding_page.test.mjs
       - run: node --test tests/agents_creator_filter.test.mjs
       - run: node --test tests/registration_page.test.mjs
-      - run: node --test tests/workspace_events.test.mjs
       - run: node --test tests/skill_imports.test.mjs
       - run: node --test tests/skills_page.test.mjs
       - run: node --test tests/home_page.test.mjs

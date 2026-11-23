@@ -2435,12 +2435,6 @@
     "mode": "100644",
     "bytes": 5522
   },
-  "src/platform.ts": {
-    "sha256": "9579a241c4adbcfe5b2bce03da790693a375fb70b9ad37a0180a0e9d789a8283",
-    "git_blob_sha": "ef50bd00dcde977b9577a553ced82ba71743629d",
-    "mode": "100644",
-    "bytes": 556520
-  },
   "src/db.ts": {
     "sha256": "3a9be56d600e2440be1da75bace8d5437538eaabc3368aded1f83b01b0a81363",
     "git_blob_sha": "8307b50724b4556e941d39b892e55847f6f91348",

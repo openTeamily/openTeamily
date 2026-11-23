@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mount } from '../openteamily/static/agents/app.mjs';
+import { mount, teamDirectoryLink } from '../openteamily/static/agents/app.mjs';
 
 class Element {
   constructor(tag = 'div') {
@@ -129,12 +129,27 @@ function fetcher(requests, {applyStatus = 200} = {}) {
 async function mountAgents(options) {
   const requests = [];
   const {doc, el} = fakeDocument();
-  globalThis.location = {search: '', pathname: '/agents', hash: '', href: '', assign(href) { this.href = href; }};
+  globalThis.location = {search: options?.search || '', pathname: '/agents', hash: '', href: '', assign(href) { this.href = href; }};
   globalThis.history = {replaceState() {}, pushState() {}};
   await mount(doc, {fetcher: fetcher(requests, options)});
   await tick();
   return {doc, el, requests};
 }
+
+test('the Discover team-template link opens and focuses templates without creating a group', async () => {
+  assert.equal(teamDirectoryLink('?tab=teams'), true);
+  assert.equal(teamDirectoryLink('?tab=teams&new=1'), true);
+  assert.equal(teamDirectoryLink('?tab=teams&new=2'), false);
+  assert.equal(teamDirectoryLink('?category=design&tab=teams'), false);
+  const {el, requests} = await mountAgents({search:'?tab=teams&new=1'});
+  assert.equal(el('tab-teams').attributes['aria-selected'], 'true');
+  assert.equal(el('teams-panel').hidden, false);
+  assert.equal(el('teams-panel').focused, true);
+  assert.equal(el('list-panel').hidden, true);
+  assert.equal(el('team-template-list').children.length, 3);
+  assert.equal(requests.filter(call => call.path === '/v1/team-templates').length, 1);
+  assert.equal(requests.some(call => call.method === 'POST'), false);
+});
 
 test('the teams tab lists all three templates with their agents', async () => {
   const {el} = await mountAgents();

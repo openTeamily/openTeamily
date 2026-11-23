@@ -131,7 +131,9 @@
         <p id="work-detail-meta" class="work-detail-meta"></p>
         <p id="work-detail-status" role="status"></p>
         <button type="button" id="work-detail-retry" hidden>重试</button>
+        <button type="button" id="work-detail-resume-remix" aria-haspopup="dialog" aria-controls="work-remix-dialog" hidden>确认上次复制</button>
         <div id="work-detail-preview" class="work-detail-content"></div>
+        <div id="work-detail-reader"></div>
         <div class="work-detail-actions" id="work-detail-actions" hidden>
           <a class="feed-detail-open" id="work-detail-open" href="/discover">打开原作品</a>
           <a class="feed-detail-open" id="work-detail-download" download hidden>下载原文件</a>
@@ -154,6 +156,7 @@
       </form>
       <a class="catalog-create" id="catalog-create-agent" href="/agents">+ 创建智能体</a>
       <a class="catalog-create" id="catalog-create-team" href="/team" hidden>+ 创建团队</a>
+      <a class="catalog-create catalog-create-secondary" id="catalog-create-agent-team" href="/agents?tab=teams&amp;new=1" hidden>+ 创建 AI 智能体团队</a>
     </header>
     <div id="catalog-filters" class="catalog-filters" aria-label="分类">
       <div class="catalog-filter-scroll">

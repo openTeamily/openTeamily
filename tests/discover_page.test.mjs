@@ -83,10 +83,11 @@ test('catalog categories are selectable and the search opens a real dialog', () 
 });
 
 
-test('the teams catalog links to the existing team wizard', () => {
+test('the teams catalog links to separate workspace and AI team creation flows', () => {
   const html = readFileSync(new URL('../openteamily/static/discover/index.html', import.meta.url), 'utf8');
   assert.match(html, /id="catalog-tab-teams" href="\/discover\?tab=agents&amp;section=groups">AI 团队</);
   assert.match(html, /id="catalog-create-team" href="\/team" hidden>\+ 创建团队</);
+  assert.match(html, /id="catalog-create-agent-team" href="\/agents\?tab=teams&amp;new=1" hidden>\+ 创建 AI 智能体团队</);
   assert.doesNotMatch(html, /没有公共 AI 团队目录接口/);
 });
 
@@ -588,6 +589,7 @@ test('anonymous viewers see login guidance and never query the teams directory',
   await mount(doc, {fetcher, location: {search: '?tab=agents&section=groups'}});
   assert.equal(doc.getElementById('catalog-tab-teams').attributes['aria-current'], 'page');
   assert.equal(doc.getElementById('catalog-create-team').hidden, false);
+  assert.equal(doc.getElementById('catalog-create-agent-team').hidden, true);
   assert.match(doc.getElementById('discover-empty').textContent, /登录后/);
   await doc.getElementById('catalog-search').handlers.submit({preventDefault() {}});
   assert.deepEqual(requests, ['/v1/auth/session']);
@@ -604,11 +606,13 @@ test('search and join use the team directory and show the approval status', asyn
     requests.push([path, options.method]);
     if (path === '/v1/auth/session') return respond(200, {user: {id: 'one', username: 'alice'}});
     if (path === '/v1/team-directory/ott_1/join') return pending.promise;
-    assert.match(path, /^\/v1\/team-directory\?limit=100/);
+    assert.match(path, /^\/v1\/team-directory\?limit=24/);
     return respond(200, {items: path.includes('&q=') ? [] : [team]});
   };
   await mount(doc, {fetcher, location: {search: '?tab=agents&section=groups'}});
   const el = id => doc.getElementById(id);
+  assert.equal(el('catalog-create-team').hidden, false);
+  assert.equal(el('catalog-create-agent-team').hidden, false);
   const teamAction = () => el('discover-list').children[0].children[0].children[1].children[1];
   const original = teamAction();
   const clicked = original.handlers.click();
@@ -624,11 +628,33 @@ test('search and join use the team directory and show the approval status', asyn
   assert.equal(el('discover-list').children.length, 1);
   assert.deepEqual(requests, [
     ['/v1/auth/session', 'GET'],
-    ['/v1/team-directory?limit=100', 'GET'],
+    ['/v1/team-directory?limit=24', 'GET'],
     ['/v1/team-directory/ott_1/join', 'POST'],
-    ['/v1/team-directory?limit=100&q=%E7%A0%94%E5%8F%91+%26+%E5%86%85%E5%AE%B9', 'GET'],
-    ['/v1/team-directory?limit=100', 'GET'],
+    ['/v1/team-directory?limit=24&q=%E7%A0%94%E5%8F%91+%26+%E5%86%85%E5%AE%B9', 'GET'],
+    ['/v1/team-directory?limit=24', 'GET'],
   ]);
+});
+
+test('an empty team directory explains publication and keeps errors separate', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  let status = 200;
+  await mount(doc, {
+    location: {search: '?tab=agents&section=groups'},
+    async fetcher(path) {
+      if (path === '/v1/auth/session') return commentResponse({user: {id: 'owner', username: 'alice'}});
+      if (path.startsWith('/v1/team-directory?')) return commentResponse({items: [], cursor: null}, status);
+      throw new Error('unexpected ' + path);
+    },
+  });
+  const empty = doc.getElementById('discover-empty');
+  assert.equal(empty.hidden, false);
+  assert.match(empty.textContent, /创建团队后.*成员页.*团队目录/);
+  status = 503;
+  await doc.getElementById('catalog-search').handlers.submit({preventDefault() {}});
+  assert.equal(empty.hidden, true);
+  assert.equal(doc.getElementById('catalog-error').hidden, false);
+  assert.equal(doc.getElementById('teams-retry').hidden, false);
 });
 
 test('feedQuery encodes a keyword and a recency cursor', () => {
@@ -636,6 +662,34 @@ test('feedQuery encodes a keyword and a recency cursor', () => {
   assert.equal(feedQuery('外观', '100.ci-doc'), 'limit=12&q=%E5%A4%96%E8%A7%82&cursor=100.ci-doc');
   assert.equal(feedQuery('设计', 'hot-key', '', 'popular'), 'limit=12&q=%E8%AE%BE%E8%AE%A1&cursor=hot-key&sort=popular');
   assert.equal(feedQuery('', '', '', 'latest', 'vera.home'), 'limit=12&creator=vera.home');
+});
+
+test('an empty author feed uses the canonical handle and can be cleared', async () => {
+  const {mount, feedStateFromSearch, feedSearchText} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const requests = [];
+  const mixedCase = '?creator=Writer.Home';
+  assert.equal(feedSearchText(feedStateFromSearch(mixedCase)), '?creator=writer.home');
+  assert.equal(feedSearchText(feedStateFromSearch('?kind=image&q=sample&creator=Writer.Home')),
+    '?kind=image&q=sample&creator=writer.home');
+  assert.equal(feedStateFromSearch('?creator=writer%2Fhome').creator, undefined);
+  await mount(doc, {
+    location: {search: mixedCase},
+    async fetcher(path) {
+      requests.push(path);
+      if (path === '/v1/auth/session') return commentResponse({}, 401);
+      if (path.startsWith('/v1/discover/works?')) return commentResponse({items: [], cursor: null});
+      throw new Error('unexpected ' + path);
+    },
+  });
+  const clear = doc.getElementById('feed-creator-filter');
+  assert.match(clear.textContent, /writer\.home/);
+  assert.equal(doc.getElementById('feed-note').textContent, '该作者还没有公开作品。');
+  assert.ok(requests.includes('/v1/discover/works?limit=12&creator=writer.home'));
+  await clear.handlers.click();
+  assert.equal(clear.hidden, true);
+  assert.equal(doc.getElementById('feed-note').textContent, FEED_ACTIVITY_EMPTY_NOTE);
+  assert.ok(requests.includes('/v1/discover/works?limit=12'));
 });
 
 test('the activity feed renders opted-in work cards from the public API', async () => {
@@ -715,6 +769,45 @@ test('the feed only presents available filters', () => {
   }
   assert.doesNotMatch(html, />小游戏</);
   assert.equal(feedQuery('中文', '1.site-one', 'website'), 'limit=12&q=%E4%B8%AD%E6%96%87&cursor=1.site-one&kind=website');
+});
+
+test('a failed Discover feed shows retry before a successful empty result', async t => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const cases = [
+    {name: 'public feed', search: '', path: '/v1/discover/works?limit=12', note: FEED_ACTIVITY_EMPTY_NOTE},
+    {name: 'public search', search: '?q=notes', path: '/v1/discover/works?limit=12&q=notes', note: FEED_SEARCH_EMPTY_NOTE},
+    {name: 'following feed', search: '?feed=following', path: '/v1/discover/me/works?limit=12&tab=following',
+      note: FEED_FOLLOWING_NOTE, viewer: 'alice'},
+  ];
+  for (const {name, search, path, note, viewer} of cases) {
+    await t.test(name, async () => {
+      const doc = fakeDocument();
+      doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+      const reads = [];
+      await mount(doc, {location: {search}, fetcher: async requested => {
+        if (requested === '/v1/auth/session') {
+          return viewer ? commentResponse({user: {id: 'owner', username: viewer}}) : commentResponse({}, 401);
+        }
+        reads.push(requested);
+        if (reads.length === 1) return commentResponse({}, 503);
+        return commentResponse({items: [], viewer_username: viewer || null});
+      }});
+      const el = id => doc.getElementById(id);
+      assert.deepEqual(reads, [path]);
+      assert.equal(el('feed-error').hidden, false);
+      assert.match(el('feed-error').textContent, /无法加载公开作品/);
+      assert.equal(el('feed-note').textContent, '');
+      assert.equal(el('feed-following-empty').hidden, true);
+      assert.equal(el('feed-retry').hidden, false);
+
+      await el('feed-retry').handlers.click();
+      assert.deepEqual(reads, [path, path]);
+      assert.equal(el('feed-error').hidden, true);
+      assert.equal(el('feed-retry').hidden, true);
+      assert.equal(el('feed-note').textContent, note);
+      assert.equal(el('feed-following-empty').hidden, !viewer);
+    });
+  }
 });
 
 test('selecting the active feed category refreshes once and preserves its items and cursor on failure', async () => {
@@ -1460,6 +1553,70 @@ function detailFetcher(item, previewResult) {
   };
   return {fetcher, requests};
 }
+
+test('a public work copy with a lost response can recover across reload and withdrawal for its original viewer', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const work = detailFixture({remix_available:true});
+  const workspace = 'a'.repeat(32);
+  const artifactId = 'b'.repeat(32);
+  const revision = 'c'.repeat(64);
+  const copyTitle = 'Copy the reviewed version';
+  const detailPath = '/v1/discover/works/' + work.slug;
+  const remixPath = detailPath + '/remix';
+  const storage = new Map();
+  const writes = [];
+  let withdrawn = false;
+  async function reopen(viewer) {
+    const doc = feedDocument();
+    doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+    await mount(doc, {
+      location:{search:'?work=' + work.slug},
+      window:{sessionStorage:{
+        getItem:key => storage.get(key) ?? null,
+        setItem:(key,value) => storage.set(key,value),
+        removeItem:key => storage.delete(key),
+      }},
+      fetcher:async (path, options) => {
+        if (path === '/v1/auth/session') return commentResponse({user:{id:viewer+'-id',username:viewer}});
+        if (path === detailPath) return withdrawn ? commentResponse({},404) : commentResponse({work,viewer_username:viewer});
+        if (path.startsWith('/v1/discover/works?')) return commentResponse({items:[],viewer_username:viewer});
+        if (path.startsWith('/w/')) return commentResponse({},404);
+        assert.equal(path,remixPath);
+        if (options.method === 'GET') return commentResponse({
+          template:{revision,title:work.title,kind:work.kind},viewer_username:viewer,
+        });
+        writes.push({viewer,body:JSON.parse(options.body),key:options.headers['Idempotency-Key']});
+        return writes.length === 1 ? commentResponse({},503) : commentResponse({
+          artifact:{id:artifactId,workspace_id:workspace,kind:work.kind},viewer_username:viewer,
+        });
+      },
+    });
+    return id => doc.getElementById(id);
+  }
+  const started = await reopen('reader');
+  started('work-detail-remix').handlers.click();
+  await flush();
+  started('work-remix-name').value = copyTitle;
+  await started('work-remix-form').handlers.submit({preventDefault() {}});
+  assert.equal(writes.length,1);
+  assert.equal(started('work-remix-submit').textContent,'确认副本');
+  withdrawn = true;
+  const other = await reopen('other-reader');
+  assert.equal(other('work-detail-resume-remix').hidden,true);
+  const reload = await reopen('reader');
+  assert.equal(reload('work-detail-resume-remix').hidden,false);
+  reload('work-detail-resume-remix').handlers.click();
+  assert.equal(writes.length,1);
+  assert.equal(reload('work-remix-name').disabled,true);
+  assert.equal(reload('work-remix-name').value,copyTitle);
+  await reload('work-remix-form').handlers.submit({preventDefault() {}});
+  assert.equal(writes.length,2);
+  assert.deepEqual(writes[0],writes[1]);
+  assert.deepEqual(writes[1].body,{title:copyTitle,revision});
+  assert.equal(reload('work-remix-open').href,`/space?workspace=${workspace}&artifact=${artifactId}`);
+  assert.equal(storage.size,0);
+  assert.equal(reload('work-detail-resume-remix').hidden,true);
+});
 
 test('public work bylines link to canonical creator directories from cards and details', async () => {
   const {mount} = await import('../openteamily/static/discover/app.mjs');

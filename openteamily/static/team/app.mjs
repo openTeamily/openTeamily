@@ -32,10 +32,22 @@ export function readWizard(form) {
 // The invite endpoint (POST /v1/workspaces/<id>/invites) takes a role and an
 // expiry in seconds; its defaults are member and seven days.
 const INVITE_EXPIRY = [86400, 604800, 2592000];
+const INVITE_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const BATCH_LIMIT = 10;
 
-export function inviteValues(document) {
-  const roleField = document.getElementById('invite-role');
-  const expiryField = document.getElementById('invite-expiry');
+export function parseInviteLines(text) {
+  const entries = new Map();
+  for (const line of text.split('\n')) {
+    const email = line.trim();
+    const key = email.toLowerCase();
+    if (email && !entries.has(key)) entries.set(key, {key, email, valid: email.length <= 254 && INVITE_EMAIL.test(email)});
+  }
+  return {entries: [...entries.values()].slice(0, BATCH_LIMIT), overflow: Math.max(0, entries.size - BATCH_LIMIT)};
+}
+
+export function inviteValues(document, prefix = 'invite') {
+  const roleField = document.getElementById(prefix + '-role');
+  const expiryField = document.getElementById(prefix + '-expiry');
   const expires = Number(expiryField ? expiryField.value : 0);
   return {
     role: roleField && roleField.value === 'admin' ? 'admin' : 'member',
@@ -48,7 +60,7 @@ export function inviteValues(document) {
 // client. Nothing is sent to the server and no mail is claimed to be sent.
 export function inviteMailto(email, teamName, url) {
   const address = (email || '').trim();
-  if (!url || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address) || /[\r\n]/.test(address)) return '';
+  if (!url || !INVITE_EMAIL.test(address) || /[\r\n]/.test(address)) return '';
   const subject = '邀请你加入团队「' + (teamName || 'OpenTeamily 团队') + '」';
   const body = '打开邀请，登录后确认加入：\n' + url;
   return 'mailto:' + encodeURIComponent(address) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
@@ -89,18 +101,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let created = null;
   let creation = null;
   let busy = false;
+  const batch = new Map();
+  const batchButton = document.getElementById('batch-invite');
+  const batchSummary = document.getElementById('batch-summary');
+  const batchList = document.getElementById('batch-results');
 
   function show(kind, text) {
     status.dataset.kind = kind;
     status.textContent = text;
   }
 
-  async function request(method, path, body, extraHeaders) {
+  async function request(method, path, body, extraHeaders, signal) {
     const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie)};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (extraHeaders) Object.assign(headers, extraHeaders);
     const response = await fetcher(path, {
-      method, headers, credentials: 'same-origin',
+      method, headers, signal, credentials: 'same-origin',
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     let parsed = {};
@@ -169,6 +185,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('invite-summary').textContent = '';
     document.getElementById('invite-token').value = '';
     document.getElementById('invite-mailto').hidden = true;
+    batch.clear();
+    batchButton.disabled = false;
+    batchList.replaceChildren();
+    batchSummary.textContent = '';
+    document.getElementById('batch-invites').open = false;
     form.reset();
     form.elements.mode.value = 'new';
     renderStep();
@@ -370,15 +391,112 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   document.getElementById('invite-skip').addEventListener('click', () => createAndInvite(false));
 
-  document.getElementById('copy-invite').addEventListener('click', async () => {
-    const field = document.getElementById('invite-token');
+  async function copyInvite(field, announce) {
     if (!field.value) return;
     try {
       await globalThis.navigator.clipboard.writeText(field.value);
-      show('ok', '已复制邀请链接。');
+      announce('ok', '已复制邀请链接。');
     } catch {
       field.select();
-      show('error', '请复制选中的链接。');
+      announce('error', '请复制选中的链接。');
+    }
+  }
+
+  document.getElementById('copy-invite').addEventListener('click', () => copyInvite(document.getElementById('invite-token'), show));
+
+  async function generateInvite(entry, result, workspace, values) {
+    if (!entry.valid) {
+      result.state = 'failed';
+      result.row.dataset.state = 'failed';
+      result.status.textContent = '邮箱格式不正确。';
+      return;
+    }
+    result.status.textContent = '正在生成邀请链接…';
+    let response;
+    try {
+      response = await request('POST', '/v1/workspaces/' + workspace.id + '/invites', values, {}, AbortSignal.timeout(15000));
+    } catch {
+      response = {status: 0};
+    }
+    if (created !== workspace) return;
+    const url = response.status === 201 ? teamInviteUrl(response.body.token, document.defaultView?.location?.origin) : '';
+    if (url) {
+      result.state = 'ok';
+      result.status.textContent = inviteSummary(response.body.invite);
+      const field = document.createElement('input');
+      field.type = 'url';
+      field.readOnly = true;
+      field.value = url;
+      field.setAttribute('aria-label', entry.email + ' 的邀请链接');
+      const label = document.createElement('label');
+      label.className = 'wizard-field';
+      label.append(field);
+      const controls = document.createElement('div');
+      controls.className = 'actions';
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.textContent = '复制邀请链接';
+      copy.addEventListener('click', () => copyInvite(field, (_kind, text) => {batchSummary.textContent = text;}));
+      const mail = document.createElement('a');
+      mail.href = inviteMailto(entry.email, workspace.name, url);
+      mail.textContent = '打开邮件草稿';
+      controls.append(copy, mail);
+      result.row.append(label, controls);
+    } else if (!response.status || response.status === 201 || response.status >= 500 || response.status === 408) {
+      result.state = 'unknown';
+      result.status.textContent = '暂时无法确认是否生成，请在成员页检查。';
+    } else {
+      result.state = 'failed';
+      result.status.textContent = messageFor(response.body?.error, '无法生成邀请链接。');
+    }
+    result.row.dataset.state = result.state;
+  }
+
+  batchButton.addEventListener('click', async () => {
+    if (busy || step !== 3 || !created) return;
+    const source = document.getElementById('batch-emails');
+    const {entries, overflow} = parseInviteLines(source.value);
+    if (!entries.length) {
+      batchSummary.textContent = '请填写收件人邮箱。';
+      source.focus();
+      return;
+    }
+    const workspace = created;
+    const values = {...inviteValues(document, 'batch'), max_uses:1};
+    busy = true;
+    batchButton.disabled = true;
+    batchSummary.textContent = '正在生成邀请链接…';
+    try {
+      for (const entry of entries) {
+        if (created !== workspace) return;
+        let result = batch.get(entry.key);
+        if (result?.state === 'ok' || result?.state === 'unknown') continue;
+        if (!result) {
+          const row = document.createElement('li');
+          const email = document.createElement('strong');
+          email.textContent = entry.email;
+          const status = document.createElement('p');
+          row.append(email, status);
+          result = {row, status};
+          batch.set(entry.key, result);
+          batchList.append(row);
+        }
+        await generateInvite(entry, result, workspace, values);
+      }
+      if (created !== workspace) return;
+      const counts = {ok:0, failed:0, unknown:0};
+      for (const {key} of entries) counts[batch.get(key).state] += 1;
+      batchSummary.textContent = [
+        '已生成 ' + counts.ok + ' 条。',
+        counts.failed ? counts.failed + ' 行未生成。' : '',
+        counts.unknown ? counts.unknown + ' 行待确认。' : '',
+        overflow ? '另有 ' + overflow + ' 行超出本批上限。' : '',
+      ].filter(Boolean).join(' ');
+    } finally {
+      if (created === workspace) {
+        busy = false;
+        batchButton.disabled = false;
+      }
     }
   });
 

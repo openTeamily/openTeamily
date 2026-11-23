@@ -42,6 +42,7 @@ export function workspaceFromHash(hash = '') {
 }
 
 const WORKSPACE_ID = /^[a-f0-9]{32}$/;
+const PENDING_INVITATION = 'openTeamilyPendingTeamInvite';
 const JOIN_STATES = {pending: '等待审批', approved: '已批准', rejected: '未获批准'};
 const unavailable = {status: 0, body: {}};
 
@@ -153,6 +154,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
   const workspaceChat = document.getElementById('workspace-chat');
   const view = document.defaultView;
   const receiveForm = document.getElementById('accept-form');
+  const receiveParent = receiveForm.parentNode;
+  const receiveNext = receiveForm.nextSibling;
   const receiveToken = document.getElementById('receive-invite-token');
   const receiveField = document.getElementById('receive-invite-field');
   const receivePreview = document.getElementById('invitation-preview');
@@ -165,11 +168,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     feedback:document.getElementById('add-member-status'), pending:'正在添加成员…'};
   const inviteWrite = {form:inviteForm, fields:['role','expires_days','max_uses','requires_approval'],
     button:document.getElementById('create-invite-submit'), feedback:document.getElementById('create-invite-status'), pending:'正在生成邀请…'};
-  let linkedInvite = teamInviteFromHash(view?.location?.hash);
   let linkedWorkspace = workspaceFromHash(view?.location?.hash);
   let previewed = '';
   let inviteRequest = 0;
-  let accepting = false;
+  let accepting = null;
   let currentUser = null;
   let actor = null;
   let workspaces = [];
@@ -653,7 +655,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     if (leaving) {
       linkedWorkspace = null;
       if (workspaceFromHash(view?.location?.hash) !== null && view?.location) {
-        view.history?.replaceState(null, '', view.location.pathname + view.location.search);
+        view.history?.replaceState(view.history.state, '', view.location.pathname + view.location.search);
       }
       workspaces = workspaces.filter(item => item.id !== id);
       showWorkspaceOptions(workspaces);
@@ -924,7 +926,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     if (!WORKSPACE_ID.test(id)) return;
     linkedWorkspace = id;
     if (view?.location) {
-      view.history?.replaceState(null, '', view.location.pathname + view.location.search + '#workspace=' + id);
+      view.history?.replaceState(view.history.state, '', view.location.pathname + view.location.search + '#workspace=' + id);
     }
   }
 
@@ -1069,6 +1071,49 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     receiveButton.textContent = '查看邀请';
   }
 
+  function rememberInvitation(token, scrubFragment = false) {
+    const history = view?.history;
+    if (!history?.replaceState || !view.location) return;
+    const state = {...history.state};
+    if (token && currentUser?.id) state[PENDING_INVITATION] = {viewer:currentUser.id, token};
+    else if (Object.hasOwn(state, PENDING_INVITATION)) delete state[PENDING_INVITATION];
+    else if (!scrubFragment) return;
+    const {pathname, search, hash} = view.location;
+    const fragment = scrubFragment ? (WORKSPACE_ID.test(linkedWorkspace || '') ? '#workspace=' + linkedWorkspace : '') : hash;
+    history.replaceState(state, '', pathname + search + fragment);
+  }
+
+  function resumeInvitation() {
+    const pending = view?.history?.state?.[PENDING_INVITATION];
+    if (currentUser?.id && pending?.viewer === currentUser.id && teamInviteHash(pending.token)) return pending.token;
+    rememberInvitation(null);
+    return '';
+  }
+
+  function openLinkedInvitation(token, scrubFragment = false) {
+    accepting = null;
+    resetInvitePreview();
+    receiveForm.dataset.linked = 'true';
+    mainPanel.querySelector('.page-toolbar')?.before(receiveForm);
+    receiveToken.readOnly = false;
+    receiveToken.type = 'password';
+    receiveToken.value = token;
+    if (scrubFragment) rememberInvitation(token, true);
+    return previewInvite(token);
+  }
+
+  function leaveLinkedInvitation() {
+    if (receiveForm.dataset.linked !== 'true') return;
+    delete receiveForm.dataset.linked;
+    accepting = null;
+    receiveForm.reset();
+    receiveToken.readOnly = false;
+    receiveToken.type = 'text';
+    resetInvitePreview();
+    receiveButton.disabled = false;
+    receiveParent?.insertBefore(receiveForm, receiveNext || null);
+  }
+
   function invitationReceipt(result) {
     const invitation = result?.status === 200 ? result.body?.invitation : null;
     if (invitation?.membership === 'pending') return {pending: true};
@@ -1079,6 +1124,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
   }
 
   async function showInvitationReceipt({pending, joined}, selection) {
+    rememberInvitation(null);
     receiveForm.reset();
     receiveToken.type = 'text';
     resetInvitePreview();
@@ -1111,6 +1157,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       }
       const invitation = result?.body?.invitation;
       if (result?.status !== 200 || !invitation?.team_name) {
+        if ([403, 404, 410].includes(result?.status)) rememberInvitation(null);
         receivePreview.textContent = result?.status === 403 ? '暂时无法通过这条邀请加入工作区。'
           : result?.status === 404 || result?.status === 410 ? '这条邀请已失效。' : '暂时无法读取邀请，请重试。';
         return;
@@ -1136,6 +1183,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       return;
     }
     if (groupInvite && session.status === 200 && session.body.user) {
+      resetInvitePreview();
       if (currentUser?.id !== session.body.user.id) workspaceWrites.clear();
       currentUser = session.body.user;
       loginPanel.hidden = mainPanel.hidden = true;
@@ -1145,6 +1193,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     }
     if (session.status === 401) {
       currentUser = null;
+      accepting = null;
+      rememberInvitation(null);
       workspaceWrites.clear();
       workspaces = [];
       myRequests = [];
@@ -1155,6 +1205,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       renderMyRequests();
       receiveForm.reset();
       receiveToken.type = 'text';
+      receiveToken.readOnly = false;
       resetInvitePreview();
       receiveButton.disabled = false;
       loginPanel.hidden = false;
@@ -1180,16 +1231,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     loginPanel.hidden = true;
     mainPanel.hidden = false;
     document.getElementById('whoami').textContent = currentUser.username;
-    if (linkedInvite) {
-      const token = linkedInvite;
-      linkedInvite = '';
-      receiveForm.dataset.linked = 'true';
-      mainPanel.querySelector('.page-toolbar')?.before(receiveForm);
-      receiveToken.type = 'password';
-      receiveToken.value = token;
-      view.history.replaceState(null, '', view.location.pathname + view.location.search);
-      void previewInvite(token);
-    }
+    const linkedInvite = teamInviteFromHash(view?.location?.hash);
+    const token = linkedInvite || resumeInvitation();
+    if (token) void openLinkedInvitation(token, Boolean(linkedInvite));
     await Promise.all([
       refreshWorkspaces({preferred: linkedWorkspace, explicit: linkedWorkspace !== null, initial: true}),
       loadMyRequests(),
@@ -1218,7 +1262,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
   });
   workspaceSelect.addEventListener('change', () => selectWorkspace(workspaceId()));
   view?.addEventListener?.('hashchange', event => {
-    if (groupInviteFromHash(view.location.hash) || (event?.oldURL && groupInviteFromHash(new URL(event.oldURL).hash))) return load();
+    if (groupInviteFromHash(view.location.hash) || (event?.oldURL && groupInviteFromHash(new URL(event.oldURL).hash))) {
+      resetInvitePreview();
+      return load();
+    }
+    const invite = teamInviteFromHash(view.location.hash);
+    if (invite && currentUser) return openLinkedInvitation(invite, true);
     const requested = workspaceFromHash(view.location.hash);
     if (!currentUser || requested === null || requested === workspaceId()) return;
     if (workspaces.some(item => item.id === requested)) return selectWorkspace(requested);
@@ -1229,6 +1278,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     clearWorkspaceView();
     document.getElementById('role-note').textContent = '正在查看工作区…';
     return refreshWorkspaces({preferred: requested, explicit: true, initial: true});
+  });
+  view?.addEventListener?.('popstate', () => {
+    if (!currentUser || groupInviteFromHash(view.location.hash) || teamInviteFromHash(view.location.hash)) return;
+    const token = resumeInvitation();
+    if (token && token !== receiveToken.value) void openLinkedInvitation(token);
+    if (!token) leaveLinkedInvitation();
   });
 
   addForm.addEventListener('submit', async event => {
@@ -1305,6 +1360,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
 
   receiveToken?.addEventListener('input', () => {
     if (accepting) return;
+    rememberInvitation(null);
     resetInvitePreview();
     receiveButton.disabled = false;
   });
@@ -1319,7 +1375,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     }
     if (token !== previewed) return previewInvite(token);
     const viewer = currentUser, selection = workspaceSelection, sequence = inviteRequest;
-    accepting = true;
+    const attempt = {};
+    accepting = attempt;
     receiveToken.readOnly = true;
     receiveButton.disabled = true;
     try {
@@ -1335,6 +1392,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
           if (receipt) return await showInvitationReceipt(receipt, selection);
         }
         if (result.status === 404 || result.status === 410) {
+          rememberInvitation(null);
           resetInvitePreview();
           receivePreview.hidden = false;
           receivePreview.textContent = '这条邀请已失效。';
@@ -1344,9 +1402,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       const pending = result.status === 202 || result.body.join_request?.status === 'pending';
       await showInvitationReceipt({pending, joined: result.body.workspace?.id}, selection);
     } finally {
-      accepting = false;
-      receiveToken.readOnly = false;
-      receiveButton.disabled = false;
+      if (accepting === attempt) {
+        accepting = null;
+        receiveToken.readOnly = false;
+        receiveButton.disabled = false;
+      }
     }
   });
 

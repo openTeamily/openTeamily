@@ -22,8 +22,7 @@ function archivedHistory(host) {
     const target = routingInstanceId ?? instanceId
     if (!TASK.test(target ?? '')) return {}
     importJsonBundles({
-      dataDir: host.dataDir, feature: { name: 'skill-run-history', importTables: { skill_run_history: [] } },
-      store, instanceId: target,
+      host, feature: { name: 'skill-run-history', importTables: { skill_run_history: [] } }, store,
       apply(draft, { skill_run_history }) {
         if (!Array.isArray(skill_run_history)) throw new Error('missing skill history')
         for (const row of skill_run_history) {

@@ -29,7 +29,9 @@ test('reviewed local meeting actions copy once to personal Memory with a saved r
   const stored = await copy()
   assert.equal(stored.status,201)
   const action = stored.body.action
+  const resolveSource = () => bot.call('memory','GET',target+'/'+action.id+'/meeting-source')
   assert.deepEqual(action.source,{kind:'meeting',...reference})
+  assert.deepEqual((await resolveSource()).body, {source:reference})
   assert.equal(action.title,reviewed.title)
   assert.equal(action.due_at,reviewed.due_at)
   assert.doesNotMatch(JSON.stringify(action),/讨论排期|同步进度|订会议室/)
@@ -43,8 +45,25 @@ test('reviewed local meeting actions copy once to personal Memory with a saved r
   assert.equal((await copy(current)).body.action.id,action.id)
   assert.equal((await bot.call('memory','GET', target)).body.items.length,1)
   assert.deepEqual((await bot.call('memory','GET', target+'/'+action.id)).body.action.source, action.source)
+
+  const [original, other] = edit.body.meeting.action_items
+  const reordered = await bot.call('meetings','POST',base(id,team),{
+    revision:edit.body.meeting.revision, changes:{action_items:[other, {...original, done:true}]},
+  })
+  assert.equal(reordered.status,200)
+  assert.deepEqual((await resolveSource()).body, {source:{
+    workspace_id:team, meeting_id:id, revision:reordered.body.meeting.revision, action_index:1,
+  }})
+  const ambiguous = await bot.call('meetings','POST',base(id,team),{
+    revision:reordered.body.meeting.revision, changes:{action_items:[original, other, original]},
+  })
+  assert.equal(ambiguous.status,200)
+  assert.deepEqual((await resolveSource()).body, {source:{
+    workspace_id:team, meeting_id:id, revision:ambiguous.body.meeting.revision,
+  }})
   bot.features.table['teams/activeWorkspaces'] = async () => []
   assert.equal((await copy(current)).status,404)
+  assert.equal((await resolveSource()).status,404)
   assert.equal((await bot.call('memory','POST', target+'/'+action.id+'/remove',{})).status,200)
   assert.equal((await bot.call('memory','GET', target+'/'+action.id)).status,404)
 })
@@ -842,5 +861,19 @@ test('legacy meetings of one test account import into that account\'s DS-Bot, id
   const evil = volume()
   deliverBundle(evil, 'x.bundle', JSON.stringify(tampered))
   const rejected = await boot(evil)
-  assert.equal((await rejected.endpoint('meetings/routes')).value.imported[0].status, 'rejected')
+  const badDigest = (await rejected.endpoint('meetings/routes')).value.imported[0]
+  assert.equal(badDigest.status, 'rejected')
+  assert.match(badDigest.reason, /digest mismatch/)
+
+  const foreign = volume()
+  deliverBundle(foreign, 'foreign.bundle', JSON.stringify({
+    ...JSON.parse(bundles.meetings),
+    instance_id: bot.identity.routingInstanceId ?? bot.identity.instanceId,
+  }))
+  const other = await boot(foreign)
+  assert.deepEqual((await other.endpoint('meetings/routes')).value.imported, [
+    { name: 'foreign.bundle', status: 'rejected', reason: 'import target mismatch' },
+  ])
+  assert.equal((await other.call('meetings', 'GET', base(expect.meetings.meeting_id, wid))).status, 404)
+  assert.equal(existsSync(join(foreign.data, 'openteamily', 'import', 'foreign.bundle')), true)
 })

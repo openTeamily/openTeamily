@@ -1,14 +1,11 @@
 import { studioDocumentHref } from '../shell/studio-link.mjs';
 
-const ID = /^[0-9a-f]{32}$/;
-const ROLES = new Set(['owner', 'admin', 'member']);
+import { studioCopyCandidate } from './entry.mjs';
 
 export function mountStudioCopy(document, {source, ready, request, show}) {
   const byId = id => document.getElementById('studio-copy-' + id);
   const dialog = byId('dialog');
   if (!dialog) return null;
-  const desktop = byId('open');
-  const mobile = byId('mobile');
   const title = byId('title');
   const body = byId('body');
   const target = byId('target');
@@ -22,17 +19,7 @@ export function mountStudioCopy(document, {source, ready, request, show}) {
   let review = null;
   let pending = false;
 
-  function candidate() {
-    const {selection, item, workspaces} = source();
-    const teams = (workspaces || []).filter(team => team.kind === 'team' && ID.test(team.id) &&
-      typeof team.name === 'string' && team.name.trim() && ROLES.has(team.role));
-    if (!teams.length || !selection || selection.workspace !== item?.workspace_id ||
-        item.kind !== 'document' || !ID.test(item.id || '') ||
-        !Number.isSafeInteger(item.revision) || item.revision < 1 ||
-        typeof item.title !== 'string' || typeof item.body !== 'string') return null;
-    const draft = {revision: item.revision, title: item.title.replace(/\s+/g, ' ').trim(), body: item.body};
-    return {selection, item, teams, draft};
-  }
+  const candidate = () => studioCopyCandidate(source());
 
   function close() {
     review = null;
@@ -83,7 +70,6 @@ export function mountStudioCopy(document, {source, ready, request, show}) {
     dialog.showModal();
   }
 
-  for (const button of [desktop, mobile]) button.addEventListener('click', open);
   workspaceSelect.addEventListener('change', () => {
     if (!review || pending || workspaceSelect.disabled) return;
     const team = review.teams.find(item => item.id === workspaceSelect.value);
@@ -154,10 +140,5 @@ export function mountStudioCopy(document, {source, ready, request, show}) {
     }
   });
 
-  return {
-    close,
-    update() {
-      desktop.hidden = mobile.hidden = !candidate();
-    },
-  };
+  return {close, open};
 }

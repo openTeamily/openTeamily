@@ -26,7 +26,9 @@ test('memory actions run in DS-Bot: create linked to a page, filter, update, con
     call('POST',base(`/actions/${action.id}`),{revision:2,changes:{notes}})))
   assert.deepEqual(edits.map(result => result.status).sort(),[200,409])
   const winner = edits.find(result => result.status === 200).body.action
-  assert.deepEqual(edits.find(result => result.status === 409).body.error.current,winner)
+  const {automation_followups, ...canonical} = winner
+  assert.deepEqual(automation_followups, [])
+  assert.deepEqual(edits.find(result => result.status === 409).body.error.current,canonical)
   assert.deepEqual((await call('GET',base(`/actions/${action.id}`))).body.action,winner)
   assert.equal((await call('POST', base(`/actions/${action.id}/remove`), {})).status, 200)
 })
@@ -51,6 +53,29 @@ test('a committed action create remains replayable after its linked page is remo
   assert.equal((await call('POST',base('/actions'),payload,key())).status,400)
   assert.equal((await call('POST',`/v1/workspaces/${team}/memory/actions`,payload,clientKey)).status,400)
   assert.equal((await call('GET',base('/actions'))).body.items.length,1)
+})
+
+test('due-ordered action paging uses an immutable boundary and keeps legacy cursors', async () => {
+  const bot = await boot()
+  const call = (...args) => bot.call('memory', ...args)
+  const add = async (title, due_at) => (await call('POST', base('/actions'), {title, due_at}, key())).body.action
+  const later = await add('later', 1800000000)
+  const earliest = [await add('first tied', 1700000000), await add('second tied', 1700000000)]
+    .sort((a,b) => a.id.localeCompare(b.id))
+  const unscheduled = await add('without a due date', null)
+  const finished = await add('finished', 1600000000)
+  await call('POST', base('/actions/' + finished.id), {revision:1, changes:{status:'done'}})
+  const listing = base('/actions?order=due&limit=1')
+  const first = (await call('GET', listing)).body
+  assert.equal(first.items[0].id, earliest[0].id)
+  await call('POST', base('/actions/' + earliest[0].id + '/remove'), {})
+  const after = (await call('GET', base('/actions?order=due&limit=5&after=' + encodeURIComponent(first.cursor)))).body
+  assert.deepEqual(after.items.map(row => row.id), [earliest[1].id, later.id, unscheduled.id, finished.id])
+  assert.equal(after.cursor, null)
+  const legacy = (await call('GET', base('/actions?limit=1'))).body
+  assert.match(legacy.cursor, /^[0-9a-f]{32}$/)
+  assert.equal((await call('GET', listing + '&after=bogus')).status, 400)
+  assert.equal((await call('GET', listing + '&cursor=' + later.id)).status, 400)
 })
 
 test('links and the graph (topics, [[mentions]], manual links) are computed in DS-Bot', async () => {

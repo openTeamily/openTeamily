@@ -1238,12 +1238,16 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   });
 
   const announcement = (cid: string) => ot.get<any>("SELECT * FROM ot_group_announcements WHERE conversation_id=?", cid) ?? { body: "", revision: 0 };
+  const announcementView = (cid: string) => {
+    const saved = announcement(cid);
+    return saved.body ? {...saved, author_name: ot.profileView(saved.updated_by).display_name} : saved;
+  };
   const canAnnounce = (conv: any, owner: string) => conv.account_group === 1 ? groupOwner(conv) === owner
     : !!conv.team_id && !!ot.get("SELECT 1 FROM ot_team_members WHERE team_id=? AND owner_id=? AND role IN ('owner','admin') AND suspended=0", conv.team_id, owner);
   app.get("/v1/ot/conversations/:id/announcement", async req => {
     const me = ot.me(req), conv = memberOf(ot, params(req).id, me.ownerId);
     assert(conv.kind === "group", 400, "invalid_request", "announcements require a group");
-    return { announcement: announcement(conv.id), can_edit: canAnnounce(conv, me.ownerId) };
+    return { announcement: announcementView(conv.id), can_edit: canAnnounce(conv, me.ownerId) };
   });
   app.post("/v1/ot/conversations/:id/announcement", async req => {
     const me = ot.me(req), conv = memberOf(ot, params(req).id, me.ownerId), b = body(req);
@@ -1255,7 +1259,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       assert(Number.isInteger(b.revision) && b.revision === current.revision, 409, "conflict", "announcement changed; reload");
       ot.run("INSERT INTO ot_group_announcements VALUES(?,?,?,?,?) ON CONFLICT(conversation_id) DO UPDATE SET body=excluded.body,revision=excluded.revision,updated_at=excluded.updated_at,updated_by=excluded.updated_by", conv.id, content, current.revision + 1, ot.now(), me.ownerId);
     });
-    return { announcement: announcement(conv.id), can_edit: true };
+    return { announcement: announcementView(conv.id), can_edit: true };
   });
 
   // ---- messages

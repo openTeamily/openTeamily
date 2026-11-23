@@ -52,16 +52,17 @@ PAGE_SEGMENT = re.compile(r'[a-z0-9][a-z0-9-]{0,40}')
 
 # Browser and non-browser /v1 routes that the signed-in owner's DS-Bot now serves.
 # Kept in sync with openteamily/static/shell/dsbot-api.mjs `MOVED`. A path not listed
-# here stays on the platform (auth, the
-# Composio callback bounce page, workspace lists, C pages, automations/agents until B2).
+# here stays on the platform, including authentication and the Composio callback.
 MOVED_APIS = (
     (re.compile(r'^/v1/skills/(?:catalog|bindings|installed|packages(?:/import-[a-z0-9][a-z0-9-]{1,39}(?:/(?:revoke|versions(?:/[0-9.]+)?))?)?)$'), 'skills'),
     (re.compile(r'^/v1/skill-secrets$'), 'skill-secrets'),
     (re.compile(r'^/v1/stickers(?:/[0-9a-f]{32}(?:/file)?)?$'), 'stickers'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/overview$'), 'overview'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/export$'), 'export'),
     (re.compile(r'^/v1/team-templates$'), 'team-templates'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/team-templates/[a-z0-9-]{3,40}$'), 'team-templates'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/team-runs(?:/[0-9a-f]{32}(?:/(?:cancel|remove|export|steps/[0-7]/(?:retry|artifact)))?)?$'), 'team-runs'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/team-runs/automation-results/[0-9a-f]{32}/[0-9a-f]{32}$'), 'team-runs'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/(?:team-runs/[0-9a-f]{32}/share|shared-runs(?:/otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}(?:/revoke)?)?)$'), 'shares'),
     (re.compile(r'^/v1/contacts(?:/(?:lookup|otcpt_[A-Za-z0-9_-]{1,80}))?$'), 'social'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/notifications(?:/read)?$'), 'social'),
@@ -81,7 +82,7 @@ MOVED_APIS = (
     (re.compile(r'^/v1/meeting-calls/(?:create|preview|join|poll|signal|leave|end|recording)$'), 'messenger'),
     (re.compile(r'^/v1/profile/(?:social|follow-work)$'), 'discover'),
     (re.compile(r'^/v1/discover/(?:agents|works|me/works)$'), 'discover'),
-    (re.compile(r'^/v1/discover/agents/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]/start$'), 'discover'),
+    (re.compile(r'^/v1/discover/agents/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]/(?:start|remix)$'), 'discover'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts/[0-9a-f]{32}/discover(?:/revoke)?$'), 'discover'),
     (re.compile(r'^/v1/discover/works/[a-z0-9][a-z0-9-]{1,28}[a-z0-9](?:/(?:engagement|remix|comments(?:/otwc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}/(?:like|remove))?))?$'), 'discover'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/discover(?:/revoke)?$'), 'discover'),
@@ -89,12 +90,15 @@ MOVED_APIS = (
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/automations(?:/(?:tick|[0-9a-f]{32}))?$'), 'automations'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/automations/[0-9a-f]{32}/(?:run|remove|runs(?:/[0-9a-f]{32}(?:/(?:cancel|retry|artifact|studio))?)?)$'), 'automations'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/api-keys(?:/[0-9a-f]{32}/revoke)?$'), 'agent-api'),
+    (re.compile(r'^/v1/agent-copy-grants(?:/(?:recipients|otag_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}/remix))?$'), 'agents'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/shares(?:/otag_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}/revoke)?$'), 'agents'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/access(?:/otc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}/revoke)?$'), 'agents'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/conversations/[0-9a-f]{32}/memory/capture$'), 'agents'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents(?:/[0-9a-f]{32}(?:/(?:archive|conversations(?:/[0-9a-f]{32}(?:/(?:attachments|reply-progress|reply-stop|messages(?:/[0-9a-f]{32}/(?:artifact|retry|files/[0-3]))?))?)?))?)?$'), 'agents'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/meetings(?:/(?:from-call/otcav_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}|draft|speech|transcribe|share-recipients|shared(?:/[0-9a-f]{32}(?:/(?:revoke|action|discussion))?)?|[0-9a-f]{32}(?:/(?:remove|export|shares|action|artifact|memory))?))?$'), 'meetings'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory(?:/[0-9a-f]{32}(?:/(?:remove|export|share-group|dream(?:/[0-9a-f]{32})?|versions(?:/\d{1,8}(?:/restore)?)?))?)?$'), 'memory'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory(?:/[0-9a-f]{32}(?:/(?:remove|export|share-group|dream(?:/[0-9a-f]{32})?|versions(?:/[0-9]{1,8}(?:/restore)?)?))?)?$'), 'memory'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory/actions/draft(?:/save)?$'), 'memory'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory/actions/from-meeting$'), 'memory'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory/actions/from-(?:chat|meeting)$'), 'memory'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory/(?:candidates(?:/[0-9a-f]{32})?|profile(?:/dream)?|graph|(?:actions|links|preferences)(?:/[0-9a-f]{32}(?:/remove)?)?)$'), 'memory'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/search/(?:messages|resources)$'), 'search'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/studio/documents(?:/[0-9a-f]{32}(?:/(?:remove|restore|live|versions(?:/[1-9][0-9]{0,15})?))?)?$'), 'studio'),
@@ -117,60 +121,12 @@ MOVED_APIS = (
     (re.compile(r'^/v1/mcp/servers(?:/[0-9a-f]{32})?$'), 'connectors'),
 )
 
-# Nginx locations that send a moved /v1 API to the owner's DS-Bot. More-specific
-# platform exceptions (automations, composio callback) are emitted first.
-MOVED_API_LOCATIONS = (
-    'location ^~ /v1/skills/ { return 418; }',
-    'location = /v1/skill-secrets { return 418; }',
-    'location ~ ^/v1/stickers(?:/[0-9a-f]{32}(?:/file)?)?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/overview$ { return 418; }',
-    'location = /v1/team-templates { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/(?:team-templates|notifications)(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/team-runs(?:/[0-9a-f]{32}(?:/(?:cancel|remove|export|share|steps/[0-7]/(?:retry|artifact)))?)?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/shared-runs(?:/otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}(?:/revoke)?)?$ { return 418; }',
-    'location = /v1/invites/accept { return 418; }',
-    'location = /v1/invites/preview { return 418; }',
-    'location ~ ^/v1/invites/group/(?:accept|preview)$ { return 418; }',
-    'location = /v1/join-requests { return 418; }',
-    'location ~ ^/v1/skills/(?:scopes|readiness|runs)$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts/[0-9a-f]{32}/discover(?:/revoke)?$ { return 418; }',
-    'location = /v1/workspaces { return 418; }',
+# These paths are handled at the edge or on the platform. The moved API
+# locations below are rendered from the same table as the gateway authorization.
+PLATFORM_API_LOCATIONS = (
     'location = /v1/agent-homepages/start { return 410; }',
-    'location = /v1/teams { return 418; }',
-    'location = /v1/team-directory { return 418; }',
-    'location ^~ /v1/team-directory/ { return 418; }',
-    'location ~ ^/v1/meeting-calls/(?:create|preview|join|poll|signal|leave|end|recording)$ { return 418; }',
-    'location = /v1/profile/social { return 418; }',
-    'location = /v1/profile/follow-work { return 418; }',
-    'location ^~ /v1/discover/ { return 418; }',
-    'location ~ ^/v1/contacts(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/(?:members|invites|join-requests|directory|social)(?:/|$) { return 418; }',
     'location = /v1/composio/callback { proxy_pass http://__PLATFORM__; proxy_set_header Host $host; proxy_set_header X-OT-Gateway-Key ""; }',
-    'location = /v1/settings { return 418; }',
-    'location = /v1/notification-prefs { return 418; }',
-    'location = /v1/onboarding { return 418; }',
-    'location ^~ /v1/onboarding/ { return 418; }',
-    'location ~ ^/v1/model-api(?:/(?:image|video|music|model3d))?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/images(?:/[0-9a-f]{32})?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/videos(?:/[0-9a-f]{32})?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/music(?:/[0-9a-f]{32})?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/websites(?:/[0-9a-f]{32})?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/models-3d(?:/[0-9a-f]{32})?$ { return 418; }',
-    'location = /v1/composio { return 418; }',
-    'location ^~ /v1/composio/ { return 418; }',
-    'location ^~ /v1/mcp/servers { return 418; }',
-    'location = /v1/automation-templates { return 418; }',
-    'location = /v1/onboarding/automations { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/automations(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/agents(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/meetings(?:/(?:from-call/otcav_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}|draft|speech|transcribe|share-recipients|shared(?:/[0-9a-f]{32}(?:/(?:revoke|action|discussion))?)?|[0-9a-f]{32}(?:/(?:remove|export|shares|action|artifact|memory))?))?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/memory(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/search/(?:messages|resources)$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/studio/documents(?:/[0-9a-f]{32}(?:/(?:remove|restore|live|versions(?:/[1-9][0-9]{0,15})?))?)?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:activity|shared-copy|studio-personal-copy|(?:spreadsheet|slides)/draft)$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|studio-copy|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/(?:revoke|link))?)?))?)?$ { return 418; }',
 )
-
 
 
 def moved_api(path):
@@ -757,7 +713,7 @@ __DSBOT_LOCATIONS__
   error_page 401 = @ot_login;
   location @ot_login {
     if ($uri = /discover/) { rewrite ^ /_ot_discover_guest/discover last; }
-    if ($uri ~ "^/discover(?:/app[.](?:css|mjs)|/comments[.]mjs)?$") {
+    if ($uri ~ "^/discover(?:/app[.](?:css|mjs)|/(?:comments|document-reader)[.]mjs)?$") {
       rewrite ^ /_ot_discover_guest$uri last;
     }
 __GUEST_DISCOVER_FEEDS__
@@ -869,8 +825,9 @@ def nginx_config(routes, platform, listen, key_include=None, key=None, bot_socia
                  f'  location ^~ {routes["mount"]}/ {{ return 418; }}']
     for prefix in routes['passthrough']:
         locations.append(f'  location ^~ {prefix} {{ return 418; }}')
-    for line in MOVED_API_LOCATIONS:
-        locations.append('  ' + line.replace('__PLATFORM__', platform))
+    locations.extend('  ' + line.replace('__PLATFORM__', platform) for line in PLATFORM_API_LOCATIONS)
+    # nginx treats unquoted PCRE quantifiers as configuration block delimiters.
+    locations.extend(f'  location ~ "{pattern.pattern}" {{ return 418; }}' for pattern, _ in MOVED_APIS)
     if 'artifacts' in routes['moved_pages']:
         locations.append('  location = /space { return 418; }')
     for page in sorted(routes['moved_pages']):

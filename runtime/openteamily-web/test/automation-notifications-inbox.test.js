@@ -29,7 +29,7 @@ function fixture(t) {
     }},
   ]
   const sharedCalls = [], localCalls = []
-  const faults = {}
+  const faults = {}, prefs = {}
   setSharedBotSocial({ async request(method, path, body) {
     sharedCalls.push({method, path, body})
     if (path.startsWith('/v1/ot/teams/by-workspace/')) {
@@ -42,23 +42,31 @@ function fixture(t) {
     const kind = method === 'GET' ? url.searchParams.get('kind') : body.kind
     assert.notEqual(kind,'automation')
     assert.ok(!body?.notification_id?.startsWith('automation-run-'))
-    const visible = sharedRows.filter(row => !kind || row.kind === 'artifact.shared')
+    const exclude = method === 'GET' ? url.searchParams.get('exclude') : body.exclude
+    const excludes = (faults.oldShared || !exclude) ? [] : exclude.split(',')
+    const echo = excludes.length ? {exclude} : {}
+    const visible = sharedRows.filter(row => !excludes.includes(row.kind) &&
+      (!kind || row.kind === 'artifact.shared' || (row.kind === 'discover.published' && row.data.kind === 'work')))
     if (method === 'POST') {
       if (faults.sharedPost) throw faults.sharedPost
       if (!body.all && !visible.some(row => row.id === body.notification_id)) {
         throw Object.assign(new Error('Notice not found'),{status:404,code:'social/not_found'})
       }
       for (const row of visible) if (body.all || row.id === body.notification_id) row.read = true
-      return {unread:visible.filter(row => !row.read).length}
+      return {unread:visible.filter(row => !row.read).length, ...echo}
     }
     if (faults.sharedGet) throw faults.sharedGet
     const unread = visible.filter(row => !row.read)
     const filtered = url.searchParams.get('unread') ? unread : visible
     const notifications = [...filtered].sort((a,b) => b.seq-a.seq).slice(0,Number(url.searchParams.get('limit')))
-    return {unread:unread.length, notifications}
+    return {unread:unread.length, notifications, ...echo}
   } })
   t.after(() => setSharedBotSocial(undefined))
   const host = {async call(endpoint, payload) {
+    if (endpoint === 'settings/notificationPrefs') {
+      if (faults.prefs) throw faults.prefs
+      return {prefs}
+    }
     if (endpoint === 'agents/personal-binding') return {workspace_id:workspace}
     if (endpoint === 'agents/workspaceOverview') return {count:1,items:[{id:'agent-thread',source:'agent',updated:1}]}
     if (endpoint === 'automations/list') return {items:[]}
@@ -83,7 +91,7 @@ function fixture(t) {
   const endpoint = social(host).endpoints.v1
   const get = (query = '', wid = workspace) => endpoint({method:'GET',path:inbox(wid)+query})
   const read = (body, wid = workspace) => endpoint({method:'POST',path:inbox(wid)+'/read',body})
-  return {host, first, second, third, sharedCalls, localCalls, localRows, get, read, faults}
+  return {host, first, second, third, sharedCalls, sharedRows, localCalls, localRows, prefs, get, read, faults}
 }
 
 test('the mixed inbox cuts off the globally newest rows and projects only exact private run metadata', async t => {
@@ -134,6 +142,42 @@ test('read-one changes only its own store and reports the total unread for the a
   assert.deepEqual(await read({all:true}),{status:200,body:{unread_count:0}})
   assert.equal(localRows.find(row => row.workspace_id === other).read,false)
   assert.deepEqual(localCalls.at(-1),{endpoint:'automations/readNotifications',payload:{workspace_id:workspace,all:true}})
+})
+
+test('preferences hide matching rows and unread counts while keeping follow notices and hidden receipts', async t => {
+  const {get, read, prefs, sharedRows, sharedCalls, localRows, first, faults} = fixture(t)
+  sharedRows.push(
+    {id:'following', seq:14, kind:'follow.new', created_at:10100, read:false, data:{}},
+    {id:'published', seq:15, kind:'discover.published', created_at:10200, read:false, data:{kind:'work', slug:'updated-work'}},
+  )
+  Object.assign(prefs, {mentions:false, artifacts:false, task_completion:false})
+  const muted = await get('?limit=1&filter=unread')
+  assert.equal(muted.status, 200)
+  assert.deepEqual(muted.body.items.map(row => row.id), ['published'])
+  assert.equal(muted.body.unread_count, 2)
+  assert.equal(new URL(sharedCalls.at(-1).path, 'https://fixture.test').searchParams.get('exclude'),
+    'messenger.mention,artifact.shared,artifact')
+  assert.deepEqual((await get('?kind=work')).body.items.map(row => row.id), ['published'])
+  assert.deepEqual((await get('?kind=automation')).body, {items:[], unread_count:0, limit:200})
+  assert.equal((await get('?kind=automation', foreign)).status, 404)
+
+  assert.equal((await read({notification_id:first})).status, 404)
+  assert.equal((await read({notification_id:'shared-recent'})).status, 404)
+  assert.deepEqual((await read({all:true})).body, {unread_count:0})
+  assert.ok(sharedRows.filter(row => row.kind === 'messenger.mention').every(row => !row.read))
+  assert.ok(localRows.every(row => !row.read))
+  prefs.mentions = true
+  prefs.task_completion = true
+  assert.equal((await get()).body.unread_count, 4)
+
+  prefs.mentions = false
+  faults.oldShared = true
+  const writes = sharedCalls.filter(call => call.method === 'POST').length
+  assert.equal((await read({all:true})).status, 503)
+  assert.equal(sharedCalls.filter(call => call.method === 'POST').length, writes)
+  assert.equal((await get()).status, 503)
+  faults.prefs = new Error('internal path')
+  assert.doesNotMatch(JSON.stringify(await get()), /internal path/)
 })
 
 test('invalid requests and real source failures cannot masquerade as successful inbox reads or marks', async t => {

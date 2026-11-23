@@ -11,7 +11,7 @@
   <script type="module" src="/shell/dsbot-api.mjs"></script>
   <script type="module" src="/memory/app.mjs"></script>
 </head>
-<body class="app-workspace app-primary">
+<body class="app-workspace app-primary memory-page">
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
     <a class="brand-mark" href="/" title="OpenTeamily 首页" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
@@ -156,7 +156,10 @@
       <section id="actions-panel" hidden>
         <header class="memory-page-head">
           <h2>下一步行动</h2>
-          <button type="button" id="dream-actions" disabled aria-controls="action-draft-panel" aria-expanded="false" title="从记忆页生成行动建议">做梦</button>
+          <div class="action-head-tools">
+            <button type="button" id="dream-actions" disabled aria-controls="action-draft-panel" aria-expanded="false" title="从记忆页生成行动建议">做梦</button>
+            <button type="button" id="new-action-open" aria-controls="new-action-form" aria-expanded="false">新建行动</button>
+          </div>
         </header>
         <section id="action-draft-panel" class="action-draft-panel" aria-labelledby="action-draft-title" hidden>
           <header class="memory-page-head">
@@ -178,7 +181,18 @@
           </div>
           <p id="action-draft-status" class="note" role="status"></p>
         </section>
-        <button type="button" id="new-action-open">新建行动</button>
+        <form id="new-action-form" hidden>
+          <label>标题 <input id="new-action-title" name="title" type="text" maxlength="80" required autocomplete="off"></label>
+          <label>备注 <input id="new-action-notes" name="notes" type="text" maxlength="2000" autocomplete="off"></label>
+          <label>截止日期 <input id="new-action-due" name="due" type="date"></label>
+          <label>关联记忆页
+            <select id="new-action-page">
+              <option value="">不关联</option>
+            </select>
+          </label>
+          <button type="submit" id="new-action">保存行动</button>
+          <p id="new-action-status" class="note" role="status"></p>
+        </form>
         <form id="action-list-filters" role="search" aria-label="筛选行动">
           <label>搜索行动 <input id="action-search" type="search" maxlength="80" placeholder="按标题搜索"></label>
           <label>状态
@@ -190,24 +204,13 @@
           </label>
         </form>
         <p id="action-list-count" class="note" role="status"></p>
+        <p id="action-quick-status" class="note" role="status"></p>
         <p id="action-empty" class="note" hidden>暂无行动。</p>
         <ul id="action-list"></ul>
         <div class="actions action-list-navigation">
           <button type="button" id="action-list-more" hidden>加载更多行动</button>
           <button type="button" id="action-list-retry" hidden>重试</button>
         </div>
-        <form id="new-action-form" hidden>
-          <label>标题 <input id="new-action-title" name="title" type="text" maxlength="80" required autocomplete="off"></label>
-          <label>备注 <input id="new-action-notes" name="notes" type="text" maxlength="2000" autocomplete="off"></label>
-          <label>截止日期 <input id="new-action-due" name="due" type="date"></label>
-          <label>关联记忆页
-            <select id="new-action-page">
-              <option value="">不关联</option>
-            </select>
-          </label>
-          <button type="submit" id="new-action">新建行动</button>
-          <p id="new-action-status" class="note" role="status"></p>
-        </form>
       </section>
       <section id="memory-candidates" hidden>
         <header class="memory-page-head">
@@ -388,8 +391,9 @@
         </div>
       </form>
     </dialog>
-    <form id="action-editor-form" method="post" action="/v1/workspaces" hidden>
+    <form id="action-editor-form" method="post" action="/v1/workspaces" aria-labelledby="action-editor-title" hidden>
       <button type="button" id="close-action-editor" class="memory-editor-back">‹ 返回列表</button>
+      <h2 id="action-editor-title">编辑行动</h2>
       <section id="action-edit-conflict" hidden aria-labelledby="action-edit-conflict-heading">
         <h3 id="action-edit-conflict-heading">核对行动修改</h3>
         <pre id="action-edit-conflict-preview"></pre>
@@ -400,21 +404,27 @@
       </section>
       <label>标题 <input type="text" name="title" maxlength="80" required autocomplete="off"></label>
       <label>备注 <textarea name="notes" maxlength="2000" rows="4"></textarea></label>
-      <label>状态
-        <select name="status">
-          <option value="open">未完成</option>
-          <option value="done">已完成</option>
-        </select>
-      </label>
-      <label>截止日期 <input type="date" name="due"></label>
-      <label>关联记忆页
-        <select name="memory_page_id">
-          <option value="">不关联</option>
-        </select>
-      </label>
+      <div class="action-editor-fields">
+        <label>状态
+          <select name="status">
+            <option value="open">未完成</option>
+            <option value="done">已完成</option>
+          </select>
+        </label>
+        <label>截止日期 <input type="date" name="due"></label>
+        <label>关联记忆页
+          <select name="memory_page_id">
+            <option value="">不关联</option>
+          </select>
+        </label>
+      </div>
       <p id="action-editor-meta" class="note"></p>
-      <p id="action-editor-source" class="note" hidden><a id="action-source-meeting" hidden></a><a id="action-source-chat" hidden>查看来源消息</a></p>
-      <div class="actions">
+      <p id="action-editor-source" class="note" hidden>
+        <a id="action-source-meeting" hidden></a>
+        <a id="action-source-chat" hidden>查看来源消息</a>
+        <span id="action-source-meeting-status" role="status"></span>
+      </p>
+      <div class="actions action-editor-tools">
         <button type="submit" id="save-action">保存</button>
         <a id="action-follow-up" class="secondary" target="_blank" rel="noopener" aria-describedby="action-follow-up-status" hidden>跟进自动化</a>
         <button type="button" id="delete-action">删除</button>

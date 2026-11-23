@@ -15,8 +15,11 @@ const LEGAL_ROWS = [
 
 function rowLink(html, href, label) {
   const rows = html.match(/<a class="settings-row" href="[^"]*">[\s\S]*?<\/a>/g) || [];
-  return rows.find((row) => row.includes(`href="${href}"`)
-    && row.includes(`<span class="settings-row-label">${label}</span>`));
+  // Labels may carry data-ui-text (or other) attributes after the locale catalog landed.
+  const labelRe = new RegExp(
+    `<span\\b[^>]*\\bclass="settings-row-label"[^>]*>${label}</span>`,
+  );
+  return rows.find((row) => row.includes(`href="${href}"`) && labelRe.test(row));
 }
 
 test('the settings page links the help, terms and privacy pages it already serves', () => {

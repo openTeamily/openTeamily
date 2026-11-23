@@ -44,6 +44,21 @@ const RESERVED = new Set(["admin", "api", "automations", "docs", "health", "invi
 const DAY = 86_400_000;
 const MAX_OWNED_TEAMS = 50;
 
+function decodeDirectoryCursor(raw: string | undefined, q: string) {
+  if (raw === undefined) return null;
+  assert(/^[a-zA-Z0-9_-]{1,512}$/.test(raw), 400, "invalid_request", "invalid team directory cursor");
+  let value: unknown;
+  try {
+    value = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+  } catch { /* The query-scoped cursor is validated below. */ }
+  assert(Array.isArray(value) && value.length === 4 && value[0] === q
+    && Number.isSafeInteger(value[1]) && value[1] >= 0
+    && Number.isSafeInteger(value[2]) && value[2] >= 0
+    && typeof value[3] === "string" && /^ott_[0-9A-Z]{26}$/.test(value[3]),
+    400, "invalid_request", "invalid team directory cursor");
+  return { members: value[1] as number, updated: value[2] as number, id: value[3] as string };
+}
+
 export function roleOf(ot: OtContext, teamId: string, ownerId: string): { role: string; suspended: boolean } | undefined {
   const row = ot.get<any>("SELECT role, suspended FROM ot_team_members WHERE team_id = ? AND owner_id = ?", teamId, ownerId);
   return row ? { role: row.role, suspended: !!row.suspended } : undefined;
@@ -479,23 +494,45 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
     });
     return teamView(ot, ot.get("SELECT * FROM ot_teams WHERE id = ?", team.id), me.ownerId);
   });
-  app.get("/v1/ot/directory", async (req) => {
+  app.get("/v1/ot/directory", async (req, reply) => {
     const me = ot.me(req);
-    const q = (one(query(req).q, "q") ?? "").trim().toLowerCase().slice(0, 60);
-    const limit = intParam(query(req).limit, "limit", 30, 100);
+    const input = query(req);
+    const q = (one(input.q, "q") ?? "").trim().toLowerCase().slice(0, 60);
+    const limit = intParam(input.limit, "limit", 30, 100);
+    const before = decodeDirectoryCursor(one(input.cursor, "cursor"), q);
+    reply.header("cache-control", "private, no-store");
+    if (!limit) return {teams: [], cursor: null};
     const like = `%${q.replace(/[\\%_]/g, (c) => "\\" + c)}%`;
-    const rows = ot.all<any>("SELECT t.* FROM ot_teams t WHERE t.listed = 1 AND (lower(t.name) LIKE ? ESCAPE '\\' OR lower(t.summary) LIKE ? ESCAPE '\\') ORDER BY (SELECT COUNT(*) FROM ot_team_members m WHERE m.team_id = t.id) DESC, t.updated_at DESC LIMIT ?", like, like, limit);
+    const rows = ot.all<{
+      id: string; name: string; summary: string; member_count: number; updated_at: number;
+      workspace_id: string | null; suspended: number | null; request_status: string | null;
+    }>(`WITH listed AS (
+      SELECT t.id, t.name, t.summary, t.updated_at, t.workspace_id,
+        (SELECT COUNT(*) FROM ot_team_members m WHERE m.team_id = t.id) AS member_count
+      FROM ot_teams t
+      WHERE t.listed = 1 AND (lower(t.name) LIKE ? ESCAPE '\\' OR lower(t.summary) LIKE ? ESCAPE '\\')
+    ), page AS (
+      SELECT * FROM listed
+      WHERE (? IS NULL OR (member_count, updated_at, id) < (?, ?, ?))
+      ORDER BY member_count DESC, updated_at DESC, id DESC LIMIT ?
+    )
+    SELECT page.*, member.suspended, request.status AS request_status
+    FROM page
+    LEFT JOIN ot_team_members member ON member.team_id = page.id AND member.owner_id = ?
+    LEFT JOIN ot_join_requests request ON request.team_id = page.id AND request.owner_id = ?
+    ORDER BY page.member_count DESC, page.updated_at DESC, page.id DESC`,
+    like, like, before?.id ?? null, before?.members ?? 0, before?.updated ?? 0, before?.id ?? "", limit + 1,
+    me.ownerId, me.ownerId);
+    const tail = rows[limit - 1];
     return {
-      teams: rows.map((t) => {
-        const r = roleOf(ot, t.id, me.ownerId);
-        const pending = ot.get<any>("SELECT status FROM ot_join_requests WHERE team_id = ? AND owner_id = ?", t.id, me.ownerId);
-        const v = teamView(ot, t, me.ownerId);
-        return {
-          id: v.id, name: v.name, summary: v.summary, member_count: v.member_count, updated_at: v.updated_at,
-          membership: r?.suspended ? "suspended" : r ? "member" : pending?.status === "pending" ? "pending" : null,
-          ...(r && !r.suspended && v.workspace_id ? { workspace_id: v.workspace_id } : {}),
-        };
-      }),
+      teams: rows.slice(0, limit).map(t => ({
+        id: t.id, name: t.name, summary: t.summary, member_count: t.member_count, updated_at: t.updated_at,
+        membership: t.suspended === 1 ? "suspended" : t.suspended === 0 ? "member"
+          : t.request_status === "pending" ? "pending" : null,
+        ...(t.suspended === 0 && t.workspace_id ? {workspace_id: t.workspace_id} : {}),
+      })),
+      cursor: rows.length > limit
+        ? Buffer.from(JSON.stringify([q, tail.member_count, tail.updated_at, tail.id])).toString("base64url") : null,
     };
   });
   app.post("/v1/ot/directory/:id/join", async (req) => {

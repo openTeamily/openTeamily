@@ -17,7 +17,7 @@ from openteamily.security import digest, opaque
 from openteamily.store import Store
 from openteamily.operator_config import load_manager_auth
 import os
-from test_management import Client, ORIGIN
+from test_management import Client, ORIGIN, seed_legacy_workspace
 
 
 class RuntimeTests(unittest.TestCase):
@@ -29,7 +29,7 @@ class RuntimeTests(unittest.TestCase):
         self.app = App(self.store, Config(ORIGIN, allow_registration=True), clock=lambda: self.now, lifecycle=self.runtime)
         self.client = Client(self.app); self.client.register()
         self.owner = self.client.call('GET', '/v1/auth/session')['body']['user']['id']
-        self.wid = self.client.workspace()['body']['workspace']['id']
+        self.wid = seed_legacy_workspace(self.client)['id']
         self.fake = FakeRuntimeBackend(self.store)
         self.token = opaque()
 
@@ -233,7 +233,7 @@ class RuntimeTests(unittest.TestCase):
                  ('POST', f'/v1/instances/{iid}/start'), ('POST', f'/v1/instances/{iid}/purge'), ('GET', f'/v1/workspaces/{self.wid}/instances')]
         for method, path in paths:
             self.assertEqual(other.call(method, path)['status'], 404)
-        own = other.workspace()['body']['workspace']['id']
+        own = seed_legacy_workspace(other)['id']
         self.assertEqual(other.call('GET', f'/v1/workspaces/{own}/instances')['body']['items'], [])
         self.assertEqual(self.action(iid, 'purge')['status'], 501)
 
@@ -382,13 +382,19 @@ class RuntimeTests(unittest.TestCase):
 
     def test_members_can_inspect_but_only_owner_or_admin_operate(self):
         result = self.create(); iid, jid = result['instance']['id'], result['job']['id']
-        admin = Client(self.app, peer='127.0.0.2'); admin.register('bob')
-        member = Client(self.app, peer='127.0.0.3'); member.register('carol')
+        admin = Client(self.app, peer='127.0.0.2')
+        admin_id = admin.register('bob')['body']['user']['id']
+        member = Client(self.app, peer='127.0.0.3')
+        member_id = member.register('carol')['body']['user']['id']
         outsider = Client(self.app, peer='127.0.0.4'); outsider.register('dave')
-        self.assertEqual(self.client.call('POST', f'/v1/workspaces/{self.wid}/members',
-                                          {'username': 'bob', 'role': 'admin'})['status'], 201)
-        self.assertEqual(self.client.call('POST', f'/v1/workspaces/{self.wid}/members',
-                                          {'username': 'carol', 'role': 'member'})['status'], 201)
+        # The lifecycle still checks the membership snapshot on historical rows.
+        # Live membership changes are owned by Bot Social.
+        with self.store.transaction() as db:
+            db.executemany(
+                'INSERT INTO workspace_members(workspace_id, user_id, role, created, added_by) VALUES(?,?,?,?,?)',
+                [(self.wid, admin_id, 'admin', self.now, self.owner),
+                 (self.wid, member_id, 'member', self.now, self.owner)],
+            )
         listed = admin.call('GET', f'/v1/workspaces/{self.wid}/instances')
         self.assertEqual(listed['status'], 200)
         self.assertEqual([row['id'] for row in listed['body']['items']], [iid])

@@ -122,9 +122,17 @@ body.app-workspace #main-panel {
   gap: 0.15rem;
 }
 
+#automation-list .automation-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  padding-inline-end: 0.65rem;
+  border-radius: 0.75rem;
+}
+
 #automation-list .automation-row {
   display: grid;
-  grid-template-columns: 2.5rem minmax(0, 1fr) auto;
+  grid-template-columns: 2.5rem minmax(0, 1fr);
   gap: 0.75rem;
   align-items: center;
   width: 100%;
@@ -140,7 +148,8 @@ body.app-workspace #main-panel {
   white-space: normal;
 }
 
-#automation-list .automation-row:is(:hover, :focus-visible) {
+#automation-list .automation-entry:hover,
+#automation-list .automation-entry:focus-within {
   background: var(--ot-surface-2);
 }
 
@@ -198,6 +207,26 @@ body.app-workspace #main-panel {
 .status-pill.is-on {
   background: var(--ot-accent-soft);
   color: var(--ot-accent);
+}
+
+#automation-list .automation-switch {
+  min-height: 2.75rem;
+  justify-content: center;
+  gap: 0.35rem;
+  border: 1px solid var(--ot-line);
+  box-shadow: none;
+}
+
+#automation-list .automation-switch::before {
+  content: '';
+  width: 0.5rem;
+  height: 0.5rem;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+
+#automation-list .automation-switch.is-on::before {
+  background: currentColor;
 }
 
 #automation-list.template-catalog {
@@ -654,8 +683,20 @@ body.app-workspace #main-panel {
 }
 
 #editor-head-confirm,
-.editor-head .manual-run-feedback {
+.editor-head .manual-run-feedback,
+.editor-draft-notice {
   grid-column: 1 / -1;
+}
+
+.editor-draft-notice:not([hidden]) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .25rem .5rem;
+}
+
+.editor-draft-notice p {
+  margin: 0;
 }
 
 #editor-head-confirm:empty {

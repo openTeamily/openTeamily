@@ -281,3 +281,37 @@ test("a platform workspace binds to one team; members can be added by handle", a
   assert.equal(after.members.find((m: any) => m.handle === B.handle).role, "admin");
   assert.equal((await A.call("POST", "/v1/ot/teams", { name: "Other", workspace_id: workspace })).status, 409);
 });
+test("the listed team directory pages stable ties without exposing private workspace IDs", async () => {
+  const owner = await home(S.base, "directory-paging-owner");
+  const viewer = await home(S.base, "directory-paging-viewer");
+  const created = [];
+  for (const suffix of ["a", "b", "c", "d"]) {
+    const team = await owner.ok("POST", "/v1/ot/workspaces", {
+      name: `Catalog cohort ${suffix}`, slug: `catalog-cohort-${suffix}`, idempotency_key: `directory-paging-${suffix}`,
+    });
+    created.push(team);
+    if (suffix !== "d") {
+      await owner.ok("PUT", `/v1/ot/teams/${team.id}/listing`, {listed:true, summary:"Searchable cohort"});
+    }
+  }
+  S.platform.db.prepare("UPDATE ot_teams SET updated_at=1 WHERE owner_id=?").run((await owner.ok("GET", "/v1/ot/me")).owner_id);
+  const read = "/v1/ot/directory?limit=2&q=Searchable+cohort";
+  const expected = created.slice(0, 3).map(team => team.id).sort().reverse();
+  const first = await viewer.ok("GET", read);
+  assert.deepEqual(first.teams.map((team: {id: string}) => team.id), expected.slice(0, 2));
+  assert.ok(first.cursor);
+  const page2 = await viewer.ok("GET", `${read}&cursor=${first.cursor}`);
+  assert.deepEqual(page2.teams.map((team: {id: string}) => team.id), expected.slice(2));
+  assert.equal(page2.cursor, null);
+  for (const team of [...first.teams, ...page2.teams]) {
+    assert.equal(team.workspace_id, undefined);
+    assert.equal(team.membership, null);
+  }
+  assert.equal((await viewer.call("GET", `/v1/ot/directory?q=different&cursor=${first.cursor}`)).status, 400);
+  assert.equal((await viewer.call("GET", `${read}&cursor=invalid`)).status, 400);
+  assert.equal((await fetch(S.base + read)).status, 401);
+
+  const joined = await owner.ok("GET", read);
+  assert.ok(joined.teams.every((team: {workspace_id: string; membership: string}) =>
+    team.membership === "member" && /^[a-f0-9]{32}$/.test(team.workspace_id)));
+});

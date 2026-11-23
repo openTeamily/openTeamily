@@ -12,6 +12,17 @@ const validNotes = (v) => validLongText(v, LIMITS.NOTES_MAX)
 const validStatus = (v) => v === 'open' || v === 'done'
 const validDue = (v) => v === null || (Number.isInteger(v) && v >= 0 && v <= 2 ** 31)
 const validRef = (v) => v === null || (typeof v === 'string' && HEX.test(v))
+const ACTION_CURSOR = /^([012]):(-?\d{1,11}):([0-9a-f]{32})$/
+
+function dueOrder(row) {
+  if (row.status === 'done') return [2, -row.updated, row.id]
+  if (row.due_at === null) return [1, -row.updated, row.id]
+  return [0, row.due_at, row.id]
+}
+
+function compareDue(left, right) {
+  return left[0] - right[0] || left[1] - right[1] || left[2].localeCompare(right[2])
+}
 
 // ---- actions ----
 export function actionView(store, row, includeNotes = true, user = usernames(store)) {
@@ -81,17 +92,31 @@ export function createAction(req, ws, body, keyHash) {
 async function actions(req, ws, targetId, removing) {
   const store = req.store
   if (!targetId && req.method === 'GET') {
-    const { limit, cursor } = pagination(req.query, ['q', 'status'])
+    const { limit, cursor } = pagination(req.query, ['q', 'status', 'order', 'after'])
     const needle = casefold((req.query.get('q') ?? '').trim())
     const status = req.query.get('status') ?? ''
-    if (needle.length > 80 || (status && !validStatus(status))) refuse(400, 'invalid', 'Invalid memory action request')
+    const order = req.query.get('order') ?? ''
+    const after = req.query.get('after')
+    const marker = after === null ? null : ACTION_CURSOR.exec(after)
+    if (needle.length > 80 || (status && !validStatus(status)) || (order && order !== 'due') ||
+      (order === 'due' && cursor) || (after !== null && (!marker || order !== 'due'))) {
+      refuse(400, 'invalid', 'Invalid memory action request')
+    }
     let rows = store.all('SELECT * FROM memory_actions WHERE workspace_id=? ORDER BY id', ws)
     if (status) rows = rows.filter((row) => row.status === status)
     if (needle) rows = rows.filter((row) => casefold(row.title).includes(needle))
-    if (cursor) rows = rows.filter((row) => row.id > cursor)
+    if (order === 'due') {
+      if (marker) {
+        const boundary = [Number(marker[1]), Number(marker[2]), marker[3]]
+        rows = rows.filter(row => compareDue(dueOrder(row), boundary) > 0)
+      }
+      rows.sort((a,b) => compareDue(dueOrder(a), dueOrder(b)))
+    } else if (cursor) rows = rows.filter((row) => row.id > cursor)
     rows = rows.slice(0, limit + 1)
     const user = usernames(store)
-    return { body: { items: rows.slice(0, limit).map((row) => actionView(store, row, false, user)), cursor: rows.length > limit ? rows[limit - 1].id : null } }
+    const last = rows.length > limit ? rows[limit - 1] : null
+    return { body: { items: rows.slice(0, limit).map((row) => actionView(store, row, false, user)),
+      cursor: last ? (order === 'due' ? dueOrder(last).join(':') : last.id) : null } }
   }
   if (!targetId && req.method === 'POST' && !req.queryString) {
     const body = requireBodyKeys(await req.json(), ['title', 'notes', 'due_at', 'memory_page_id'])

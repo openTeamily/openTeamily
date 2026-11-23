@@ -145,6 +145,31 @@
               <a id="invite-mailto" href="#" hidden>写邮件邀请</a>
             </div>
           </section>
+          <details id="batch-invites">
+            <summary>批量邀请成员</summary>
+            <label class="wizard-field">收件人邮箱
+              <textarea id="batch-emails" rows="4" maxlength="2550" autocomplete="off" spellcheck="false" placeholder="a@example.com&#10;b@example.com" aria-describedby="batch-invite-hint"></textarea>
+            </label>
+            <p id="batch-invite-hint" class="wizard-hint">每行一个邮箱，每批最多 10 人。每条链接只能使用一次。邮箱仅用于标记链接和打开邮件草稿。</p>
+            <div class="batch-invite-options">
+              <label class="wizard-field">角色
+                <select id="batch-role">
+                  <option value="member" selected>成员</option>
+                  <option value="admin">管理员</option>
+                </select>
+              </label>
+              <label class="wizard-field">有效期
+                <select id="batch-expiry">
+                  <option value="86400">1 天</option>
+                  <option value="604800" selected>7 天</option>
+                  <option value="2592000">30 天</option>
+                </select>
+              </label>
+            </div>
+            <div class="actions"><button type="button" id="batch-invite">生成邀请链接</button></div>
+            <p id="batch-summary" class="wizard-hint" role="status"></p>
+            <ul id="batch-results"></ul>
+          </details>
           <div class="actions team-destinations">
             <a id="finish-members" href="/members">管理团队成员</a>
             <a id="finish-chat" href="/chat">打开团队聊天</a>

@@ -12,6 +12,17 @@ test('call recording consent uses the owner runtime on both call roots', () => {
   }
 });
 
+test('workspace export routes only its canonical path and keeps paging in the owner runtime', () => {
+  const path = `/v1/workspaces/${WS}/export`;
+  const paged = path + '?type=memory&cursor=20';
+  const target = {feature:'export', path:paged};
+  assert.deepEqual(movedTarget(paged, ORIGIN),target);
+  assert.deepEqual(envelope(target, 'GET'),{endpoint:'export/v1', payload:{method:'GET',path:paged}});
+  assert.equal(movedTarget(path + '/another', ORIGIN), null);
+  assert.equal(movedTarget('/v1/workspaces/other/export', ORIGIN), null);
+  assert.equal(movedTarget('https://other.example' + path, ORIGIN), null);
+});
+
 test('copying shared work goes only to the signed owner artifact runtime', () => {
   for (const action of ['shared-copy','studio-personal-copy']) {
     const path = `/v1/workspaces/${WS}/artifacts/${action}`;

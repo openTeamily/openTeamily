@@ -61,6 +61,7 @@
         <p>按功能分区说明这个自托管实例现在能做什么、边界在哪。每一条边界都对着实例里的按钮或接口写，不写空头承诺。</p>
         <ul class="doc-jump" aria-label="跳到功能分区">
           <li><a href="#chat">会话</a></li>
+          <li><a href="#channels">Agent 渠道</a></li>
           <li><a href="#agents">智能体</a></li>
           <li><a href="#artifacts">作品库</a></li>
           <li><a href="#automations">自动化</a></li>
@@ -85,6 +86,19 @@
           <li>输入框工具栏里的 Auto / Instant / Agentic 模式、格式工具、表情、技能、会议纪要、用记忆强化提示都还是 disabled 占位，点了没有反应。</li>
           <li>没有语音或视频通话入口。</li>
         </ul>
+      </section>
+
+      <section class="doc-section" id="channels">
+        <h2>Agent 渠道</h2>
+        <p>可以通过<a href="/chat">站内聊天</a>使用智能体，或在<a href="/agents">智能体页</a>为外部调用创建 Agent API 密钥。下列渠道目前没有站内授权入口。</p>
+        <h3 id="channel-wechat">微信公众号</h3>
+        <p>需要独立的渠道服务处理公众号消息的校验、接收和回复。</p>
+        <h3 id="channel-imessage">Apple iMessage</h3>
+        <p>需要能收发 iMessage 的外部渠道服务。</p>
+        <h3 id="channel-slack">Slack</h3>
+        <p>需要部署 Slack 应用和接收工作区消息的回调服务。</p>
+        <h3 id="channel-whatsapp">WhatsApp</h3>
+        <p>需要能接收并发送 WhatsApp Business 消息的外部渠道服务。</p>
       </section>
 
       <section class="doc-section" id="agents">

@@ -9,7 +9,7 @@
 import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
-import { verifyBundle } from '../../featurekit/bundle.js'
+import { requireBundleTarget, verifyBundle } from '../../featurekit/bundle.js'
 import { unwrapLegacy } from './seal.js'
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.bundle$/
@@ -28,8 +28,9 @@ export function readSecrets(bundle, sealKey) {
 }
 
 // feature: { name, importTables }, store: lib/b4/json-store, apply(draft, tables, secrets)
-export function importJsonBundles({ dataDir, feature, store, sealKey = null, instanceId, apply, log = () => {} }) {
-  const dir = join(dataDir, 'openteamily', 'import')
+export function importJsonBundles({ host, feature, store, sealKey = null, apply, log = () => {} }) {
+  const dir = join(host.dataDir, 'openteamily', 'import')
+  const instanceId = host.identity?.routingInstanceId ?? host.identity?.instanceId
   let names = []
   try { names = readdirSync(dir).filter(name => NAME.test(name)).sort() } catch { return [] }
   const results = []
@@ -39,12 +40,12 @@ export function importJsonBundles({ dataDir, feature, store, sealKey = null, ins
       const text = readFileSync(file, 'utf8')
       const bundle = JSON.parse(text)
       if (bundle?.feature !== feature.name) continue
-      if (instanceId !== undefined && bundle.instance_id !== instanceId) throw new Error('import target mismatch')
+      requireBundleTarget(bundle, instanceId)
       const digest = sha256(text)
       if ((store.read().imports ?? []).includes(digest)) { unlinkSync(file); results.push({ name, status: 'already-imported' }); continue }
       const tables = verifyBundle(bundle, feature)
       if (bundle.seal_key_id && bundle.seal_key_id !== createHash('sha256').update(sealKey).digest('hex')) throw new Error('runtime import key mismatch; preserve bundle and restore manager key mount')
-  const secrets = bundle.secrets === undefined ? {} : sealKey ? readSecrets(bundle, sealKey) : null
+      const secrets = bundle.secrets === undefined ? {} : sealKey ? readSecrets(bundle, sealKey) : null
       if (secrets === null) throw new Error('bundle has secrets but this runtime has no seal key')
       store.update((draft) => {
         apply(draft, tables, secrets)

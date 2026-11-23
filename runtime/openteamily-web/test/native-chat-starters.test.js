@@ -371,7 +371,15 @@ test('the native Chat directory and thread observe live roster edits without a m
 test('archived agents can be listed and restored without recreating or crossing owner scope', async t => {
   const runtime = ownerRuntime(t)
   const outsider = ownerRuntime(t)
+  outsider.host.call = async name => name === 'teams/activeWorkspaces' ? [] : null
   const agent = await createAgent(runtime, WORKSPACE, 'Recoverable agent', ['Existing starter'])
+  let archiveRole = 'owner'
+  runtime.host.call = async name => {
+    if (name === 'agents/personal-binding') return null
+    assert.equal(name, 'teams/activeWorkspaces')
+    if (archiveRole === 'unavailable') throw Error('Bot Social unavailable')
+    return [{id: WORKSPACE, role: archiveRole}, {id: OTHER_WORKSPACE, role: 'owner'}]
+  }
   const another = await createAgent(runtime, WORKSPACE, 'Active neighbour', [])
   const archive = agentBase(WORKSPACE) + '/' + agent.id + '/archive'
   const directory = agentBase(WORKSPACE) + '?limit=100'
@@ -387,8 +395,23 @@ test('archived agents can be listed and restored without recreating or crossing 
   const [hidden] = (await runtime.request('GET', archivedList)).body.items
   assert.equal(hidden.id, agent.id)
   assert.equal(runtime.bots[hidden.native_bot_id].hidden, true)
-  assert.equal((await outsider.request('POST', archive, {archived:false, revision:hidden.revision})).status, 404)
+  assert.equal((await outsider.request('POST', archive, {archived:false, revision:hidden.revision})).status, 403)
   assert.equal((await runtime.request('POST', archive, {archived:false, revision:agent.revision})).status, 409)
+  archiveRole = 'member'
+  assert.equal((await runtime.request('GET', archivedList)).status, 403)
+  assert.equal((await runtime.request('GET', directory+'&include_archived=1')).status, 403)
+  const hiddenResponse = await runtime.request('POST', archive, {archived:false, revision:hidden.revision})
+  const missingResponse = await runtime.request('POST', agentBase(WORKSPACE) + '/' + 'f'.repeat(32) + '/archive',
+    {archived:false, revision:hidden.revision})
+  assert.equal(hiddenResponse.status, 403)
+  assert.deepEqual(missingResponse, hiddenResponse)
+  assert.deepEqual((await runtime.request('GET', directory)).body.items.map(item=>item.id), [another.id])
+  await assert.rejects(runtime.endpoints.archive({workspace_id:WORKSPACE, id:agent.id,
+    archived:false, revision:hidden.revision}), error => error.status === 403)
+  assert.equal(runtime.bots[hidden.native_bot_id].hidden, true)
+  archiveRole = 'unavailable'
+  assert.equal((await runtime.request('GET', archivedList)).status, 503)
+  archiveRole = 'admin'
   const restored = await runtime.request('POST', archive, {archived:false, revision:hidden.revision})
   assert.equal(restored.status, 200)
   assert.equal(restored.body.agent.id, agent.id)

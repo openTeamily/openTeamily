@@ -26,11 +26,13 @@ object ids the pin records, or if an unpinned file appears here.
 | --- | --- |
 | `ds-bot/` (whole) | The DSH plugin that is the Bot runtime: host (`src/host`), web client bundle (`client.js`), its unit tests, the DSH test-harness pin (`dev/harness`), and the mock LLM used by its smoke test. The whole directory is taken so its single tree id proves the copy. |
 | `link/` (whole) | ds-bot's tests import `link/server`, and `ds-bot/link.js` is built from `link/src`. It is needed to run upstream's suite unchanged. The phone app itself is not an OpenTeamily target; see below. |
+| `app/ui/src/`, `app/package.json` | Desktop UI source for the DS-Bot frontend assertions and its upstream module boundary. |
+| `mobile/src/team/gated.ts`, `start.ps1` | Source read by upstream mobile access-control and Windows launcher tests. |
 | `docker/Dockerfile`, `docker/entrypoint.sh`, `docker/docker.patch.yml` | Upstream's image: DSH `0.2.2-rc.1` plus the packed plugin, served by `dsh web` on port 3080. |
 | `docker/test.mjs` | Upstream's container startup test. It builds no network (`--network none`), migrates data ownership, starts `dsh web`, logs in with the printed token, and asserts that the DS Bot `/api/bot` `state` endpoint answers. CI uses it as the runtime smoke test. |
 | `LICENSE`, `NOTICE` | Binding license and attribution. |
 
-**Not taken:** `app/` (Electron desktop), `mobile/` (Android app), `browser-plugins/`, `docs/`,
+**Not taken:** the rest of the Electron desktop and Android apps, `browser-plugins/`, `docs/`,
 upstream `scripts/`, `docker/Dockerfile.dev`, the dev compose files, `.github/`, and the upstream
 git history (`sync` fetches one commit at depth 1 and copies trees; no upstream commits enter
 this repository's history).
@@ -39,7 +41,7 @@ this repository's history).
 
 ```sh
 node scripts/ds-bot-upstream.mjs latest            # newest upstream vX.Y.Z tag
-node scripts/ds-bot-upstream.mjs sync v0.3.7       # replace the tree + pin, staged
+node scripts/ds-bot-upstream.mjs sync v0.3.10      # replace the tree + pin, staged
 node scripts/ds-bot-upstream.mjs check
 ```
 

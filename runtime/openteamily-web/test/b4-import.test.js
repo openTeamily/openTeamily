@@ -13,13 +13,15 @@ import * as modelApi from '../features/model-api/model-api.js'
 import * as connectors from '../features/connectors/connectors.js'
 
 const KEY = Buffer.from([...Array(32).keys()]) // test key; fixture wrapped with it
+const INSTANCE = '1'.repeat(32)
+const host = dataDir => ({ dataDir, identity: { instanceId: '2'.repeat(32), routingInstanceId: INSTANCE } })
 const WRAPPED = JSON.parse(readFileSync(new URL('./fixtures/b4-secrets.json', import.meta.url), 'utf8'))
 const sha = text => createHash('sha256').update(text, 'utf8').digest('hex')
 const sorted = obj => Object.fromEntries(Object.keys(obj).sort().map(k => [k, obj[k]]))
 const canon = v => JSON.stringify(Array.isArray(v) ? v.map(sorted) : sorted(v))
 
 function bundle(feature, tables, secrets) {
-  const out = { format: 'openteamily-dsbot-import', version: 1, feature, tables: {}, manifest: {} }
+  const out = { format: 'openteamily-dsbot-import', version: 1, feature, instance_id: INSTANCE, tables: {}, manifest: {} }
   for (const [name, rows] of Object.entries(tables)) {
     out.tables[name] = canon(rows)
     out.manifest[name] = { rows: rows.length, sha256: sha(out.tables[name]) }
@@ -44,7 +46,7 @@ test('settings bundle imports once and is removed; re-delivery is a no-op', () =
   })
   const file = place(dataDir, 'settings.bundle', value)
   place(dataDir, 'other.bundle', { feature: 'meetings' })
-  const run = () => importJsonBundles({ dataDir, feature: spec, store: feature.store, apply: settings.applyImport })
+  const run = () => importJsonBundles({ host: host(dataDir), feature: spec, store: feature.store, apply: settings.applyImport })
   assert.deepEqual(run(), [{ name: 'settings.bundle', status: 'imported' }])
   assert.equal(existsSync(file), false)
   assert.equal(existsSync(join(dataDir, 'openteamily', 'import', 'other.bundle')), true, 'other features untouched')
@@ -55,13 +57,31 @@ test('settings bundle imports once and is removed; re-delivery is a no-op', () =
   assert.deepEqual(run(), [{ name: 'settings.bundle', status: 'already-imported' }])
 })
 
+test('JSON importers retain wrong-target and untargeted bundles with all data unchanged', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'b4i-'))
+  const feature = settings.createSettingsFeature({ dir: join(dataDir, 'f') })
+  const spec = { name: 'settings', importTables: settings.IMPORT_TABLES }
+  const initial = feature.store.read()
+  const value = bundle('settings', {
+    user_settings: [{ user_id: 'u', document: JSON.stringify({ language: 'zh-CN' }), revision: 3, updated: 10 }],
+  })
+  const foreign = place(dataDir, 'foreign.bundle', { ...value, instance_id: host(dataDir).identity.instanceId })
+  const missing = place(dataDir, 'missing.bundle', { ...value, instance_id: undefined })
+  const results = importJsonBundles({ host: host(dataDir), feature: spec, store: feature.store, apply: settings.applyImport })
+  assert.deepEqual(results.map(({ status, reason }) => [status, reason]), [
+    ['rejected', 'import target mismatch'], ['rejected', 'import target mismatch'],
+  ])
+  assert.deepEqual(feature.store.read(), initial)
+  assert.equal(existsSync(foreign) && existsSync(missing), true)
+})
+
 test('tampered tables or secrets are rejected and left in place', () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'b4i-'))
   const api = modelApi.createModelApi({ dir: join(dataDir, 'm'), sealKey: KEY, env: {}, policy: { bases: [] }, platform: () => null })
   const value = bundle('model-api', { model_api_configs: [{ id: 'a', provider: 'openai', base_url: 'https://api.example/v1', model: 'm', revision: 1, updated: 1, key_set: 1 }] }, { model_api_key: WRAPPED.model_api_key })
   value.secrets.model_api_key = WRAPPED.composio_key
   const file = place(dataDir, 'm.bundle', value)
-  const [result] = importJsonBundles({ dataDir, feature: { name: 'model-api', importTables: modelApi.IMPORT_TABLES }, store: api.store, sealKey: KEY, apply: modelApi.importApplier(KEY) })
+  const [result] = importJsonBundles({ host: host(dataDir), feature: { name: 'model-api', importTables: modelApi.IMPORT_TABLES }, store: api.store, sealKey: KEY, apply: modelApi.importApplier(KEY) })
   assert.equal(result.status, 'rejected')
   assert.match(result.reason, /secrets digest/)
   assert.equal(existsSync(file), true)
@@ -72,7 +92,7 @@ test('model-api and connectors secrets are unwrapped and re-sealed, never stored
   const dataDir = mkdtempSync(join(tmpdir(), 'b4i-'))
   const api = modelApi.createModelApi({ dir: join(dataDir, 'm'), sealKey: KEY, env: {}, policy: { bases: [] }, platform: () => null })
   place(dataDir, 'm.bundle', bundle('model-api', { model_api_configs: [{ id: 'a', provider: 'openai', base_url: 'https://api.example/v1', model: 'gpt-test', revision: 2, updated: 1, key_set: 1 }] }, { model_api_key: WRAPPED.model_api_key }))
-  importJsonBundles({ dataDir, feature: { name: 'model-api', importTables: modelApi.IMPORT_TABLES }, store: api.store, sealKey: KEY, apply: modelApi.importApplier(KEY) })
+  importJsonBundles({ host: host(dataDir), feature: { name: 'model-api', importTables: modelApi.IMPORT_TABLES }, store: api.store, sealKey: KEY, apply: modelApi.importApplier(KEY) })
   assert.equal(api.resolveForProxy().api_key, 'sk-test-fixture-0001')
   assert.doesNotMatch(readFileSync(api.store.file, 'utf8'), /sk-test-fixture/)
 
@@ -84,7 +104,7 @@ test('model-api and connectors secrets are unwrapped and re-sealed, never stored
     composio_connections: [{ id: 'd'.repeat(32), toolkit: 'gmail', account_id: 'ca_1', status: 'ACTIVE', status_reason: null, created: 1, updated: 1 }],
     custom_mcp_servers: [{ id: sid, name: 'Docs', origin: 'https://mcp.example.com', revision: 1, created: 1, updated: 1 }],
   }, { composio_key: WRAPPED.composio_key, ['mcp:' + sid]: WRAPPED.mcp }))
-  const [result] = importJsonBundles({ dataDir, feature: { name: 'connectors', importTables: connectors.IMPORT_TABLES }, store: conn.store, sealKey: KEY, apply: connectors.importApplier(KEY) })
+  const [result] = importJsonBundles({ host: host(dataDir), feature: { name: 'connectors', importTables: connectors.IMPORT_TABLES }, store: conn.store, sealKey: KEY, apply: connectors.importApplier(KEY) })
   assert.equal(result.status, 'imported')
   const state = conn.store.read()
   assert.equal(state.composio_user, 'openteamily-' + 'c'.repeat(32))

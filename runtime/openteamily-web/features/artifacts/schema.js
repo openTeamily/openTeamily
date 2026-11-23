@@ -118,6 +118,15 @@ CREATE TABLE artifact_team_run_sources (
   position INTEGER NOT NULL CHECK(position BETWEEN 0 AND 7),
   run_title TEXT NOT NULL,
   UNIQUE(workspace_id, run_id, position));
+`, `
+CREATE TABLE artifact_restores (
+  artifact_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  source_revision INTEGER NOT NULL,
+  request_key TEXT,
+  PRIMARY KEY (artifact_id, revision),
+  UNIQUE (artifact_id, request_key),
+  FOREIGN KEY (artifact_id, revision) REFERENCES artifact_versions(artifact_id, revision) ON DELETE CASCADE);
 `]
 
 export const IMPORT_TABLES = {

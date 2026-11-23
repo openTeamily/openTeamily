@@ -1,12 +1,7 @@
-const TOKEN = /^[A-Za-z0-9_-]{43}$/;
+export {sharedWorkCopyToken} from './entry.mjs';
+
 const ID = /^[a-f0-9]{32}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
-
-export function sharedWorkCopyToken(hash) {
-  const fragment = new URLSearchParams(String(hash || '').slice(1));
-  const token = fragment.get('shared-work');
-  return fragment.size === 1 && TOKEN.test(token || '') ? token : '';
-}
 
 export function mountSharedWorkCopy(document, {request, dismissLink, openArtifact}) {
   const find = name => document.getElementById('shared-work-copy-' + name);

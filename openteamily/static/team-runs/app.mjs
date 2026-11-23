@@ -1,6 +1,5 @@
 import {readWorkspaceChoices} from '../shell/dsbot-api.mjs';
 import {spaceHref} from '../shell/thumb.mjs';
-import {createTeamRunShares} from './shares.mjs';
 
 const ID = /^[a-f0-9]{32}$/;
 const SHARED_ID = /^otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
@@ -22,7 +21,7 @@ const STEP_ERROR = {
   runtime_failed: '运行时未能完成此步骤。',
   workspace_unavailable: '运行时已失去对该工作区的访问权限。',
   source_changed: '共享结果已更新。请打开最新版并发起后续任务。',
-  source_unavailable: '无法读取引用的共享结果。',
+  source_unavailable: '无法读取引用的结果。',
 };
 const MUTATION_STATUS = {artifact: '已保存到作品库。', retry: '已提交重试。', cancel: '任务已取消。'};
 
@@ -31,22 +30,35 @@ export function teamRunTarget(hash = '') {
   const params = new URLSearchParams(hash.replace(/^#/, ''));
   const workspace = params.get('workspace'), run = params.get('run'), shared = params.get('shared'), draft = params.get('draft');
   const step = params.get('step');
+  const automation = params.get('automation'), result = params.get('result');
+  const handoff = automation !== null || result !== null;
   const selections = [run, shared, draft].filter(value => value !== null).length;
-  if (!ID.test(workspace || '') || selections > 1 || params.size !== 1 + selections + Number(step !== null) ||
+  if (!ID.test(workspace || '') || selections > 1 || params.size !== 1 + selections + Number(step !== null) + (handoff ? 2 : 0) ||
       (run !== null && !ID.test(run)) || (shared !== null && !SHARED_ID.test(shared)) ||
       (step !== null && (!run || !/^[0-7]$/.test(step))) ||
-      (draft !== null && draft !== '1')) return {invalid: true};
+      (draft !== null && draft !== '1') ||
+      (handoff && (draft !== '1' || !ID.test(automation || '') || !ID.test(result || '')))) return {invalid: true};
   return {workspace, ...(run ? {run} : {}), ...(step !== null ? {step:Number(step)} : {}),
-    ...(shared ? {shared} : {}), ...(draft ? {draft: true} : {})};
+    ...(shared ? {shared} : {}), ...(draft ? {draft: true} : {}),
+    ...(handoff ? {automationSource:{kind:'automation_run', automation_id:automation, run_id:result}} : {})};
 }
 
 function readSource(value) {
+  if (value?.kind === 'automation_run') {
+    if (typeof value.automation_id !== 'string' || !ID.test(value.automation_id) ||
+        typeof value.run_id !== 'string' || !ID.test(value.run_id)) return null;
+    return {kind:value.kind, automation_id:value.automation_id, run_id:value.run_id};
+  }
   if (!value || typeof value.id !== 'string' || !SHARED_ID.test(value.id) ||
       typeof value.version !== 'string' || !/^[a-f0-9]{64}$/.test(value.version) ||
       !Array.isArray(value.positions) || value.positions.length < 1 || value.positions.length > 3 ||
       value.positions.some(position => !Number.isInteger(position) || position < 0 || position > 7) ||
       new Set(value.positions).size !== value.positions.length) return null;
   return {id: value.id, version: value.version, positions: [...value.positions].sort((a, b) => a - b)};
+}
+
+function sameAutomationSource(left, right) {
+  return left?.kind === 'automation_run' && left.automation_id === right.automation_id && left.run_id === right.run_id;
 }
 
 export function teamRunPayload(draft, agents) {
@@ -66,7 +78,8 @@ export function teamRunPayload(draft, agents) {
   }
   const source = draft.source && readSource(draft.source);
   if (draft.source && !source) return null;
-  return {title, goal, steps, ...(source && {source})};
+  if (draft.sourceRun && !ID.test(draft.sourceRun)) return null;
+  return {title, goal, steps, ...(source && {source}), ...(draft.sourceRun && {reused_from:draft.sourceRun})};
 }
 
 export function teamRunDraftFromHistory(run, nextKey) {
@@ -110,12 +123,13 @@ function readDraft(view, storageKey, nextKey) {
   try {
     const raw = view.sessionStorage.getItem(storageKey);
     if (!raw || raw.length > 65536) return null;
-    const {title, goal, steps, sourceRun, source: rawSource, createKey} = JSON.parse(raw);
+    const {title, goal, steps, sourceRun, source: rawSource, createKey, createSourceRun} = JSON.parse(raw);
     const source = readSource(rawSource);
     if (typeof title !== 'string' || title.length > LIMITS.title || typeof goal !== 'string' ||
         goal.length > LIMITS.goal || !Array.isArray(steps) || steps.length < LIMITS.minimum ||
         steps.length > LIMITS.maximum || (sourceRun && !ID.test(sourceRun)) ||
-        (rawSource !== undefined && !source) || (createKey && !CREATE_KEY.test(createKey))) return null;
+        (rawSource !== undefined && !source) || (createKey && !CREATE_KEY.test(createKey)) ||
+        (createSourceRun !== undefined && (createSourceRun !== sourceRun || !createKey))) return null;
     const draft = {title, goal, steps: [], ...(sourceRun && {sourceRun}), ...(source && {source})};
     for (const [position, step] of steps.entries()) {
       if (!step || typeof step.agent !== 'string' || (step.agent && !ID.test(step.agent)) ||
@@ -128,6 +142,8 @@ function readDraft(view, storageKey, nextKey) {
     }
     if (!createKey) return {draft};
     const payload = teamRunPayload(draft, draft.steps.map(step => ({id: step.agent})));
+    // Older pending copies were sent without lineage. Continue to replay the same body.
+    if (payload && !createSourceRun) delete payload.reused_from;
     return payload ? {draft, attempt: {key: createKey, payload, draft}} : null;
   } catch {
     return null;
@@ -144,7 +160,7 @@ function writeDraft(view, storageKey, draft, attempt) {
       const steps = draft.steps.map(step => ({agent: step.agent, instruction: step.instruction,
         dependsOn: [...step.dependencies].map(key => positions.get(key))}));
       view.sessionStorage.setItem(storageKey, JSON.stringify({title: draft.title, goal: draft.goal, steps,
-        sourceRun: draft.sourceRun, source: draft.source, createKey: attempt?.key}));
+        sourceRun: draft.sourceRun, source: draft.source, createKey: attempt?.key, createSourceRun:attempt?.payload.reused_from}));
     }
     return true;
   } catch {
@@ -157,6 +173,8 @@ function errorMessage(result, fallback) {
   if (result.body?.error?.code === 'source_unavailable') return result.status === 503
     ? '暂时无法读取共享结果，请稍后重试。' : '共享结果已不可用。可以移除引用后继续。';
   if (result.body?.error?.code === 'source_invalid') return '请选择有输出的已完成步骤。';
+  if (result.body?.error?.code === 'reuse_unavailable') return '原任务已不可用。可以在草稿中移除原任务引用后继续。';
+  if (result.body?.error?.code === 'reuse_active') return '原任务仍在运行。完成后可以复用。';
   if (result.status === 401) return '登录已失效，请重新登录。';
   if (result.status === 403) return '你没有权限操作此工作区的任务。';
   if (result.status === 404) return '找不到这条团队任务。';
@@ -180,6 +198,7 @@ function runFromResponse(result, workspace, runId) {
 }
 
 export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalThis)) {
+  const native = document.querySelector?.('meta[name="openteamily-served-by"]')?.content === 'ds-bot';
   const view = document.defaultView;
   const node = id => document.getElementById(id);
   const main = node('main-panel');
@@ -201,6 +220,10 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   const previewNodes = new Map();
   let viewer, spaces = [], workspace = '', screen = '', detailId = '';
   let linkedStep, focusLinkedStep = false;
+  let automationHandoff;
+  let shares, sharesLoad, shareScope, linkedShare;
+  let sharesFailed = false;
+  let showSharedList = false;
   let personalSpaces = new Set();
   let epoch = 0, reads = 0, auth = 0, serial = 0;
   let current, currentDraft, tasks = [], agents = [];
@@ -243,17 +266,43 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     }
   }
 
-  const shares = createTeamRunShares({
-    document, request, adopt: adoptShare, selectAddress: id => updateLocation(id ? {shared: id} : {}),
-  });
   const pathFor = (id = workspace) => `/v1/workspaces/${id}/team-runs`;
+  const automationResultPath = (space, source) =>
+    pathFor(space) + '/automation-results/' + source.automation_id + '/' + source.run_id;
   const scope = () => ({viewer, workspace, epoch});
   const active = target => target.viewer === viewer && target.workspace === workspace && target.epoch === epoch;
 
-  function updateLocation(extra = {}) {
+  function beginStartupRead(space, target) {
+    const path = target.automationSource ? automationResultPath(space, target.automationSource)
+      : target.run ? pathFor(space) + '/' + target.run : target.draft ? '' : pathFor(space);
+    return path ? {path, result:request('GET', path)} : null;
+  }
+
+  async function readTeamRuns(path, target, reading) {
+    if (reading) {
+      const early = await reading;
+      if (!active(target)) return {status:0, body:{}};
+      if (early?.path === path) {
+        const result = await early.result;
+        if (!active(target)) return {status:0, body:{}};
+        // The browser can receive a response from an earlier session while
+        // the current account/workspace is still being checked.
+        if (result.status === 200 && target.viewer?.username &&
+            result.body.viewer_username === target.viewer.username) return result;
+      }
+    }
+    const result = await request('GET', path);
+    if (result.body.viewer_username && result.body.viewer_username !== target.viewer?.username) return {status:403, body:{}};
+    return result;
+  }
+
+  function updateLocation(extra = {}, {replace = false} = {}) {
     if (!workspace || !view?.history) return;
     const hash = '#' + new URLSearchParams({workspace, ...extra});
-    if (view.location.hash !== hash) view.history.pushState(null, '', hash);
+    if (view.location.hash !== hash) {
+      if (replace) view.history.replaceState(null, '', hash);
+      else view.history.pushState(null, '', hash);
+    }
   }
 
   function hydrateDraft() {
@@ -283,8 +332,54 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     if (refocus && !trigger.hidden) trigger.focus();
   }
 
+  function loadShares() {
+    if (sharesLoad || !node('team-shared-runs') || !node('share-team-run')) return;
+    const stylesheet = document.createElement('link');
+    stylesheet.rel = 'stylesheet';
+    stylesheet.href = '/team-runs/shares.css';
+    const styled = new Promise(resolve => {
+      stylesheet.addEventListener('load', resolve, {once:true});
+      stylesheet.addEventListener('error', resolve, {once:true});
+    });
+    document.head.append(stylesheet);
+    sharesLoad = Promise.all([import('./shares.mjs'), styled]).then(([module]) => {
+      shares = module.createTeamRunShares({
+        document, request, adopt:adoptShare, selectAddress:id => updateLocation(id ? {shared:id} : {}),
+      });
+      syncShareWorkspace();
+    }).catch(() => {
+      stylesheet.remove();
+      sharesFailed = true;
+      syncShareWorkspace();
+    });
+  }
+
+  function sharingWorkspace() {
+    if (!viewer || !screen || personalSpaces.has(workspace)) return null;
+    return spaces.find(item => item.id === workspace && ['team', 'workspace'].includes(item.kind)) || null;
+  }
+
+  function clearShareWorkspace() {
+    shareScope = null;
+    shares?.selectWorkspace(null);
+  }
+
   function syncShareWorkspace() {
-    shares.selectWorkspace(screen && !personalSpaces.has(workspace) ? spaces.find(item => item.id === workspace) : null);
+    const team = sharingWorkspace();
+    if (shareScope && (shareScope.viewer !== viewer || shareScope.id !== team?.id)) clearShareWorkspace();
+    if (!team || !(screen === 'list' && showSharedList || screen === 'detail' && REUSABLE.has(current?.status))) return;
+    if (sharesFailed) {
+      show(screen === 'detail' ? 'team-run-status' : 'status', '暂时无法加载团队共享。请刷新页面重试。', 'error');
+      return;
+    }
+    if (!shares) return loadShares();
+    shares.selectWorkspace(team);
+    shareScope = {viewer, id:team.id};
+    if (screen === 'detail') shares.selectRun(current);
+    else if (linkedShare !== undefined) {
+      shares.openTarget(linkedShare);
+      linkedShare = undefined;
+    }
   }
 
   function syncExport(run) {
@@ -292,6 +387,22 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     exportRun.hidden = !REUSABLE.has(run?.status) || !run.steps.some(step => step.status === 'succeeded' && step.output?.trim());
     if (exportRun.hidden) exportRun.removeAttribute('href');
     else exportRun.href = pathFor() + '/' + run.id + '/export';
+  }
+
+  function syncAutomationSourceLink(id, source) {
+    const link = node(id);
+    link.hidden = source?.kind !== 'automation_run';
+    if (link.hidden) link.removeAttribute('href');
+    else link.href = '/automations?' + new URLSearchParams({
+      workspace, automation:source.automation_id, run:source.run_id,
+    });
+  }
+
+  function syncRunLink(id, runId) {
+    const link = node(id);
+    link.hidden = !ID.test(runId || '') || !ID.test(workspace || '');
+    if (link.hidden) link.removeAttribute('href');
+    else link.href = '/team-runs#' + new URLSearchParams({workspace, run:runId});
   }
 
   function clearInaccessibleRunData() {
@@ -309,9 +420,13 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     node('team-run-heading').textContent = '任务详情';
     node('team-run-goal-detail').textContent = '';
     node('team-run-open-source').hidden = true;
+    syncAutomationSourceLink('team-run-detail-source');
+    syncRunLink('team-run-original');
+    syncRunLink('team-run-latest-reuse');
     show('team-run-progress', '');
-    shares.selectRun(null);
-    shares.selectWorkspace(null);
+    showSharedList = false;
+    linkedShare = undefined;
+    clearShareWorkspace();
   }
 
   function changeScreen(next, id = '') {
@@ -319,6 +434,10 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     clearTimeout(timer);
     doing = '';
     detailId = id;
+    automationHandoff = null;
+    linkedShare = undefined;
+    showSharedList = false;
+    node('team-run-handoff').hidden = true;
     linkedStep = undefined;
     focusLinkedStep = false;
     current = null;
@@ -339,7 +458,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     show('team-run-start-status', '');
     hideQuestion();
     syncShareWorkspace();
-    shares.selectRun(null);
+    shares?.selectRun(null);
   }
 
   function afterPoll(work, delay = document.hidden ? 8000 : screen === 'detail' ? 1000 : 3500) {
@@ -376,11 +495,11 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     }
   }
 
-  async function loadList() {
+  async function loadList(reading) {
     clearTimeout(timer);
     if (!workspace) return;
     const target = scope(), read = ++reads;
-    const result = await request('GET', pathFor());
+    const result = await readTeamRuns(pathFor(), target, reading);
     if (!active(target) || read !== reads) return;
     if (result.status !== 200 || !Array.isArray(result.body.items)) {
       if (cannotRead(result.status)) clearInaccessibleRunData();
@@ -388,24 +507,27 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     } else {
       tasks = result.body.items.filter(item => matchesRun(item, workspace));
       newRun.disabled = false;
-      syncShareWorkspace();
+      showSharedList = true;
       show('status', '');
+      syncShareWorkspace();
       renderList(tasks);
     }
     if (tasks.some(item => item.status === 'running')) afterPoll(loadList);
   }
 
-  function showList({address = true, focus = false, shared} = {}) {
+  function showList({address = true, focus = false, shared, read = true, reading} = {}) {
     changeScreen('list');
-    shares.openTarget(shared);
+    linkedShare = shared || '';
     tasks = [];
     node('team-run-list').replaceChildren();
     node('team-runs-empty').hidden = true;
     if (address) updateLocation(shared ? {shared} : {});
     if (focus) node('team-runs-list-heading').focus();
-    if (workspace) {
+    if (workspace && read) {
+      showSharedList = true;
       show('status', '正在读取任务…');
-      return loadList();
+      syncShareWorkspace();
+      return loadList(reading);
     }
   }
 
@@ -434,11 +556,60 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     return 'opened';
   }
 
+  function adoptAutomationDraft(source, name) {
+    const draft = blankDraft();
+    draft.title = ('跟进 · ' + name).slice(0, LIMITS.title).toWellFormed();
+    draft.goal = '根据这次自动化运行的结果制定下一步行动计划。';
+    draft.steps[0].instruction = '核对运行结果，梳理待解决的问题和优先事项。';
+    draft.steps[1].instruction = '根据核对结果制定下一步行动计划，明确建议负责人和优先级。';
+    draft.steps[1].dependencies.add(draft.steps[0].key);
+    draft.source = source;
+    drafts.set(workspace, draft);
+    return showEditor({replaceAddress:true});
+  }
+
+  async function openAutomationDraft(source, reading) {
+    showList({address:false, read:false});
+    const target = scope();
+    automationHandoff = {source};
+    node('team-run-handoff').hidden = false;
+    node('team-run-handoff-continue').hidden = true;
+    node('team-run-handoff-replace').hidden = true;
+    node('team-run-handoff-retry').hidden = true;
+    show('team-run-handoff-status', '正在读取自动化运行…');
+    const result = await readTeamRuns(automationResultPath(target.workspace, source), target, reading);
+    if (!active(target)) return;
+    if (result.status !== 200 || !sameAutomationSource(readSource(result.body.source), source) ||
+        typeof result.body.title !== 'string' || !result.body.title.trim()) {
+      const unavailable = [401, 403, 404, 409].includes(result.status);
+      show('team-run-handoff-status', unavailable ? '原运行已不可访问或没有可跟进的结果。' : '暂时无法读取原运行。', 'error');
+      node('team-run-handoff-retry').hidden = unavailable;
+      void loadList();
+      return;
+    }
+    const existing = drafts.get(workspace);
+    if (sameAutomationSource(existing?.source, source)) return showEditor({replaceAddress:true});
+    if (!hasDraftContent(existing) && !creates.has(workspace)) return adoptAutomationDraft(source, result.body.title);
+    automationHandoff = {source, title:result.body.title};
+    const pending = creates.has(workspace);
+    node('team-run-handoff-continue').hidden = false;
+    node('team-run-handoff-replace').hidden = pending;
+    show('team-run-handoff-status', pending ? '请先确认现有草稿的启动结果，再创建后续任务。'
+      : '这个工作区已有草稿。可以继续原草稿，或用此运行结果新建并替换草稿。');
+    void loadList();
+  }
+
   function renderDraftSource() {
-    const source = currentDraft.source;
+    const source = readSource(currentDraft.source);
     const container = node('team-run-source');
     container.hidden = !source;
-    if (source) show('team-run-source-status', `已引用团队共享的第 ${source.positions.map(position => position + 1).join('、')} 步结果摘要。开始运行后，由你选择的智能体处理。`);
+    node('team-run-review-source').hidden = !source || source.kind === 'automation_run';
+    syncAutomationSourceLink('team-run-source-link', source);
+    if (source) show('team-run-source-status', source.kind === 'automation_run'
+      ? '已引用原自动化运行的结果摘要。开始运行后，由你选择的智能体处理。'
+      : `已引用团队共享的第 ${source.positions.map(position => position + 1).join('、')} 步结果摘要。开始运行后，由你选择的智能体处理。`);
+    node('team-run-reuse-source').hidden = !currentDraft.sourceRun;
+    syncRunLink('team-run-draft-original', currentDraft.sourceRun);
     node('team-run-form-heading').textContent = currentDraft.sourceRun ? '复用为新任务' : source ? '发起后续任务' : '新建任务';
   }
 
@@ -554,11 +725,11 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     renderDraft();
   }
 
-  function showEditor({address = true} = {}) {
+  function showEditor({address = true, replaceAddress = false} = {}) {
     if (!workspace) return;
     hydrateDraft();
     changeScreen('editor');
-    if (address) updateLocation({draft: '1'});
+    if (address) updateLocation({draft: '1'}, {replace:replaceAddress});
     if (!drafts.has(workspace)) drafts.set(workspace, blankDraft());
     currentDraft = drafts.get(workspace);
     title.value = currentDraft.title;
@@ -711,14 +882,18 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     remove.hidden = run.status === 'running';
     reuse.hidden = !REUSABLE.has(run.status);
     syncExport(run);
-    node('team-run-open-source').hidden = !readSource(run.source);
+    const source = readSource(run.source);
+    node('team-run-open-source').hidden = !source || source.kind === 'automation_run';
+    syncAutomationSourceLink('team-run-detail-source', source);
+    syncRunLink('team-run-original', run.reused_from);
+    syncRunLink('team-run-latest-reuse', run.latest_reuse);
     cancel.disabled = remove.disabled = reuse.disabled = Boolean(doing);
     if ((question === 'cancel' && cancel.hidden) || (question === 'remove' && remove.hidden) || (question === 'reuse' && reuse.hidden)) {
       const refocus = confirm.contains(document.activeElement);
       hideQuestion();
       if (refocus) node('team-run-heading').focus({preventScroll: true});
     }
-    shares.selectRun(run);
+    syncShareWorkspace();
     renderResults(run);
     if (focusLinkedStep) {
       focusLinkedStep = false;
@@ -730,16 +905,15 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     }
   }
 
-  async function loadDetail() {
+  async function loadDetail(reading) {
     clearTimeout(timer);
     if (doing) return;
     const target = scope(), read = ++reads, runId = detailId;
-    const result = await request('GET', pathFor() + '/' + runId);
+    const result = await readTeamRuns(pathFor() + '/' + runId, target, reading);
     if (!active(target) || read !== reads) return;
     const run = runFromResponse(result, workspace, runId);
     if (run) {
       newRun.disabled = false;
-      syncShareWorkspace();
       if (node('team-run-status').dataset.kind === 'read-error') show('team-run-status', '');
       renderDetail(run);
     } else {
@@ -751,7 +925,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     else if (current?.status === 'running') afterPoll(loadDetail);
   }
 
-  function openDetail(id, initial, {address = true, step} = {}) {
+  function openDetail(id, initial, {address = true, step, reading} = {}) {
     if (!workspace || !ID.test(id)) return;
     changeScreen('detail', id);
     linkedStep = step;
@@ -760,13 +934,15 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     node('team-run-heading').textContent = '任务详情';
     node('team-run-goal-detail').textContent = '';
     node('team-run-open-source').hidden = true;
+    syncRunLink('team-run-original');
+    syncRunLink('team-run-latest-reuse');
     cancel.hidden = remove.hidden = reuse.hidden = true;
     syncExport();
     show('status', '');
     if (initial) renderDetail(initial);
     else show('team-run-progress', '正在读取步骤…');
     node('team-run-heading').focus();
-    if (!initial) return loadDetail();
+    if (!initial) return loadDetail(reading);
     if (initial.status === 'running') afterPoll(loadDetail);
   }
 
@@ -878,7 +1054,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     return showEditor();
   }
 
-  function choose(target, address = false) {
+  function choose(target, address = false, reading) {
     const allowed = spaces.find(item => item.id === target.workspace);
     workspace = allowed?.id || (target.workspace || target.invalid ? '' : spaces[0]?.id || '');
     picker.value = workspace;
@@ -889,9 +1065,10 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
       return;
     }
     hydrateDraft();
+    if (target.automationSource) return openAutomationDraft(target.automationSource, reading);
     if (target.draft) return showEditor({address});
-    if (target.run) return openDetail(target.run, null, {address, step:target.step});
-    return showList({address: address && !target.shared, shared: target.shared});
+    if (target.run) return openDetail(target.run, null, {address, step:target.step, reading});
+    return showList({address: address && !target.shared, shared: target.shared, reading});
   }
 
   function fillSpaces(items) {
@@ -911,8 +1088,23 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
 
   async function load() {
     const seq = ++auth;
+    const startingHash = view.location.hash;
+    const startingTarget = teamRunTarget(startingHash);
+    // A direct shared link needs the public UI assets. Reads still wait for
+    // the signed session and the selected workspace below.
+    if (startingTarget.shared) loadShares();
     const sessionRead = request('GET', '/v1/auth/session');
     const personalRead = request('GET', '/v1/workspaces?scope=personal');
+    const reading = native && !startingTarget.invalid
+      ? startingTarget.workspace
+        ? beginStartupRead(startingTarget.workspace, startingTarget)
+        : personalRead.then(result => {
+          if (seq !== auth || view.location.hash !== startingHash || result.status !== 200) return null;
+          const personal = Array.isArray(result.body.items) &&
+            result.body.items.find(item => item?.kind === 'personal' && ID.test(item.id));
+          return personal ? beginStartupRead(personal.id, startingTarget) : null;
+        })
+      : null;
     const trustedPersonal = Promise.all([sessionRead, personalRead]).then(([session, local]) => {
       const user = session.body.user;
       if (session.status !== 200 || !user || local.status !== 200 || !Array.isArray(local.body.items)) return {status: 0, body: {}};
@@ -946,13 +1138,16 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     node('login-panel').hidden = true;
     picker.disabled = true;
     let [{initial, supplemental}, personal] = await Promise.all([directory, trustedPersonal]);
-    const target = teamRunTarget(view.location.hash);
+    if (seq !== auth) return;
+    const targetHash = view.location.hash;
+    const target = teamRunTarget(targetHash);
     if (target.workspace && !initial.body.items?.some(item => item.id === target.workspace) && supplemental) {
       const shared = await supplemental;
       if (shared.status === 200) initial = shared;
       supplemental = null;
     }
     if (seq !== auth) return;
+    if (view.location.hash !== targetHash) return load();
     personalSpaces = new Set((personal.body.items || []).map(item => item.id));
     if (initial.status !== 200 || !Array.isArray(initial.body.items)) {
       show('status', '无法读取工作区，点击刷新重试。', 'error');
@@ -966,7 +1161,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
         picker.disabled = !spaces.length;
       }
     });
-    return choose(target);
+    return choose(target, false, targetHash === startingHash ? reading : null);
   }
 
   editor.addEventListener('submit', startRun);
@@ -979,11 +1174,30 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
     persistDraft();
   });
   node('team-run-review-source').addEventListener('click', () => {
-    if (currentDraft?.source) showList({shared: currentDraft.source.id});
+    if (currentDraft?.source?.id) showList({shared: currentDraft.source.id});
+  });
+  node('team-run-handoff-continue').addEventListener('click', () => {
+    if (screen === 'list' && automationHandoff?.title) return showEditor({replaceAddress:true});
+  });
+  node('team-run-handoff-replace').addEventListener('click', () => {
+    if (screen === 'list' && automationHandoff?.title && !creates.has(workspace)) {
+      return adoptAutomationDraft(automationHandoff.source, automationHandoff.title);
+    }
+  });
+  node('team-run-handoff-retry').addEventListener('click', () => {
+    if (screen === 'list' && automationHandoff?.source) return openAutomationDraft(automationHandoff.source);
   });
   node('team-run-remove-source').addEventListener('click', () => {
     if (screen !== 'editor' || creates.has(workspace) || !currentDraft?.source) return;
     delete currentDraft.source;
+    renderDraftSource();
+    persistDraft();
+    show('team-run-start-status', '');
+    node('team-run-form-heading').focus();
+  });
+  node('team-run-unlink-reuse').addEventListener('click', () => {
+    if (screen !== 'editor' || creates.has(workspace) || !currentDraft?.sourceRun) return;
+    delete currentDraft.sourceRun;
     renderDraftSource();
     persistDraft();
     show('team-run-start-status', '');
@@ -1013,7 +1227,7 @@ export function mountTeamRuns(document, fetcher = globalThis.fetch.bind(globalTh
   reuse.addEventListener('click', () => reuseRun());
   node('team-run-open-source').addEventListener('click', () => {
     const source = readSource(current?.source);
-    if (source) showList({shared: source.id});
+    if (source?.id) showList({shared: source.id});
   });
   node('team-run-keep').addEventListener('click', () => hideQuestion(true));
   node('team-run-confirm-action').addEventListener('click', () => {

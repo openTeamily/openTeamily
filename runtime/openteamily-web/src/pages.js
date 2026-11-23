@@ -29,10 +29,15 @@ const TYPES = {
 const SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const MAX_PATH = 256
 const REVALIDATE_ASSETS = new Set(['.css', '.mjs', '.js'])
-const CHAT_PACKAGE_ROOTS = ['chat', 'home', 'look', 'memory', 'shell']
-const CHAT_MANIFEST = '.chat-assets-v1.json'
-const CHAT_PACKAGE_PATH = /^\/chat\/assets\/([a-f0-9]{32})(\/[^?#]+)$/
-const CHAT_ENTRY_RESOURCE = /((?:src|href)=")(\/(?:chat|home|look|memory|shell)\/[A-Za-z0-9._-]+\.(?:css|mjs|js))"/g
+// Native pages and their shared dependencies use the existing authenticated
+// asset route. The manifest only indexes static files in these directories.
+const PAGE_PACKAGE_ROOTS = [
+  'agents', 'artifacts', 'automations', 'chat', 'contacts', 'discover', 'home', 'look',
+  'meetings', 'members', 'memory', 'onboarding', 'profile', 'settings', 'shell', 'skills', 'team', 'team-runs',
+]
+const PAGE_MANIFEST = '.chat-assets-v1.json'
+const PAGE_PACKAGE_PATH = /^\/chat\/assets\/([a-f0-9]{32})(\/[^?#]+)$/
+const PAGE_ENTRY_RESOURCE = /((?:src|href)=")(\/[a-z][a-z-]*\/[A-Za-z0-9._-]+\.(?:css|mjs|js))"/g
 
 function matchesValidator(request, etag) {
   return (request.headers.get('if-none-match')?.split(',') ?? []).some(value => {
@@ -43,9 +48,9 @@ function matchesValidator(request, etag) {
 
 const digestOf = data => createHash('sha256').update(data).digest('hex')
 
-async function scanChatAssets(root) {
+async function scanPageAssets(root) {
   const hashes = []
-  for (const directory of CHAT_PACKAGE_ROOTS) {
+  for (const directory of PAGE_PACKAGE_ROOTS) {
     const folder = await realpath(join(root, directory)).catch(() => null)
     if (!folder?.startsWith(root + sep)) continue
     const entries = await readdir(folder, {withFileTypes: true})
@@ -65,12 +70,12 @@ async function scanChatAssets(root) {
 
 export async function writeChatAssetManifest(pagesDir) {
   const root = await realpath(pagesDir)
-  const hashes = await scanChatAssets(root)
-  await writeFile(join(root, CHAT_MANIFEST), JSON.stringify(hashes) + '\n')
+  const hashes = await scanPageAssets(root)
+  await writeFile(join(root, PAGE_MANIFEST), JSON.stringify(hashes) + '\n')
 }
 
-async function readChatManifest(root) {
-  const file = join(root, CHAT_MANIFEST)
+async function readPageManifest(root) {
+  const file = join(root, PAGE_MANIFEST)
   if (await realpath(file) !== file) return null
   const manifest = JSON.parse(await readFile(file, 'utf8'))
   if (!Array.isArray(manifest)) return null
@@ -81,7 +86,7 @@ async function readChatManifest(root) {
     const parts = resolvePagePath(path)
     if (!parts) return null
     const extension = extname(path).toLowerCase()
-    if (parts.length !== 2 || !CHAT_PACKAGE_ROOTS.includes(parts[0])
+    if (parts.length !== 2 || !PAGE_PACKAGE_ROOTS.includes(parts[0])
       || path !== '/' + parts.join('/') || path <= previous
       || !Object.hasOwn(TYPES, extension) || extension === '.html'
       || typeof digest !== 'string' || !/^[a-f0-9]{64}$/.test(digest)) return null
@@ -90,10 +95,10 @@ async function readChatManifest(root) {
   return manifest
 }
 
-async function loadChatPackage(root) {
+async function loadPagePackage(root) {
   // The immutable image builds this catalogue once. Source checkouts and
   // older images can still calculate it from their own bundled pages.
-  const hashes = await readChatManifest(root).catch(() => null) ?? await scanChatAssets(root)
+  const hashes = await readPageManifest(root).catch(() => null) ?? await scanPageAssets(root)
   const assets = new Map()
   const release = createHash('sha256')
   for (const [path, digest] of hashes) {
@@ -149,9 +154,9 @@ function markShellAppearance(html, values) {
 }
 
 export function createPageHandler({ pagesDir, identity, getSystemLanguage, getShellSettings }) {
-  let root, localeModule, chatMessages, chatPackage
-  const packageFor = pageRoot => chatPackage ??= loadChatPackage(pageRoot).catch(() => {
-    chatPackage = undefined
+  let root, localeModule, chatMessages, pagePackage
+  const packageFor = pageRoot => pagePackage ??= loadPagePackage(pageRoot).catch(() => {
+    pagePackage = undefined
     return null
   })
   return async (request) => {
@@ -166,7 +171,7 @@ export function createPageHandler({ pagesDir, identity, getSystemLanguage, getSh
     }
     try {
       const pageRoot = root ??= await realpath(pagesDir)
-      const packagedPath = CHAT_PACKAGE_PATH.exec(path)
+      const packagedPath = PAGE_PACKAGE_PATH.exec(path)
       if (packagedPath) {
         const current = await packageFor(pageRoot)
         const asset = current?.assets.get(packagedPath[2])
@@ -203,9 +208,9 @@ export function createPageHandler({ pagesDir, identity, getSystemLanguage, getSh
         const indexPage = parts.length === 2 && parts[1] === 'index.html'
         const shell = getShellSettings && indexPage
           ? await Promise.resolve().then(getShellSettings).catch(() => null) : null
-        if (parts.length === 2 && parts[0] === 'chat' && parts[1] === 'index.html') {
+        if (indexPage && PAGE_PACKAGE_ROOTS.includes(parts[0])) {
           const current = await packageFor(pageRoot)
-          if (current) html = html.replace(CHAT_ENTRY_RESOURCE, (literal, prefix, asset) =>
+          if (current) html = html.replace(PAGE_ENTRY_RESOURCE, (literal, prefix, asset) =>
             current.assets.has(asset) ? prefix + current.base + asset + '"' : literal)
         }
         if ((shell || getSystemLanguage) && indexPage && ['chat', 'settings'].includes(parts[0])) {

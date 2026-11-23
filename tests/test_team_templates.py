@@ -1,4 +1,4 @@
-"""AI agent team templates (issues #7 #89). Creating a team never calls a runtime or vendor."""
+"""The platform retires team-template reads and writes in favor of the user's DS-Bot."""
 from pathlib import Path
 import tempfile
 import unittest
@@ -14,56 +14,40 @@ class TeamTemplateTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.app = App(Store(Path(self.temp.name) / 'state'), Config(ORIGIN, allow_registration=True),
                        clock=lambda: 1800000000)
-        self.owner, self.member = Client(self.app), Client(self.app, peer='127.0.0.2')
-        self.owner.register('owner')
-        self.member.register('member')
-        self.wid = self.owner.workspace()['body']['workspace']['id']
-        self.owner.call('POST', f'/v1/workspaces/{self.wid}/members', {'username': 'member', 'role': 'member'})
-        self.member_id = self.member.call('GET', '/v1/auth/session')['body']['user']['id']
-        self.path = f'/v1/workspaces/{self.wid}/team-templates/product-squad'
+        self.owner = Client(self.app)
+        self.assertEqual(self.owner.register('owner')['status'], 201)
 
-    def apply(self, client=None, body=None, key='team-template-00001', path=None):
-        return (client or self.owner).call('POST', path or self.path, body or {}, {'HTTP_IDEMPOTENCY_KEY': key})
+    def test_platform_refuses_the_template_catalog(self):
+        for client in (self.owner, Client(self.app)):
+            result = client.call('GET', '/v1/team-templates')
+            self.assertEqual(result['status'], 410)
+            self.assertEqual(result['body']['error']['code'], 'moved_to_dsbot')
 
-    def test_catalog_lists_self_written_templates(self):
-        listed = self.member.call('GET', '/v1/team-templates')
-        self.assertEqual(listed['status'], 200)
-        slugs = [item['slug'] for item in listed['body']['items']]
-        self.assertEqual(slugs, ['product-squad', 'content-studio', 'research-desk'])
-        self.assertTrue(all(len(item['agents']) == 3 for item in listed['body']['items']))
-        self.assertNotIn('instructions', listed['body']['items'][0]['agents'][0])
+    def test_platform_refuses_template_apply_without_creating_agents_or_groups(self):
+        personal = self.owner.call('POST', '/v1/personal-agent')
+        self.assertEqual(personal['status'], 201)
+        workspace = personal['body']['personal_agent']['workspace']['id']
+        outsider = Client(self.app, peer='127.0.0.2')
+        self.assertEqual(outsider.register('outsider')['status'], 201)
 
-    def test_apply_creates_agents_and_group_with_idempotent_replay(self):
-        created = self.apply(body={'member_ids': [self.member_id]})
-        self.assertEqual(created['status'], 201, created)
-        conv = created['body']['conversation']
-        self.assertEqual((conv['kind'], conv['title']), ('group', '产品研发小队'))
-        self.assertEqual({a['name'] for a in conv['agent_members']}, {'产品经理助理', '研发工程师助理', '测试工程师助理'})
-        self.assertEqual(len(created['body']['created_agents']), 3)
-        self.assertEqual({m['username'] for m in conv['members']}, {'owner', 'member'})
-        listed = self.owner.call('GET', f'/v1/workspaces/{self.wid}/agents?limit=100')['body']['items']
-        self.assertEqual(len(listed), 3)
-        self.assertIn(conv['id'], [c['id'] for c in self.member.call(
-            'GET', f'/v1/workspaces/{self.wid}/social/conversations')['body']['items']])
-        replay = self.apply(body={'member_ids': [self.member_id]})
-        self.assertEqual((replay['status'], replay['body']['conversation']['id']), (200, conv['id']))
-        self.assertEqual(self.apply(body={'title': '别的'})['status'], 409)
-        # A second team reuses the same-name agents instead of duplicating them.
-        again = self.apply(body={'title': '第二小队'}, key='team-template-00002')
-        self.assertEqual((again['status'], again['body']['created_agents']), (201, []))
-        self.assertEqual(len(self.owner.call('GET', f'/v1/workspaces/{self.wid}/agents?limit=100')['body']['items']), 3)
+        def agent_ids():
+            with self.app.store.connect() as db:
+                return [row[0] for row in db.execute(
+                    'SELECT id FROM workspace_agents WHERE workspace_id=? ORDER BY id', (workspace,))]
 
-    def test_permissions_and_validation(self):
-        self.assertEqual(self.apply(self.member)['status'], 403)
-        self.assertEqual(self.apply(path=f'/v1/workspaces/{self.wid}/team-templates/nope-team')['status'], 404)
-        self.assertEqual(self.owner.call('POST', self.path, {}, {})['status'], 400)
-        self.assertEqual(self.apply(body={'member_ids': ['0' * 32]})['status'], 400)
-        self.assertEqual(self.apply(body={'title': ''})['status'], 201)  # empty title falls back to template name
-        outsider = Client(self.app, peer='127.0.0.9')
-        outsider.register('outsider')
-        self.assertEqual(self.apply(outsider, key='team-template-00003')['status'], 404)
-        self.assertIn(self.owner.call('POST', self.path, {}, {'HTTP_IDEMPOTENCY_KEY': 'team-template-00004'},
-                                      csrf=False)['status'], (401, 403))
+        before = agent_ids()
+        self.assertTrue(before)
+        path = f'/v1/workspaces/{workspace}/team-templates/product-squad'
+        headers = {'HTTP_IDEMPOTENCY_KEY': 'team-template-00001'}
+        for actor, client in (('owner', self.owner), ('other account', outsider), ('signed-out', Client(self.app))):
+            with self.subTest(actor=actor):
+                result = client.call('POST', path, {}, headers)
+                self.assertEqual(result['status'], 410)
+                self.assertEqual(result['body']['error']['code'], 'moved_to_dsbot')
+        self.assertEqual(agent_ids(), before)
+        with self.app.store.connect() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM social_conversations WHERE workspace_id=?',
+                                        (workspace,)).fetchone()[0], 0)
 
 
 if __name__ == '__main__':

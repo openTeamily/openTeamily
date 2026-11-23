@@ -166,7 +166,7 @@ export async function dispatch(req, workspaceId, artifactId, action) {
     if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid artifact request')
     if (!canEdit('owner', req.owner, row)) refuse(403, 'forbidden', 'Not allowed to change this document')
     const body = requireBodyKeys(await req.json(), ['revision', 'to'])
-    return restoreArtifact(context, mustLoad(req, workspaceId, artifactId), body.revision, body.to)
+    return restoreArtifact(context, mustLoad(req, workspaceId, artifactId), body.revision, body.to, req.headers.get('idempotency-key'))
   }
   if (action) refuse(400, 'invalid', 'Invalid artifact request')
   if (req.method === 'GET' && !req.queryString) return { body: { artifact: view(row) } }
@@ -184,15 +184,18 @@ export async function history(req, workspaceId, artifactId, version, exporting) 
   if (req.method !== 'GET' || (req.queryString && !exporting)) refuse(400, 'invalid', 'Invalid artifact request')
   if (!version) {
     const user = usernames(req.store)
-    const items = req.store.all(`SELECT revision, title, kind, created, created_by, mime, byte_count, filename,
-      CASE WHEN kind='document' THEN body ELSE '' END AS body
-      FROM artifact_versions WHERE artifact_id=? ORDER BY revision DESC`, row.id)
+    const items = req.store.all(`SELECT v.revision, v.title, v.kind, v.created, v.created_by, v.mime, v.byte_count, v.filename,
+      CASE WHEN v.kind='document' THEN v.body ELSE '' END AS body, r.source_revision AS restored_from
+      FROM artifact_versions v LEFT JOIN artifact_restores r ON r.artifact_id=v.artifact_id AND r.revision=v.revision
+      WHERE v.artifact_id=? ORDER BY v.revision DESC`, row.id)
       .map((item) => versionView(item, false, user))
     return { body: { items } }
   }
   const revision = Number(version)
   if (!Number.isInteger(revision)) refuse(400, 'invalid', 'Invalid artifact request')
-  const snapshot = req.store.get('SELECT * FROM artifact_versions WHERE artifact_id=? AND revision=?', row.id, revision)
+  const snapshot = req.store.get(`SELECT v.*, r.source_revision AS restored_from FROM artifact_versions v
+    LEFT JOIN artifact_restores r ON r.artifact_id=v.artifact_id AND r.revision=v.revision
+    WHERE v.artifact_id=? AND v.revision=?`, row.id, revision)
   if (!snapshot) refuse(404, 'not_found', 'Version not found')
   if (exporting) return exportResult(snapshot, context.featureDir, workspaceId, true, parseExportFormat(req.query))
   return { body: { version: versionView(snapshot, true, usernames(req.store)) } }

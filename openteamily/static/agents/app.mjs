@@ -30,6 +30,8 @@ export function searchWithCategory(search, slug) {
 }
 
 const directoryId = /^[0-9a-f]{32}$/;
+const editLimits = {name:80, summary:500, instructions:16000, quick_starts:404, category:80};
+const editFields = Object.keys(editLimits);
 
 function directoryTarget(hash) {
   const params = new URLSearchParams((hash || '').replace(/^#/, ''));
@@ -42,6 +44,10 @@ function directoryTarget(hash) {
     return {invalid: true};
   }
   return {workspace, agent, archived: params.get('status') === 'archived'};
+}
+
+export function teamDirectoryLink(search) {
+  return search === '?tab=teams' || search === '?tab=teams&new=1';
 }
 
 export function readAgentForm(form) {
@@ -142,6 +148,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const editForm = document.getElementById('edit-form');
   const editConflict = document.getElementById('agent-edit-conflict');
   const reloadSettings = document.getElementById('reload-agent-settings');
+  const draftNotice = document.getElementById('agent-edit-draft');
+  const draftText = document.getElementById('agent-edit-draft-note');
+  const restoreDraft = document.getElementById('restore-agent-draft');
+  const clearDraft = document.getElementById('discard-agent-draft');
   const chatPanel = document.getElementById('chat-panel');
   const drawer = document.getElementById('manage-drawer');
   const openCreate = document.getElementById('open-create');
@@ -150,6 +160,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const nativeSharing = servedByDsBot(document);
   let sharing;
   const directoryStatus = document.getElementById('agent-status');
+  const directoryStatusControl = document.getElementById('agent-status-control');
   let archivedOnly = false;
   let loadedArchived = false;
   const archiveWrites = new Set();
@@ -157,8 +168,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let actor = null;
   let workspaces = [];
   let currentAgent = null;
-  let personalAgentId = '';
-  let personalLook = null;
+  let draftKey = '', originalEdits, waitingDraft;
+  let personalIdentity = null;
   let agentSelection = 0;
   let sessionLoad = 0;
   let workspaceLoad = 0;
@@ -173,10 +184,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let memberNames = new Map();
   let teamTemplates = [];
   let teamTemplatesLoaded = false;
+  const directorySearch = globalThis.location?.search || '';
+  let teamsTabSelected = teamDirectoryLink(directorySearch);
+  let focusTemplates = directorySearch === '?tab=teams&new=1';
 
   function hideDrawer() {
     sharing?.close();
     currentAgent = null;
+    draftKey = '';
+    originalEdits = waitingDraft = null;
     agentSelection += 1;
     createForm.hidden = editForm.hidden = chatPanel.hidden = true;
     if (drawer) drawer.hidden = true;
@@ -352,6 +368,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     else history.replaceState?.(null, '', url);
   }
 
+  function syncDirectoryStatus() {
+    const available = canManage(actor);
+    if (directoryStatusControl) directoryStatusControl.hidden = !available;
+    if (directoryStatus) {
+      directoryStatus.disabled = !available;
+      directoryStatus.value = available && archivedOnly ? 'archived' : 'active';
+    }
+  }
+
   async function restoreDirectory() {
     const hash = globalThis.location?.hash;
     const target = directoryTarget(hash);
@@ -365,7 +390,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       loadedWorkspace = '';
       hideDrawer();
       if (openCreate) openCreate.hidden = true;
-      if (directoryStatus) directoryStatus.disabled = true;
+      syncDirectoryStatus();
       fillCreatorOptions(creatorFilter, [], memberNames, document);
       selectedCreator = '';
       syncTeamRunLink();
@@ -380,10 +405,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     workspaceSelect.value = workspace;
     archivedOnly = target.archived;
-    if (directoryStatus) {
-      directoryStatus.disabled = false;
-      directoryStatus.value = archivedOnly ? 'archived' : 'active';
-    }
     syncTeamRunLink();
     if (!directoryLoaded || loadedWorkspace !== workspace || loadedArchived !== archivedOnly) {
       if (!await loadWorkspace({directoryOnly: true}) || globalThis.location?.hash !== hash) return;
@@ -421,20 +442,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentUser = session.body.user;
     loginPanel.hidden = true;
     mainPanel.hidden = false;
-    personalAgentId = '';
-    personalLook = null;
+    personalIdentity = null;
+    actor = null;
+    syncDirectoryStatus();
     directoryLoaded = false;
     loadedWorkspace = '';
     directoryAgents = [];
     archivedOnly = false;
     if (directoryStatus) directoryStatus.value = 'active';
     document.getElementById('agent-list').replaceChildren();
-    void request('GET', '/v1/personal-agent').catch(() => unavailable).then(personal => {
-      if (seq !== sessionLoad) return;
-      const found = personal.status === 200 && personal.body.personal_agent;
-      personalAgentId = found?.agent?.id || '';
-      personalLook = found ? found.look || null : null;
-      if (directoryLoaded && personalAgentId) renderDirectory();
+    const personalPath = nativeSharing ? '/v1/workspaces?scope=personal&include=personal-agent' : '/v1/personal-agent';
+    void request('GET', personalPath).catch(() => unavailable).then(personal => {
+      if (seq !== sessionLoad || personal.status !== 200) return;
+      const body = personal.body ?? {};
+      if (nativeSharing) {
+        const space = body.items?.length === 1 ? body.items[0] : null;
+        const viewer = body.viewer_username;
+        if (space?.kind !== 'personal' || !directoryId.test(space.id) || !directoryId.test(body.personal_agent_id ?? '')
+            || (!space.owner_id && !viewer) || (space.owner_id && space.owner_id !== currentUser.id)
+            || (viewer && viewer !== currentUser.username)) return;
+        personalIdentity = {agentId: body.personal_agent_id, workspaceId: space.id, look: body.personal_look ?? null};
+      } else if (body.personal_agent?.agent?.id) {
+        const found = body.personal_agent;
+        personalIdentity = {agentId: found.agent.id, workspaceId: found.workspace?.id, look: found.look ?? null};
+      }
+      if (directoryLoaded && personalIdentity && (!personalIdentity.workspaceId || personalIdentity.workspaceId === workspaceId())) {
+        renderDirectory();
+      }
     });
     const whoami = document.getElementById('whoami');
     whoami.dataset.username = currentUser.username;
@@ -461,11 +495,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       empty.textContent = '这个工作区还没有智能体。';
       const count = document.getElementById('agents-count');
       if (count) count.textContent = '显示 0 个智能体';
-      if (directoryStatus) directoryStatus.disabled = true;
+      syncDirectoryStatus();
       show(listed.status === 200 ? '' : 'error', listed.status === 200 ? '' : '无法加载工作区。请刷新后重试。');
       return;
     }
     await restoreDirectory();
+    if (seq !== sessionLoad || !teamsTabSelected) return;
+    await loadTeamTemplates();
+    if (seq === sessionLoad && teamsTabSelected && focusTemplates) {
+      focusTemplates = false;
+      document.getElementById('teams-panel')?.focus();
+    }
   }
 
   let directoryAgents = [];
@@ -491,7 +531,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       shown += 1;
       const li = document.createElement('li');
       li.className = 'agent-card';
-      const lookAvatar = item.id === personalAgentId ? createLookAvatar(personalLook, document) : null;
+      const isPersonal = item.id === personalIdentity?.agentId && (!personalIdentity.workspaceId || personalIdentity.workspaceId === id);
+      const lookAvatar = isPersonal ? createLookAvatar(personalIdentity.look, document) : null;
       const avatar = lookAvatar || document.createElement('span');
       if (!lookAvatar) {
         avatar.className = 'avatar';
@@ -523,18 +564,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         chat.href = '/chat#workspace=' + encodeURIComponent(id) + '&agent=' + encodeURIComponent(item.id);
         chat.textContent = '聊天';
         li.append(chat);
-      } else if (canManage(actor) && !item.native_deleted) {
-        const restore = document.createElement('button');
-        restore.type = 'button';
-        restore.className = 'chat-cta';
-        restore.textContent = '恢复';
-        restore.addEventListener('click', () => changeArchive(item, false, restore));
-        li.append(restore);
       } else {
         const label = document.createElement('span');
         label.className = 'archive-label';
         label.textContent = item.native_deleted ? '已删除' : '已归档';
-        li.append(label);
+        copy.append(label);
+        if (canManage(actor) && !item.native_deleted) {
+          const restore = document.createElement('button');
+          restore.type = 'button';
+          restore.className = 'chat-cta';
+          restore.textContent = '恢复';
+          restore.addEventListener('click', () => changeArchive(item, false, restore));
+          li.append(restore);
+        }
       }
       list.append(li);
     }
@@ -585,11 +627,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!id) return false;
     const seq = ++workspaceLoad;
     const user = currentUser?.id;
-    const archived = archivedOnly;
+    let archived = archivedOnly;
     const includeWorkspace = !directoryOnly || id !== loadedWorkspace;
     hideDrawer();
     if (includeWorkspace) {
       actor = null;
+      syncDirectoryStatus();
       if (openCreate) openCreate.hidden = true;
       if (teamTemplatesLoaded) renderTeamTemplates();
     }
@@ -604,16 +647,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const unavailable = {status: 0, body: {}};
     const base = `/v1/workspaces/${id}`;
     const nativeWorkspace = nativeSharing ? workspaces.find(space => space.id === id) : null;
-    const [detail, members, listed] = await Promise.all([
+    const readList = status => listAgents(base, status).catch(() => unavailable);
+    const stillCurrent = () => seq === workspaceLoad && id === workspaceId() && user === currentUser?.id;
+    const [detail, members, active] = await Promise.all([
       includeWorkspace && !nativeSharing ? request('GET', base).catch(() => unavailable) : null,
       includeWorkspace ? request('GET', base + '/members').catch(() => unavailable) : null,
-      listAgents(base, archived).catch(() => unavailable),
+      archived ? null : readList(false),
     ]);
-    if (seq !== workspaceLoad || id !== workspaceId() || user !== currentUser?.id) return false;
-    if (listed.status !== 200) {
-      show('error', messageFor(listed.body.error, '无法加载智能体目录。'));
-      return false;
-    }
+    if (!stillCurrent()) return false;
     if (includeWorkspace) {
       const workspace = nativeSharing ? nativeWorkspace : detail?.status === 200 ? detail.body.workspace : null;
       if (!workspace) {
@@ -627,12 +668,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const self = members.status === 200
         ? (members.body.items || []).find(row => row.user_id === currentUser.id)
         : null;
-      actor = self?.role || (nativeSharing ? workspace.role || 'member'
+      actor = self?.suspended ? 'member' : self?.role || (nativeSharing ? workspace.role || 'member'
         : workspace.owner_id === currentUser.id ? 'owner' : 'member');
       document.getElementById('role-note').textContent = canManage(actor)
         ? '你可以管理这个工作区中的智能体。'
         : '你可以查看这个工作区中的智能体。';
       if (teamTemplatesLoaded) renderTeamTemplates();
+    }
+    if (archived && !canManage(actor)) {
+      archived = archivedOnly = false;
+      writeDirectoryTarget(null);
+    }
+    syncDirectoryStatus();
+    const listed = active ?? await readList(archived);
+    if (!stillCurrent()) return false;
+    if (listed.status !== 200) {
+      show('error', messageFor(listed.body.error, '无法加载智能体目录。'));
+      return false;
     }
     if (openCreate) openCreate.hidden = archived || !canManage(actor);
     directoryAgents = listed.body.items || [];
@@ -644,6 +696,57 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderDirectory();
     show('', '');
     return true;
+  }
+
+  function currentEdits() {
+    return Object.fromEntries(editFields.filter(field => editForm.elements[field])
+      .map(field => [field, editForm.elements[field].value]));
+  }
+
+  function applyEdits(values) {
+    for (const [field, value] of Object.entries(values)) {
+      if (editForm.elements[field]) editForm.elements[field].value = value;
+    }
+  }
+
+  function readEditDraft() {
+    if (!draftKey) return null;
+    try {
+      const draft = JSON.parse(document.defaultView.sessionStorage.getItem(draftKey));
+      if (!Number.isSafeInteger(draft?.revision) || !draft.values) return null;
+      const values = Object.fromEntries(editFields.filter(field => typeof draft.values[field] === 'string' &&
+        draft.values[field].length <= editLimits[field] &&
+        (field !== 'category' || !draft.values[field] || AGENT_CATEGORY_SLUGS.has(draft.values[field])))
+        .map(field => [field,draft.values[field]]));
+      for (const field of Object.keys(values)) {
+        if (values[field] === originalEdits[field]) delete values[field];
+      }
+      return Object.keys(values).length ? {revision:draft.revision, values} : null;
+    } catch { return null; }
+  }
+
+  function storeEditDraft() {
+    if (!draftKey || !originalEdits || waitingDraft) return;
+    const values = Object.fromEntries(Object.entries(currentEdits()).filter(([field,value]) => originalEdits[field] !== value));
+    const changed = Object.keys(values).length > 0;
+    let saved = false;
+    try {
+      const storage = document.defaultView.sessionStorage;
+      if (changed) storage.setItem(draftKey, JSON.stringify({revision:currentAgent.revision, values}));
+      else storage.removeItem(draftKey);
+      saved = true;
+    } catch {}
+    if (draftNotice) draftNotice.hidden = !changed;
+    const text = saved ? '草稿已保存在此标签页。' : '有未保存的修改。';
+    if (draftText && draftText.textContent !== text) draftText.textContent = text;
+    if (restoreDraft) restoreDraft.hidden = true;
+  }
+
+  function setEditFieldsEnabled(enabled) {
+    for (const field of editFields) {
+      if (editForm.elements[field]) editForm.elements[field].disabled = !enabled;
+    }
+    editForm.querySelector('button[type="submit"]').disabled = !enabled;
   }
 
   function fillEdit(agent) {
@@ -665,9 +768,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (starts) starts.value = (agent.quick_starts || []).join('\n');
     const active = !agent.archived && !agent.native_deleted;
     const writable = active && canManage(actor);
-    for (const field of ['name', 'summary', 'instructions', 'category', 'quick_starts']) {
-      if (editForm.elements[field]) editForm.elements[field].disabled = !writable;
-    }
+    const scope = [currentUser?.id, workspaceId(), agent.id];
+    draftKey = writable && scope.every(id => directoryId.test(id || '')) ? 'ot-agent-edit:' + scope.join(':') : '';
+    originalEdits = currentEdits();
+    const draft = readEditDraft();
+    waitingDraft = draft && draft.revision !== agent.revision ? draft : null;
+    if (draft && !waitingDraft) applyEdits(draft.values);
+    if (waitingDraft) {
+      if (draftNotice) draftNotice.hidden = false;
+      if (draftText) draftText.textContent = '设置已更新。恢复草稿会应用你改过的字段，请核对后再保存。';
+      if (restoreDraft) restoreDraft.hidden = false;
+    } else if (draftKey) storeEditDraft();
+    else if (draftNotice) draftNotice.hidden = true;
+    setEditFieldsEnabled(writable && !waitingDraft);
     document.getElementById('archive-button').hidden = !writable;
     if (openSharing) {
       openSharing.hidden = !nativeSharing || !canManage(actor);
@@ -687,7 +800,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (drawer) {
       drawer.hidden = false;
       drawer.scrollTop = 0;
-      editForm.elements.name.focus?.();
+      if (waitingDraft) restoreDraft?.focus?.();
+      else editForm.elements.name.focus?.();
     }
     const openChat = document.getElementById('open-in-chat');
     if (openChat) {
@@ -755,7 +869,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   workspaceSelect.addEventListener('change', () => {
     syncTeamRunLink();
-    if (directoryStatus) directoryStatus.disabled = false;
     writeDirectoryTarget(null, {push: true});
     return loadWorkspace();
   });
@@ -784,6 +897,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
   reloadSettings?.addEventListener('click', () => {
     if (currentAgent) return openAgent(currentAgent.id);
+  });
+  editForm.addEventListener('input', storeEditDraft);
+  editForm.addEventListener('change', storeEditDraft);
+  restoreDraft?.addEventListener('click', () => {
+    if (!waitingDraft) return;
+    applyEdits(waitingDraft.values);
+    waitingDraft = null;
+    setEditFieldsEnabled(true);
+    storeEditDraft();
+    editForm.elements.name.focus?.();
+  });
+  clearDraft?.addEventListener('click', () => {
+    if (!draftKey || (editForm.querySelector('button[type="submit"]').disabled && !waitingDraft)) return;
+    applyEdits(originalEdits);
+    waitingDraft = null;
+    setEditFieldsEnabled(true);
+    storeEditDraft();
+    editForm.elements.name.focus?.();
   });
 
   function invalidQuickStarts(starts) {
@@ -828,14 +959,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const edited = event.currentTarget.elements.id.value;
     const submit = event.currentTarget.querySelector('button[type="submit"]');
     if (submit.disabled) return;
+    const sentEdits = currentEdits();
     const values = readAgentForm(event.currentTarget);
     if (invalidQuickStarts(values.quick_starts)) return;
     values.revision = Number(event.currentTarget.elements.revision.value);
     submit.disabled = true;
     const result = await request('POST', `/v1/workspaces/${workspace}/agents/${edited}`, values)
       .catch(() => ({status:0, body:{}}));
-    submit.disabled = false;
     if (selected !== agentSelection || workspace !== workspaceId() || edited !== currentAgent?.id) return;
+    submit.disabled = false;
     if (result.body.error?.code === 'revision_conflict' && editConflict && reloadSettings) {
       editConflict.hidden = reloadSettings.hidden = false;
       return;
@@ -845,9 +977,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     const {agent} = result.body;
+    const newerEdits = Object.fromEntries(Object.entries(currentEdits()).filter(([field,value]) => sentEdits[field] !== value));
+    try { if (draftKey) document.defaultView.sessionStorage.removeItem(draftKey); } catch {}
     directoryAgents = directoryAgents.map(item => item.id === agent.id ? agent : item);
     renderDirectory();
     fillEdit(agent);
+    applyEdits(newerEdits);
+    storeEditDraft();
     show('ok', '已更新。之后的对话会使用新的说明。');
   });
 
@@ -917,6 +1053,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     createForm.elements.name.focus?.();
   });
   directoryStatus?.addEventListener('change', () => {
+    if (!canManage(actor)) return;
     archivedOnly = directoryStatus.value === 'archived';
     writeDirectoryTarget(null, {push: true});
     return loadWorkspace({directoryOnly: true});
@@ -939,19 +1076,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const tabAgents = document.getElementById('tab-agents');
   const tabTeams = document.getElementById('tab-teams');
   if (tabAgents && tabTeams) {
+    function selectDirectoryTab(teams) {
+      teamsTabSelected = teams;
+      tabAgents.setAttribute('aria-selected', String(!teams));
+      tabTeams.setAttribute('aria-selected', String(teams));
+      document.getElementById('list-panel').hidden = teams;
+      document.getElementById('teams-panel').hidden = !teams;
+    }
     tabAgents.addEventListener('click', () => {
-      tabAgents.setAttribute('aria-selected', 'true');
-      tabTeams.setAttribute('aria-selected', 'false');
-      document.getElementById('list-panel').hidden = false;
-      document.getElementById('teams-panel').hidden = true;
+      focusTemplates = false;
+      selectDirectoryTab(false);
     });
     tabTeams.addEventListener('click', async () => {
-      tabAgents.setAttribute('aria-selected', 'false');
-      tabTeams.setAttribute('aria-selected', 'true');
-      document.getElementById('list-panel').hidden = true;
-      document.getElementById('teams-panel').hidden = false;
+      selectDirectoryTab(true);
       await loadTeamTemplates();
     });
+    if (teamsTabSelected) selectDirectoryTab(true);
   }
 
   return load();

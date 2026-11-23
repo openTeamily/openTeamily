@@ -281,7 +281,7 @@ test('late graph and action responses cannot replace the new workspace panels', 
   el('workspace').value = 'ws-2';
   await el('workspace').handlers.change();
   const checkNew = () => {
-    assert.equal(el('action-list').children[0]?.children[0]?.dataset.id,'new-action');
+    assert.equal(el('action-list').children[0]?.children[1]?.dataset.id,'new-action');
     assert.equal(el('graph-counts').children[0]?.children[0]?.textContent,'2');
   };
   checkNew();
@@ -346,7 +346,7 @@ test('an action keeps its linked page before the full graph loads', async () => 
     return fallback(path,options);
   }});
   await tick();
-  await el('action-list').children[0].children[0].click();
+  await el('action-list').children[0].children[1].click();
   const select = el('action-editor-form').elements.memory_page_id;
   assert.equal(select.value,'older-page');
   assert.equal(select.options.find(option => option.value === 'older-page')?.textContent,'归档笔记');
@@ -363,6 +363,7 @@ test('actions search paginates through retry and opens a follow-up for the exact
   const {doc, el} = fakeDocument();
   const workspace = 'a'.repeat(32), team = 'b'.repeat(32);
   const first = {id:'c'.repeat(32), workspace_id:workspace, title:'Review summary', status:'open', revision:1};
+  const cursor = '1:-1800000000:' + first.id;
   const match = {id:'d'.repeat(32), workspace_id:workspace, title:'Review context', notes:'Saved notes', status:'open', revision:4,
     source_chat:{kind:'social', workspace_id:team, conversation_id:'otc_team', message_id:'otm_source'}};
   const spaces = [{id:workspace, name:'Personal', kind:'personal'},{id:team, name:'Team', kind:'team'}];
@@ -374,11 +375,12 @@ test('actions search paginates through retry and opens a follow-up for the exact
     const url = new URL(path, 'https://fixture.invalid');
     const {pathname, searchParams} = url;
     requests.push(`${options.method} ${path}`);
-    if (pathname === '/v1/auth/session') return json(200, {user:{id:'user',username:'alice'}});
+    if (pathname === '/v1/auth/session') return json(200, {user:{id:'1'.repeat(32),username:'alice'}});
     if (pathname === '/v1/workspaces') return json(200, {items:spaces});
     if (pathname === base && searchParams.get('status') === 'open' && searchParams.get('q') === 'Review') {
-      if (!searchParams.has('cursor')) return json(200, {items:[first], cursor:first.id});
-      assert.equal(searchParams.get('cursor'), first.id);
+      assert.equal(searchParams.get('order'), 'due');
+      if (!searchParams.has('after')) return json(200, {items:[first], cursor});
+      assert.equal(searchParams.get('after'), cursor);
       return ++pages === 1 ? json(503, {}) : json(200, {items:[first, match], cursor:null});
     }
     if (pathname === `${base}/${match.id}` && options.method === 'POST') {
@@ -409,7 +411,7 @@ test('actions search paginates through retry and opens a follow-up for the exact
   await el('action-list-retry').click();
   assert.equal(el('action-list-count').textContent, '已显示 2 项行动');
   assert.equal(el('action-list-more').hidden, true);
-  await el('action-list').children[1].children[0].click();
+  await el('action-list').children[1].children[1].click();
   const follow = el('action-follow-up');
   assert.equal(follow.href, `/automations?workspace=${workspace}&memory_action=${match.id}&revision=4`);
   assert.equal(el('action-source-chat').href, `/chat#workspace=${team}&social=otc_team&message=otm_source`);

@@ -1,7 +1,6 @@
 import { readWorkspaceChoices, servedByDsBot } from '../shell/dsbot-api.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
 import { notifyActionFollowup } from '../shell/action-followup-events.mjs';
-import { mountStudioShare } from './studio-share.mjs';
 
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
@@ -187,6 +186,20 @@ export function automationTargetFromSearch(search) {
 }
 
 const RECURRING_KINDS = new Set(['daily', 'weekdays', 'weekly', 'monthly']);
+const EDITOR_DRAFT_FIELDS = {
+  title:80, prompt:4000, kind:12, date:10, time:8, weekday:2, day:2, time_zone:64,
+  notification_policy:12, template_id:64, intent:12, scope:12, participants:512, agents:512,
+};
+const EDITOR_ID = /^[a-f0-9]{32}$/;
+
+function draftFields(values) {
+  const fields = Object.fromEntries(Object.entries(EDITOR_DRAFT_FIELDS)
+    .filter(([field, limit]) => typeof values?.[field] === 'string' && values[field].length <= limit)
+    .map(([field]) => [field, values[field]]));
+  if (typeof values?.enabled === 'boolean') fields.enabled = values.enabled;
+  return fields;
+}
+
 function exactRunForTarget(run, target) {
   return /^[a-f0-9]{32}$/.test(run?.id || '') && run.workspace_id === target.workspace && run.automation_id === target.automation;
 }
@@ -316,6 +329,14 @@ export function draftFromTemplate(template, username) {
   // Only 每日工作简报 had recorded defaults: 意图=监测, 时间=立即运行, 范围=单次.
   if (draft.template_id === 'daily_brief') draft.intent = 'monitor';
   return draft;
+}
+
+export function automationEditionDraft(item) {
+  const suffix = ' · 副本';
+  const title = item.title.trim().slice(0, 80 - suffix.length).replace(/[\uD800-\uDBFF]$/, '').trimEnd() + suffix;
+  return {edition:true,title,prompt:item.prompt,template_id:item.template_id,intent:item.intent,scope:item.scope,
+    enabled:false,schedule:{...item.schedule},participants:[...(item.participants || [])],agents:[...(item.agents || [])],
+    notification_policy:notificationPolicy(item.notification_policy)};
 }
 
 function meetingActionDraft(source, username) {
@@ -492,13 +513,14 @@ function monogram(name) {
   return {label, tone: (tone % 6) + 1};
 }
 
-function renderList(items, list, empty, onOpen) {
+function renderList(items, list, empty, onOpen, onToggle, togglePending) {
   list.textContent = '';
   list.classList.remove('template-catalog');
   setBusy(list, false);
   empty.hidden = items.length > 0;
   for (const item of items) {
     const row = document.createElement('li');
+    row.className = 'automation-entry';
     const mark = monogram(item.title);
     const avatar = document.createElement('span');
     avatar.className = 'avatar';
@@ -544,16 +566,31 @@ function renderList(items, list, empty, onOpen) {
         copy.appendChild(next);
       }
     }
-    const state = document.createElement('span');
-    state.className = 'status-pill' + (item.enabled && !consumed ? ' is-on' : '');
+    const canToggle = onToggle && !consumed && !item.source_meeting && !item.source_memory_action
+      && RECURRING_KINDS.has(item.schedule?.kind) && /^[0-9a-f]{32}$/.test(item.id)
+      && ['paused', 'scheduled', 'due'].includes(item.schedule_status?.state)
+      && Number.isSafeInteger(item.revision) && item.revision > 0;
+    const state = document.createElement(canToggle ? 'button' : 'span');
+    state.className = 'status-pill' + (canToggle ? ' automation-switch' : '') + (item.enabled && !consumed ? ' is-on' : '');
     state.id = 'automation-state-' + item.id;
     state.textContent = consumed || (item.enabled ? '已启用' : '未启用');
-    description.push(state.id);
+    if (canToggle) {
+      state.type = 'button';
+      state.dataset.automationToggle = item.id;
+      state.setAttribute('role', 'switch');
+      state.setAttribute('aria-label', item.title + '自动运行');
+      state.setAttribute('aria-checked', String(Boolean(item.enabled)));
+      state.disabled = togglePending(item);
+      setBusy(state, state.disabled);
+      state.addEventListener('click', () => onToggle(item, state));
+    } else {
+      description.push(state.id);
+    }
     open.setAttribute('aria-describedby', description.join(' '));
     open.appendChild(avatar);
     open.appendChild(copy);
-    open.appendChild(state);
     row.appendChild(open);
+    row.appendChild(state);
     list.appendChild(row);
   }
 }
@@ -602,12 +639,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const newButton = document.getElementById('new-automation');
   const saveButton = document.getElementById('save-automation');
   const sampleButton = document.getElementById('save-and-sample');
+  const copyButton = document.getElementById('copy-automation');
   const backButton = document.getElementById('cancel-editor');
   const editorConfirm = document.getElementById('editor-head-confirm') || form;
   const manualRunNote = document.getElementById('manual-run-note');
   const manualRunStatus = document.getElementById('manual-run-status');
   const viewWatchedRun = document.getElementById('view-watched-run');
   const reloadSettings = document.getElementById('reload-automation-settings');
+  const draftNotice = document.getElementById('automation-draft-notice');
+  const draftNote = document.getElementById('automation-draft-text');
+  const restoreDraft = document.getElementById('restore-automation-draft');
+  const discardDraft = document.getElementById('discard-automation-draft');
+  const retrySave = document.getElementById('retry-automation-save');
   const historyError = document.getElementById('run-history-error');
   const runLinkStatus = document.getElementById('run-link-status');
   const runLinkNote = document.getElementById('run-link-note');
@@ -630,6 +673,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let current = null;
   let followupSource = null;
   let draftSave = null;
+  let editorDraft = null;
   let category = 'mine';
   let runTimer = 0;
   let runRequest = 0;
@@ -654,6 +698,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const runSubmissions = new Map();
   const watchedRuns = new Map();
   const cancellingRuns = new Set();
+  const pendingScheduleSwitches = new Set();
   const view = document.defaultView;
   const readSearch = () => (view && view.location && view.location.search) || '';
   let runFilter = runFilterFromSearch(readSearch());
@@ -661,10 +706,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   // the filter switches do not close a row under the reader.
   const expandedRuns = new Set();
   const teamNames = new Map();
-  const studioShare = mountStudioShare(document, {
-    request: (method, path, body, signal) => request(method, path, body, undefined, signal),
-    isCurrent: currentRunScope,
-  });
+  const canShareToStudio = typeof document.getElementById('automation-studio-dialog')?.showModal === 'function';
+  let studioShareLoad;
+
+  async function openStudioShare(trigger, target, run, team) {
+    if (!currentRunScope(target) || trigger.disabled) return;
+    trigger.disabled = true;
+    setBusy(trigger, true);
+    studioShareLoad ??= import('./studio-share.mjs').then(({mountStudioShare}) => mountStudioShare(document, {
+      request: (method, path, body, signal) => request(method, path, body, undefined, signal),
+      isCurrent: currentRunScope,
+    })).catch(() => {
+      studioShareLoad = null;
+      return null;
+    });
+    const share = await studioShareLoad;
+    trigger.disabled = false;
+    setBusy(trigger, false);
+    if (!currentRunScope(target)) return;
+    const activeTrigger = trigger.isConnected ? trigger
+      : document.querySelector(`#run-list [data-run-id="${run}"] [data-run-control="studio"]`);
+    if (!activeTrigger || activeTrigger.closest('[hidden]')) return;
+    if (share) share.open(activeTrigger, target, run, team);
+    else show('error', '暂时无法打开团队共享。请重试。');
+  }
 
   function pushRunFilter(filter) {
     if (!view || !view.history || !view.location) return;
@@ -685,7 +750,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function clearEditorLink() {
-    if (!editorTargetFromSearch(readSearch())) return;
+    if (!editorTargetFromSearch(readSearch()) && !templateFromSearch(readSearch()) &&
+        !view?.history?.state?.automationDraft) return;
     if (linkRetry) linkRetry.hidden = true;
     show('', '');
     writeWorkspaceLink();
@@ -729,6 +795,48 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   const viewerId = () => currentUser?.id || currentUser?.username;
+
+  function scheduleSwitchKey(workspace, viewer, automation) {
+    return JSON.stringify([workspace, viewer, automation]);
+  }
+
+  async function toggleSchedule(item, control, workspace, viewer) {
+    const key = scheduleSwitchKey(workspace, viewer, item.id);
+    const isCurrent = () => workspaceId() === workspace && viewerId() === viewer
+      && !mainPanel.hidden && !listPanel.hidden && category === 'mine';
+    if (item.workspace_id !== workspace || !isCurrent() || pendingScheduleSwitches.has(key)) return;
+    pendingScheduleSwitches.add(key);
+    control.disabled = true;
+    setBusy(control, true);
+    show('', '');
+    const result = await request('POST', `/v1/workspaces/${workspace}/automations/${item.id}`,
+      {revision: item.revision, changes: {enabled: !item.enabled}})
+      .catch(() => ({status: 0, body: {}}));
+    pendingScheduleSwitches.delete(key);
+    if (!isCurrent()) return;
+    const visibleControl = control.isConnected ? control
+      : document.querySelector(`#automation-list [data-automation-toggle="${item.id}"]`);
+    if (visibleControl) {
+      visibleControl.disabled = false;
+      setBusy(visibleControl, false);
+    }
+    const saved = result.body?.automation;
+    if (result.status === 200 && saved?.id === item.id && saved.workspace_id === workspace) {
+      Object.assign(item, saved);
+      if (visibleControl) {
+        visibleControl.setAttribute('aria-checked', String(Boolean(item.enabled)));
+        visibleControl.className = 'status-pill automation-switch' + (item.enabled ? ' is-on' : '');
+        visibleControl.textContent = item.enabled ? '已启用' : '未启用';
+      }
+      await loadList({quiet: true});
+    } else if (result.status === 409) {
+      await loadList({quiet: true});
+      if (isCurrent()) show('error', '这条自动化已更新。请确认最新状态后再切换。');
+    } else {
+      show('error', messageFor(result.body?.error, '无法确认自动运行状态，请重新读取列表。'));
+      await loadList({quiet: true});
+    }
+  }
 
   function runScope() {
     const workspace = workspaceId(), automation = current?.id, viewer = viewerId();
@@ -842,7 +950,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function editorHasChanges() {
-    return !form.hidden && !mainPanel.hidden && editorInitial && editorInitial !== editorSettings();
+    return !form.hidden && !mainPanel.hidden && editorInitial &&
+      (Boolean(editorDraft?.stale) || editorInitial !== editorSettings());
   }
 
   function warnBeforeLeaving(event) {
@@ -852,7 +961,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function watchEditorExit() {
-    if (editorHasChanges()) view?.addEventListener?.('beforeunload', warnBeforeLeaving);
+    if (editorHasChanges() && !editorDraft?.stored) view?.addEventListener?.('beforeunload', warnBeforeLeaving);
     else view?.removeEventListener?.('beforeunload', warnBeforeLeaving);
   }
 
@@ -860,6 +969,129 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     editorInitial = editorSettings();
     watchEditorExit();
   }
+
+  function editorDraftKey(item, source, entryId) {
+    const owner = currentUser?.id, space = workspaceId();
+    if (!native || !EDITOR_ID.test(owner || '') || !EDITOR_ID.test(space)) return '';
+    const ref = source?.target;
+    const entry = item?.id ? ['edit', item.id]
+      : ref?.memoryAction ? ['memory', ref.memoryAction, ref.revision]
+      : ref?.meeting ? ['meeting', ref.meeting, ref.revision, ref.action] : ['new', entryId];
+    return 'ot-automation-editor:' + JSON.stringify([owner, space, ...entry]);
+  }
+
+  function snapshotDraft() {
+    return draftFields({...Object.fromEntries(Object.keys(EDITOR_DRAFT_FIELDS)
+      .map(field => [field, form.elements[field]?.value])), enabled:Boolean(form.elements.enabled.checked)});
+  }
+
+  function readEditorDraft(key) {
+    if (!key) return null;
+    try {
+      const saved = JSON.parse(view.sessionStorage.getItem(key) || 'null');
+      if (!saved?.values || (saved.revision !== null && !Number.isSafeInteger(saved.revision))) return null;
+      const attempt = saved.attempt;
+      return {values:draftFields(saved.values), revision:saved.revision, edition:saved.edition === true,
+        attempt: typeof attempt?.content === 'string' && attempt.content.length < 18000 &&
+          /^[A-Za-z0-9_-]{16,64}$/.test(attempt.key || '')
+          ? {content:attempt.content, key:attempt.key, values:draftFields(attempt.values), sample:attempt.sample === true} : null};
+    } catch { return null; }
+  }
+
+  function showDraftStatus(text, review = false) {
+    if (draftNotice) draftNotice.hidden = !text;
+    if (draftNote && draftNote.textContent !== text) draftNote.textContent = text;
+    if (restoreDraft) restoreDraft.hidden = !review;
+    if (discardDraft) discardDraft.hidden = !review;
+    if (retrySave) retrySave.hidden = !(draftSave && !current?.id && !saveButton.disabled);
+  }
+
+  function forgetEditorDraft(key = editorDraft?.key) {
+    if (!key) return;
+    try { view.sessionStorage.removeItem(key); } catch {}
+    if (editorDraft?.key === key) editorDraft = null;
+  }
+
+  function syncEditorDraft() {
+    if (!editorDraft || editorDraft.stale || form.hidden || mainPanel.hidden) return;
+    const {key, revision, base} = editorDraft;
+    const values = snapshotDraft();
+    const patch = Object.fromEntries(Object.entries(values).filter(([field, value]) => value !== base[field]));
+    const fresh = !current?.id && !followupSource;
+    const changed = Boolean(draftSave || (fresh && current?.edition) || Object.keys(patch).length);
+    editorDraft.stored = false;
+    try {
+      if (changed) view.sessionStorage.setItem(key, JSON.stringify({
+        revision, values:fresh ? values : patch, edition:current?.edition === true, attempt:draftSave,
+      }));
+      else view.sessionStorage.removeItem(key);
+      editorDraft.stored = true;
+    } catch {}
+    showDraftStatus(draftSave ? '上次保存尚未确认，可以用原内容确认。'
+      : changed ? editorDraft.stored ? '草稿已保存在此标签页。' : '有未保存的修改。' : '');
+  }
+
+  function applyEditorDraft(values) {
+    if (values.template_id && /^[a-z0-9_-]{1,64}$/.test(values.template_id) &&
+        !Array.from(form.elements.template_id.options || []).some(option => option.value === values.template_id)) {
+      const option = document.createElement('option');
+      option.value = values.template_id;
+      option.textContent = '草稿模板';
+      form.elements.template_id.appendChild(option);
+    }
+    for (const [field, value] of Object.entries(values)) {
+      if (!form.elements[field] || (field === 'enabled' && followupSource)) continue;
+      if (field === 'enabled') form.elements.enabled.checked = value;
+      else form.elements[field].value = value;
+    }
+    syncScheduleFields(form);
+    renderEditorSchedule();
+  }
+
+  function openEditorDraft(item, source, entryId) {
+    const fresh = !item?.id && !source;
+    if (fresh && native) entryId ||= idempotencyKey();
+    const key = editorDraftKey(item, source, entryId);
+    editorDraft = key ? {key, revision:item?.revision ?? null, base:snapshotDraft(), stored:false} : null;
+    const saved = readEditorDraft(key);
+    if (saved && saved.revision !== editorDraft.revision) {
+      editorDraft.stale = saved;
+      editorDraft.stored = true;
+      showDraftStatus('设置已在别处更新。恢复草稿仅应用你改过的字段，请核对后保存。', true);
+      return;
+    }
+    if (saved) {
+      draftSave = saved.attempt;
+      if (saved.edition && !item?.id && !source) current = {...current, edition:true};
+      applyEditorDraft(saved.values);
+    }
+    if (editorDraft && fresh && view?.history?.replaceState && view.location) {
+      view.history.replaceState({...view.history.state, automationDraft:{owner:currentUser.id, workspace:workspaceId(), entryId}}, '',
+        (view.location.pathname || '/automations') + readSearch() + '#workspace=' + workspaceId());
+    }
+    if (editorDraft) syncEditorDraft();
+    else showDraftStatus('');
+  }
+
+  restoreDraft?.addEventListener('click', () => {
+    if (!editorDraft?.stale || form.hidden) return;
+    const {values} = editorDraft.stale;
+    editorDraft.stale = null;
+    applyEditorDraft(values);
+    syncEditorDraft();
+    watchEditorExit();
+  });
+  discardDraft?.addEventListener('click', () => {
+    if (!editorDraft?.stale || form.hidden) return;
+    editorDraft.stale = null;
+    syncEditorDraft();
+    watchEditorExit();
+  });
+  retrySave?.addEventListener('click', () => {
+    if (!draftSave || current?.id || saveButton.disabled) return;
+    applyEditorDraft(draftSave.values);
+    form.requestSubmit(draftSave.sample ? sampleButton : saveButton);
+  });
 
   function stopRunPoll() {
     if (runTimer) {
@@ -1109,6 +1341,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             nextFocus = [...exports.children].find(control => control.dataset.runControl === focusedControl) || nextFocus;
           }
           detail.appendChild(exports);
+          const follow = document.createElement('a');
+          follow.className = 'run-work-link';
+          follow.dataset.runControl = 'followup';
+          follow.href = '/team-runs#' + new URLSearchParams({
+            workspace:target.workspace, draft:'1', automation:target.automation, result:item.id,
+          });
+          follow.textContent = '发起后续任务';
+          if (restore && focusRow.dataset.runId === item.id && focusedControl === 'followup') nextFocus = follow;
+          detail.appendChild(follow);
         }
         const artifact = savedRunWork(item, target);
         const action = document.createElement(artifact ? 'a' : 'button');
@@ -1127,7 +1368,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         }
         detail.appendChild(action);
         const team = teamNames.get(target.workspace);
-        if (studioShare && native && team) {
+        if (canShareToStudio && native && team) {
           const share = document.createElement('button');
           share.type = 'button';
           share.className = 'secondary run-share-team';
@@ -1135,7 +1376,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           share.textContent = '分享至团队协作';
           share.setAttribute('aria-haspopup', 'dialog');
           if (restore && focusRow.dataset.runId === item.id && focusedControl === 'studio') nextFocus = share;
-          share.addEventListener('click', () => studioShare.open(share, target, item.id, team));
+          share.addEventListener('click', () => openStudioShare(share, target, item.id, team));
           detail.appendChild(share);
         }
       }
@@ -1258,6 +1499,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function syncRunControls() {
     const target = runScope();
+    if (copyButton) {
+      copyButton.hidden = !native || !target.automation || current?.workspace_id !== target.workspace;
+      copyButton.disabled = saveButton.disabled;
+    }
     const submission = runSubmissions.get(target.key);
     const watched = watchedRuns.get(target.key);
     const uncertain = submission?.state === 'uncertain';
@@ -1469,6 +1714,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (current?.id && current.template_id && !available.some(item => item.id === current.template_id)) {
       available.push({id: current.template_id, title: '已保存的模板'});
     }
+    if (editorDraft && /^[a-z0-9_-]{1,64}$/.test(selected || '') && !available.some(item => item.id === selected)) {
+      available.push({id:selected, title:'草稿模板'});
+    }
     for (const item of available) {
       const option = document.createElement('option');
       option.value = item.id;
@@ -1543,7 +1791,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     mainPanel.classList.remove('is-editing');
   }
 
-  function openEditor(item, source = null, opener = null, run = null) {
+  function openEditor(item, source = null, opener = null, run = null, draftEntry) {
     listReturn = opener && {opener, workspace: workspaceId(), category, query: search.value, scroll: main.scrollTop || 0};
     // A question belongs to the editor that raised it; entering another editor
     // drops the question instead of showing it again above a different item.
@@ -1560,6 +1808,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     runSettingsChanged = false;
     followupSource = source;
     draftSave = null;
+    editorDraft = null;
     recentRuns = [];
     selectedRun = run;
     if (selectedRun) {
@@ -1590,9 +1839,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderEditorSchedule();
     form.elements.template_id.disabled = Boolean(item?.id);
     rememberEditorSettings();
+    openEditorDraft(item, source, draftEntry);
+    watchEditorExit();
     const heading = document.getElementById('editor-heading');
     if (heading) heading.textContent = item?.id ? item.title
-      : source?.target.memoryAction ? '准备行动跟进' : source ? '创建会议跟进' : '新建自动化';
+      : source?.target.memoryAction ? '准备行动跟进' : source ? '创建会议跟进' : current?.edition ? '复制自动化' : '新建自动化';
     document.getElementById('remove-automation').hidden = !item || !item.id;
     runButton.hidden = !item?.id;
     syncRunControls();
@@ -1609,8 +1860,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function renderManualRunNote() {
     if (!manualRunNote) return;
-    manualRunNote.hidden = !current?.id && !followupSource;
+    manualRunNote.hidden = !current?.id && !followupSource && !current?.edition;
     manualRunNote.textContent = followupSource ? '保存为暂停的自动化。保存后可手动运行一次。'
+      : current?.edition ? '副本默认暂停。保存前可以修改任务和运行时间。'
       : oneTimeScheduleLabel(current?.schedule_status?.state) ? '可以用已保存的设置手动运行一次。' : current?.enabled
       ? '按计划自动运行。也可用已保存的设置额外运行一次。'
       : '自动运行已暂停。「运行一次」使用已保存的设置，运行后仍保持暂停。';
@@ -1806,6 +2058,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const list = document.getElementById('automation-list');
     const empty = document.getElementById('list-empty');
     const searchText = search.value;
+    const viewer = viewerId();
     const refreshPending = () => {
       listTimer = globalThis.setTimeout(() => {
         if (!listPanel.hidden && workspaceId() === id && search.value === searchText && listRequest === seq) void loadList({quiet: true});
@@ -1814,13 +2067,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const renderItems = items => {
       const fingerprint = JSON.stringify(items);
       if (!quiet || listFingerprint !== fingerprint) {
-        const focused = document.activeElement?.dataset?.automationId;
+        const active = document.activeElement?.dataset;
+        const focused = active?.automationToggle || active?.automationId;
         listFingerprint = fingerprint;
         renderList(items, list, empty, (item, opener) => {
           openEditor(item, null, opener);
           if (native && /^[0-9a-f]{32}$/.test(item.id) && item.workspace_id === id) replaceAutomationLink(item);
-        });
-        if (quiet && /^[a-f0-9]{32}$/.test(focused || '')) list.querySelector?.(`[data-automation-id="${focused}"]`)?.focus({preventScroll: true});
+        }, native && viewer ? (item, control) => toggleSchedule(item, control, id, viewer) : null,
+        item => pendingScheduleSwitches.has(scheduleSwitchKey(id, viewer, item.id)));
+        if (quiet && /^[a-f0-9]{32}$/.test(focused || '')) {
+          const replacement = active?.automationToggle && list.querySelector?.(`[data-automation-toggle="${focused}"]`);
+          (replacement || list.querySelector?.(`[data-automation-id="${focused}"]`))?.focus({preventScroll: true});
+        }
       }
       if (items.some(item => scopedActiveRun(item.active_run, id, item.id))) refreshPending();
     };
@@ -1994,6 +2252,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', memoryActionTargetFromSearch(readSearch()) ? '记忆行动项链接已不可用。'
         : meetingTargetFromSearch(readSearch()) ? '会议行动项链接已不可用。' : '这条自动化链接已不可用。');
     }
+    const marker = view?.history?.state?.automationDraft;
+    if (!target && marker && marker.owner === currentUser.id && marker.workspace === workspaceId() &&
+        /^[A-Za-z0-9_-]{16,64}$/.test(marker.entryId || '') &&
+        readEditorDraft(editorDraftKey(null, null, marker.entryId))) {
+      openEditor(null, null, null, null, marker.entryId);
+      return;
+    }
     if (catalog) {
       const selected = editorRequest;
       await catalog;
@@ -2154,6 +2419,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     listReturn = null;
     clearEditorLink();
     closeConfirm({restoreFocus: false});
+    forgetEditorDraft();
     discardFollowupDraft();
     current = null;
     form.hidden = true;
@@ -2193,12 +2459,37 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       },
     });
   });
-  form.addEventListener('input', watchEditorExit);
-  form.addEventListener('change', watchEditorExit);
+  copyButton?.addEventListener('click', () => {
+    const target = runScope();
+    if (copyButton.hidden || copyButton.disabled || !target.automation || current?.workspace_id !== target.workspace) return;
+    const action = () => {
+      if (!currentRunScope(target) || saveButton.disabled) return;
+      const draft = automationEditionDraft(current);
+      const position = listReturn;
+      clearEditorLink();
+      forgetEditorDraft();
+      openEditor(draft);
+      listReturn = position;
+    };
+    if (!editorHasChanges()) return action();
+    openConfirm({parent:editorConfirm,trigger:copyButton,
+      prompt:{question:'有未保存的修改。放弃修改并复制已保存版本？',confirmLabel:'复制已保存版本'},action});
+  });
+  function rememberChanges() {
+    syncEditorDraft();
+    watchEditorExit();
+  }
+  form.addEventListener('input', rememberChanges);
+  form.addEventListener('change', rememberChanges);
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
     if (saveButton.disabled) return;
+    if (editorDraft?.stale) {
+      show('error', '请先恢复或放弃旧草稿，再保存最新设置。');
+      restoreDraft?.focus();
+      return;
+    }
     const values = readEditor(form);
     if (!native) delete values.notification_policy;
     const workspace = workspaceId();
@@ -2212,10 +2503,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const item = current?.id ? current : null;
     const source = followupSource;
+    const edition = current?.edition === true;
     const sample = Boolean(sampleButton && event.submitter === sampleButton && !sampleButton.hidden &&
       !item && !source && native && RECURRING_KINDS.has(values.schedule.kind));
     const editor = editorRequest;
     const loadSeq = loadRequest;
+    const draftKey = editorDraft?.key;
     const isCurrent = () => editorRequest === editor && loadRequest === loadSeq && workspaceId() === workspace && !form.hidden;
     if (source) values.enabled = false;
     const path = `/v1/workspaces/${workspace}/automations`;
@@ -2237,7 +2530,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           : ref ? {source_meeting: {meeting_id: ref.meeting, revision: ref.revision, action_index: ref.action}} : {};
         const body = {...changes, template_id, ...provenance, ...(sample ? {run_sample: true} : {})};
         const content = JSON.stringify([workspace, body]);
-        if (draftSave?.content !== content) draftSave = {content, key: idempotencyKey()};
+        if (draftSave?.content !== content) {
+          if (native && draftSave && editorDraft) {
+            show('error', '先确认上次保存，再提交新的修改。');
+            return;
+          }
+          draftSave = {content, key:idempotencyKey(), values:snapshotDraft(), sample};
+        }
+        syncEditorDraft();
         result = await request('POST', path, body, {'Idempotency-Key': draftSave.key});
       }
     } catch {
@@ -2253,12 +2553,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           sampleButton.textContent = '保存并试运行';
         }
         syncRunControls();
+        syncEditorDraft();
       }
     }
     if (result.status === 200 || result.status === 201) {
       notifyActionFollowup(document.defaultView, workspace, result.body.automation?.source_memory_action?.action_id);
     }
     if (!isCurrent()) return;
+    if (!item && result.status >= 400 && result.status < 500 && result.status !== 408) {
+      draftSave = null;
+      syncEditorDraft();
+    }
     if (source && result.body.error?.code === 'meeting_source_unavailable') {
       showMeetingSourceError(result.status);
       return;
@@ -2276,6 +2581,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(result.body.error, '保存失败。'));
       return;
     }
+    if (native && EDITOR_ID.test(workspace) &&
+        (result.body.automation?.workspace_id !== workspace || !EDITOR_ID.test(result.body.automation?.id || '') ||
+          (item && result.body.automation.id !== item.id))) {
+      show('error', '暂时无法确认是否保存成功，请重试。');
+      return;
+    }
+    forgetEditorDraft(draftKey);
+    draftSave = null;
     current = result.body.automation;
     runSettingsChanged = false;
     const returnedSample = result.body.sample_run;
@@ -2293,6 +2606,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       followupSource = null;
       replaceAutomationLink(current);
     }
+    if ((native || edition) && !startedSample && current?.workspace_id === workspace && EDITOR_ID.test(current.id || '')) {
+      replaceAutomationLink(current);
+    }
     renderFollowupSource(savedFollowupSource(current));
     if (!item) {
       selectCategory('mine');
@@ -2303,11 +2619,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderEditorSchedule();
     form.elements.template_id.disabled = true;
     rememberEditorSettings();
+    openEditorDraft(current, null);
     const heading = document.getElementById('editor-heading');
     if (heading) heading.textContent = current.title;
     document.getElementById('remove-automation').hidden = false;
     runButton.hidden = false;
     if (runHistoryButton) runHistoryButton.hidden = false;
+    syncRunControls();
     renderManualRunNote();
     show('ok', startedSample ? '已保存。可在下方查看本次试运行结果。' : sample ? '自动化已保存。点击「运行一次」生成样例。'
       : source && result.status === 200 ? '已打开这条行动项的现有跟进。'
@@ -2352,6 +2670,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         show('error', '载入期间有新的未保存修改。请再次确认后载入最新设置。');
         return;
       }
+      forgetEditorDraft();
       openEditor(item, null, listReturn?.opener, selectedRun);
       show('ok', '已载入最新设置。');
     } finally { reloadSettings.disabled = false; }
@@ -2379,6 +2698,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     notifyActionFollowup(document.defaultView, target.workspace, target.memoryAction);
     storeRunSubmission(target, null);
+    forgetEditorDraft();
     current = null;
     clearEditorLink();
     form.hidden = true;
@@ -2414,6 +2734,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     closeConfirm({restoreFocus: false});
     discardFollowupDraft();
     current = null;
+    editorDraft = null;
     savedRunResults.clear();
     runSubmissions.clear();
     watchedRuns.clear();

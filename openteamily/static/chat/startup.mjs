@@ -9,6 +9,7 @@ export function startChatReads(read, start, allowLocal) {
   const params = new URLSearchParams({scope: 'personal', include: 'chat'});
   if (start.workspace) params.set('workspace', start.workspace);
   const id = /^[a-f0-9]{32}$/;
+  if (start.social && id.test(start.workspace)) params.set('directory', '0');
   if (!start.social && id.test(start.workspace) && id.test(start.agent) && (!start.conversation || id.test(start.conversation))) {
     params.set('entry_agent', start.agent);
     if (start.conversation) {

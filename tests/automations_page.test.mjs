@@ -1,11 +1,26 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { automationTargetFromSearch, cancellationPrompt, catalogItems, csrfCookie, deletePrompt, draftFromTemplate, listQuery, matchesRunFilter, meetingTargetFromSearch, memoryActionTargetFromSearch, mount, namesFromList, readEditor, RUN_DETAIL_EMPTY, runDetailFields, runErrorReason, runFilterFromSearch, runFilterSearchText, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory } from '../openteamily/static/automations/app.mjs';
+import { automationEditionDraft, automationTargetFromSearch, cancellationPrompt, catalogItems, csrfCookie, deletePrompt, draftFromTemplate, listQuery, matchesRunFilter, meetingTargetFromSearch, memoryActionTargetFromSearch, mount, namesFromList, readEditor, RUN_DETAIL_EMPTY, runDetailFields, runErrorReason, runFilterFromSearch, runFilterSearchText, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory } from '../openteamily/static/automations/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
   assert.equal(csrfCookie('ot_dev_session=x; ot_dev_csrf=token-b'), 'token-b');
   assert.equal(csrfCookie('csrf=nope; other=1'), '');
+});
+
+test('a copied automation starts paused and separates task settings from saved history and source grants', () => {
+  const original = {id:'a'.repeat(32),revision:4,workspace_id:'b'.repeat(32),title:'a'.repeat(74)+'📘abcd',
+    prompt:'Prepare a weekly briefing',template_id:'custom',intent:'monitor',scope:'ongoing',enabled:true,
+    schedule:{kind:'weekly',weekday:3,time:'15:30',time_zone:'Asia/Shanghai'},notification_policy:'off',
+    participants:['alice'],agents:['research'],source_meeting:{meeting_id:'c'.repeat(32)},
+    source_memory_action:{action_id:'d'.repeat(32)},active_run:{id:'e'.repeat(32)}};
+  const draft = automationEditionDraft(original);
+  assert.deepEqual(draft,{edition:true,title:'a'.repeat(74)+' · 副本',prompt:original.prompt,template_id:'custom',
+    intent:'monitor',scope:'ongoing',enabled:false,schedule:original.schedule,notification_policy:'off',
+    participants:['alice'],agents:['research']});
+  assert.notEqual(draft.schedule,original.schedule);
+  assert.notEqual(draft.participants,original.participants);
+  assert.notEqual(draft.agents,original.agents);
 });
 
 test('listQuery encodes tab and search', () => {
@@ -268,6 +283,59 @@ const projectedAutomation = 'c'.repeat(32);
 const projectedPath = '/v1/workspaces?scope=personal&include=automations';
 const projectedPersonal = {id: projectedWorkspace, owner_id: projectedOwner, name: '个人工作区', kind: 'personal'};
 
+test('a new automation restores the same account and workspace draft without a write', async () => {
+  const storage = new Map();
+  const location = {pathname:'/automations', search:'', hash:'#workspace=' + projectedWorkspace};
+  const history = {
+    state:null,
+    replaceState(state, _, address) {
+      this.state = state;
+      const parsed = new URL(address, 'https://example.test');
+      Object.assign(location, {search:parsed.search, hash:parsed.hash});
+    },
+  };
+  const sessionStorage = {
+    getItem:key => storage.get(key),
+    setItem:(key,value) => storage.set(key,value),
+    removeItem:key => storage.delete(key),
+  };
+  const requests = [];
+  async function open(owner, workspace = projectedWorkspace) {
+    const {doc, elements} = fakeDocument();
+    doc.querySelector = selector => selector === 'meta[name="openteamily-served-by"][content="ds-bot"]'
+      ? {content:'ds-bot', getAttribute:() => 'ds-bot'} : null;
+    doc.defaultView = {location, history, sessionStorage};
+    await mount(doc, {fetcher:async (path, {method} = {}) => {
+      requests.push(method);
+      let body;
+      if (path === '/v1/auth/session') body = {user:{id:owner,username:'alice'}};
+      else if (path.startsWith('/v1/workspaces?')) body = {items:[{id:workspace,name:'工作区'}]};
+      else body = {items:[]};
+      return {status:200,json:async () => body};
+    }});
+    return elements;
+  }
+  const first = await open(projectedOwner);
+  first.get('new-automation').handlers.click[0]();
+  const form = first.get('editor-form');
+  form.elements.prompt.value = '保存在本页的指令';
+  form.elements.kind.value = 'weekly';
+  form.elements.weekday.value = '4';
+  form.handlers.input[0]();
+  assert.equal(storage.size,1);
+  const reloaded = await open(projectedOwner);
+  assert.equal(reloaded.get('editor-form').hidden,false);
+  assert.equal(reloaded.get('editor-form').elements.prompt.value,'保存在本页的指令');
+  assert.equal(reloaded.get('editor-form').elements.weekday.value,'4');
+  const foreign = await open('d'.repeat(32));
+  assert.equal(foreign.get('editor-form').hidden,true);
+  const otherWorkspace = 'e'.repeat(32);
+  location.hash = '#workspace=' + otherWorkspace;
+  const changedWorkspace = await open(projectedOwner, otherWorkspace);
+  assert.equal(changedWorkspace.get('editor-form').hidden,true);
+  assert.ok(!requests.includes('POST'));
+});
+
 test('native startup overlaps authentication and the owned list, then requests templates on demand', async t => {
   const {doc, elements} = fakeDocument();
   const previousDocument = globalThis.document;
@@ -322,6 +390,46 @@ test('native startup overlaps authentication and the owned list, then requests t
     finishTeams(respond({items: []}));
     await mounted;
   }
+});
+
+test('a native recurring automation switches only after its revision-checked save succeeds', async t => {
+  const {doc, elements} = fakeDocument();
+  const previousDocument = globalThis.document;
+  globalThis.document = doc;
+  t.after(() => { globalThis.document = previousDocument; });
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const {promise: saving, resolve: finishSave} = Promise.withResolvers();
+  const base = '/v1/workspaces/' + projectedWorkspace + '/automations';
+  let recurring = {id: projectedAutomation, workspace_id: projectedWorkspace, title: '工作日报',
+    enabled: false, revision: 3, schedule: {kind: 'daily', time: '09:00'}, schedule_status: {state: 'paused'}};
+  const linked = {...recurring, id: 'e'.repeat(32), title: '关联会议', source_meeting: {meeting_id: 'f'.repeat(32)}};
+  const requests = [];
+  const fetcher = (path, options = {}) => {
+    if (path === '/v1/auth/session') return respond({user: {id: projectedOwner, username: 'alice'}});
+    if (path === projectedPath) return respond({items: [projectedPersonal], viewer_username: 'alice',
+      automations: {items: [recurring, linked]}});
+    if (path === '/v1/workspaces?limit=100') return respond({items: [projectedPersonal]});
+    if (path === base + '?category=mine') return respond({items: [recurring, linked]});
+    if (path === base + '/' + projectedAutomation && options.method === 'POST') {
+      requests.push(JSON.parse(options.body));
+      return saving;
+    }
+    throw new Error('unexpected ' + path);
+  };
+  await mount(doc, {fetcher});
+  const list = elements.get('automation-list');
+  const switchFor = row => row.children.find(child => child.getAttribute('role') === 'switch');
+  const control = switchFor(list.children[0]);
+  assert.equal(control.getAttribute('aria-checked'), 'false');
+  assert.equal(switchFor(list.children[1]), undefined);
+  const toggled = control.handlers.click[0]();
+  assert.equal(control.disabled, true);
+  assert.equal(control.getAttribute('aria-checked'), 'false');
+  assert.deepEqual(requests, [{revision: 3, changes: {enabled: true}}]);
+  recurring = {...recurring, enabled: true, revision: 4, schedule_status: {state: 'scheduled'}};
+  finishSave(respond({automation: recurring}));
+  await toggled;
+  assert.equal(switchFor(list.children[0]).getAttribute('aria-checked'), 'true');
 });
 
 test('native startup falls back on a different viewer or an out-of-workspace automation row', async t => {

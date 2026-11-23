@@ -8,7 +8,10 @@
   <link rel="stylesheet" href="/shell/app.css">
   <link rel="stylesheet" href="/home/app.css">
   <link rel="stylesheet" href="/home/auth.css">
-  <link rel="stylesheet" href="/look/app.css">
+  <link rel="modulepreload" href="/shell/dsbot-api.mjs">
+  <link rel="modulepreload" href="/shell/meeting-link.mjs">
+  <link rel="modulepreload" href="/shell/thumb.mjs">
+  <link rel="modulepreload" href="/home/runtime-readiness.mjs">
   <script type="module" src="/shell/app.mjs"></script>
   <script type="module" src="/home/app.mjs"></script>
 </head>
@@ -92,9 +95,7 @@
     <span id="whoami" hidden></span>
     <header class="home-hero-head">
       <div>
-        <p class="home-kicker">OpenTeamily 工作台</p>
         <h1 id="home-greeting">欢迎回来</h1>
-        <p class="note">查看当前工作区的对话、作品和会议。</p>
       </div>
       <label class="home-workspace">工作区
         <select id="home-workspace" disabled></select>
@@ -125,6 +126,7 @@
       <a href="/automations" data-home-workspace-path="/automations"><strong>自动化</strong><span>管理模板和运行</span></a>
       <a href="/space" data-home-workspace-path="/space"><strong>作品</strong><span>文档、幻灯片和看板</span></a>
       <a href="/meetings" data-home-workspace-path="/meetings"><strong>会议</strong><span>纪要和行动项</span></a>
+      <a href="/memory"><strong>记忆</strong><span>笔记和待办</span></a>
       <a href="/skills"><strong>技能</strong><span>浏览技能库</span></a>
       <a href="/discover"><strong>发现</strong><span>浏览公开目录</span></a>
     </nav>
@@ -148,5 +150,6 @@
     </div>
   </section>
   </main>
+  <nav class="mobile-primary-nav" aria-label="主导航"></nav>
 </body>
 </html>

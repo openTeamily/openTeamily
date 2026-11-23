@@ -29,9 +29,15 @@ const UPSTREAM_URL = 'https://github.com/Fei2411/DS-Bot.git'
 //   ds-bot/  the DSH plugin package itself (runtime, its tests, test harness pin, mock LLM)
 //   link/    the shared phone-link code: ds-bot's tests import it and ds-bot/link.js is built
 //            from it (the phone feature itself is not an OpenTeamily target, see UPSTREAM.md)
+//   app/ui/src and app/package.json  desktop source and its module scope read by the Bot frontend tests
+//   mobile/src/team/gated.ts and start.ps1  inputs read by the phone and Windows launcher tests
 //   docker/  the image build, entrypoint, DSH web patch, and the startup smoke test
 //   LICENSE, NOTICE  Apache-2.0 text and upstream NOTICE; both must travel with the code
-const PATHS = ['ds-bot', 'link', 'docker/Dockerfile', 'docker/entrypoint.sh', 'docker/docker.patch.yml', 'docker/test.mjs', 'LICENSE', 'NOTICE']
+const PATHS = [
+  'ds-bot', 'link', 'app/package.json', 'app/ui/src', 'mobile/src/team/gated.ts', 'start.ps1',
+  'docker/Dockerfile', 'docker/entrypoint.sh', 'docker/docker.patch.yml', 'docker/test.mjs',
+  'LICENSE', 'NOTICE',
+]
 // Files in runtime/ds-bot-upstream/ that are OpenTeamily's own, not upstream's.
 const OWNED = new Set(['UPSTREAM.md'])
 

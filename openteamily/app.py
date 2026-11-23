@@ -586,11 +586,14 @@ class App:
             return 200, result, []
         if path == '/v1/auth/runtime-start' and method == 'POST' and not query:
             return self.start_personal_runtime(env, now)
-        if path == '/v1/auth/session' and method == 'GET' and not query:
+        if path == '/v1/auth/session' and method == 'GET' and query in ('', 'include=home'):
             with self.store.connect() as db:
                 session = self.authenticated(db, env, now)
-            return 200, {'user': {'id': session['user_id'], 'username': session['username']},
-                         'expires_at': session['expires']}, []
+                result = {'user': {'id': session['user_id'], 'username': session['username']},
+                          'expires_at': session['expires']}
+                if query:
+                    result['home'] = self.home_session(db, session['user_id'])
+            return 200, result, []
         with self.store.transaction() as db:
             session = self.authenticated(db, env, now)
             if method in ('POST', 'DELETE'):
@@ -850,6 +853,24 @@ class App:
         if row is None:
             return 200, {'personal_agent': None}, []
         return 200, self.personal_payload(db, session, row), []
+
+    def home_session(self, db, user_id):
+        state = self.runtime_readiness(db, user_id)
+        card = None
+        if state in ('ready', 'unmanaged'):
+            row = db.execute('''
+                SELECT w.id AS workspace_id, w.name AS workspace_name,
+                       a.id AS agent_id, a.name AS agent_name, a.summary AS agent_summary
+                FROM personal_agents p
+                JOIN workspaces w ON w.id=p.workspace_id AND w.owner_id=p.user_id
+                JOIN workspace_agents a ON a.id=p.agent_id AND a.workspace_id=w.id
+                WHERE p.user_id=?
+            ''', (user_id,)).fetchone()
+            if row is not None:
+                card = {'workspace': {'id': row['workspace_id'], 'name': row['workspace_name'], 'kind': 'personal'},
+                        'agent': {'id': row['agent_id'], 'name': row['agent_name'], 'summary': row['agent_summary']},
+                        'look': onboarding.load_look(db, user_id)}
+        return {'runtime_state': state, 'personal_agent': card}
 
     def personal_agent_ensure(self, db, session, now):
         try:

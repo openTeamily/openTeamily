@@ -198,9 +198,8 @@ test('a ready personal chat becomes clickable while the workspace list and onboa
   const pending = [];
   const reply = (body, status = 200) => ({status, json: async () => body});
   mount(document, {fetcher: async url => {
-    if (url === '/v1/auth/session') return reply({user: {id: alice, username: 'alice'}});
-    if (url === '/v1/personal-agent') return reply({personal_agent: {
-      workspace: {id: alice}, agent: {id: bob, name: 'Personal Agent'}, runtime_provisioning: {readiness: 'ready'},
+    if (url === '/v1/auth/session?include=home') return reply({user: {id: alice, username: 'alice'}, home: {
+      runtime_state: 'ready', personal_agent: {workspace: {id: alice}, agent: {id: bob, name: 'Personal Agent'}},
     }});
     return new Promise(resolve => pending.push({url, resolve}));
   }});
@@ -219,6 +218,23 @@ test('a ready personal chat becomes clickable while the workspace list and onboa
   }
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(read('home-context').textContent, '工作背景：测试');
+});
+
+test('a stopped home runtime still uses the explicit startup page', async () => {
+  const {document, read, view} = homeFixture();
+  const calls = [], destinations = [];
+  view.location.replace = target => destinations.push(target);
+  mount(document, {fetcher: async (url, {method}) => {
+    calls.push([method, url]);
+    const body = url.endsWith('include=home')
+      ? {user:{id:alice, username:'alice'}, home:{runtime_state:'stopped', personal_agent:null}}
+      : {personal_agent:{runtime_provisioning:{readiness:'stopped'}}};
+    return {status:200, json:async()=>body};
+  }});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls, [['GET', '/v1/auth/session?include=home'], ['POST', '/v1/personal-agent']]);
+  assert.deepEqual(destinations, ['/runtime-starting#home=1']);
+  assert.equal(read('main-panel').hidden, true);
 });
 
 test('a blocked or different signup session cannot resume an invitation as another account', async () => {

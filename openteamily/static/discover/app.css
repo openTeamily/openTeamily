@@ -302,6 +302,39 @@ a.catalog-create[hidden] { display: none; }
   .work-detail-site { height: clamp(18rem, 50dvh, 34rem); }
 }
 .feed-detail-lines { display: grid; gap: .18rem; margin: 0; padding-left: 1.1rem; }
+#work-detail-reader:empty { display: none; }
+.work-document-reader { min-width: 0; border-top: 1px solid var(--ot-line); }
+.work-document-reader > summary {
+  box-sizing: border-box;
+  width: fit-content;
+  min-height: 2.75rem;
+  padding-block: .55rem;
+  color: var(--ot-accent-hover);
+  font-weight: 650;
+  cursor: pointer;
+}
+.work-document-status { color: var(--ot-muted); font-size: .875rem; }
+.work-document-status:empty, .work-document-body:empty { display: none; }
+.work-document-reader > button { margin-block-start: .375rem; min-height: 2.75rem; }
+.work-document-body {
+  display: grid;
+  gap: .9rem;
+  padding: clamp(.875rem, 3vw, 1.5rem);
+  border: 1px solid var(--ot-line);
+  border-radius: .625rem;
+  background: var(--ot-surface);
+  overflow-wrap: anywhere;
+}
+.work-document-body > :is(h3, h4, h5, h6, ul, ol, blockquote, pre, hr) { margin: 0; }
+.work-document-body > :is(ul, ol) { padding-inline-start: 1.25rem; }
+.work-document-body > blockquote { padding-inline-start: .75rem; border-inline-start: 2px solid var(--ot-line); }
+.work-document-body pre, .work-document-body .chat-markdown-table-scroll { max-width: 100%; overflow: auto; }
+.work-document-body pre { padding: .625rem; border-radius: .45rem; background: var(--ot-surface-2); }
+.work-document-body table { min-width: 100%; border-collapse: collapse; font-size: .875rem; }
+.work-document-body :is(th, td) { padding: .375rem .55rem; border: 1px solid var(--ot-line); text-align: start; }
+.work-document-body th { background: var(--ot-surface-2); }
+.work-document-body [data-align="center"] { text-align: center; }
+.work-document-body [data-align="right"] { text-align: right; }
 .feed-detail-open { color: var(--ot-accent); font-weight: 600; text-decoration: none; }
 .feed-detail-open:hover { text-decoration: underline; }
 .feed-detail-open:focus-visible { outline: 2px solid var(--ot-accent); outline-offset: 2px; }
@@ -1223,6 +1256,15 @@ html[data-theme-resolved="dark"] .feed-grid > .feed-entry > .feed-card-actions {
   padding-inline: .875rem;
   border-radius: .625rem;
   color: var(--ot-on-accent);
+}
+a.catalog-create.catalog-create-secondary {
+  border: 1px solid var(--ot-line);
+  background: var(--ot-surface-solid);
+  color: var(--ot-accent);
+}
+a.catalog-create.catalog-create-secondary:hover {
+  background: var(--ot-accent-soft);
+  color: var(--ot-accent-hover);
 }
 #discover-list article { padding: .875rem; gap: .75rem; }
 #discover-list h3 { font-size: .9375rem; }

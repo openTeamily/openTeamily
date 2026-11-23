@@ -8,6 +8,9 @@ import {consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinu
 import {mountPublicAgentComposer} from '../openteamily/static/shell/public-agent-composer.mjs';
 import {mountPublicDraft} from '../openteamily/static/chat/public-draft.mjs';
 import {mountChatFiles} from '../openteamily/static/chat/files.mjs';
+import {mountWorkspaceInvite} from '../openteamily/static/chat/workspace-invite.mjs';
+import {mountMessageUtilities} from '../openteamily/static/chat/utilities.mjs';
+import {readMarkdownTable, renderMarkdownTable} from '../openteamily/static/shell/markdown-table.mjs';
 import {countMentionedGroupMembers} from '../openteamily/static/chat/mentions.mjs';
 import {pendingSignupSession, readChatDraftMentions, readChatDrafts, readPendingPrivateText, rememberSignupSession,
   savePendingPrivateText, writeChatDraftMentions, writeChatDrafts} from '../openteamily/static/home/runtime-readiness.mjs';
@@ -280,6 +283,13 @@ class FakeElement {
     this.scrollTop = 0;
     this.scrollHeight = 0;
   }
+  get textContent() {
+    return this.text + this.children.map(child => child.textContent).join('');
+  }
+  set textContent(value) {
+    this.replaceChildren();
+    this.text = String(value);
+  }
   get classList() {
     const element = this;
     const names = () => element.className.split(/\s+/).filter(Boolean);
@@ -319,6 +329,7 @@ class FakeElement {
   replaceChildren(...nodes) {
     for (const child of this.children) child.parent = null;
     this.children = [];
+    this.text = '';
     this.append(...nodes);
   }
   setAttribute(name, value) { this.attributes[name] = String(value); }
@@ -487,7 +498,7 @@ function installChatGlobals({narrow = false} = {}) {
     matchMedia: globalThis.matchMedia,
   };
   globalThis.location = {hash: '', pathname: '/chat'};
-  globalThis.history = {replaceState() {}};
+  globalThis.history = {pushState() {}, replaceState() {}};
   globalThis.addEventListener = () => {};
   globalThis.matchMedia = (query) => ({matches: narrow && query === '(max-width: 900px)'});
   return () => {
@@ -2257,7 +2268,12 @@ test('the inbox filters personal agents and persists bulk-read and mute', async 
   const restore = installChatGlobals({narrow: true});
   const unread = new Set(['conv-1', 'conv-2']);
   const writes = [];
+  const noticeFetches = [];
+  const follow = {id:'follow-notice', kind:'follow.new', created:10, read:false, by:{display_name:'Follower'}};
+  const mention = {id:'mention-notice', kind:'messenger.mention', created:11, read:false, conversation_id:'conv-1',
+    by:{display_name:'Mention sender'}};
   let muted = false;
+  let pendingNotifications;
   try {
     await mount(doc, {fetcher: async (path, init) => {
       if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: 'ws-1'}, agent: {id: 'personal'}}});
@@ -2272,6 +2288,12 @@ test('the inbox filters personal agents and persists bulk-read and mute', async 
       if (path.endsWith('/conv-1/preferences')) {
         muted = JSON.parse(init.body).muted;
         return json(200, {muted});
+      }
+      if (path.endsWith('/notifications')) {
+        noticeFetches.push(muted);
+        const items = muted ? [follow] : [mention, follow];
+        if (pendingNotifications) await pendingNotifications.promise;
+        return json(200, {items, unread_count:items.length});
       }
       const response = await original(path);
       const data = await response.json();
@@ -2294,10 +2316,60 @@ test('the inbox filters personal agents and persists bulk-read and mute', async 
     assert.equal(el('conversations-read-all').hidden, true);
     const row = sessionRows(el).find(item => item.dataset.conversation === 'conv-1');
     await fire(el('conversation-list'), 'click', {target: row});
+    await fire(el('notifications-toggle'), 'click');
+    assert.equal(el('notifications-panel').hidden, false);
+    assert.equal(el('notification-count').textContent, '2');
+    const previousNotificationReads = noticeFetches.length;
+    pendingNotifications = Promise.withResolvers();
     await fire(el('mute-conversation'), 'click');
+    assert.equal(el('notification-list').children.length, 0, 'do not reactivate cached rows under the new visibility scope');
+    pendingNotifications.resolve();
+    pendingNotifications = null;
+    await settle(2);
     assert.equal(muted, true);
+    assert.deepEqual(noticeFetches.slice(previousNotificationReads), [true]);
+    assert.equal(el('notifications-panel').hidden, false);
+    assert.equal(el('notification-count').textContent, '1');
+    assert.deepEqual(el('notification-list').children.map(entry => entry.children[0].dataset.notification), [follow.id]);
     assert.equal(el('mute-conversation').getAttribute('aria-pressed'), 'true');
     assert.match(sessionRows(el).find(item => item.dataset.conversation === 'conv-1').getAttribute('aria-label'), /免打扰/);
+    await fire(el('mute-conversation'), 'click');
+    await settle(2);
+    assert.equal(muted, false);
+    assert.equal(el('notification-count').textContent, '2');
+    assert.deepEqual(el('notification-list').children.map(entry => entry.children[0].dataset.notification), [mention.id, follow.id]);
+  } finally { restore(); }
+});
+
+test('muted sessions have no sidebar unread badge and bulk-read leaves their cursor alone', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  const writes = [];
+  try {
+    await mount(doc, {fetcher: async (path) => {
+      if (path.endsWith('/read')) {
+        writes.push(path);
+        return json(200, {unread_count: 0});
+      }
+      const response = await original(path);
+      const data = await response.json();
+      if (path.endsWith('/social/conversations?limit=100')) return json(200, {
+        items: data.items.map(item => ({...item, muted:item.id === 'conv-1', unread_count:3})),
+      });
+      return json(response.status, data);
+    }});
+    const muted = sessionRows(el).find(item => item.dataset.conversation === 'conv-1');
+    assert.ok(muted.classList.contains('is-muted'));
+    assert.equal(muted.classList.contains('is-unread'), false);
+    assert.doesNotMatch(muted.getAttribute('aria-label'), /未读消息/);
+    assert.equal(muted.querySelector('.unread-badge'), null);
+    const filter = el('session-filter-value');
+    filter.value = 'unread';
+    await fire(filter, 'change');
+    assert.deepEqual(sessionRows(el).map(item => item.dataset.conversation), ['conv-2']);
+    await fire(el('conversations-read-all'), 'click');
+    assert.deepEqual(writes, ['/v1/workspaces/ws-1/social/conversations/conv-2/read']);
   } finally { restore(); }
 });
 
@@ -2780,7 +2852,7 @@ test('pin a message and multi-select forward call the real endpoints', async () 
       return original(path);
     }});
     await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
-    assert.equal(el('chat-invite').hidden, false);
+    assert.equal(el('chat-invite').hidden, true, 'a legacy chat without verified workspace authority cannot issue links');
     assert.equal(el('multi-select-toggle').hidden, false);
     let li = el('message-list').children[0];
     const tools = li.children.find(node => node.className === 'message-tools');
@@ -3135,6 +3207,101 @@ function attachmentMessage(attachment) {
   };
 }
 
+test('the Chat workspace invitation copies a native recipient link and discards stale receipts', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const workspace = 'a'.repeat(32), token = 'b'.repeat(32);
+  const receipt = {status:201, body:{invite:{id:'issued', workspace_id:workspace}, token}};
+  let active = {scope:'owner:team:chat', workspace};
+  const response = Promise.withResolvers();
+  const calls = [], copied = [];
+  let denyCopy = false;
+  const invite = mountWorkspaceInvite(doc, {
+    context: () => active,
+    view: {location:{origin:'https://test.example'}, navigator:{clipboard:{async writeText(value) {
+      if (denyCopy) throw new Error('Clipboard declined');
+      copied.push(value);
+    }}}},
+    async request(method, path, body) {
+      calls.push([method,path,body]);
+      return calls.length === 1 ? receipt : response.promise;
+    },
+  });
+  const trigger = el('chat-invite');
+  const link = el('chat-invite-link');
+  link.select = () => {link.selected = true;};
+  invite.sync();
+  assert.equal(trigger.hidden,false);
+  trigger.handlers.click[0]();
+  el('chat-invite-approval').checked = true;
+  const submit = () => el('chat-invite-form').handlers.submit[0]({preventDefault() {}});
+  await submit();
+  assert.deepEqual(calls[0], ['POST', `/v1/workspaces/${workspace}/invites`, {
+    role:'member',expires_in:604800,max_uses:1,requires_approval:true,
+  }]);
+  assert.equal(link.value,`https://test.example/login#team-invite=${token}`);
+  assert.equal(el('chat-invite-link-row').hidden,false);
+  await el('chat-invite-copy').handlers.click[0]();
+  assert.deepEqual(copied,[link.value]);
+  denyCopy = true;
+  await el('chat-invite-copy').handlers.click[0]();
+  assert.equal(link.selected,true);
+  assert.equal(el('chat-invite-result').textContent,'请复制选中的链接。');
+
+  const slow = submit();
+  active = null;
+  invite.sync();
+  response.resolve(receipt);
+  await slow;
+  assert.equal(trigger.hidden,true);
+  assert.equal(link.value,'');
+  assert.equal(el('chat-invite-link-row').hidden,true);
+  assert.equal(el('chat-invite-panel').hidden,true);
+});
+
+test('group announcements display the publisher and can be cleared only by an editor', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const dialog = el('announcement-dialog');
+  dialog.showModal = () => { dialog.open = true; };
+  dialog.close = () => { dialog.open = false; dialog.dispatchEvent({type:'close'}); };
+  const calls = [];
+  let canEdit = false;
+  const entry = {body:'Planning update', author_name:'<Ada>', updated_at:1800000000000, revision:4};
+  const {refreshAnnouncement} = mountMessageUtilities(doc, {
+    context: () => ({wid:'team', cid:'group', kind:'group'}),
+    formatAnnouncementTime: timestamp => { assert.equal(timestamp, entry.updated_at); return '16:20'; },
+    notify: () => {},
+    async request(method, path, body) {
+      const announcement = method === 'POST' ? {body:'',revision:5} : entry;
+      calls.push({method,path,body});
+      return {status:200,body:{announcement,can_edit:canEdit}};
+    },
+  });
+  await refreshAnnouncement();
+  assert.equal(el('group-announcement-preview').textContent, entry.body);
+  assert.equal(el('group-announcement-meta').textContent, '<Ada> · 16:20');
+  assert.equal(el('group-announcement-meta').hidden, false);
+
+  const open = el('group-announcement-open').handlers.click[0];
+  const clear = el('announcement-clear');
+  await open();
+  assert.equal(el('announcement-save').disabled, true);
+  assert.equal(clear.hidden, true);
+  await clear.handlers.click[0]();
+  assert.equal(calls.some(call => call.method === 'POST'), false);
+  dialog.close();
+
+  canEdit = true;
+  await open();
+  assert.equal(clear.hidden, false);
+  await clear.handlers.click[0]();
+  assert.deepEqual(calls.at(-1), {
+    method:'POST',path:'/v1/workspaces/team/social/conversations/group/announcement',body:{body:'',revision:4},
+  });
+  assert.equal(dialog.open, false);
+  assert.equal(el('group-announcement-preview').textContent, '还没有群公告。');
+  assert.equal(el('group-announcement-meta').hidden, true);
+});
+
 test('a picture shared in a chat renders as an image, not a document card', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const restore = installChatGlobals();
@@ -3463,6 +3630,88 @@ test('team document links open the exact same-origin workspace and document', as
   assert.equal(studioDocumentHrefInMessage(origin+href+'&studio='+id,origin),'');
 });
 
+test('assistant Markdown tables handle alignment, optional outer pipes, escapes and code spans', () => {
+  const lines = [
+    '左 | 中 | 右 | 默认',
+    ':--- | :---: | ---: | ---',
+    '| 甲\\|乙 | `A|B` | ``C`|D`` | `E\\|F` |',
+    '短行 | 中间 | 右边',
+    '| 多余 | 单元格 | 会被 | 忽略 | 不属于表格 |',
+    '### 后续段落 | 继续显示',
+  ];
+  const result = readMarkdownTable(lines, 0);
+  assert.deepEqual(result, {
+    next:5,
+    block:{
+      type:'table', header:['左','中','右','默认'], alignments:['left','center','right',null],
+      rows:[['甲|乙','`A|B`','``C`|D``','`E|F`'], ['短行','中间','右边',''], ['多余','单元格','会被','忽略']],
+    },
+  });
+  assert.equal(readMarkdownTable(['甲 | 乙','--- | ouch'], 0), null);
+  assert.equal(readMarkdownTable(['甲 | 乙','--- | --- | ---'], 0), null);
+  assert.equal(readMarkdownTable(['甲 \\| 乙','--- | ---'], 0), null);
+  assert.deepEqual(readMarkdownTable(['| 单列 |','| --- |','| 行 |'], 0).block.rows, [['行']]);
+  const rows = Array.from({length:121}, () => '甲 | 乙');
+  const bounded = readMarkdownTable([lines[0],lines[1],...rows], 0);
+  assert.equal(bounded.block.rows.length, 120);
+  assert.equal(bounded.next, 122);
+});
+
+test('assistant Markdown tables render scoped table headers and delegate only cell content', () => {
+  const {doc} = fakeChatDocument(chatHtml());
+  doc.documentElement = {lang:'zh-Hans'};
+  const lines = ['| 名称 | 数据 |','| --- | ---: |','| **本周** | <img src=x> |'];
+  const cells = [];
+  const content = renderMarkdownTable(doc, readMarkdownTable(lines, 0).block, (node, text) => {
+    cells.push(text);
+    node.textContent = text;
+  });
+  const [table] = content.children;
+  const [head, body] = table.children;
+  const headers = head.children[0].children;
+  assert.equal(content.className, 'chat-markdown-table-scroll');
+  assert.equal(content.tabIndex, 0);
+  assert.equal(content.getAttribute('aria-label'), '表格');
+  assert.deepEqual([table.tagName, head.tagName, body.tagName], ['TABLE','THEAD','TBODY']);
+  assert.ok(headers.every(cell => cell.tagName === 'TH' && cell.getAttribute('scope') === 'col'));
+  assert.equal(headers[1].getAttribute('data-align'), 'right');
+  assert.deepEqual(cells, ['名称','数据','**本周**','<img src=x>']);
+  assert.deepEqual(body.children[0].children.map(cell => cell.tagName), ['TD','TD']);
+  assert.equal(body.children[0].children[1].textContent, '<img src=x>');
+});
+
+test('the inbox entry leaves Markdown modules outside its static dependency graph', () => {
+  assert.doesNotMatch(chatHtml(), /rel="modulepreload"[^>]*href="[^"]*(?:rich-content|markdown(?:-table)?|\/rich|code-block)\.mjs"/);
+  const source = readFileSync(new URL('../openteamily/static/chat/app.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /from\s+['"][^'"]*(?:rich-content|markdown(?:-table)?|\/rich|code-block)\.mjs['"]/);
+});
+
+test('a later rich renderer updates a folded message preview without closing or replacing its details', async () => {
+  const {renderMessageText} = await import('../openteamily/static/chat/utilities.mjs');
+  const {doc} = fakeChatDocument(chatHtml());
+  const root = doc.createElement('div');
+  const source = `### 后续检查\n\n${'保留完整内容。'.repeat(145)}`;
+  let body;
+  let updatePreview;
+  renderMessageText(doc, root, source, 'standard', false, (parent, text, afterRender) => {
+    body = doc.createElement('div');
+    body.textContent = text;
+    parent.append(body);
+    updatePreview = afterRender;
+  });
+  const [details] = root.children;
+  const [summary] = details.children;
+  details.open = true;
+  assert.match(summary.textContent, /^### 后续检查/);
+  const heading = doc.createElement('h3');
+  heading.textContent = '后续检查';
+  body.replaceChildren(heading);
+  updatePreview();
+  assert.equal(root.children[0], details);
+  assert.equal(details.open, true);
+  assert.equal(summary.textContent, '后续检查… 展开全文');
+});
+
 test('folding preserves complete message and link preview preference never fetches or executes markup', async () => {
   const {renderMessageText}=await import('../openteamily/static/chat/utilities.mjs');
   const document={createElement:tag=>new FakeElement(tag)}, root=new FakeElement('div');
@@ -3513,6 +3762,67 @@ test('resource picker cancels pending reads, inserts actual quoted content once,
   assert.match(el('chat-body').value,/Original note（修订 2）/u);
   assert.ok(el('chat-body').value.endsWith(JSON.stringify('<script>quoted, never executable</script>')));
   assert.equal(el('resource-picker').open,false);assert.equal(posts.length,0);
+});
+
+test('prompt templates save the current draft, bind late inserts to their conversation, and never send', async () => {
+  const {mountPromptTemplates} = await import('../openteamily/static/chat/prompt-templates.mjs');
+  const {doc, el} = utilityDocument();
+  const composer = el('chat-body');
+  composer.maxLength = 4000;
+  composer.value = 'Summarize {{topic}}';
+  const prompt = {id: 'b'.repeat(32), title: 'Summary', variables: ['topic'], current_version: 1};
+  let scope = 'owner-workspace-thread';
+  let receipt;
+  let changed = 0;
+  composer.dispatchEvent = event => { if (event.type === 'input') changed += 1; };
+  const requests = [];
+  const library = mountPromptTemplates(doc, {composer, scope: () => scope, uiLabel: (_zh, en) => en,
+    request: async (method, path, body) => {
+      assert.equal(method, 'POST');
+      assert.equal(path, '/b/api/openteamily');
+      requests.push(body);
+      const value = body.endpoint === 'prompts/list' ? {items: [], cursor: null}
+        : body.endpoint === 'prompts/create' ? {prompt} : await receipt.promise;
+      return {status: 200, body: {ok: true, value}};
+    },
+  });
+  library.open();
+  await settle(2);
+  el('chat-prompt-title').value = 'Summary';
+  await fire(el('chat-prompt-save-form'), 'submit', {preventDefault() {}});
+  await settle(2);
+  assert.deepEqual(requests.map(call => call.endpoint), ['prompts/list', 'prompts/create']);
+  assert.deepEqual(requests.at(-1).payload, {title: 'Summary', body: 'Summarize {{topic}}', scope: 'private'});
+  const fields = el('chat-prompt-values');
+  fields.querySelector('input').value = 'work';
+  composer.value = 'Keep this';
+  receipt = Promise.withResolvers();
+  await fire(el('chat-prompt-insert-form'), 'submit', {preventDefault() {}});
+  receipt.resolve({text: 'x'.repeat(4000), missing: []});
+  await settle(2);
+  assert.match(el('chat-prompt-status').textContent, /message limit/);
+  assert.equal(composer.value, 'Keep this');
+  assert.equal(changed, 0);
+
+  receipt = Promise.withResolvers();
+  await fire(el('chat-prompt-insert-form'), 'submit', {preventDefault() {}});
+  scope = 'owner-workspace-other-thread';
+  receipt.resolve({text: 'Summarize work', missing: []});
+  await settle(2);
+  assert.equal(composer.value, 'Keep this');
+  assert.equal(changed, 0);
+
+  scope = 'owner-workspace-thread';
+  receipt = Promise.withResolvers();
+  await fire(el('chat-prompt-insert-form'), 'submit', {preventDefault() {}});
+  receipt.resolve({text: 'Summarize work', missing: []});
+  await settle(2);
+  assert.equal(composer.value, 'Keep this\n\nSummarize work');
+  assert.equal(changed, 1);
+  assert.equal(el('chat-prompt-dialog').open, false);
+  assert.deepEqual(requests.slice(-3).map(call => call.payload), Array(3).fill({
+    id: prompt.id, version: 1, values: {topic: 'work'},
+  }));
 });
 
 test('model utility errors remain visible and retries retain identity without fake completion', async()=>{
@@ -3766,8 +4076,10 @@ const linkSocialOlder = 'otm_' + '9'.repeat(26);
 const linkSocialLatest = 'otm_' + 'A'.repeat(26);
 const linkNativeDirectory = '/agents?limit=100&include=conversations';
 const linkSocialDirectory = '/social/conversations?limit=100';
+const linkPersonalIdentity = '/v1/workspaces?scope=personal&include=personal-agent';
 const linkPersonalDefault = '/v1/workspaces?scope=personal&include=chat';
 const linkPersonalStartup = linkPersonalDefault + '&workspace=';
+const linkPersonalSocial = workspace => linkPersonalStartup + workspace + '&directory=0';
 const linkPersonalEntry = linkPersonalStartup + linkWork + '&entry_agent=' + linkAgent;
 const linkPersonalThreadEntry = linkPersonalEntry + '&entry_conversation=' + linkThread + '&directory=0';
 const linkBase = workspace => '/v1/workspaces/' + workspace;
@@ -3812,11 +4124,14 @@ function linkedChatFixture(hash, {visibility = 'visible', narrow = false} = {}) 
     const call = {path, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : undefined};
     calls.push(call);
     const compatiblePath = path === linkPersonalEntry || path === linkPersonalThreadEntry ? linkPersonalStartup + linkWork
+      : [linkWork, linkTeam].some(workspace => path === linkPersonalSocial(workspace)) ? path.slice(0, -'&directory=0'.length)
       : path.endsWith(linkSocialPath + '?start=unread') ? path.slice(0, -'?start=unread'.length) : path;
     const override = routes.get(path) || routes.get(compatiblePath);
     if (override) return override(call, options);
     if (path === '/v1/auth/session') return json(200, {user: {id: alice, username: 'alice'}});
-    if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: linkWork}, agent}});
+    if (path === linkPersonalIdentity) return json(200, {items: [
+      {id: linkWork, name: 'Personal', kind: 'personal', owner_id: alice},
+    ], personal_agent_id: agent.id});
     if (path === '/v1/settings') return json(200, {settings: {values: {}}});
     if (path === '/v1/onboarding') return json(200, {onboarding: {completed: true}});
     if (path === '/v1/workspaces?limit=100') return json(200, {items: [
@@ -3920,6 +4235,42 @@ test('an interrupted group send checks for its exact receipt and retries the ori
     assert.equal(el('chat-body').value,newer);
     assert.equal(fixture.messages().filter(id => id === saved.id).length,1);
   } finally {
+    restore();
+  }
+});
+
+test('switching workspaces records the original thread and updates the new history entry when a conversation opens', async () => {
+  const original = `#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`;
+  const fixture = linkedChatFixture(original, {narrow:true});
+  const {doc, el, selected, restore} = fixture;
+  const entries = [original];
+  const hashFrom = url => new URL(url, 'https://fixture.invalid').hash;
+  globalThis.history.pushState = (_state, _title, url) => {
+    globalThis.location.hash = hashFrom(url);
+    entries.push(globalThis.location.hash);
+  };
+  globalThis.history.replaceState = (_state, _title, url) => {
+    globalThis.location.hash = hashFrom(url);
+    entries[entries.length - 1] = globalThis.location.hash;
+  };
+  try {
+    await mount(doc, {fetcher:fixture.fetcher});
+    await settle();
+    assert.equal(selected(), linkThread);
+    el('workspace').value = linkTeam;
+    await fire(el('workspace'), 'change');
+    assert.deepEqual(entries, [original, `#workspace=${linkTeam}`]);
+    const group = sessionRows(el).find(row => row.dataset.conversation === linkSocial);
+    await fire(el('conversation-list'), 'click', {target:group});
+    assert.equal(selected(), linkSocial);
+    assert.deepEqual(entries, [original, `#workspace=${linkTeam}&social=${linkSocial}`]);
+
+    await fixture.navigate(original);
+    await settle();
+    assert.equal(el('workspace').value, linkWork);
+    assert.equal(selected(), linkThread);
+  } finally {
+    await settle();
     restore();
   }
 });
@@ -4089,6 +4440,72 @@ test('a meeting discussion draft unlocks thread controls only after its exact fi
   }
 });
 
+for (const includesReceipt of [false, true]) {
+  test(`returning to a private chat shows its confirmed background send once when history ${includesReceipt ? 'already includes it' : 'arrives stale'}`, async () => {
+    const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+    const {doc, el, routes, agent, nativeThread, nativeRows, messages, restore} = fixture;
+    const scope = linkBase(linkWork);
+    const returning = Promise.withResolvers();
+    const sent = Promise.withResolvers();
+    const readPath = scope + linkNativeLatest;
+    const writePath = scope + linkNativePath + '/messages';
+    const chat = items => json(200, {agent, conversation:nativeThread, items, cursor:null});
+    let reads = 0;
+    let sendKey;
+    routes.set(readPath, () => ++reads === 1 ? chat(nativeRows) : returning.promise);
+    const fetcher = (path, options = {}) => {
+      if (path === writePath && options.method === 'POST') {
+        sendKey = options.headers['Idempotency-Key'];
+        return sent.promise;
+      }
+      return fixture.fetcher(path, options);
+    };
+    const click = id => fire(el('conversation-list'), 'click', {
+      target: sessionRows(el).find(row => row.dataset.conversation === id),
+    });
+    let returningView;
+    try {
+      await mount(doc, {fetcher});
+      await settle();
+      el('chat-body').value = 'This message was sent while switching chats';
+      await fire(el('chat-form'), 'submit', {preventDefault() {}});
+      assert.equal(el('chat-body').value, '');
+      assert.ok(sendKey);
+      await click(linkSocial);
+      assert.deepEqual(messages(), [linkSocialLatest]);
+      el('chat-body').value = 'The other conversation has its own draft';
+      await fire(el('chat-body'), 'input');
+      returningView = click(linkThread);
+      await settle();
+      assert.equal(reads, 2);
+      const saved = {workspace_id:linkWork, agent_id:linkAgent, conversation_id:linkThread, client_key:sendKey, status:'succeeded', created:20};
+      const message = {...saved, id:'c'.repeat(32), role:'user', body:'This message was sent while switching chats'};
+      const reply = {...saved, id:'d'.repeat(32), role:'assistant', body:'Confirmed reply'};
+      sent.resolve(json(200, {message, reply}));
+      await settle();
+      assert.deepEqual(messages(), [linkSocialLatest]);
+      const latestReply = {...reply, body:'Newer saved reply'};
+      returning.resolve(chat(includesReceipt ? [...nativeRows,message,latestReply] : nativeRows));
+      await returningView;
+      await settle();
+      assert.deepEqual(messages(), [linkAgentOlder, linkAgentLatest, message.id, reply.id]);
+      assert.equal(el('chat-body').value, '');
+      assert.equal(reads, 2);
+      assert.match(el('message-list').children.at(-1).children[1].textContent,
+        includesReceipt ? /Newer saved reply/ : /Confirmed reply/);
+      await click(linkSocial);
+      assert.equal(el('chat-body').value, 'The other conversation has its own draft');
+      assert.deepEqual(messages(), [linkSocialLatest]);
+    } finally {
+      sent.resolve(json(403, {}));
+      returning.resolve(chat(nativeRows));
+      await returningView;
+      await settle();
+      restore();
+    }
+  });
+}
+
 test('returning to a private chat fetches once and keeps the older scroll position until the user loads the update', async () => {
   const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
   const {doc, el, routes, messages, restore} = fixture;
@@ -4131,6 +4548,56 @@ test('returning to a private chat fetches once and keeps the older scroll positi
   }
 });
 
+for (const hasGap of [false, true]) {
+  test(`the plain inbox sends before native history loads and ${hasGap ? 'keeps a history gap out of view' : 'shows the confirmed next message'}`, async () => {
+    const fixture = linkedChatFixture('', {narrow:true});
+    const {doc, el, routes, calls, messages, selected, restore} = fixture;
+    const personal = Promise.withResolvers();
+    const scope = linkBase(linkWork);
+    const path = scope + linkSocialPath;
+    const next = 'otm_' + 'B'.repeat(26);
+    routes.set(linkPersonalDefault, () => personal.promise);
+    routes.set(path + '?start=unread', () => json(200, {
+      conversation:{id:linkSocial, workspace_id:linkWork, kind:'group', title:'Linked group', unread_count:3,
+        updated:30, last_seq:8, members:[linkMember]},
+      items:[{id: linkSocialLatest, conversation_id:linkSocial, user_id:bob, seq:8, body:'Unread group message'}],
+      unread_window:{first:{id:linkSocialLatest, seq:8}, read_seq:7, last_seq:8, has_newer:false},
+    }));
+    routes.set(path + '/messages', () => json(201, {message:{
+      id:next, conversation_id:linkSocial, user_id:alice, seq:hasGap ? 10 : 9, body:'Reply before the inbox finishes',
+    }}));
+    const loading = mount(doc, {fetcher:fixture.fetcher});
+    try {
+      await settle();
+      assert.equal(el('workspace').value, linkWork);
+      const group = sessionRows(el).find(row => row.dataset.conversation === linkSocial);
+      assert.ok(group);
+      await fire(el('conversation-list'), 'click', {target:group});
+      assert.equal(selected(), linkSocial);
+      assert.deepEqual(messages().filter(Boolean), [linkSocialLatest]);
+      el('chat-body').value = 'Reply before the inbox finishes';
+      await fire(el('chat-form'), 'submit', {preventDefault() {}});
+      await settle();
+      assert.equal(el('chat-body').value, '');
+      assert.deepEqual(messages().filter(Boolean), hasGap ? [linkSocialLatest] : [linkSocialLatest,next]);
+      assert.equal(el('conversation-live-update').hidden, !hasGap);
+      assert.equal(calls.filter(call => call.path === path + '/messages').length, 1);
+      assert.equal(calls.some(call => call.path === scope + linkNativeDirectory), false);
+      personal.resolve(linkedChatSnapshot(fixture));
+      await loading;
+      await settle();
+      assert.ok(sessionRows(el).some(row => row.dataset.conversation === linkThread));
+      assert.equal(selected(), linkSocial);
+      assert.equal(calls.some(call => call.path === scope + linkNativeDirectory), false);
+    } finally {
+      personal.resolve(json(503, {}));
+      await loading;
+      await settle();
+      restore();
+    }
+  });
+}
+
 test('an exact shared chat and its group sidebar are usable while the personal startup and agent directory wait', async () => {
   const fixture = linkedChatFixture(`#workspace=${linkTeam}&social=${linkSocial}`, {narrow:true});
   const {doc, el, routes, calls, messages, selected, restore} = fixture;
@@ -4146,7 +4613,7 @@ test('an exact shared chat and its group sidebar are usable while the personal s
     assert.equal(selected(), linkSocial);
     assert.deepEqual(messages(), [linkSocialLatest]);
     assert.equal(el('chat-body').disabled, false);
-    assert.ok(calls.some(call => call.path === linkPersonalStartup + linkTeam));
+    assert.ok(calls.some(call => call.path === linkPersonalSocial(linkTeam)));
     assert.ok(calls.some(call => call.path === scope + linkNativeDirectory));
     assert.ok(calls.some(call => call.path === scope + linkSocialDirectory));
 
@@ -4161,6 +4628,52 @@ test('an exact shared chat and its group sidebar are usable while the personal s
   } finally {
     personal.resolve(json(503, {}));
     agents.resolve(json(503, {}));
+    restore();
+  }
+});
+
+test('an authorized personal group opens while the personal snapshot and native sidebar wait', async () => {
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&social=${linkSocial}`, {narrow:true});
+  const {doc, el, routes, calls, messages, selected, restore} = fixture;
+  const personal = Promise.withResolvers();
+  const agents = Promise.withResolvers();
+  const scope = linkBase(linkWork);
+  routes.set(linkPersonalSocial(linkWork), () => personal.promise);
+  routes.set(scope + linkNativeDirectory, () => agents.promise);
+  const loading = mount(doc, {fetcher:fixture.fetcher});
+  try {
+    await settle();
+    assert.equal(el('workspace').value, linkWork);
+    assert.equal(selected(), linkSocial);
+    assert.deepEqual(messages(), [linkSocialLatest]);
+    assert.equal(el('chat-body').disabled, false);
+    assert.equal(calls.filter(call => call.path.startsWith(scope + linkSocialPath + '?')).length, 1);
+    assert.ok(calls.some(call => call.path === linkPersonalSocial(linkWork)));
+  } finally {
+    personal.resolve(linkedChatSnapshot(fixture));
+    agents.resolve(json(200, {items:[fixture.agent], conversations:[fixture.nativeThread]}));
+    await loading;
+    await settle();
+    restore();
+  }
+});
+
+test('an authorized team workspace entry starts loading its sidebar before the personal binding returns', async () => {
+  const fixture = linkedChatFixture(`#workspace=${linkTeam}`, {narrow:true});
+  const {doc, el, routes, calls, restore} = fixture;
+  const personal = Promise.withResolvers();
+  routes.set(linkPersonalStartup + linkTeam, () => personal.promise);
+  const loading = mount(doc, {fetcher:fixture.fetcher});
+  try {
+    await settle();
+    assert.equal(el('workspace').value, linkTeam);
+    assert.ok(calls.some(call => call.path === linkBase(linkTeam) + linkSocialDirectory));
+    assert.ok(calls.some(call => call.path === linkBase(linkTeam) + linkNativeDirectory));
+    assert.equal(calls.some(call => call.path === linkBase(linkWork) + linkNativeDirectory), false);
+  } finally {
+    personal.resolve(linkedChatSnapshot(fixture));
+    await loading;
+    await settle();
     restore();
   }
 });
@@ -5041,7 +5554,8 @@ test('a native startup snapshot from another owner cannot authorize a private co
     await settle();
     assert.equal(fixture.calls.some(call => call.path.startsWith(scope + '/')), false);
     assert.deepEqual(fixture.messages(), []);
-    assert.ok(fixture.calls.some(call => call.path === '/v1/personal-agent' && call.method === 'GET'));
+    assert.ok(fixture.calls.some(call => call.path === linkPersonalIdentity && call.method === 'GET'));
+    assert.equal(fixture.calls.some(call => call.path === '/v1/personal-agent' && call.method === 'GET'), false);
     workspaces.resolve(json(200, {items: [{id: linkWork, name: 'Personal', kind: 'personal'}]}));
     await loading;
     await settle();
@@ -5085,9 +5599,9 @@ test('a cold native Chat boot provisions the personal workspace and ignores the 
   const earlier = Promise.withResolvers();
   const initialized = Promise.withResolvers();
   let workspaceReads = 0;
-  fixture.routes.set('/v1/personal-agent', ({method}) => method === 'GET'
-    ? json(200, {personal_agent: null})
-    : initialized.promise);
+  fixture.routes.set(linkPersonalIdentity, () => json(200, {items: []}));
+  fixture.routes.set('/v1/personal-agent', ({method}) => method === 'POST'
+    ? initialized.promise : json(404, {}));
   fixture.routes.set('/v1/workspaces?limit=100', () => {
     workspaceReads += 1;
     return workspaceReads === 1 ? earlier.promise
@@ -5161,7 +5675,7 @@ test('a linked native history and message jump render while settings and the Soc
     assert.ok(fixture.calls.some(call => call.path === '/v1/onboarding'));
     assert.ok(fixture.calls.some(call => call.path === '/v1/settings'));
     assert.ok(fixture.calls.some(call => call.path === scope + linkSocialDirectory), 'the Social directory really is pending');
-    const personal = fixture.calls.findIndex(call => call.path === '/v1/personal-agent' && call.method === 'GET');
+    const personal = fixture.calls.findIndex(call => call.path === linkPersonalIdentity && call.method === 'GET');
     const workspaces = fixture.calls.findIndex(call => call.path === '/v1/workspaces?limit=100');
     const detail = fixture.calls.findIndex(call => call.path === scope + linkNativeLatest);
     assert.ok(personal >= 0 && workspaces >= 0 && personal < detail && workspaces < detail, 'workspace authorization precedes detail');
@@ -5321,6 +5835,40 @@ test('a pending native older page cannot replace the latest view after the user 
   } finally {
     pending.resolve(page([]));
     fixture.restore();
+  }
+});
+
+test('private pagination keeps an open rich message and replaces it if its source changes', async () => {
+  const path = linkBase(linkWork) + linkNativePath;
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+  const {doc, el, fetcher, nativeRows, routes, restore} = fixture;
+  const chat = items => json(200, {agent: fixture.agent, conversation: fixture.nativeThread, items, cursor: linkAgentLatest});
+  const reply = {...nativeRows[1], body: `### 原回复\n\n项目 | 值\n--- | ---\n甲 | 乙\n\n${'背景说明'.repeat(210)}`};
+  let latest = reply;
+  routes.set(path + '?limit=50', () => chat([latest]));
+  routes.set(`${path}?before=${linkAgentLatest}&limit=50`, () => chat([nativeRows[0]]));
+  const body = () => el('message-list').children.find(row => row.dataset.messageId === linkAgentLatest)
+    ?.children.find(node => node.className === 'body');
+  try {
+    await mount(doc, {fetcher});
+    const oldBody = body();
+    const fold = oldBody.children.find(node => node.tagName === 'DETAILS');
+    assert.ok(fold);
+    fold.open = true;
+    await fire(el('chat-load-older'), 'click');
+    await settle();
+    assert.deepEqual(fixture.messages(), [linkAgentOlder, linkAgentLatest]);
+    assert.equal(body(), oldBody);
+    assert.equal(fold.open, true);
+
+    latest = {...reply, body: '修改后的回复'};
+    await fire(el('chat-back-to-latest'), 'click');
+    await settle();
+    assert.notEqual(body(), oldBody);
+    assert.equal(body().textContent, '修改后的回复');
+  } finally {
+    await settle();
+    restore();
   }
 });
 

@@ -85,20 +85,46 @@ function sharedUnread(result) {
 export default function social(host) {
   const bs = () => sharedBotSocial(host)
   const personalScope = async workspace => (await host.call?.('agents/personal-binding', {}))?.workspace_id === workspace
-  const listShared = (workspace, personal, limit, unread, kind) => bs().get('/v1/ot/notifications' + qs({
-    limit, latest:'1', ...(personal ? {personal:'1'} : {workspace_id:workspace}), unread:unread ? '1' : undefined, kind,
-  }))
-  const readShared = (workspace, personal, selection, kind) => bs().post('/v1/ot/notifications/read', {
-    ...selection, ...(personal ? {personal:true} : {workspace_id:workspace}), kind,
-  })
+  async function notificationPrefs() {
+    try {
+      return (await host.call?.('settings/notificationPrefs', {}))?.prefs ?? {}
+    } catch (error) {
+      if (error?.code === 'openteamily/not-found') return {}
+      throw new Fault(503, 'notifications_unavailable', '暂时无法读取通知偏好。')
+    }
+  }
+  const excludedKinds = prefs => [
+    ...(prefs.mentions === false ? ['messenger.mention'] : []),
+    ...(prefs.artifacts === false ? ['artifact.shared', 'artifact'] : []),
+  ].join(',') || undefined
+  function checkExclusions(result, exclude) {
+    if (exclude && result?.exclude !== exclude) {
+      throw new Fault(503, 'notifications_unavailable', '暂时无法按通知偏好读取通知。')
+    }
+    return result
+  }
+  const listShared = async (workspace, personal, limit, unread, kind, exclude) => checkExclusions(
+    await bs().get('/v1/ot/notifications' + qs({
+      limit, latest:'1', ...(personal ? {personal:'1'} : {workspace_id:workspace}),
+      unread:unread ? '1' : undefined, kind, exclude,
+    })), exclude)
+  async function readShared(workspace, personal, selection, kind, exclude) {
+    // Older Bot Social versions ignore an unknown exclusion on a write.
+    if (exclude) await listShared(workspace, personal, 1, true, kind, exclude)
+    return checkExclusions(await bs().post('/v1/ot/notifications/read', {
+      ...selection, ...(personal ? {personal:true} : {workspace_id:workspace}), kind, ...(exclude && {exclude}),
+    }), exclude)
+  }
   return {
     pages: ['contacts'],
     endpoints: {
       v1: compatHandler([
         { method: 'GET', path: /^\/v1\/contacts$/,
-          handle: () => wrap(async () => {
+          handle: (_request, call) => wrap(async () => {
             const [data, binding] = await Promise.all([bs().get('/v1/ot/contacts'), host.call('agents/personal-binding', {})])
-            return [200, {...data, workspace_id: binding?.workspace_id ?? null}]
+            const viewer = call?.request?.headers?.get('x-ot-owner-username') ?? process.env.OPENTEAMILY_OWNER_USERNAME ?? ''
+            return [200, {...data, workspace_id: binding?.workspace_id ?? null,
+              ...(/^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/.test(viewer) ? {viewer_username:viewer} : {})}]
           }) },
         { method: 'GET', path: /^\/v1\/contacts\/lookup$/,
           handle: ({query}) => wrap(async () => {
@@ -124,35 +150,48 @@ export default function social(host) {
               throw new Fault(400, 'invalid', '无效的通知列表长度。')
             }
             const workspace = match[1], unread = filter === 'unread'
+            const prefs = await notificationPrefs()
+            const includeAutomation = prefs.task_completion !== false
             const [shared, local] = await Promise.all([
-              kind === 'automation' ? null : personalScope(workspace).then(personal => listShared(workspace, personal, limit, unread, kind)),
-              kind === 'work' ? null : listAutomationNotifications(host, workspace, {limit, unread}, kind !== 'automation'),
+              kind === 'automation' ? null
+                : personalScope(workspace).then(personal => listShared(workspace, personal, limit, unread, kind, excludedKinds(prefs))),
+              kind === 'automation' || (kind !== 'work' && includeAutomation)
+                ? listAutomationNotifications(host, workspace, {limit, unread}, kind !== 'automation') : null,
             ])
             if (shared !== null && !Array.isArray(shared?.notifications)) {
               throw new Fault(503, 'notifications_unavailable', '暂时无法读取共享通知。')
             }
-            return [200, {items:recentNotifications(shared?.notifications ?? [], local?.items ?? [], workspace, limit),
-              unread_count:(shared === null ? 0 : sharedUnread(shared)) + (local?.unread_count ?? 0), limit}]
+            const automation = includeAutomation ? local : null
+            return [200, {items:recentNotifications(shared?.notifications ?? [], automation?.items ?? [], workspace, limit),
+              unread_count:(shared === null ? 0 : sharedUnread(shared)) + (automation?.unread_count ?? 0), limit}]
           }) },
         { method: 'POST', path: /^\/v1\/workspaces\/([0-9a-f]{32})\/notifications\/read$/,
           handle: ({ match, body }) => wrap(async () => {
             const workspace = match[1], {kind, local, selection} = notificationRead(body)
+            const prefs = await notificationPrefs()
+            const includeAutomation = prefs.task_completion !== false
+            if (!includeAutomation && local) throw new Fault(404, 'not_found', '找不到这条通知。')
             if (kind === 'automation') {
+              if (!includeAutomation) {
+                await listAutomationNotifications(host, workspace, {limit:1, unread:true}, false)
+                return [200, {unread_count:0}]
+              }
               const result = await readAutomationNotifications(host, workspace, selection)
               return [200, {unread_count:result.unread_count}]
             }
             const personal = await personalScope(workspace)
+            const exclude = excludedKinds(prefs)
             if (kind === 'work') {
-              const result = await readShared(workspace, personal, selection, kind)
+              const result = await readShared(workspace, personal, selection, kind, exclude)
               return [200, {unread_count:sharedUnread(result)}]
             }
             if (local) {
-              const shared = sharedUnread(await listShared(workspace, personal, 1, true))
+              const shared = sharedUnread(await listShared(workspace, personal, 1, true, undefined, exclude))
               const result = await readAutomationNotifications(host, workspace, selection)
               return [200, {unread_count:shared + result.unread_count}]
             }
-            const before = await listAutomationNotifications(host, workspace, {limit:1, unread:true})
-            const shared = sharedUnread(await readShared(workspace, personal, selection))
+            const before = includeAutomation ? await listAutomationNotifications(host, workspace, {limit:1, unread:true}) : null
+            const shared = sharedUnread(await readShared(workspace, personal, selection, undefined, exclude))
             if (!selection.all || before === null) return [200, {unread_count:shared + (before?.unread_count ?? 0)}]
             try {
               const result = await readAutomationNotifications(host, workspace, selection)
@@ -166,8 +205,15 @@ export default function social(host) {
       identity: async () => bs().identity(),
       profile: async () => bs().get('/v1/ot/me'),
       updateProfile: async (p) => bs().put('/v1/ot/profile', { display_name: p?.display_name, bio: p?.bio }),
-      notifications: async (p) => bs().get('/v1/ot/notifications' + qs({ after: p?.after, limit: p?.limit })),
-      readNotifications: async (p) => bs().post('/v1/ot/notifications/read', { up_to: p?.up_to }),
+      async notifications(p) {
+        const exclude = excludedKinds(await notificationPrefs())
+        return checkExclusions(await bs().get('/v1/ot/notifications' + qs({after:p?.after, limit:p?.limit, exclude})), exclude)
+      },
+      async readNotifications(p) {
+        const exclude = excludedKinds(await notificationPrefs())
+        if (exclude) checkExclusions(await bs().get('/v1/ot/notifications' + qs({limit:1, unread:'1', exclude})), exclude)
+        return checkExclusions(await bs().post('/v1/ot/notifications/read', {up_to:p?.up_to, ...(exclude && {exclude})}), exclude)
+      },
     },
   }
 }

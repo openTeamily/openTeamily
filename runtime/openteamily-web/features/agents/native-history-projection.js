@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { currentSession, threadCurrentOfPart, threadOf, threadOfPart } from '../../../ds-bot-upstream/ds-bot/src/host/threads.js'
+import { livePrivateChat, privateChatThread } from '../../lib/native-chat.js'
 import { NATIVE_EVENT_LEDGER } from './history.js'
 
 const MAX_TURN_EVENTS = 2048
@@ -92,11 +92,10 @@ export function nativeHistoryProjection({host,db}) {
     const bot = rt.botOf(botId)
     const identity = bot?.openteamily
     if (bot?.hidden || !ID.test(identity?.agent_id || '') || !ID.test(identity?.workspace_id || '')) return null
-    const thread = old ? threadOfPart(bot,sessionId) : threadOf(bot,sessionId)
-    if (!thread) return null
-    const liveId = thread.thread === 'current' ? currentSession(bot) : bot.openParts[thread.index].sessionId
+    const thread = privateChatThread(bot,sessionId)
+    if (!thread || (!old && thread.sessionId !== sessionId)) return null
     let found
-    for (const id of [liveId,...thread.segments.map(part => part.sessionId)]) {
+    for (const id of [thread.sessionId,...thread.segments.map(part => part.sessionId)]) {
       const row = mapping.get(id,botId)
       if (!row) continue
       if (row.agent_id !== identity.agent_id || row.workspace_id !== identity.workspace_id || (found && row.id !== found.id)) return null
@@ -173,9 +172,8 @@ export function nativeHistoryProjection({host,db}) {
     const {rt,ctx} = runtime ?? {}
     if (typeof rt?.botOf !== 'function' || typeof ctx?.sessions?.get !== 'function') return
     if (recovering.has(conversationId)) return recovering.get(conversationId)
-    const bot = rt.botOf(mapping.native_bot_id)
     const exact = mapping.native_session_id
-    const current = threadCurrentOfPart(bot,exact)
+    const current = livePrivateChat(rt,mapping.native_bot_id,exact)
     if (!current) return
     const job = enqueue(conversationId,async () => {
       for (const sessionId of new Set([exact,current])) {

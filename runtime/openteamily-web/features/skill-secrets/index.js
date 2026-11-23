@@ -10,7 +10,7 @@ import { importJsonBundles } from '../../lib/b4/importer.js'
 export default function skillSecrets(host) {
   const key = loadSealKey({ fallbackFile: join(host.featureDir(), 'seal.key'), preferFallback: true })
   const store = openJsonStore(host.featureDir(), 'imports', () => ({ pending: {}, imports: [] }))
-  importJsonBundles({ dataDir: host.dataDir, feature: { name: 'skill-secrets', importTables: { skill_secrets: ['name','updated'] } }, store, sealKey: loadImportSealKey(),
+  importJsonBundles({ host, feature: { name: 'skill-secrets', importTables: { skill_secrets: ['name','updated'] } }, store, sealKey: loadImportSealKey(),
     apply(draft, tables, secrets) {
       draft.pending ||= {}
       for (const row of tables.skill_secrets || []) {

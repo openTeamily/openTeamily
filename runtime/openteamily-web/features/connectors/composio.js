@@ -83,7 +83,9 @@ export class Client {
     if ((raw?.length ?? 0) > MAX_RESPONSE) throw new ComposioError('composio_failed', 'Composio response was too large')
     if (status === 401 || status === 403) throw new ComposioError('composio_key_rejected', 'Composio rejected this API key', status)
     if (status === 404) throw new ComposioError('composio_not_found', 'Composio did not find that item', status)
+    if (status === 409) throw new ComposioError('composio_conflict', 'Composio reported a connection conflict', status)
     if (status === 429) throw new ComposioError('composio_rate_limited', 'Composio rate limit reached; try later', status)
+    if (status >= 500 && status < 600) throw new ComposioError('composio_upstream', 'Composio service returned an error; try later', status)
     if (!allow.includes(status)) throw new ComposioError('composio_failed', 'Composio request failed', status)
     if (!raw || raw.length === 0) return {}
     let payload

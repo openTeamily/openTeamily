@@ -41,8 +41,23 @@ const files = {
     '34b2a23af48a7c90984cca4050d3187816a9873fd513005cfb4663a6b8a33cb8',
     'a24c9c2421c93aaacb5f50b58bbf3733883976908b8ee64866d9ef4e3f32cd0f',
   ],
+  'src/host/bot-tasks.js': [
+    '07701ae804298f68aa54f6fb8d69c7b98b4b99afd059d81d107d320bdc593e7e',
+    '16c61d88dd2e9d3a5257fe12d818e830c9392d72b5f1db24a52f012481f87243',
+  ],
+  'src/host/parts.js': [
+    'd0c762e46a00d053220eda242efaf503d24e15dbcff65ea6ac39c42f3d5234a6',
+    'ea7ca0a5bd1b60db291c4a555dc0694d089b4a3a4fb04a916b63ee0c480af924',
+  ],
+  'src/host/store.js': [
+    '6494f21fe71c208d246d56947680fdcbe55b77546c12bdf1da240854e0d5a504',
+    '76fbe8fe334567c266ef740335fa8ef6cdf9d5f8fa7be37296b9fcd511e85972',
+  ],
+  'src/host/threads.js': [
+    'e93710eacf98a2e86c74bd768f55590f1ac9af98748e4dc74148e5bc5b6e90e0',
+    'e3d1421905a6b1bbbeb9ce12bd94b2cc997cd6ba95cd90558a00fd5f2b0d1118',
+  ],
 }
-
 
 const digest = (root, path) => createHash('sha256').update(readFileSync(join(root, path))).digest('hex')
 

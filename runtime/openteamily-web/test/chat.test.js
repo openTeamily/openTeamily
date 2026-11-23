@@ -13,8 +13,7 @@ import { tokens, rank } from '../features/chat/recall.js'
 const dir = join(fileURLToPath(new URL('.', import.meta.url)), '..', 'features')
 const identity = { instanceId: 'd'.repeat(32) }
 
-async function load() {
-  const data = mkdtempSync(join(tmpdir(), 'ot-chat-'))
+async function load(data = mkdtempSync(join(tmpdir(), 'ot-chat-'))) {
   const { table, failed } = await loadFeatures({ dir, identity, dataDir: data, log: () => {} })
   assert.deepEqual(failed, [])
   return table
@@ -187,6 +186,20 @@ test('personal chat history is adopted through the trusted importer only', async
   assert.equal(typeof table['chat/exportLegacy'], 'function')
   assert.equal(table['chat/import'], undefined)
   assert.equal(table['chat/importStatus'], undefined)
+})
+
+test('legacy private chat export preserves insertion order for messages at the same time', async t => {
+  const data = mkdtempSync(join(tmpdir(), 'ot-chat-'))
+  const table = await load(data)
+  await table['chat/exportLegacy']()
+  const db = new DatabaseSync(join(data, 'openteamily', 'features', 'chat', 'chat.sqlite3'))
+  t.after(() => db.close())
+  db.exec(`INSERT INTO conversations VALUES ('c','Conversation',1,1);
+    INSERT INTO messages VALUES
+      ('zzz','c','user','Question',1,'{}'),
+      ('aaa','c','assistant','Answer',1,'{}');`)
+  const {conversations} = await table['chat/exportLegacy']()
+  assert.deepEqual(conversations[0].messages.map(message => message.id), ['zzz', 'aaa'])
 })
 
 test('the browser can neither provide raw skill material nor invoke the internal materializer', async () => {

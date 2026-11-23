@@ -10,16 +10,20 @@ test('boot imports only its feature; foreign targets retained; redelivery is ide
   const dataDir = mkdtempSync(join(tmpdir(), 'ot-import-')), db = new DatabaseSync(':memory:')
   try {
     const dir = join(dataDir, 'openteamily', 'import'); mkdirSync(dir, { recursive: true })
-    const host = { dataDir, name: 'agents', identity: { instanceId: 'a'.repeat(32) }, log() {} }
+    const host = { dataDir, name: 'agents', identity: { instanceId: 'a'.repeat(32), routingInstanceId: 'b'.repeat(32) }, log() {} }
     const file = join(dir, 'agents-v1.bundle'), other = join(dir, 'automations-v1.bundle')
-    const text = JSON.stringify({ feature: 'agents', instance_id: host.identity.instanceId })
+    const text = JSON.stringify({ feature: 'agents', instance_id: host.identity.routingInstanceId })
     writeFileSync(file, text); writeFileSync(other, '{"feature":"automations"}')
     let calls = 0; const migrate = async () => { calls++ }
     await importPending({ host, db, migrate }); assert.equal(calls, 1); assert.equal(existsSync(file), false)
     writeFileSync(file, text); await importPending({ host, db, migrate }); assert.equal(calls, 1)
     assert.equal(existsSync(other), true)
-    writeFileSync(file, JSON.stringify({ feature: 'agents', instance_id: 'b'.repeat(32) }))
-    const rejected = await importPending({ host, db, migrate })
-    assert.equal(rejected[0].status, 'rejected'); assert.equal(existsSync(file), true); assert.equal(calls, 1)
+    for (const instance_id of [host.identity.instanceId, undefined]) {
+      writeFileSync(file, JSON.stringify({ feature: 'agents', instance_id }))
+      const rejected = await importPending({ host, db, migrate })
+      assert.deepEqual(rejected, [{ status: 'rejected' }])
+      assert.equal(existsSync(file), true)
+      assert.equal(calls, 1)
+    }
   } finally { db.close(); rmSync(dataDir, { recursive: true, force: true }) }
 })

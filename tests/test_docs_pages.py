@@ -1,5 +1,6 @@
 """Help centre, terms and privacy page serving tests. In-process WSGI only; not browser E2E."""
 from pathlib import Path
+import re
 import tempfile
 import unittest
 
@@ -8,6 +9,24 @@ from openteamily.settings_page import SettingsPage
 from openteamily.store import Store
 from tests.test_management import Client, ORIGIN
 from tests.test_settings_page import RawClient
+
+
+def has_account_menu_link(html, href, label):
+    """Account-menu anchors may carry data-ui-text (or other) attributes.
+
+    Attribute order also varies across pages after the locale catalog landed.
+    The link must still be a real role=menuitem anchor to the public docs page.
+    """
+    for match in re.finditer(r'<a\b([^>]*?)>([^<]*)</a>', html):
+        attrs, text = match.group(1), match.group(2)
+        if text != label:
+            continue
+        if not re.search(r'\bhref="%s"' % re.escape(href), attrs):
+            continue
+        if not re.search(r'\brole="menuitem"', attrs):
+            continue
+        return True
+    return False
 
 
 class DocsPagesTests(unittest.TestCase):
@@ -62,13 +81,16 @@ class DocsPagesTests(unittest.TestCase):
         self.assertEqual(self.raw.call('GET', '/docs/app.css', query='v=1')['status'], 400)
 
     def test_the_account_menu_no_longer_offers_disabled_legal_placeholders(self):
+        links = (('/help', '帮助中心'), ('/terms', '服务条款'), ('/privacy', '隐私政策'))
         for path in ('/chat', '/profile', '/settings', '/guide'):
             html = self.raw.call('GET', path)
             self.assertEqual(html['status'], 200)
             body = html['body'].decode()
-            self.assertIn('<a href="/help" role="menuitem">帮助中心</a>', body)
-            self.assertIn('<a href="/terms" role="menuitem">服务条款</a>', body)
-            self.assertIn('<a href="/privacy" role="menuitem">隐私政策</a>', body)
+            for href, label in links:
+                self.assertTrue(
+                    has_account_menu_link(body, href, label),
+                    '%s still has no real %s link in the account menu' % (path, label),
+                )
             self.assertNotIn('未实现：还没有 OpenTeamily 帮助中心页', body)
             self.assertNotIn('未实现：还没有 OpenTeamily 服务条款页', body)
             self.assertNotIn('未实现：还没有 OpenTeamily 隐私政策页', body)

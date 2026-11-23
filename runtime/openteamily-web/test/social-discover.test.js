@@ -7,11 +7,30 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createBotSocial, setSharedBotSocial } from '../lib/c/bot-social.js'
 import discover from '../features/discover/index.js'
+import social from '../features/social/index.js'
 import { createDispatch } from '../src/dispatch.js'
 import { boot } from './helpers.js'
 import { triangleGlb } from './fixtures/triangle-glb.js'
 
 const SERVER = 'https://social.example.test'
+
+test('the contacts directory carries its authenticated viewer and personal workspace', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ot-contacts-viewer-'))
+  const credentialsPath = join(dir, 'connector.json')
+  writeFileSync(credentialsPath, JSON.stringify({token:'fixture',server:SERVER}), {mode:0o600})
+  const workspace = 'a'.repeat(32)
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath,fetch:async url => {
+    assert.equal(url, SERVER + '/v1/ot/contacts')
+    return Response.json({items:[]})
+  }}))
+  const list = social({call:async endpoint => {
+    assert.equal(endpoint, 'agents/personal-binding')
+    return {workspace_id:workspace}
+  }}).endpoints.v1
+  const request = new Request(SERVER, {headers:{'x-ot-owner-username':'SignedOwner'}})
+  const result = await list({method:'GET',path:'/v1/contacts',body:{viewer_username:'UntrustedName'}},{request})
+  assert.deepEqual(result, {status:200,body:{items:[],workspace_id:workspace,viewer_username:'SignedOwner'}})
+})
 
 test('editable publishing and remix copy only the selected canonical saved work', async () => {
   const author = await boot()

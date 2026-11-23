@@ -72,6 +72,7 @@ function fakeDocument() {
 const WORKSPACE = 'a'.repeat(32);
 const MEETING_ID = 'b'.repeat(32);
 const OTHER_MEETING_ID = 'c'.repeat(32);
+const OWNER = 'd'.repeat(32);
 
 function meeting(id = MEETING_ID, revision = 3, actions = [
   {text: 'A', done: false, owner: ''},
@@ -86,7 +87,7 @@ function meeting(id = MEETING_ID, revision = 3, actions = [
   };
 }
 
-async function mountPage(tag, { revokeWith = 200, beforeWrite = () => {}, afterWrite = () => {}, native = false, mobile = false, readList, saveArtifact, intercept } = {}) {
+async function mountPage(tag, { revokeWith = 200, beforeWrite = () => {}, afterWrite = () => {}, native = false, mobile = false, readList, saveArtifact, intercept, historyEntry } = {}) {
   const {doc, elements} = fakeDocument();
   if (native) doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
   const state = {calls: [], body: meeting(), posted: [], revokeWith};
@@ -96,7 +97,7 @@ async function mountPage(tag, { revokeWith = 200, beforeWrite = () => {}, afterW
     state.calls.push(`${method} ${path}`);
     const custom = intercept?.({method, path, options, state, json});
     if (custom) return custom;
-    if (path === '/v1/auth/session') return json(200, {user: {username: 'alice'}});
+    if (path === '/v1/auth/session') return json(200, {user: {username: 'alice', id:OWNER}});
     if (path === '/v1/workspaces?limit=100' || path === '/v1/workspaces?scope=personal') {
       return json(200, {items: [{id: WORKSPACE, name: 'Team'}]});
     }
@@ -135,14 +136,26 @@ async function mountPage(tag, { revokeWith = 200, beforeWrite = () => {}, afterW
     throw new Error('unexpected ' + method + ' ' + path);
   };
   const saved = {document: globalThis.document, fetch: globalThis.fetch, FormData: globalThis.FormData, matchMedia: globalThis.matchMedia};
+  const oldHistory = globalThis.history, oldLocation = globalThis.location;
   globalThis.document = doc;
   globalThis.fetch = fetcher;
   globalThis.matchMedia = () => ({matches: mobile});
+  if (historyEntry) {
+    const location = globalThis.location = new URL('https://local.test/meetings#workspace=' + WORKSPACE);
+    globalThis.history = {state:historyEntry, replaceState(value, _title, url) {
+      this.state = value;
+      location.href = new URL(url, location).href;
+    }};
+  }
   const restore = () => {
     if (saved.document === undefined) delete globalThis.document; else globalThis.document = saved.document;
     if (saved.fetch === undefined) delete globalThis.fetch; else globalThis.fetch = saved.fetch;
     if (saved.matchMedia === undefined) delete globalThis.matchMedia; else globalThis.matchMedia = saved.matchMedia;
     globalThis.FormData = saved.FormData;
+    if (historyEntry) {
+      if (oldHistory === undefined) delete globalThis.history; else globalThis.history = oldHistory;
+      if (oldLocation === undefined) delete globalThis.location; else globalThis.location = oldLocation;
+    }
   };
   await import('../openteamily/static/meetings/app.mjs?toggle=' + tag);
   await settle();
@@ -152,6 +165,23 @@ async function mountPage(tag, { revokeWith = 200, beforeWrite = () => {}, afterW
 async function settle() {
   for (let i = 0; i < 14; i += 1) await new Promise((resolve) => setImmediate(resolve));
 }
+
+test('meeting catalogue restores filtered pagination only for the matching account and workspace', async () => {
+  for (const [owner, workspace, matches] of [[OWNER, WORKSPACE, true], [MEETING_ID, WORKSPACE, false], [OWNER, OTHER_MEETING_ID, false]]) {
+    const {doc, state, restore} = await mountPage(`catalogue-${owner}-${workspace}`, {native:true, mobile:true,
+      historyEntry:{meetingCatalogue:{owner, workspace, query:'shipping review', open:true, size:41}},
+    });
+    try {
+      const fields = new URLSearchParams(state.calls.find(call => call.includes('/meetings?')).split('?')[1]);
+      assert.equal(fields.get('q'), matches ? 'shipping review' : null);
+      assert.equal(fields.get('open'), matches ? '1' : null);
+      assert.equal(fields.get('limit'), matches ? '41' : '20');
+      assert.equal(doc.getElementById('meeting-search').value, matches ? 'shipping review' : '');
+      assert.equal(doc.getElementById('meeting-open-only').checked, matches);
+      assert.equal(globalThis.location.href.includes('shipping'), false);
+    } finally { restore(); }
+  }
+});
 
 function checkbox(doc, index) {
   const row = doc.getElementById('action-list').children[index];
@@ -375,7 +405,8 @@ test('native follow-up opens only saved open items and artifact save uses the st
     },
   });
   const ele = id => doc.getElementById(id);
-  const link = index => ele('action-list').children[index].children.find(child => child.className === 'action-followup');
+  const link = index => ele('action-list').children[index].children.find(child => child.className === 'action-destinations')
+    .children.find(child => child.className === 'action-followup');
   try {
     assert.equal(link(0).href, `/automations?workspace=${WORKSPACE}&meeting=${MEETING_ID}&action=0&revision=3`);
     assert.equal(link(0).target, '_blank');

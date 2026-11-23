@@ -7,6 +7,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createSettingsFeature } from '../features/settings/settings.js'
 import { createBotSocial, setSharedBotSocial, seg } from '../lib/c/bot-social.js'
 import social from '../features/social/index.js'
 import teams from '../features/teams/index.js'
@@ -115,6 +116,44 @@ test('the automation snapshot reads the personal list for the authenticated gate
   assert.equal(fallback.status, 200)
   assert.equal(fallback.body.items[0].id, workspace)
   assert.equal(fallback.body.automations, undefined)
+})
+
+test('the personal agent snapshot serves the latest native look for the bound workspace', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'ot-native-look-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const workspace = 'a'.repeat(32)
+  const agent = 'b'.repeat(32)
+  const saved = {color: '葡萄紫', expression: '好奇', headwear: '贝雷帽', glasses: '圆框眼镜', hand: '魔法棒'}
+  const settings = createSettingsFeature({dir}).endpoints
+  const lookReads = []
+  const endpoint = teams({call: async (name, payload) => {
+    if (name === 'agents/personal-binding') return {workspace_id: workspace, agent_id: agent}
+    assert.equal(name, 'settings/look')
+    lookReads.push(payload)
+    return settings.look()
+  }}).endpoints.v1
+  const request = {headers: new Headers({'x-ot-owner-username': 'account-test'})}
+  const get = (suffix = '') => endpoint({method: 'GET',
+    path: '/v1/workspaces?scope=personal&include=personal-agent' + suffix}, {request})
+
+  const before = await get()
+  assert.equal(before.status, 200)
+  assert.equal(before.body.items[0].id, workspace)
+  assert.equal(before.body.viewer_username, 'account-test')
+  assert.equal(before.body.personal_agent_id, agent)
+  assert.equal(before.body.personal_look, null)
+
+  await settings.onboardingLook({look: saved})
+  const updated = await get('&workspace=' + workspace)
+  assert.equal(updated.body.personal_agent_id, agent)
+  assert.deepEqual(updated.body.personal_look, saved)
+  for (const suffix of ['&workspace=' + 'c'.repeat(32), '&workspace=' + workspace + '&workspace=' + workspace,
+    '&include=personal-agent']) {
+    const scoped = await get(suffix)
+    assert.equal(scoped.body.personal_agent_id, undefined)
+    assert.equal(scoped.body.personal_look, undefined)
+  }
+  assert.deepEqual(lookReads, [{}, {}])
 })
 
 test('the Chat snapshot reads only the local owner’s workspace and directory', async t => {
@@ -378,7 +417,7 @@ test('the native inbox requests recent scoped notices and constructs safe meetin
   setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:creds(),fetch:f.fetch}))
   t.after(() => setSharedBotSocial(undefined))
   const endpoint = social({async call(name) {
-    if (name === 'automations/notifications') {
+    if (name === 'automations/notifications' || name === 'settings/notificationPrefs') {
       throw Object.assign(new Error('Unknown OpenTeamily endpoint'), {code:'openteamily/not-found'})
     }
     assert.equal(name,'agents/personal-binding')

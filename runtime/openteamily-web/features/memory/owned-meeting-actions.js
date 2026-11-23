@@ -14,6 +14,11 @@ function sourceReference(input) {
   return source
 }
 
+function ownedActionKey(workspace, meeting, action) {
+  return digest('memory-action-meeting:' + JSON.stringify([workspace, meeting, action.text,
+    action.owner ?? '', action.due_date ?? '']))
+}
+
 async function savedAction(host, source) {
   const {workspace_id:workspace,meeting_id:id,action_index:index,revision} = source
   await requireMemoryWorkspace(host, workspace)
@@ -45,8 +50,7 @@ export const ownedMeetingActionRoutes = [{
     }
     const original = await savedAction(req.host, source)
     const {workspace_id,meeting_id,revision,action_index} = source
-    const key = digest('memory-action-meeting:' + JSON.stringify([workspace_id,meeting_id,original.text,
-      original.owner ?? '',original.due_date ?? '']))
+    const key = ownedActionKey(workspace_id, meeting_id, original)
     return req.store.transaction(() => {
       const prior = req.store.get('SELECT * FROM memory_actions WHERE workspace_id=? AND key_hash=?', workspace, key)
       if (prior) return {body:{action:actionView(req.store,prior)}}
@@ -55,5 +59,37 @@ export const ownedMeetingActionRoutes = [{
         action.id, workspace_id, meeting_id, revision, action_index)
       return {status,body:{action:{...action,source:{kind:'meeting', ...source}}}}
     })
+  },
+}, {
+  pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/memory\/actions\/([0-9a-f]{32})\/meeting-source$/,
+  async handle(req, workspace, actionId) {
+    if (req.method !== 'GET') refuse(405, 'method', 'Only GET is supported')
+    if (req.queryString) refuse(400, 'invalid', 'Invalid meeting source request')
+    if (await personalMemoryWorkspace(req.host) !== workspace) refuse(404, 'not_found', '无法访问原会议。')
+    const saved = req.store.get(`SELECT s.workspace_id, s.meeting_id, s.revision, s.action_index, a.key_hash
+      FROM memory_owned_meeting_action_sources s JOIN memory_actions a ON a.id=s.action_id
+      WHERE a.workspace_id=? AND a.id=?`, workspace, actionId)
+    if (!saved) refuse(404, 'not_found', '无法访问原会议。')
+    const {workspace_id, meeting_id} = sourceReference({
+      workspace_id:saved.workspace_id, meeting_id:saved.meeting_id, revision:saved.revision, action_index:saved.action_index,
+    })
+    await requireMemoryWorkspace(req.host, workspace_id)
+    const result = await req.host.call('meetings/v1', {
+      method:'GET', path:`/v1/workspaces/${workspace_id}/meetings/${meeting_id}`,
+    })
+    if ([403, 404].includes(result?.status)) refuse(404, 'not_found', '无法访问原会议。')
+    const {meeting} = result?.body || {}
+    if (result?.status !== 200 || meeting?.id !== meeting_id || meeting.workspace_id !== workspace_id ||
+        !Number.isSafeInteger(meeting.revision) || meeting.revision < saved.revision ||
+        !Array.isArray(meeting.action_items) || meeting.action_items.length > 50) {
+      refuse(503, 'source_unavailable', '暂时无法核对原会议行动项。')
+    }
+    const matches = meeting.action_items.flatMap((item, index) =>
+      typeof item?.text === 'string' && ownedActionKey(workspace_id, meeting_id, item) === saved.key_hash ? [index] : [])
+    // Only a matching original revision makes the saved position authoritative.
+    const actionIndex = meeting.revision === saved.revision && matches.includes(saved.action_index)
+      ? saved.action_index : matches.length === 1 ? matches[0] : undefined
+    return {body:{source:{workspace_id, meeting_id, revision:meeting.revision,
+      ...(actionIndex === undefined ? {} : {action_index:actionIndex})}}}
   },
 }]

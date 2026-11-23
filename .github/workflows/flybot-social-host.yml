@@ -4,7 +4,9 @@ name: FlyBot social host adapter
 # Does not edit runtime/ds-bot-upstream/.
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:

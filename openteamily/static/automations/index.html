@@ -106,6 +106,12 @@
         </div>
         <h1 id="editor-heading" tabindex="-1">新建自动化</h1>
         <div id="editor-head-confirm"></div>
+        <div id="automation-draft-notice" class="editor-draft-notice" hidden>
+          <p id="automation-draft-text" class="note" role="status"></p>
+          <button id="restore-automation-draft" type="button" class="secondary" hidden>恢复草稿</button>
+          <button id="discard-automation-draft" type="button" class="secondary" hidden>放弃草稿</button>
+          <button id="retry-automation-save" type="button" class="secondary" hidden>恢复并确认上次保存</button>
+        </div>
         <div class="manual-run-feedback">
           <p id="manual-run-status" class="note" role="status"></p>
           <button type="button" id="view-watched-run" class="secondary" aria-controls="run-panel" hidden>查看本次运行</button>
@@ -201,6 +207,7 @@
       <div class="editor-actions">
         <button type="submit" id="save-automation">保存</button>
         <button type="submit" id="save-and-sample" class="secondary" hidden>保存并试运行</button>
+        <button type="button" id="copy-automation" class="secondary" hidden>复制为草稿</button>
         <button type="button" id="remove-automation" hidden>删除</button>
       </div>
     </form>
