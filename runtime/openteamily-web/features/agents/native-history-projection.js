@@ -148,7 +148,8 @@ export function nativeHistoryProjection({host,db}) {
   async function recoverStored(storage, sessionId, next, signal = AbortSignal.timeout(STORAGE_READ_MS)) {
     if (!storage) return null
     const snapshot = await storage.stat(sessionId,{signal})
-    if (!snapshot || snapshot.header?.id !== sessionId || snapshot.eventCount <= next) return null
+    if (!snapshot || snapshot.header?.id !== sessionId) return null
+    if (snapshot.eventCount <= next) return {checked:true}
     const reached = coldRevisions.get(sessionId)
     const revision = storage.identity !== undefined && typeof snapshot.revision === 'string'
       ? {storage:storage.identity, revision:snapshot.revision} : null
@@ -167,6 +168,21 @@ export function nativeHistoryProjection({host,db}) {
     } finally { await handle.close() }
   }
 
+  function previousPartIds(rt, mapping, current) {
+    const exact = mapping.native_session_id
+    const bot = rt.botOf(mapping.native_bot_id)
+    return (privateChatThread(bot,exact)?.segments ?? []).map(part=>part.sessionId)
+      .filter(id=>id !== exact && id !== current)
+  }
+
+  function requiresEarlierRecovery(runtime, mapping, conversationId) {
+    const {rt,ctx} = runtime ?? {}
+    if (typeof rt?.botOf !== 'function' || typeof ctx?.sessions?.get !== 'function') return false
+    const current = livePrivateChat(rt,mapping.native_bot_id,mapping.native_session_id)
+    return !!current && previousPartIds(rt,mapping,current).some(id=>
+      !checkpoint.get(id,conversationId) && ownedConversation(rt,id,true)?.id === conversationId)
+  }
+
   function catchUp(runtime, mapping, conversationId) {
     const {rt,ctx} = runtime ?? {}
     if (typeof rt?.botOf !== 'function' || typeof ctx?.sessions?.get !== 'function') return
@@ -175,9 +191,7 @@ export function nativeHistoryProjection({host,db}) {
     const current = livePrivateChat(rt,mapping.native_bot_id,exact)
     if (!current) return
     const job = enqueue(conversationId,async () => {
-      const bot = rt.botOf(mapping.native_bot_id)
-      const previous = privateChatThread(bot,exact)?.segments ?? []
-      const ids = new Set([exact,current,...previous.map(part=>part.sessionId)])
+      const ids = new Set([exact,current,...previousPartIds(rt,mapping,current)])
       let previousBudget
       for (const sessionId of ids) {
         if (ownedConversation(rt,sessionId,true)?.id !== conversationId) continue
@@ -190,18 +204,22 @@ export function nativeHistoryProjection({host,db}) {
         const session = ctx.sessions.get(sessionId)
         let recovered
         let revision
+        let checked = false
         if (session?.id === sessionId && Number.isSafeInteger(session.seq) && typeof session.eventAt === 'function') {
           // firstLiveSeq includes the entire restored log. Only native fork seeds
           // came from a different physical Session.
           const floor = session.inheritedEventCount ?? 0
           recovered = recoverRows(session,Math.max(floor,next),floor)
           if (recovered) await ctx.sessions.flush(session)
+          checked = true
         } else {
           const stored = await recoverStored(ctx.get?.('sessionPersistence'),sessionId,next,previousBudget)
           recovered = stored?.recovered
           revision = stored?.revision
+          checked = stored?.checked
         }
         if (recovered && !save(rt,sessionId,conversationId,recovered.rows,recovered.through)) continue
+        if (!recovered && checked && previousBudget) save(rt,sessionId,conversationId,[],next)
         if (revision) {
           coldRevisions.set(sessionId,{...revision,next:recovered?.through ?? next})
           if (coldRevisions.size > MAX_COLD_REVISIONS) coldRevisions.delete(coldRevisions.keys().next().value)
@@ -230,5 +248,5 @@ export function nativeHistoryProjection({host,db}) {
     })
   }
 
-  return {attach,catchUp,pending: id => jobs.get(id)}
+  return {attach,catchUp,requiresEarlierRecovery,pending: id => jobs.get(id)}
 }
