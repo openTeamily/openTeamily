@@ -3,6 +3,7 @@ import { mountActionMenus } from '../shell/action-menu.mjs';
 import { chatPathId } from '../shell/chat-utils.mjs';
 import { meetingArchiveDepth, meetingArchiveHref, meetingArchiveLocation, saveMeetingArchive } from '../shell/meeting-link.mjs';
 import { studioDocumentFromSearch, studioDocumentHref } from '../shell/studio-link.mjs';
+import { appendWorkTopics, isWorkTopic } from '../shell/work-topics.mjs';
 import { preloadStudio, sharedWorkCopyToken, studioCopyCandidate, studioScope } from './entry.mjs';
 import { artifactTargetFromSearch, startSavedArtifactReads, takeSpaceStartup } from './startup.mjs';
 
@@ -573,6 +574,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const liveCompare = document.getElementById('artifact-live-compare');
   const editorPanels = new Map(['version', 'share', 'discover'].map(name => [name, document.getElementById(name + '-panel')]));
   const discoverSlug = document.getElementById('discover-slug');
+  const discoverTopic = document.getElementById('discover-topic');
+  const discoverTopicField = document.getElementById('discover-topic-field');
   const discoverEditable = document.getElementById('discover-editable-remix');
   const discoverEditableField = document.getElementById('discover-editable-remix-field');
   const discoverEditableNote = document.getElementById('discover-editable-remix-note');
@@ -600,6 +603,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const clearSearch = document.getElementById('clear-artifact-search');
   const resetArtifactSearch = document.getElementById('reset-artifact-search');
   const nativeCatalog = servedByDsBot(document);
+  if (nativeCatalog && discoverTopicField) {
+    discoverTopicField.hidden = false;
+    appendWorkTopics(document, discoverTopic);
+  }
   const pageMore = document.getElementById('more-artifacts');
   const pageFooter = document.getElementById('artifact-pagination');
   const pageNote = document.getElementById('artifact-pagination-note');
@@ -2738,12 +2745,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     document.getElementById('create-share').disabled = false;
     document.getElementById('share-expires').value = '';
     discoverSlug.value = current?.id ? suggestedDiscoverSlug(current.title) : '';
+    if (discoverTopic) discoverTopic.value = '';
     if (discoverEditable) discoverEditable.checked = false;
     const canReleaseEditable = nativeCatalog && ['slides','whiteboard'].includes(current?.kind);
     if (discoverEditableField) discoverEditableField.hidden = !canReleaseEditable;
     if (discoverEditableNote) discoverEditableNote.hidden = !canReleaseEditable;
     if (editor) {
       editor.discoverSlugEdited = false;
+      editor.discoverTopicEdited = false;
       editor.discoverEditableEdited = false;
       editor.discoverListing = null;
     }
@@ -2857,6 +2866,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (publishDiscover) publishDiscover.disabled = pending;
     if (revokeDiscover) revokeDiscover.disabled = pending;
     if (discoverSlug) discoverSlug.disabled = pending;
+    if (discoverTopic) discoverTopic.disabled = pending;
     if (discoverEditable) discoverEditable.disabled = pending;
   }
 
@@ -2880,6 +2890,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (editor) editor.discoverListing = listed ? row : null;
     syncSharingRevisions(current?.revision);
     if (updateSlug) discoverSlug.value = slug || suggestedDiscoverSlug(current?.title);
+    if (discoverTopic && !editor?.discoverTopicEdited) {
+      discoverTopic.value = listed && isWorkTopic(row.category) ? row.category : '';
+    }
     if (discoverEditable && !editor?.discoverEditableEdited) discoverEditable.checked = listed && row.editable_remix === true;
     if (revokeDiscover) revokeDiscover.hidden = !listed;
     if (publishDiscover) publishDiscover.textContent = listed ? '更新公开版本' : '发布到发现页';
@@ -2916,14 +2929,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const id = current.id;
     const path = editorPath(selection, id) + '/discover';
     const payload = publish ? {slug,revision:current.revision} : {};
+    if (publish && nativeCatalog && discoverTopic && (discoverTopic.value || selection.discoverTopicEdited)) {
+      payload.category = discoverTopic.value || null;
+    }
     if (publish && discoverEditableField && !discoverEditableField.hidden) {
       payload.allow_editable_remix = discoverEditable.checked;
     }
     const isCurrent = () => activeEditor(selection) && current?.id === id;
     const validListing = row => row?.listed === false ||
       (row?.listed === true && typeof row.slug === 'string' && DISCOVER_SLUG.test(row.slug));
+    const topicMatches = row => payload.category === undefined || (row.category ?? null) === payload.category;
     const showConfirmed = row => {
       if (publish) selection.discoverSlugEdited = false;
+      selection.discoverTopicEdited = false;
       selection.discoverEditableEdited = false;
       renderDiscoverListing(row, !selection.discoverSlugEdited);
       if (!publish) panelStatus('discover', '已从发现页撤回。');
@@ -2936,7 +2954,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       if (!isCurrent()) return;
       const accepted = result.status === 200 || (publish && result.status === 201);
       const received = result.body?.discover;
-      if (accepted && validListing(received) && received.listed === publish && (!publish || received.slug === slug)) {
+      if (accepted && validListing(received) && received.listed === publish &&
+          (!publish || (received.slug === slug && topicMatches(received)))) {
         showConfirmed(received);
         return;
       }
@@ -2954,7 +2973,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
           return;
         }
         const matches = publish ? observed.listed && observed.slug === slug && observed.published_revision === payload.revision &&
-          Boolean(observed.editable_remix) === Boolean(payload.allow_editable_remix) : observed.listed === false;
+          Boolean(observed.editable_remix) === Boolean(payload.allow_editable_remix) && topicMatches(observed) : observed.listed === false;
         if (matches) showConfirmed(observed);
         else {
           renderDiscoverListing(observed, !selection.discoverSlugEdited);
@@ -4901,6 +4920,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   // plain group with a button handler (Enter in the slug field publishes too).
   discoverSlug?.addEventListener('input', () => {
     if (activeEditor(editor)) editor.discoverSlugEdited = true;
+  });
+  discoverTopic?.addEventListener('change', () => {
+    if (activeEditor(editor)) editor.discoverTopicEdited = true;
   });
   discoverEditable?.addEventListener('change', () => {
     if (activeEditor(editor)) editor.discoverEditableEdited = true;

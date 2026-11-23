@@ -2354,7 +2354,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function setSessionsOpen(open) {
     if (open) {
       document.body.classList.add('sessions-open');
-      if (narrowScreen()) stopGroupReplyProgress();
+      if (narrowScreen()) stopGroupReplyProgress({preservePreview: true});
     } else document.body.classList.remove('sessions-open');
   }
 
@@ -4552,14 +4552,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
 
-  function stopGroupReplyProgress() {
+  function stopGroupReplyProgress({preservePreview = false} = {}) {
     const watch = groupReplyWatch;
-    if (!watch) return;
     groupReplyWatch = null;
-    globalThis.clearTimeout(watch.timer);
-    globalThis.clearTimeout(watch.timeout);
-    watch.controller?.abort();
-    paintGroupReplyProgress(new Map());
+    if (watch) {
+      globalThis.clearTimeout(watch.timer);
+      globalThis.clearTimeout(watch.timeout);
+      watch.controller?.abort();
+    }
+    // A hidden pane pauses polling. Keep its scoped text and scroll anchor
+    // available while the same reply reconnects.
+    if (!preservePreview || groupReplyScope !== sendScope()) paintGroupReplyProgress(new Map());
   }
 
   function currentGroupReplyWatch(watch) {
@@ -4573,7 +4576,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   async function pollGroupReplyProgress(watch) {
     if (!currentGroupReplyWatch(watch)) {
-      if (groupReplyWatch === watch) stopGroupReplyProgress();
+      if (groupReplyWatch === watch) stopGroupReplyProgress({preservePreview: !canWatchReply()});
       return;
     }
     const controller = watch.controller = new AbortController();
@@ -4582,7 +4585,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     globalThis.clearTimeout(watch.timeout);
     watch.controller = null;
     if (!currentGroupReplyWatch(watch)) {
-      if (groupReplyWatch === watch) stopGroupReplyProgress();
+      if (groupReplyWatch === watch) stopGroupReplyProgress({preservePreview: !canWatchReply()});
       return;
     }
     if (result?.status === 200 && Array.isArray(result.body.items)) {
@@ -4632,7 +4635,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function syncGroupReplyProgress() {
     if (!canWatchGroupReplies()) {
-      stopGroupReplyProgress();
+      stopGroupReplyProgress({preservePreview: !canWatchReply()});
       return;
     }
     const scope = sendScope();
@@ -4640,7 +4643,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       paintGroupReplyProgress(groupReplyWatch.items, {preserveMissing: true});
       return;
     }
-    stopGroupReplyProgress();
+    if (groupReplyWatch) stopGroupReplyProgress();
     groupReplyWatch = {
       scope, path: `${socialBase()}/${currentConversation.id}/reply-progress`, items: new Map(), nextReconcileAt: 0,
     };
@@ -8868,7 +8871,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     rememberReadingPosition();
     cancelStartupLink();
     stopReplyProgress();
-    stopGroupReplyProgress();
+    stopGroupReplyProgress({preservePreview: true});
     if (currentSource === 'agent') stopPolling();
     setSessionsOpen(true);
     document.getElementById('conversation-list').querySelector('[aria-current="true"]')?.focus();

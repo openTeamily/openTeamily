@@ -482,6 +482,13 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   max-width: 100%;
 }
 #discover-form #discover-slug-hint { flex-basis: 100%; margin: -.375rem 0 0; font-size: .8125rem; }
+#discover-topic-field:not([hidden]) {
+  display: flex;
+  align-items: center;
+  flex-basis: 100%;
+  gap: .75rem;
+}
+#discover-topic { min-height: 2.375rem; max-width: 100%; }
 #discover-editable-remix-field:not([hidden]) {
   display: flex;
   align-items: center;

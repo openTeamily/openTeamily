@@ -1,4 +1,4 @@
-const publicFilters = ['tab', 'section', 'category', 'feed', 'kind', 'sort', 'q', 'creator', 'work', 'comments', 'share'];
+const publicFilters = ['tab', 'section', 'category', 'feed', 'kind', 'sort', 'q', 'creator', 'topic', 'work', 'comments', 'share'];
 
 function discoverIntent(search) {
   const source = new URLSearchParams(search);

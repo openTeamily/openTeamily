@@ -1375,6 +1375,7 @@ test('group progress updates only the original job and attempt and clears stale 
   let progressReads = 0;
   let pending;
   let signal;
+  let denied = false;
   const {doc, el, restore, fetcher} = groupReplyChat((path, opts, conversation) => {
     if (!path) {
       historyReads += 1;
@@ -1382,6 +1383,7 @@ test('group progress updates only the original job and attempt and clears stale 
     }
     assert.equal(path, '/reply-progress');
     progressReads += 1;
+    if (denied) return json(403, {});
     if (batches.length) return json(200, {items: batches.shift()});
     signal = opts.signal;
     return new Promise(resolve => { pending = resolve; });
@@ -1428,11 +1430,20 @@ test('group progress updates only the original job and attempt and clears stale 
     doc.visibilityState = 'hidden';
     await fire(doc, 'visibilitychange');
     assert.equal(signal.aborted, true);
-    assert.equal(second.hidden, true);
+    assert.equal(second.hidden, false);
+    assert.equal(second.textContent, '另一个智能体的新进度');
     pending(json(200, {items: [{id: 'job-b', message_id: 'source', attempt: 1, text: '迟到的隐藏更新'}]}));
     t.mock.timers.tick(2000); await settle();
     assert.equal(progressReads, 20);
+    assert.equal(second.textContent, '另一个智能体的新进度');
+
+    denied = true;
+    doc.visibilityState = 'visible';
+    await fire(doc, 'visibilitychange');
+    t.mock.timers.tick(500); await settle();
+    assert.equal(progressReads, 21);
     assert.equal(second.hidden, true);
+    assert.equal(second.textContent, '');
   } finally { restore(); }
 });
 
