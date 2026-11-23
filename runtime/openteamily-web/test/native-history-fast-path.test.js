@@ -17,3 +17,30 @@ test('opening or sending in a mapped conversation skips the native event scan', 
     db.close()
   }
 })
+
+test('history adoption appends a same-second question before its answer', async t => {
+  const db = new DatabaseSync(':memory:')
+  t.after(() => db.close())
+  db.exec(`CREATE TABLE agent_messages (id TEXT PRIMARY KEY, conversation_id TEXT, created INTEGER, meta TEXT, status TEXT,
+      role TEXT, text TEXT);
+    INSERT INTO agent_messages VALUES
+      ('zzz','c',1,'{}','sent','user','Question'),
+      ('aaa','c',1,'{}','succeeded','assistant','Answer');`)
+  const events = []
+  const session = {
+    surface: {nodes: [{}]},
+    get seq() { return events.length },
+    eventAt(seq) { return events[seq] },
+    append(type, data) {
+      const event = {type, data, seq: events.length}
+      events.push(event)
+      return event
+    },
+  }
+  const rt = {async *eventsBackwards() {}, resolveAgent: async () => ({session})}
+  const ctx = {sessions: {flush: async () => {}}}
+  assert.deepEqual(await importHistory({db, rt, ctx, bot: {}, conversationId: 'c', sessionId: 's'}),
+    {imported: 2, matched: 0})
+  assert.deepEqual(events.filter(event => /^(user|assistant)\/message$/.test(event.type))
+    .map(event => event.data.source.openteamilyMessageId), ['zzz', 'aaa'])
+})

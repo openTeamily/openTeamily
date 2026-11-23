@@ -33,7 +33,7 @@ export async function importHistory({ db, rt, ctx, bot, conversationId, sessionI
   // assistant message in the native Session that the model never completed.
   const rows = db.prepare(`SELECT m.* FROM agent_messages m WHERE m.conversation_id=? AND m.status<>'cancelled'
     AND NOT EXISTS (SELECT 1 FROM native_agent_events e WHERE e.message_id=m.id)
-    ORDER BY m.created,m.id`).all(conversationId)
+    ORDER BY m.created,m.rowid`).all(conversationId)
     .filter(row => !JSON.parse(row.meta || '{}').nativePending)
   if (!rows.length) return { imported:0, matched:0 }
   const scan = new Set()
