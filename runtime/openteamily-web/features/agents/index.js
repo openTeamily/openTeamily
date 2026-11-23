@@ -287,6 +287,18 @@ export function createAgents({ db, host }) {
       await native.session(agent, `agent:${agent.id}:${convo.id}`, convo.title)
       return { items: conversationMessages(convo.id) }
     },
+    async saveMessage(p) {
+      const agent = load(ws(p), p.id)
+      const convo = conversation(agent, p.conversation_id)
+      if (typeof p.message_id !== 'string' || !ID.test(p.message_id)) fail('invalid', 'Invalid message ID', 400)
+      const row = one('SELECT * FROM agent_messages WHERE id=? AND conversation_id=?', p.message_id, convo.id)
+      if (!row) fail('not-found', 'Message not found', 404)
+      if (!['sent', 'succeeded'].includes(row.status) || !row.text.trim()) fail('conflict', 'Only completed text messages can be saved', 409)
+      return host.call('artifacts/saveChatMessage', {
+        workspace_id: agent.workspace_id, agent_id: agent.id, conversation_id: convo.id,
+        conversation_title: convo.title, message_id: row.id, title: p.title, body: row.text,
+      })
+    },
     // Send one message to the agent: a native DS-Bot turn on this conversation's session.
     async send(p) {
       const agent = load(ws(p), p.id)

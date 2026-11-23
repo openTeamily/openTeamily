@@ -184,7 +184,7 @@ export function websitePrompt(title, brief) {
 }
 
 export function saveableSocialMessage(item) {
-  return Boolean(item && !item.retracted && typeof item.body === 'string' && item.body.trim());
+  return Boolean(item && !item.retracted && !item.voice && typeof item.body === 'string' && item.body.trim());
 }
 
 export function saveableAgentMessage(item) {

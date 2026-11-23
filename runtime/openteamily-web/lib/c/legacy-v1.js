@@ -694,12 +694,15 @@ function messengerExtraRoutes(host) {
       method: 'POST', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})\\/save'),
       async handle({ match, body }) {
         return wrap(async () => {
-          const bs = client(host); await guard(bs, match[1])
-          const row = await findMessage(bs, match[2], match[3])
-          if (row.retracted || !row.body) throw new Fault(409, 'conflict', 'This message can no longer be saved')
-          const title = String(body?.title || row.body.slice(0, 40) || '消息').trim().slice(0, 80)
-          const out = await host.call('artifacts/create', { workspace_id: match[1], kind: 'document', title, body: row.body, idempotency_key: ('msg-save-' + match[3]).replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 64) })
-          return [201, out]
+          const [, workspace, conversation, message] = match
+          if (!Number.isInteger(body?.revision) || body.revision < 1) throw new Fault(400, 'invalid', 'Provide the message revision')
+          const row = await client(host).get(`/v1/ot/workspaces/${workspace}/conversations/${seg(conversation)}/messages/${seg(message)}`)
+          if (row.revision !== body.revision) throw new Fault(409, 'conflict', '消息已修改，请刷新后再保存。')
+          const {status, artifact} = await host.call('artifacts/saveChatMessage', {
+            workspace_id: workspace, conversation_id: conversation, message_id: message,
+            conversation_title: row.title, title: body.title, body: row.body,
+          })
+          return [status, {artifact}]
         })
       },
     },

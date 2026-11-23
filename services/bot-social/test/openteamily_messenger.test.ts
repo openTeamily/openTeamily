@@ -245,8 +245,20 @@ test("workspace message search requires active workspace and conversation member
   assert.deepEqual((await A.ok("GET", search + "&conversation_id=" + outside.id)).items, []);
   assert.equal((await A.call("GET", search + "&before=invalid")).status, 400);
   assert.equal((await C.call("GET", search)).status, 404);
+  const messagePath = (conversation: string, message: string, workspace = primary.workspace_id) =>
+    `/v1/ot/workspaces/${workspace}/conversations/${conversation}/messages/${message}`;
+  const history = messagePath(current.id, oldest.id);
+  assert.deepEqual(await B.ok("GET", history), {body: oldest.body, revision: 1, title: "Current"});
+  assert.equal((await A.call("GET", messagePath(current.id, oldest.id, other.workspace_id))).status, 404);
+  assert.equal((await A.call("GET", messagePath(current.id, direct.id))).status, 404);
+  assert.equal((await A.call("GET", messagePath(current.id, removed.id))).status, 409);
+  assert.equal((await A.call("GET", messagePath(dm.id, direct.id, other.workspace_id))).status, 404);
+  assert.equal((await A.ok("GET", messagePath(dm.id, direct.id))).body, direct.body);
+  await A.ok("PATCH", `/v1/ot/messages/${oldest.id}`, {body: "A saved message has been edited"});
+  assert.equal((await B.ok("GET", history)).revision, 2);
   await A.ok("DELETE", `/v1/ot/conversations/${current.id}/members/${B.handle}`);
   assert.deepEqual((await B.ok("GET", search + "&conversation_id=" + current.id)).items, []);
+  assert.equal((await B.call("GET", history)).status, 404);
   await A.ok("PATCH", `/v1/ot/teams/${primary.id}/members/${B.handle}`, {suspended: true});
   assert.equal((await B.call("GET", search)).status, 404);
   assert.deepEqual((await A.ok("GET", search + "&conversation_id=" + dm.id)).items, []);

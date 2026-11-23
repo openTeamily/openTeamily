@@ -80,6 +80,13 @@ function memberOf(ot: OtContext, convId: string, ownerId: string) {
   return conv;
 }
 
+function workspaceTeam(ot: OtContext, workspace: string, ownerId: string) {
+  assert(/^[0-9a-f]{32}$/.test(workspace), 400, "invalid_request", "Invalid workspace");
+  const match = ot.get<{id: string}>("SELECT id FROM ot_teams WHERE workspace_id=?", workspace);
+  assert(match, 404, "team_not_found", "Workspace not found");
+  return requireMember(ot, match.id, ownerId).team;
+}
+
 const messageView = (ot: OtContext, m: any, viewer?: string) => ({
   id: m.id, conversation_id: m.conversation_id, seq: m.seq,
   author: m.author_kind === "agent" ? { kind: "agent", agent_ref: m.agent_ref, name: m.agent_name, owner: ot.profileView(m.author_id) } : { kind: "member", ...ot.profileView(m.author_id) },
@@ -273,11 +280,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   // ---- messages
   app.get("/v1/ot/workspaces/:workspace/messages/search", async req => {
     const me = ot.me(req);
-    const workspace = params(req).workspace;
-    assert(/^[0-9a-f]{32}$/.test(workspace), 400, "invalid_request", "Invalid workspace");
-    const team = ot.get<{id: string}>("SELECT id FROM ot_teams WHERE workspace_id=?", workspace);
-    assert(team, 404, "team_not_found", "Workspace not found");
-    requireMember(ot, team.id, me.ownerId);
+    const team = workspaceTeam(ot, params(req).workspace, me.ownerId);
 
     const q = query(req);
     const term = text(q.q, "q", { min: 1, max: 80 });
@@ -312,6 +315,28 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       body: row.body, created_ms: row.created_at, cursor: `${row.created_at}:${row.rowseq}`,
     }));
     return { items, more: rows.length > limit };
+  });
+  app.get("/v1/ot/workspaces/:workspace/conversations/:id/messages/:message", async req => {
+    const me = ot.me(req);
+    const {workspace, id, message} = params(req);
+    const team = workspaceTeam(ot, workspace, me.ownerId);
+    const conv = memberOf(ot, id, me.ownerId);
+    let title = conv.title;
+    if (conv.kind === "dm" && conv.team_id === null) {
+      const peer = ot.get<{owner_id: string}>(`SELECT teammate.owner_id FROM ot_conversation_members member
+        JOIN ot_team_members teammate ON teammate.owner_id=member.owner_id AND teammate.team_id=? AND teammate.suspended=0
+        WHERE member.conversation_id=? AND member.owner_id<>?`, team.id, conv.id, me.ownerId);
+      assert(peer, 404, "conversation_not_found", "no such conversation in this workspace");
+      title = ot.profileView(peer.owner_id).display_name;
+    } else {
+      assert(conv.team_id === team.id, 404, "conversation_not_found", "no such conversation in this workspace");
+    }
+    const row = ot.get<{body: string; revision: number; retracted: number}>(`SELECT body, revision, retracted
+      FROM ot_messages WHERE id=? AND conversation_id=?`, message, id);
+    assert(row, 404, "message_not_found", "Message not found in this conversation");
+    assert(!row.retracted && row.body.trim() && !ot.get("SELECT 1 FROM ot_voice_messages WHERE message_id=?", message),
+      409, "conflict", "Only available text messages can be saved");
+    return { body: row.body, revision: row.revision, title };
   });
   app.get("/v1/ot/conversations/:id/messages", async (req) => {
     const me = ot.me(req);
