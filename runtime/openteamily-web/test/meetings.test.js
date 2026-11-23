@@ -282,8 +282,26 @@ test('meetings run inside this DS-Bot: create, idempotent replay, list, read, up
   assert.match(exported.text, /^# 周会/)
   assert.match(exported.text, /- \[x\] 订会议室（bob）/)
 
-  assert.equal((await call('POST', base(meeting.id) + '/remove', {})).status, 200)
+  const remove = base(meeting.id) + '/remove'
+  assert.equal((await call('POST', remove, {})).status, 400)
+  assert.equal((await call('POST', remove, {revision:1})).status, 409)
+  assert.equal((await call('GET', base(meeting.id))).body.meeting.revision, 2)
+  const removed = await call('POST', remove, {revision:2})
+  assert.equal(removed.status, 200)
+  assert.equal(removed.body.removed.revision, 2)
   assert.equal((await call('GET', base(meeting.id))).status, 404)
+})
+
+test('concurrent edits cannot share a meeting revision', async () => {
+  const bot = await boot()
+  const {body:{meeting}} = await bot.call('meetings', 'POST', base(), body, key())
+  const path = base(meeting.id)
+  const edits = await Promise.all(['first edit', 'second edit'].map(summary =>
+    bot.call('meetings', 'POST', path, {revision:meeting.revision, changes:{summary}})))
+  assert.deepEqual(edits.map(edit => edit.status).sort(), [200, 409])
+  const saved = edits.find(edit => edit.status === 200).body.meeting
+  assert.equal(saved.revision, meeting.revision + 1)
+  assert.deepEqual((await bot.call('meetings', 'GET', path)).body.meeting, saved)
 })
 
 test('meeting creation replays an omitted start time across clock changes', async t => {
@@ -614,7 +632,7 @@ test('meeting shares publish only the saved summary and action items through the
   assert.match(calls.at(-1).path,new RegExp('source_id='+meeting.id))
   assert.equal((await call('GET','shared?limit=100')).body.items[0].id,receiptId)
   assert.equal((await call('GET',`shared/${receiptId}`)).body.meeting.summary,body.summary)
-  assert.equal((await call('POST',`${meeting.id}/remove`,{})).status,200)
+  assert.equal((await call('POST',`${meeting.id}/remove`,{revision:meeting.revision})).status,200)
   assert.equal((await call('GET','shared?sent=1')).body.items[0].id,receiptId)
   assert.equal(calls.at(-1).path,`/v1/ot/workspaces/${WS}/meeting-shares?limit=20&sent=1`)
   assert.deepEqual((await call('POST',`shared/${receiptId}/revoke`,{})).body,{revoked:true})

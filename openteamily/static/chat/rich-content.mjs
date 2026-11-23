@@ -50,12 +50,18 @@ async function showFlowchart(document, container, code, text, english) {
     const atBottom = scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32;
     const source = document.createElement('details');
     const summary = document.createElement('summary');
+    const hint = document.createElement('p');
+    hint.className = 'chat-diagram-scroll-hint';
+    hint.hidden = true;
+    hint.setAttribute('aria-hidden', 'true');
+    hint.textContent = english ? 'Scroll sideways to see the full diagram' : '横向滚动查看完整图表';
     const focused = code.contains(document.activeElement) ? document.activeElement : null;
     source.className = 'chat-diagram-source';
     source.open = Boolean(focused);
     summary.textContent = english ? 'Diagram source' : '图表源码';
     source.append(summary, code);
-    container.replaceChildren(diagram, source);
+    container.replaceChildren(diagram, hint, source);
+    module.observeDiagramSize(diagram, hint);
     focused?.focus({preventScroll:true});
     if (atBottom) scroller.scrollTop = scroller.scrollHeight;
   } catch {

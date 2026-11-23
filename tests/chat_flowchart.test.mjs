@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {parseFlowchart, renderFlowchart, renderMermaidDiagram} from '../openteamily/static/chat/flowchart.mjs';
+import {observeDiagramSize, parseFlowchart, renderFlowchart, renderMermaidDiagram} from '../openteamily/static/chat/flowchart.mjs';
 import {parseSequenceDiagram} from '../openteamily/static/chat/sequence-diagram.mjs';
 
 function createElement(tag) {
   return {
     tag, children:[], dataset:{}, style:{}, attributes:{},
     setAttribute(name, value) { this.attributes[name] = value; },
+    removeAttribute(name) { delete this.attributes[name]; },
     append(child) { this.children.push(child); },
+    replaceChildren() { this.children = []; },
   };
 }
 const document = {createElement};
@@ -67,6 +69,55 @@ test('renders feedback arrows on an exterior lane without changing the primary f
   assert.ok(labels.every(label => parseFloat(label.style.left) > rightmost));
   assert.ok(parseFloat(nodes[0].style.top) < parseFloat(nodes[1].style.top));
   assert.ok(parseFloat(nodes[1].style.top) < parseFloat(nodes[2].style.top));
+});
+
+test('fits a short horizontal diagram without changing its relations and announces real overflow', () => {
+  const chart = renderFlowchart(document, 'flowchart RL\nA[发送消息] --> B[收到回复]');
+  const [stage] = chart.children;
+  const hint = {hidden:true};
+  const label = stage.attributes['aria-label'];
+  let resized, disconnected;
+  chart.ownerDocument = {
+    documentElement:{lang:'zh-CN'},
+    defaultView:{ResizeObserver:class {
+      constructor(callback) { resized = callback; }
+      observe(node) { assert.equal(node, chart); }
+      disconnect() { disconnected = true; }
+    }},
+  };
+  chart.isConnected = true;
+  chart.closest = () => null;
+  Object.defineProperty(chart, 'scrollWidth', {get:() => parseFloat(stage.style.width)});
+  const resize = width => {
+    chart.clientWidth = width;
+    resized([{contentRect:{width}}]);
+  };
+
+  observeDiagramSize(chart, hint);
+  resize(280);
+  assert.equal(stage.style.width, '264px');
+  assert.equal(label, stage.attributes['aria-label']);
+  assert.equal(hint.hidden, true);
+  assert.equal(chart.tabIndex, -1);
+  const [from,to] = stage.children.filter(item => item.className === 'chat-flowchart-node');
+  assert.ok(parseFloat(from.style.left) > parseFloat(to.style.left));
+  assert.equal(stage.children.filter(item => item.className === 'chat-flowchart-arrow').length, 1);
+
+  resize(230);
+  assert.equal(stage.style.width, '220px');
+  assert.equal(hint.hidden, true);
+  resize(210);
+  assert.equal(hint.hidden, false);
+  assert.equal(chart.tabIndex, 0);
+  assert.match(chart.attributes['aria-description'], /左右方向键/);
+  resize(420);
+  assert.equal(stage.style.width, '398px');
+  assert.equal(hint.hidden, true);
+  assert.equal(chart.attributes['aria-description'], undefined);
+
+  chart.isConnected = false;
+  resize(0);
+  assert.equal(disconnected, true);
 });
 
 test('returns the original-code fallback sentinel for unsupported, malformed and oversized graphs', () => {

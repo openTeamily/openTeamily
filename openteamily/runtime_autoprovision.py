@@ -25,10 +25,15 @@ CREATE TABLE IF NOT EXISTS runtime_auto_provisions (
  manager_id TEXT NOT NULL,
  created INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS runtime_auto_manager ON runtime_auto_provisions(manager_id, instance_id);
+CREATE TABLE IF NOT EXISTS runtime_auto_capacity_holds (
+ instance_id TEXT PRIMARY KEY REFERENCES runtime_auto_provisions(instance_id) ON DELETE CASCADE,
+ parked_at INTEGER NOT NULL);
 '''
 
 MANAGER_ID = re.compile(r'[a-z][a-z0-9-]{0,31}')
 STARTING, CAPACITY, UNAVAILABLE = 'runtime_starting', 'runtime_capacity', 'runtime_unavailable'
+PARKED = 'runtime_parked'
+PARKED_MESSAGE = 'The personal runtime is paused by the operator'
 
 
 @dataclass(frozen=True)
@@ -86,7 +91,7 @@ def resumable_instance(db, user_id, manager_id, *, manager_auth=None):
     if not manager_id:
         return None
     iid = owned_instance(db, user_id)
-    if iid is None:
+    if iid is None or is_parked(db, iid):
         return None
     row = db.execute(
         """SELECT i.id,i.revision,p.manager_id FROM instances i
@@ -117,7 +122,7 @@ def assigned(db, manager_id, instance_id):
 
 
 def assigned_ids(db, manager_id, cursor=''):
-    """Sorted lazy iterator; bounded by the operator's global cap."""
+    """Sorted lazy iterator over assigned instances, including paused instances."""
     for row in db.execute(
         'SELECT p.instance_id FROM runtime_auto_provisions p JOIN instances i ON i.id=p.instance_id '
         'WHERE p.manager_id=? AND p.instance_id>? AND i.retired_at IS NULL ORDER BY p.instance_id',
@@ -136,7 +141,53 @@ def create_key(user_id):
 
 
 def at_capacity(db, policy):
-    return db.execute('SELECT COUNT(*) FROM runtime_auto_provisions').fetchone()[0] >= policy.max_instances
+    return capacity_status(db, policy)['available'] == 0
+
+
+def capacity_status(db, policy):
+    total, parked = db.execute(
+        'SELECT COUNT(*), COUNT(h.instance_id) FROM runtime_auto_provisions p '
+        'LEFT JOIN runtime_auto_capacity_holds h ON h.instance_id=p.instance_id'
+    ).fetchone()
+    reserved = total - parked
+    return {'limit': policy.max_instances, 'reserved': reserved, 'parked': parked,
+            'available': max(0, policy.max_instances - reserved)}
+
+
+def is_parked(db, instance_id):
+    return db.execute('SELECT 1 FROM runtime_auto_capacity_holds WHERE instance_id=?',
+                      (instance_id,)).fetchone() is not None
+
+
+def set_parked(db, policy, instance_id, expected_revision, parked, now):
+    """Change the reservation with the same IMMEDIATE transaction as lifecycle intents."""
+    from .lifecycle import Lifecycle, RuntimeFault, fail
+    if not policy.enabled:
+        fail(409, 'disabled', 'Automatic provisioning is disabled')
+    row = db.execute(
+        'SELECT i.* FROM instances i JOIN runtime_auto_provisions p '
+        'ON p.instance_id=i.id AND p.user_id=i.owner_id '
+        'WHERE i.id=? AND i.retired_at IS NULL AND p.manager_id=?',
+        (instance_id, policy.manager_id),
+    ).fetchone()
+    if row is None:
+        fail(404, 'not_found', 'Automatically provisioned instance not found for this manager')
+    if row['revision'] != expected_revision:
+        raise RuntimeFault(409, 'conflict', 'Revision conflict; fetch current instance', Lifecycle.current_intent(row))
+    if (row['desired'] != 'stopped' or row['observed'] != 'stopped' or row['observed_revision'] != row['revision']
+            or row['process_ref'] is not None or row['blocked'] or row['error_code'] is not None
+            or db.execute("SELECT 1 FROM runtime_jobs WHERE instance_id=? AND status IN ('queued','running')",
+                          (instance_id,)).fetchone() is not None):
+        fail(409, 'conflict', 'The runtime must be stopped and settled')
+    if is_parked(db, instance_id) == parked:
+        return False
+    if parked:
+        db.execute('INSERT INTO runtime_auto_capacity_holds VALUES(?,?)', (instance_id, now))
+    else:
+        if at_capacity(db, policy):
+            fail(429, CAPACITY, 'Automatic runtime capacity is full')
+        db.execute('DELETE FROM runtime_auto_capacity_holds WHERE instance_id=?', (instance_id,))
+    return True
 
 
 def ensure(db, lifecycle, policy, user_id, workspace_id, agent_id, now):
@@ -189,6 +240,8 @@ def chat_error(db, snapshot_of, result):
     if state == 'failed':
         return UNAVAILABLE
     if state in ('existing', 'provisioned'):
+        if is_parked(db, result['instance_id']):
+            return PARKED
         snapshot = snapshot_of(result['instance_id'])
         if snapshot is None or snapshot.get('blocked') or snapshot.get('error') is not None:
             return UNAVAILABLE

@@ -52,6 +52,7 @@ export function mountWorkComments(document, {request, onCount, loginHref}) {
   const retryPost = get('retry-post');
   const states = new Map();
   let actor = '';
+  let accountId = '';
   let active;
   let opener;
   let focusButtons = new Map();
@@ -74,7 +75,7 @@ export function mountWorkComments(document, {request, onCount, loginHref}) {
   }
 
   function setCount(state, count) {
-    if (!Number.isSafeInteger(count) || count < 0 || state.actor !== actor) return;
+    if (!Number.isSafeInteger(count) || count < 0 || states.get(state.slug) !== state) return;
     state.count = count;
     onCount(state.slug, count);
   }
@@ -129,6 +130,7 @@ export function mountWorkComments(document, {request, onCount, loginHref}) {
           state.replyTo = {id, name: name.textContent};
           state.error = '';
           state.notice = '';
+          saveComposer(state);
           drawComposer(state);
           input.focus?.();
         }, 'reply:' + id);
@@ -223,8 +225,9 @@ export function mountWorkComments(document, {request, onCount, loginHref}) {
     cancelReply.disabled = state.busy === 'send';
     if (input.value !== state.draft) input.value = state.draft;
     submit.disabled = Boolean(state.busy) || !state.draft.trim() || state.unavailable;
-    submit.textContent = '发送';
-    retryPost.hidden = !state.retry || (state.retry.body === state.draft.trim() && state.retry.parentId === (state.replyTo?.id ?? null));
+    const retryInComposer = retryForDraft(state);
+    submit.textContent = retryInComposer ? '重试发送' : '发送';
+    retryPost.hidden = state.retries.every(attempt => attempt === retryInComposer);
     retryPost.disabled = Boolean(state.busy) || state.unavailable;
   }
 
@@ -269,7 +272,7 @@ export function mountWorkComments(document, {request, onCount, loginHref}) {
 
     const result = await request('GET', pathFor(state) + '?' + params).catch(() => ({status: 0}));
     page.loading = false;
-    if (state.actor !== actor || state.unavailable || state.pages.get(parentId) !== page) return;
+    if (states.get(state.slug) !== state || state.unavailable || state.pages.get(parentId) !== page) return;
     if (version !== state.revision) return readPage(state, parentId, append);
     if (result.status === 200 && Array.isArray(result.body?.items)) {
       page.items = mergeComments(append ? page.items : [], result.body.items);
@@ -287,29 +290,32 @@ export function mountWorkComments(document, {request, onCount, loginHref}) {
   }
 
   async function send(state, retry = null) {
-    const body = retry?.body ?? state.draft.trim();
-    const reply = retry ? retry.reply : state.replyTo;
-    const parentId = retry ? retry.parentId : (reply?.id ?? null);
+    const previous = retry ?? retryForDraft(state);
+    const body = previous?.body ?? state.draft.trim();
+    const reply = previous ? previous.reply : state.replyTo;
+    const parentId = reply?.id ?? null;
     if (state.busy || !state.actor || state.unavailable || !body || body.length > COMMENT_LIMIT) return;
-    const same = state.retry?.body === body && state.retry.parentId === parentId;
-    const key = retry?.key || (same ? state.retry.key : newCommentKey());
-    const pending = {body, parentId, reply, key};
+    const pending = previous ?? {body, parentId, reply, key: newCommentKey()};
+    if (!previous) state.retries.unshift(pending);
     const fromComposer = !retry;
     if (fromComposer) state.draft = '';
     state.busy = 'send';
     state.pending = pending;
-    state.retry = null;
     state.error = '';
     state.notice = '';
     if (parentId) state.replies.add(parentId);
     render(state);
+    // Save the request key before the server can commit a write whose response may be lost.
+    saveComposer(state);
 
     const payload = parentId ? {body, parent_id: parentId} : {body};
-    const result = await request('POST', pathFor(state), payload, {'Idempotency-Key': key}).catch(() => ({status: 0}));
+    const result = await request('POST', pathFor(state), payload, {'Idempotency-Key': pending.key}, AbortSignal.timeout(12000))
+      .catch(() => ({status: 0}));
     state.busy = '';
     state.pending = null;
-    if (state.actor !== actor) return;
+    if (states.get(state.slug) !== state) return;
     if ((result.status === 200 || result.status === 201) && result.body?.comment) {
+      state.retries = state.retries.filter(attempt => attempt !== pending);
       state.revision += 1;
       const page = pageFor(state, parentId);
       const comment = result.body.comment;
@@ -317,20 +323,21 @@ export function mountWorkComments(document, {request, onCount, loginHref}) {
       page.items = mergeComments([comment], page.items);
       if (parentId) chronologicalReplies(page.items);
       const parent = parentId && findComment(state, parentId);
-      if (parent && !alreadyLoaded) parent.reply_count = (parent.reply_count || 0) + 1;
+      if (parent && Number.isSafeInteger(result.body.parent_reply_count)) parent.reply_count = result.body.parent_reply_count;
+      else if (parent && !alreadyLoaded && result.status === 201) parent.reply_count = (parent.reply_count || 0) + 1;
       if (fromComposer && !state.draft) state.replyTo = null;
       setCount(state, result.body.comment_count);
       state.notice = parentId ? '回复已发送。' : '评论已发送。';
       if (parentId && !page.ready && !page.loading) void readPage(state, parentId);
     } else {
       if (result.status === 404 && !parentId) unavailable(state);
-      state.retry = pending;
       if (!state.draft) {
         state.draft = body;
         state.replyTo = reply;
       }
       if (!state.unavailable) state.error = failure(result.status, '发送失败，草稿已保留。请重试。');
     }
+    saveComposer(state);
     render(state);
     if (active === state && document.activeElement === submit) input.focus?.();
   }
@@ -345,7 +352,7 @@ export function mountWorkComments(document, {request, onCount, loginHref}) {
     const payload = action === 'like' ? {enabled: !comment.liked} : {};
     const result = await request('POST', writePath(state, comment.id, action), payload).catch(() => ({status: 0}));
     state.busy = '';
-    if (state.actor !== actor) return;
+    if (states.get(state.slug) !== state) return;
     if (result.status === 200) {
       state.revision += 1;
       if (result.body?.comment) Object.assign(comment, result.body.comment);
@@ -365,7 +372,10 @@ export function mountWorkComments(document, {request, onCount, loginHref}) {
             state.replies.delete(parentId);
           }
         }
-        if (state.replyTo?.id === comment.id) state.replyTo = null;
+        if (state.replyTo?.id === comment.id) {
+          state.replyTo = null;
+          saveComposer(state);
+        }
         if (!page.loading) void readPage(state, parentId);
       }
     } else {
@@ -380,6 +390,51 @@ export function mountWorkComments(document, {request, onCount, loginHref}) {
   function newCommentKey() {
     return 'comment-' + (globalThis.crypto?.randomUUID?.() ||
       Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12));
+  }
+
+  function retryForDraft(state) {
+    const body = state.draft.trim();
+    const parentId = state.replyTo?.id ?? null;
+    return state.retries.find(attempt => attempt.body === body && attempt.parentId === parentId);
+  }
+
+  function storedReply(reply) {
+    return typeof reply?.id === 'string' && /^otwc_[0-9A-HJKMNP-TV-Z]{26}$/.test(reply.id) &&
+      typeof reply.name === 'string' && reply.name.length <= 256 ? {id: reply.id, name: reply.name} : null;
+  }
+
+  function storedAttempt(attempt) {
+    const reply = storedReply(attempt?.reply);
+    if (typeof attempt?.body === 'string' && attempt.body.trim() && attempt.body.length <= COMMENT_LIMIT &&
+        typeof attempt.key === 'string' && /^[A-Za-z0-9_-]{16,64}$/.test(attempt.key) &&
+        attempt.parentId === (reply?.id ?? null)) {
+      return [{body: attempt.body, key: attempt.key, parentId: attempt.parentId, reply}];
+    }
+    return [];
+  }
+
+  function restoreComposer(state) {
+    if (!state.storageKey) return;
+    try {
+      const saved = JSON.parse(document.defaultView?.sessionStorage.getItem(state.storageKey));
+      if (!saved) return;
+      const draft = typeof saved.draft === 'string' && saved.draft.length <= COMMENT_LIMIT ? saved.draft : '';
+      state.retries = (Array.isArray(saved.retries) ? saved.retries : [saved.retry]).flatMap(storedAttempt);
+      const [latest] = state.retries;
+      if (latest) state.error = '上次发送结果未确认，请重试。';
+      state.draft = draft || latest?.body || '';
+      state.replyTo = !draft && latest ? latest.reply : storedReply(saved.replyTo);
+    } catch { /* Keep the composer available when storage is blocked or malformed. */ }
+  }
+
+  function saveComposer(state) {
+    if (!state.storageKey) return;
+    const {draft, replyTo, retries} = state;
+    try {
+      const storage = document.defaultView?.sessionStorage;
+      if (draft || replyTo || retries.length) storage?.setItem(state.storageKey, JSON.stringify({draft, replyTo, retries}));
+      else storage?.removeItem(state.storageKey);
+    } catch { /* The open page can still offer a retry. */ }
   }
 
   closeButton.addEventListener('click', () => dialog.close());
@@ -399,15 +454,20 @@ export function mountWorkComments(document, {request, onCount, loginHref}) {
     active.notice = '';
     if (!active.pending && !active.error) status.textContent = '';
     drawComposer(active);
+    saveComposer(active);
   });
   cancelReply.addEventListener('click', () => {
     if (!active || active.busy === 'send') return;
     active.replyTo = null;
     drawComposer(active);
+    saveComposer(active);
     input.focus?.();
   });
   retryPost.addEventListener('click', () => {
-    if (active?.retry) return send(active, active.retry);
+    if (!active) return;
+    const inComposer = retryForDraft(active);
+    const retry = active.retries.find(attempt => attempt !== inComposer);
+    if (retry) return send(active, retry);
   });
   more.addEventListener('click', () => {
     if (!active) return;
@@ -416,9 +476,10 @@ export function mountWorkComments(document, {request, onCount, loginHref}) {
   });
 
   return {
-    setActor(key) {
-      if (key === actor) return;
+    setActor(key, id = '') {
+      if (key === actor && id === accountId) return;
       actor = key;
+      accountId = typeof id === 'string' ? id : '';
       if (dialog.open) dialog.close();
       states.clear();
     },
@@ -427,10 +488,12 @@ export function mountWorkComments(document, {request, onCount, loginHref}) {
       if (!state) {
         state = {
           slug: item.slug, actor, count: item.comment_count || 0, revision: 0,
-          draft: '', replyTo: null, pending: null, retry: null, busy: '',
+          storageKey: accountId ? 'openteamily.work-comments.' + JSON.stringify([accountId, item.slug]) : '',
+          draft: '', replyTo: null, pending: null, retries: [], busy: '',
           pages: new Map(), replies: new Set(), error: '', notice: '', confirm: '', unavailable: false,
         };
         states.set(item.slug, state);
+        restoreComposer(state);
       }
       if (state.unavailable) {
         state.unavailable = false;

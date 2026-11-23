@@ -3517,7 +3517,8 @@ body.app-workspace .mobile-inbox-heading h1 {
 }
 
 .chat-flowchart {
-  padding: .625rem;
+  --diagram-padding: .625rem;
+  padding: var(--diagram-padding);
   background: var(--ot-surface-2);
   color: var(--ot-muted);
 }
@@ -3591,6 +3592,12 @@ body.app-workspace .mobile-inbox-heading h1 {
   color: var(--ot-accent-hover);
   font-size: .74rem;
 }
+.chat-diagram-scroll-hint {
+  margin: -.15rem 0 .2rem;
+  color: var(--ot-muted);
+  font-size: .74rem;
+}
+.chat-diagram-scroll-hint::before { content: '↔'; margin-inline-end: .4em; }
 .chat-diagram-pending {
   color: var(--ot-muted);
   font-size: .8rem;

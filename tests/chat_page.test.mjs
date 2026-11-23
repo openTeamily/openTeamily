@@ -4258,18 +4258,22 @@ test('pending private text keeps its send key alongside an independent newer dra
   assert.equal(readChatDrafts(view,alice).get(scope),'后写的草稿');
 });
 
-test('pending shared text preserves the exact mention payload and its destination alongside a newer draft', () => {
+test('pending shared text preserves the exact quote, mention and destination alongside a newer draft', () => {
   const {view} = publicOpeningView();
   const scope = JSON.stringify([alice,linkTeam,'social',null,linkSocial]);
+  const privateScope = JSON.stringify([alice,linkWork,'agent',linkAgent,linkThread]);
   const key = 'socialmsg-original-request';
-  const message = {body:'先发出的群消息',agent_mentions:[{owner_id:bob,agent_id:linkAgent}],direct_agent_request:true};
-  assert.equal(savePendingChatText(view,scope,key,message),true);
+  const message = {body:'先发出的群消息',reply_to:linkSocialLatest,
+    agent_mentions:[{owner_id:bob,agent_id:linkAgent}],direct_agent_request:true};
+  assert.equal(savePendingChatText(view,scope,key,{...message,reply:{excerpt:'只保留引用消息的 ID'}}),true);
   assert.equal(writeChatDrafts(view,alice,new Map([[scope,'新草稿']])),true);
   assert.deepEqual(readPendingChatText(view,scope),[{key,message}]);
   assert.deepEqual(readPendingChatText(view,JSON.stringify([bob,linkTeam,'social',null,linkSocial])),[]);
   assert.deepEqual(readPendingChatText(view,JSON.stringify([alice,linkWork,'social',null,linkSocial])),[]);
   assert.deepEqual(readPendingChatText(view,JSON.stringify([alice,linkTeam,'social',null,linkSocial+'X'])),[]);
-  assert.equal(savePendingChatText(view,scope,key,{...message,reply_to:linkSocialLatest}),false);
+  assert.equal(savePendingChatText(view,scope,key,{...message,reply_to:'../another-room'}),false);
+  assert.equal(savePendingChatText(view,scope,key,{...message,reply_to:[linkSocialLatest]}),false);
+  assert.equal(savePendingChatText(view,privateScope,key,message),false);
   assert.equal(savePendingChatText(view,scope,key),true);
   assert.equal(readChatDrafts(view,alice).get(scope),'新草稿');
 });
@@ -4284,7 +4288,7 @@ test('existing private pending text can still be recovered from browser storage'
 });
 
 for (const alreadyDelivered of [false,true]) {
-  test(`reopening a shared chat ${alreadyDelivered ? 'recognizes delivery from its receipt' : 'restores its pending message without an automatic resend'}`, async () => {
+  test(`reopening a shared chat ${alreadyDelivered ? 'recognizes a quoted send from its receipt' : 'restores a quoted send without an automatic resend'}`, async () => {
     const fixture = linkedChatFixture(`#workspace=${linkTeam}&social=${linkSocial}`);
     const {doc, el, calls, routes, restore} = fixture;
     const {view} = publicOpeningView();
@@ -4293,9 +4297,10 @@ for (const alreadyDelivered of [false,true]) {
     const path = linkBase(linkTeam) + linkSocialPath + '/messages';
     const key = 'socialmsg-original-request';
     const body = '加载前发送的群消息';
+    const message = {body,reply_to:linkSocialLatest};
     const receipt = {id:'otm_'+'B'.repeat(26),client_key:key,user_id:alice,workspace_id:linkTeam,
       conversation_id:linkSocial,body,seq:9,created:15};
-    savePendingChatText(view,scope,key,{body});
+    savePendingChatText(view,scope,key,message);
     writeChatDrafts(view,alice,new Map([[scope,'继续写的草稿']]));
     routes.set(path+'?limit=50', () => json(200,{items:[alreadyDelivered ? receipt : {...receipt,user_id:bob}]}));
     const writes = [];
@@ -4315,10 +4320,12 @@ for (const alreadyDelivered of [false,true]) {
         assert.equal(failed,undefined);
       } else {
         assert.ok(failed);
+        const preview = failed.children.find(node => node.className === 'message-quote');
+        assert.equal(preview.children[1].textContent,'Latest group reply');
         const retry = failed.children.find(node => node.className === 'send-actions').children[0];
         await fire(retry,'click');
         await settle();
-        assert.deepEqual(writes,[{key,body:{body}}]);
+        assert.deepEqual(writes,[{key,body:message}]);
       }
       assert.deepEqual(readPendingChatText(view,scope),[]);
       assert.equal(fixture.messages().filter(id => id === receipt.id).length,1);

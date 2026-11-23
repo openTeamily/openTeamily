@@ -1795,7 +1795,10 @@ function discoverRoutes(host) {
           const result = await client(host).post(`/v1/ot/discover/${match[1]}/comments`, {
             body: body?.body, parent_id: body?.parent_id, client_key: key,
           })
-          return [result.replayed === true ? 200 : 201, {comment: workCommentItem(result.comment), comment_count: result.comment_count}]
+          return [result.replayed === true ? 200 : 201, {
+            comment: workCommentItem(result.comment), comment_count: result.comment_count,
+            ...(Number.isSafeInteger(result.parent_reply_count) ? {parent_reply_count: result.parent_reply_count} : {}),
+          }]
         })
       },
     },

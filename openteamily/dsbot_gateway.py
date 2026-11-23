@@ -20,7 +20,7 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from .lifecycle import RuntimeFault
-from .runtime_autoprovision import owned_instance, resumable_instance
+from .runtime_autoprovision import is_parked, owned_instance, resumable_instance
 from .security import digest
 
 ROUTES_FILE = Path(__file__).with_name('dsbot_routes.json')
@@ -266,6 +266,8 @@ def owner_runtime_readiness(db, user_id, manager_id=None, *, manager_auth=None):
         return 'unavailable'
     if iid is None:
         return 'setup'
+    if is_parked(db, iid):
+        return 'parked'
     try:
         _upstream_row(db, iid)
     except GatewayError:

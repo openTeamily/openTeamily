@@ -340,6 +340,8 @@ class Lifecycle:
                         fail(409, 'conflict', 'operation_id is bound to another action')
                     return False, self.result(db, iid, operation_id)
             target = 'stopped' if action == 'stop' else 'running'
+            if target == 'running' and runtime_autoprovision.is_parked(db, iid):
+                fail(409, runtime_autoprovision.PARKED, runtime_autoprovision.PARKED_MESSAGE)
             if action != 'restart' and row['desired'] == target:
                 return False, self.result(db, iid)
             if expected_revision is not None and row['revision'] != expected_revision:
