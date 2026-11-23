@@ -1131,6 +1131,24 @@ body.app-workspace > .app-rail > #login-panel.discover-guest-signin {
   margin: 0 0 .625rem;
   padding: .125rem .125rem .25rem;
 }
+.feed-filter-line {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: .5rem;
+  align-items: start;
+}
+.feed-topic-field select {
+  height: 2.125rem;
+  max-width: 8.5rem;
+  margin: .125rem 0 0;
+  padding: 0 .5rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .625rem;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  font: inherit;
+  font-size: .82rem;
+}
 .feed-filters button, .catalog-filters button { height: 2.125rem; padding-inline: .65rem; }
 .feed-filters button[aria-current="true"], .catalog-filters [aria-pressed="true"] { padding-inline: .65rem; }
 .feed-filters button[aria-description][aria-current="true"] {

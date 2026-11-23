@@ -1,4 +1,5 @@
 import { AGENT_CATEGORIES, categoryFromSearch, categoryLabel } from '../shell/agent-categories.mjs';
+import { appendWorkTopics, isWorkTopic } from '../shell/work-topics.mjs';
 import { csrfCookie } from '../shell/chat-utils.mjs';
 import { servedByDsBot } from '../shell/dsbot-api.mjs';
 import { discoverLoginHref } from '../shell/discover-link.mjs';
@@ -87,17 +88,18 @@ export const FEED_KINDS = [
   '', 'website', 'document', 'image', 'audio', 'slides', 'video', 'model3d', 'whiteboard', 'dashboard', 'spreadsheet',
 ];
 
-export function feedQuery(query, cursor = '', kind = '', sort = 'latest', creator = '') {
+export function feedQuery(query, cursor = '', kind = '', sort = 'latest', creator = '', topic = '') {
   const params = new URLSearchParams({limit: '12'});
   if (query) params.set('q', query);
   if (cursor) params.set('cursor', cursor);
   if (kind) params.set('kind', kind);
   if (sort === 'popular') params.set('sort', sort);
   if (creator) params.set('creator', creator);
+  if (isWorkTopic(topic)) params.set('category', topic);
   return params.toString();
 }
 
-// The feed tab, category, sort and search live in the URL so a filtered feed can be
+// The feed tab, type, topic, sort and search live in the URL so a filtered feed can be
 // shared and survives a refresh. `?tab=agents` stays the catalog switch, and the
 // default 动态 feed keeps an empty query string.
 export function feedStateFromSearch(search) {
@@ -108,12 +110,14 @@ export function feedStateFromSearch(search) {
   const kind = FEED_KINDS.includes(requestedKind) ? requestedKind : '';
   const requestedCreator = params.get('creator');
   const creator = CREATOR_HANDLE.test(requestedCreator || '') ? requestedCreator.toLowerCase() : '';
+  const topic = params.get('topic');
   return {
     tab,
     kind,
     sort: tab === 'activity' && !kind && !creator && params.get('sort') === 'popular' ? 'popular' : 'latest',
     query: (params.get('q') || '').slice(0, 80).trim(),
     ...(creator ? {creator} : {}),
+    ...(params.getAll('topic').length === 1 && isWorkTopic(topic) ? {topic} : {}),
   };
 }
 
@@ -125,6 +129,7 @@ export function feedSearchText(state) {
   if (tab === 'activity' && !state.kind && !state.creator && state.sort === 'popular') params.set('sort', 'popular');
   if (state && state.query) params.set('q', state.query);
   if (state && CREATOR_HANDLE.test(state.creator || '')) params.set('creator', state.creator.toLowerCase());
+  if (isWorkTopic(state?.topic)) params.set('topic', state.topic);
   const text = params.toString();
   return text ? '?' + text : '';
 }
@@ -152,6 +157,11 @@ function workDetailQuery(state) {
   if (tab) {
     params.delete('feed');
     params.set('tab', tab);
+  }
+  const topic = params.get('topic');
+  if (topic) {
+    params.delete('topic');
+    params.set('category', topic);
   }
   return params.size ? '?' + params : '';
 }
@@ -764,6 +774,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const commentButtons = new Map();
   const workTriggers = new Map();
   const searchInput = document.getElementById('feed-query');
+  const topicFilter = document.getElementById('feed-topic');
+  appendWorkTopics(document, topicFilter);
   const clearSearch = document.getElementById('feed-clear');
   const resetEmptyFeed = document.getElementById('feed-empty-reset');
   const retryFeed = document.getElementById('feed-retry');
@@ -1426,6 +1438,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       if (chip?.left < strip.left) filters.scrollLeft += chip.left - strip.left;
     }
     if (restoreQuery && searchInput) searchInput.value = feedState.query;
+    if (topicFilter) topicFilter.value = feedState.topic || '';
     if (clearSearch) clearSearch.hidden = !searchInput?.value;
   }
 
@@ -1566,7 +1579,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         rememberFeedPosition();
         feedRestore = null;
       }
-      Object.assign(feedState, {creator: '', ...next});
+      Object.assign(feedState, {creator: '', topic: '', ...next});
       applyFeedChrome({restoreQuery: true});
       const intent = workDetailFromSearch(location?.search);
       if (feedChanged || !intent) {
@@ -1592,7 +1605,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const followingEmpty = document.getElementById('feed-following-empty');
     const gridSection = document.getElementById('feed-activity-empty');
     const searchNote = document.getElementById('feed-search-note');
-    const filtered = Boolean(feedState.query || feedState.kind || feedState.creator);
+    const filtered = Boolean(feedState.query || feedState.kind || feedState.creator || feedState.topic);
     const empty = !feedState.items.length && !feedState.loading && !feedRestore && !feedFailure;
     if (followingEmpty) followingEmpty.hidden = !(currentUser && feedState.tab === 'following' && !filtered && empty);
     if (resetEmptyFeed) resetEmptyFeed.hidden = !(empty && filtered && (currentUser || feedState.tab === 'activity'));
@@ -1604,7 +1617,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return;
     }
     if (feedState.tab !== 'activity' && !currentUser) note.textContent = '请先登录，再查看关注或收录作品。';
-    else if (feedState.tab === 'activity' && feedState.creator && !feedState.query && !feedState.kind && !feedState.items.length)
+    else if (feedState.tab === 'activity' && feedState.creator && !feedState.query && !feedState.kind && !feedState.topic && !feedState.items.length)
       note.textContent = '该作者还没有公开作品。';
     else if (filtered && !feedState.items.length) note.textContent = FEED_SEARCH_EMPTY_NOTE;
     else if (feedState.tab === 'following') note.textContent = FEED_FOLLOWING_NOTE;
@@ -1969,7 +1982,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const viewer = currentUser;
     const privateFeed = needsViewer || (viewer && !nativeCatalog);
     const sort = needsViewer ? 'latest' : feedState.sort;
-    const params = feedQuery(feedState.query, append ? feedState.cursor : '', feedState.kind, sort, feedState.creator);
+    const params = feedQuery(feedState.query, append ? feedState.cursor : '', feedState.kind, sort, feedState.creator, feedState.topic);
     const tab = feedState.tab === 'activity' ? 'all' : feedState.tab;
     const path = privateFeed ? `/v1/discover/me/works?${params}&tab=${tab}` : `/v1/discover/works?${params}`;
     const reader = {controller:new AbortController(), changes:new Map()};
@@ -2921,6 +2934,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     document.getElementById('feed-tab-' + feedState.tab)?.focus?.();
     return loaded;
   });
+  topicFilter?.addEventListener('change', () => applyFeedFilters({topic:topicFilter.value, query:searchText()}));
   document.getElementById('feed-search')?.addEventListener('submit', event => {
     event.preventDefault();
     if (composingQuery) return;
@@ -2943,7 +2957,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   clearSearch?.addEventListener('click', clearFeedSearch);
   resetEmptyFeed?.addEventListener('click', () => {
     searchInput?.focus?.({preventScroll: true});
-    return applyFeedFilters({query: '', kind: '', creator: '', sort: 'latest'});
+    return applyFeedFilters({query: '', kind: '', creator: '', topic: '', sort: 'latest'});
   });
   retryFeed?.addEventListener('click', () => {
     const retry = feedFailure;

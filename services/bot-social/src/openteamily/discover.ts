@@ -53,6 +53,10 @@ ${WORK_COMMENTS_SCHEMA}
 `;
 
 export const CATEGORIES = ["content-creation", "customer-support", "data-analysis", "design", "education", "engineering", "finance", "it-security", "investment", "legal", "life", "marketing", "operations", "product", "recruiting", "research", "sales"];
+const WORK_TOPICS = new Set([
+  "productivity", "entertainment", "technology", "beauty", "fashion", "food", "travel", "wellness",
+  "education", "creative", "games", "finance", "career", "life",
+]);
 export const WORK_KINDS = ["document", "website", "whiteboard", "media", "image", "audio", "video", "slides", "dashboard", "model3d", "spreadsheet"];
 const CREATOR_HANDLE = /^[a-z0-9][a-z0-9._-]{1,79}$/i;
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
@@ -521,7 +525,7 @@ function scopedWorkNeighbors(ot: OtContext, work: WorkAnchor, scope: FeedScope) 
 function publicPreviewNeighbors(ot: OtContext, work: WorkAnchor, input: Record<string, unknown>) {
   try {
     // Public links can carry chronological filters, never a viewer's private feed.
-    const scope = discoverScope(ot, {kind:"work", work_kind:input.kind, q:input.q, creator:input.creator}, null);
+    const scope = discoverScope(ot, {kind:"work", work_kind:input.kind, q:input.q, creator:input.creator, category:input.topic}, null);
     return scopedWorkNeighbors(ot, work, scope);
   } catch (error) {
     // An obsolete creator filter or invalid optional query cannot hide the work itself.
@@ -698,7 +702,8 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const title = text(b.title, "title", { min: 1, max: 80 });
     const suppliedSummary = optText(b.summary, "summary", { max: 500, multiline: true });
     const category = b.category == null || b.category === "" ? null : String(b.category);
-    assert(category === null || CATEGORIES.includes(category), 400, "invalid_request", "unknown category");
+    assert(category === null || CATEGORIES.includes(category) || (b.kind === "work" && WORK_TOPICS.has(category)),
+      400, "invalid_request", "unknown category");
     let workKind = b.kind === "work" ? String(b.work_kind ?? "document") : null;
     assert(workKind === null || WORK_KINDS.includes(workKind), 400, "invalid_request", "unknown work kind");
     if (workKind !== "model3d") assert(b.model_data === undefined, 400, "invalid_request", "only a 3D work accepts a GLB file");
@@ -845,7 +850,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     assert(directory === "works" || directory === "agents", 404, "listing_not_found", "no such public directory");
     const q = query(req);
     const works = directory === "works";
-    const allowed = works ? ["limit", "cursor", "q", "creator", "sort", "kind"] : ["limit", "cursor", "q", "creator", "category"];
+    const allowed = ["limit", "cursor", "q", "creator", "category", ...(works ? ["sort", "kind"] : [])];
     assert(Object.keys(q).every(key => allowed.includes(key)), 400, "invalid_request", "unknown public directory filter");
     const ranked = q.sort === "popular";
     const result = readFeed({

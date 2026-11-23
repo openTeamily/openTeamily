@@ -65,7 +65,7 @@ export function runStatusLabel(run) {
   if (run.status === 'succeeded') return '已完成';
   if (run.status === 'queued' && run.error_code === 'no_agent') return '等待已连接的代理';
   if (run.status === 'queued') return '已排队';
-  if (run.status === 'running') return '运行中';
+  if (run.status === 'running') return run.stop_requested === true ? '正在停止' : '运行中';
   if (run.status === 'cancelled') return '已取消';
   if (run.status === 'timeout') return '已超时';
   if (run.status === 'skipped') return '已跳过';
@@ -83,7 +83,7 @@ function scopedActiveRun(run, workspace, automation) {
     ? run : null;
 }
 
-// A run that ended can be asked for again; a queued run is cancelled instead,
+// A run that ended can be asked for again; an active run is stopped first,
 // and a finished success has nothing to re-run.
 export function retryAllowed(run) {
   if (!run) return false;
@@ -152,7 +152,7 @@ export function runDetailFields(run) {
   return fields;
 }
 
-// The two destructive controls on this page ask before they act. The wording is
+// Destructive controls on this page ask before they act. The wording is
 // a pure function so it can be asserted without a DOM; it stays generic on
 // purpose and never echoes a user-supplied title, which could make the question
 // look like a different action.
@@ -161,6 +161,7 @@ export function deletePrompt(item) {
 }
 
 export function cancellationPrompt(run) {
+  if (run?.status === 'running') return {question: '停止这次运行？', confirmLabel: '确认停止'};
   return {question: '取消这次运行？', confirmLabel: '确认取消'};
 }
 
@@ -1463,12 +1464,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         toggle.setAttribute('aria-expanded', next ? 'true' : 'false');
       });
       head.appendChild(toggle);
-      if (item.status === 'queued' && current && current.id) {
+      if ((item.status === 'queued' || (native && item.status === 'running')) && current?.id) {
         const cancel = document.createElement('button');
         cancel.type = 'button';
         cancel.dataset.runControl = 'cancel';
-        cancel.disabled = cancellingRuns.has(`${target.key}/${item.id}`);
-        cancel.textContent = cancel.disabled ? '正在取消…' : '取消这次运行';
+        cancel.disabled = item.stop_requested === true || cancellingRuns.has(`${target.key}/${item.id}`);
+        cancel.textContent = item.status === 'running'
+          ? (cancel.disabled ? '正在停止…' : '停止这次运行')
+          : (cancel.disabled ? '正在取消…' : '取消这次运行');
         if (restore && focusRow.dataset.runId === item.id && focusedControl === 'cancel' && !cancel.disabled) nextFocus = cancel;
         cancel.addEventListener('click', () => {
           openConfirm({
@@ -1521,29 +1524,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (currentRunScope(target)) renderRuns(recentRuns);
     const path = `${runPath(target)}/runs/${target.run}`;
     const isCancelled = item => item?.id === target.run && item.status === 'cancelled' && exactRunForTarget(item, target);
+    const isStopping = item => item?.id === target.run && item.status === 'running' &&
+      item.stop_requested === true && exactRunForTarget(item, target);
     try {
       const result = await runRequestWithTimeout('POST', path + '/cancel', {});
       if (!currentRunScope(target)) return;
       let item = result.body.run;
-      let confirmed = result.status === 200 && (!native || isCancelled(item));
-      if (!confirmed && native && ([0, 200, 408, 409].includes(result.status) || result.status >= 500)) {
-        show('loading', '正在确认是否已取消…');
+      let confirmed = (result.status === 200 && (!native || isCancelled(item))) || (result.status === 202 && isStopping(item));
+      if (!confirmed && native && ([0, 200, 202, 408, 409].includes(result.status) || result.status >= 500)) {
+        show('loading', '正在确认运行状态…');
         const checked = await runRequestWithTimeout('GET', path);
         if (!currentRunScope(target)) return;
         item = checked.body.run;
-        confirmed = checked.status === 200 && isCancelled(item);
+        confirmed = checked.status === 200 && (isCancelled(item) || isStopping(item));
       }
       if (!confirmed) {
-        show('error', result.status === 409 ? '运行状态已改变，无法取消。'
+        show('error', result.status === 409 ? '运行状态已改变，请查看最新记录。'
           : messageFor(result.body.error, '暂时无法确认已取消，正在更新运行状态。'));
         return;
       }
-      if (isCancelled(item)) {
+      if (isCancelled(item) || isStopping(item)) {
         if (watchedRuns.get(target.key)?.id === item.id) watchedRuns.set(target.key, item);
         if (selectedRun?.id === item.id) selectedRun = item;
         recentRuns = recentRuns.map(run => run.id === item.id ? item : run);
       }
-      show('ok', '已取消。');
+      show('ok', isStopping(item) ? '已请求停止。' : '已取消。');
     } finally {
       cancellingRuns.delete(key);
       if (currentRunScope(target)) {

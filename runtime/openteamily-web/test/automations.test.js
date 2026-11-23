@@ -690,7 +690,7 @@ test('manual execution queues only the named automation and leaves its scheduled
   assert.equal(e['automations/runs']({workspace_id: W, id: target.id}).items.length, 2)
 })
 
-test('retry is idempotent and a running turn cannot be cancelled or duplicated', async () => {
+test('retry is idempotent and a running turn cannot be duplicated', async () => {
   let fail = true
   let release
   const { e, feature } = fixture(async () => {
@@ -726,7 +726,6 @@ test('retry is idempotent and a running turn cannot be cancelled or duplicated',
   const running = {workspace_id: W, id: automation.id, run_id: retried.run.id}
   assert.equal(e['automations/run'](running).run.status, 'running')
   assert.equal(e['automations/retry'](retry).run.id, retried.run.id)
-  assert.throws(() => e['automations/cancel'](running), error => error.status === 409)
   release()
   await Promise.all(feature.inflight.values())
   assert.equal(e['automations/run'](running).run.status, 'succeeded')
@@ -753,6 +752,53 @@ test('retry is idempotent and a running turn cannot be cancelled or duplicated',
   assert.equal((await read(runs+'/'+retried.run.id)).body.run.retry_of,undefined)
 })
 
+test('stopping a running automation is exact and keeps the native queue held until its turn ends', async () => {
+  const stopObserved = Promise.withResolvers()
+  const finishStoppedTurn = Promise.withResolvers()
+  const calls = []
+  const {e,feature} = fixture(async ({requestId,signal}) => {
+    calls.push(requestId)
+    if (calls.length !== 1) return {text:'Next turn completed'}
+    signal.addEventListener('abort', stopObserved.resolve, {once:true})
+    await finishStoppedTurn.promise
+    return {text:'A late result from the stopped turn'}
+  })
+  const create = (title, key) => e['automations/create']({workspace_id:W, title, template_id:'custom', prompt:'do it',
+    schedule:{kind:'now',time_zone:'UTC'}, participants:['alice'], enabled:false, idempotency_key:key.repeat(16)}).automation
+  const first = create('Stop this turn','a'), second = create('Run afterwards','b')
+  const start = (automation, key) => e['automations/runNow']({workspace_id:W, id:automation.id, idempotency_key:key.repeat(16)}).run
+  const running = start(first,'c'), queued = start(second,'d')
+  const path = `/v1/workspaces/${W}/automations/${first.id}/runs/${running.id}`
+  const work = feature.inflight.get(running.id)
+  const cancel = path => e['automations/v1']({method:'POST',path:path+'/cancel',body:{}})
+  await flush()
+  try {
+    assert.deepEqual(calls,[`ot-automation:${running.id}`])
+    assert.equal(queued.status,'queued')
+    assert.equal((await cancel(path.replace(W,'f'.repeat(32)))).status,404)
+    assert.equal((await cancel(path.replace(first.id,second.id))).status,404)
+    const accepted = await cancel(path)
+    assert.equal(accepted.status,202)
+    assert.equal(accepted.body.run.status,'running')
+    assert.equal(accepted.body.run.stop_requested,true)
+    await stopObserved.promise
+    assert.deepEqual(await cancel(path),accepted)
+    assert.equal(e['automations/runs']({workspace_id:W,id:first.id,status:'active'}).active_run.stop_requested,true)
+    assert.equal(e['automations/run']({workspace_id:W,id:second.id,run_id:queued.id}).run.status,'queued')
+  } finally {
+    finishStoppedTurn.resolve()
+  }
+  await work
+  await Promise.all(feature.inflight.values())
+  const stopped = e['automations/run']({workspace_id:W,id:first.id,run_id:running.id}).run
+  assert.equal(stopped.status,'cancelled')
+  assert.equal(stopped.stop_requested,undefined)
+  assert.deepEqual(stopped.result,{cancelled:true})
+  assert.equal((await cancel(path)).body.run.status,'cancelled')
+  assert.equal(e['automations/run']({workspace_id:W,id:second.id,run_id:queued.id}).run.status,'succeeded')
+  assert.deepEqual(calls,[`ot-automation:${running.id}`,`ot-automation:${queued.id}`])
+})
+
 test('startup interrupts claimed turns and resumes only previously unclaimed runs', async t => {
   const {e, feature, dbPath, clock} = fixture()
   const draft = {workspace_id: W, template_id: 'custom', prompt: 'Respond once', participants: ['alice'],
@@ -760,13 +806,17 @@ test('startup interrupts claimed turns and resumes only previously unclaimed run
   const {automation: first} = e['automations/create']({...draft, title: 'Interrupted', idempotency_key: 'i'.repeat(16)})
   const {automation: second} = e['automations/create']({...draft, title: 'Waiting', idempotency_key: 'w'.repeat(16)})
   const {automation: third} = e['automations/create']({...draft, title: 'Cancelled', idempotency_key: 'c'.repeat(16)})
+  const {automation: fourth} = e['automations/create']({...draft, title: 'Stop already requested', idempotency_key: 's'.repeat(16)})
   const claimedId = 'c'.repeat(32), queuedId = 'd'.repeat(32), cancelledId = 'e'.repeat(32)
+  const stoppingId = 'f'.repeat(32)
   const insert = feature.db.prepare(`INSERT INTO ot_automation_runs
     (id,automation_id,workspace_id,due_at,started,status,dispatch,claimed_at)
     VALUES(?,?,?,0,?,'queued','{"backend":"ds-bot"}',?)`)
   insert.run(claimedId, first.id, W, clock.now, clock.now)
   insert.run(queuedId, second.id, W, clock.now, null)
   insert.run(cancelledId, third.id, W, clock.now, null)
+  insert.run(stoppingId, fourth.id, W, clock.now, clock.now)
+  feature.db.prepare('UPDATE ot_automation_runs SET stop_requested_at=? WHERE id=?').run(clock.now,stoppingId)
   feature.db.close()
 
   clock.now += 20
@@ -783,6 +833,7 @@ test('startup interrupts claimed turns and resumes only previously unclaimed run
   assert.equal(queued.id, queuedId)
   assert.equal(queued.automation_revision,undefined)
   assert.equal(restored.ops.cancel({workspace_id: W, id: third.id, run_id: cancelledId}).run.status, 'cancelled')
+  assert.equal(restored.ops.run({workspace_id: W, id: fourth.id, run_id: stoppingId}).run.status, 'cancelled')
   restored.start()
   restored.start()
   await Promise.all(restored.inflight.values())
@@ -1023,7 +1074,8 @@ test('older pending native rows have unknown delivery and become interrupted aft
   feature.db.exec(`DROP TRIGGER ot_automation_notice_on_finish; DROP INDEX ot_automation_unclaimed_work;
     ALTER TABLE ot_automation_runs DROP COLUMN claimed_at;
     ALTER TABLE ot_automation_runs DROP COLUMN automation_revision;
-    ALTER TABLE ot_automation_runs DROP COLUMN queued_prompt`)
+    ALTER TABLE ot_automation_runs DROP COLUMN queued_prompt;
+    ALTER TABLE ot_automation_runs DROP COLUMN stop_requested_at`)
   feature.db.prepare("INSERT INTO ot_automation_runs VALUES(?,?,?,0,?,NULL,'queued',NULL,'{}',NULL)")
     .run(id, automation.id, W, clock.now)
   feature.db.close()

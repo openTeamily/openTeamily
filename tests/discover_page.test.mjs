@@ -677,6 +677,18 @@ test('feedQuery encodes a keyword and a recency cursor', () => {
   assert.equal(feedQuery('外观', '100.ci-doc'), 'limit=12&q=%E5%A4%96%E8%A7%82&cursor=100.ci-doc');
   assert.equal(feedQuery('设计', 'hot-key', '', 'popular'), 'limit=12&q=%E8%AE%BE%E8%AE%A1&cursor=hot-key&sort=popular');
   assert.equal(feedQuery('', '', '', 'latest', 'vera.home'), 'limit=12&creator=vera.home');
+  assert.equal(feedQuery('notes', '', 'document', 'latest', '', 'travel'), 'limit=12&q=notes&kind=document&category=travel');
+});
+
+test('work topic composes with existing filters and survives a shared detail URL', async () => {
+  const {feedSearchText, feedStateFromSearch, workDetailSearchText} = await import('../openteamily/static/discover/app.mjs');
+  const search = '?feed=collected&kind=document&q=notes&topic=education';
+  const state = feedStateFromSearch(search);
+  assert.equal(state.topic, 'education');
+  assert.equal(feedSearchText(state), search);
+  assert.equal(workDetailSearchText(state, {slug:'trip-notes', comments:true}), search + '&work=trip-notes&comments=1');
+  assert.equal(feedStateFromSearch('?topic=education&topic=travel').topic, undefined);
+  assert.equal(feedStateFromSearch('?topic=unknown').topic, undefined);
 });
 
 test('an empty author feed uses the canonical handle and can be cleared', async () => {

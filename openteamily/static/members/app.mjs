@@ -145,6 +145,11 @@ function messageFor(error, fallback) {
   return fallback;
 }
 
+function accessMayHaveChanged(result) {
+  return [401, 403, 404].includes(result.status) ||
+    (result.status === 409 && result.body.error?.code === 'membership_migration_required');
+}
+
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), assign} = {}) {
   const goTo = assign || ((href) => globalThis.location.assign(href));
   const status = document.getElementById('status');
@@ -192,6 +197,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
   const busyDirectoryJoins = new Set();
   const workspaceWrites = new Map();
   let visibleWrites = null;
+  let accessRefresh = null;
+  let directoryLoaded = false;
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -224,6 +231,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
 
   function inWorkspace(scope) {
     return scope.id === workspaceId() && scope.viewer === currentUser && scope.epoch === workspaceEpoch;
+  }
+
+  async function refreshWorkspaceAccess(scope = workspaceScope(), force = false) {
+    const requested = linkedWorkspace;
+    if ((!scope.id && !WORKSPACE_ID.test(requested)) || !scope.viewer || mainPanel.hidden || !inWorkspace(scope) ||
+        (!force && accessRefresh && inWorkspace(accessRefresh))) return;
+    accessRefresh = scope;
+    try {
+      const session = await request('GET', '/v1/auth/session', undefined, undefined, AbortSignal.timeout(8000));
+      if (!inWorkspace(scope) || accessRefresh !== scope) return;
+      if (session.status === 401 || (session.status === 200 && session.body.user?.id !== scope.viewer.id)) {
+        await load();
+      } else if (session.status === 200) {
+        if (scope.id) await loadWorkspace({revalidate: true});
+        else await refreshWorkspaces({preferred:requested, explicit:true});
+      }
+    } finally {
+      if (accessRefresh === scope) accessRefresh = null;
+    }
   }
 
   function paintWorkspaceWrites() {
@@ -282,6 +308,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
   let confirmSerial = 0;
   let memberItems = [];
   let inviteItems = [];
+  let inviteStates = [];
 
   function closeConfirm({restoreFocus = true} = {}) {
     if (!pendingConfirm) return;
@@ -470,6 +497,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     if (!inWorkspace(scope)) return;
     if (result.status !== 200 && result.status !== 201) {
       show('error', messageFor(result.body.error, '无法打开与对方的单聊。'));
+      if (accessMayHaveChanged(result)) await refreshWorkspaceAccess(scope, true);
       return;
     }
     const conversation = result.body.conversation;
@@ -546,6 +574,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     const list = document.getElementById('invite-list');
     const empty = document.getElementById('invites-empty');
     inviteItems = items;
+    inviteStates = items.map(item => inviteState(item));
     const issued = visibleWrites?.issued;
     const latest = issued && items.find(item => item.id === issued.invite.id);
     if (latest) {
@@ -555,9 +584,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     if (pendingConfirm?.row.parentElement === list) closeConfirm({restoreFocus: false});
     list.textContent = '';
     empty.hidden = items.length > 0;
-    for (const item of items) {
+    for (const [index, item] of items.entries()) {
       const row = document.createElement('li');
-      const state = inviteState(item);
+      const state = inviteStates[index];
       const detail = `${ROLE_LABELS[item.role] || item.role} · ${state} · 已用 ${item.use_count}/${item.max_uses}`;
       row.appendChild(identity('邀请', detail));
       const role = document.createElement('span');
@@ -592,6 +621,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     if (!inWorkspace(scope)) return;
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '无法更改角色。'));
+      if (accessMayHaveChanged(result)) await refreshWorkspaceAccess(scope, true);
       return;
     }
     show('ok', '已更改角色。');
@@ -635,6 +665,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     if (!inWorkspace(scope)) return;
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '无法更新成员状态。'));
+      if (accessMayHaveChanged(result)) await refreshWorkspaceAccess(scope, true);
       return;
     }
     show('ok', suspend ? '已停用该成员的访问。' : '已恢复该成员的访问。');
@@ -649,6 +680,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     if (!inWorkspace(scope)) return;
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, leaving ? '无法退出工作区。' : '无法移除成员。'));
+      if (accessMayHaveChanged(result)) await refreshWorkspaceAccess(scope, true);
       return;
     }
     show('ok', leaving ? '已退出工作区。' : '已移除。');
@@ -677,6 +709,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     if (!inWorkspace(scope)) return;
     if (result.status !== 200) {
       show('error', inviteFailure(result.body.error, action));
+      if (accessMayHaveChanged(result)) await refreshWorkspaceAccess(scope, true);
       return;
     }
     show('ok', action === 'freeze' ? '已冻结。' : action === 'unfreeze' ? '已解冻。' : '已撤销邀请。');
@@ -721,6 +754,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     }
     for (const button of [...row.children].filter(child => child.type === 'button')) button.disabled = false;
     if (result.status !== 200) {
+      if (accessMayHaveChanged(result)) await refreshWorkspaceAccess(scope, true);
+      if (!inWorkspace(scope) || !canInvite(actor)) return;
       if ([404, 409].includes(result.status)) {
         show('error', '这条申请已由其他管理员处理，正在更新列表。');
         await loadJoinQueue(scope);
@@ -739,6 +774,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
   function clearWorkspaceView() {
     actor = null;
     visibleWrites = null;
+    directoryLoaded = false;
     addForm.reset();
     inviteForm.reset();
     paintWorkspaceWrites();
@@ -754,7 +790,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     }
   }
 
-  async function loadWorkspace({reset = false} = {}) {
+  async function loadWorkspace({reset = false, revalidate = false} = {}) {
     const scope = workspaceScope();
     const {id} = scope;
     const seq = ++rosterRead;
@@ -770,61 +806,81 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       return;
     }
     if (reset) roleNote.textContent = '正在读取工作区成员…';
-    const listed = await request('GET', `/v1/workspaces/${id}/members`);
+    const listed = await request('GET', `/v1/workspaces/${id}/members`, undefined, undefined, AbortSignal.timeout(8000));
     const inRead = () => inWorkspace(scope) && seq === rosterRead;
     if (!inRead()) return;
     if (listed.status !== 200 || !Array.isArray(listed.body.items)) {
+      if (revalidate && !accessMayHaveChanged(listed)) return;
+      if (accessMayHaveChanged(listed)) workspaceWrites.delete(transferKey(scope));
       clearWorkspaceView();
       roleNote.textContent = '无法读取成员列表。';
       show('error', messageFor(listed.body.error, roleNote.textContent));
+      if (revalidate && listed.status === 401) return load();
+      if (revalidate) await refreshWorkspaces({preferred:id, explicit:true});
       return;
     }
     const items = listed.body.items;
     const self = items.find(item => samePerson(item, currentUser));
+    const previousRole = actor;
     actor = self && !self.suspended ? self.role : null;
+    const keepRows = revalidate && previousRole === actor;
     restoreWorkspaceWrites(scope);
     workspaceChat.hidden = !actor || !WORKSPACE_ID.test(id);
     if (workspaceChat.hidden) workspaceChat.removeAttribute('href');
     else workspaceChat.setAttribute('href', '/chat#workspace=' + id);
     roleNote.textContent = actor ? `当前角色：${ROLE_LABELS[actor] || actor}` : '';
-    renderMembers(items, scope);
+    if (!keepRows || JSON.stringify(items) !== JSON.stringify(memberItems)) renderMembers(items, scope);
     addForm.hidden = !canAdd(actor);
     inviteForm.hidden = !canInvite(actor);
     invitesPanel.hidden = !canInvite(actor);
     const joinPanel = document.getElementById('join-requests-panel');
     joinPanel.hidden = !canInvite(actor);
     if (canAdd(actor)) setRoleOptions(addForm, actor);
-    if (!canInvite(actor)) { document.getElementById('directory-listing-form').hidden = true; return; }
+    if (actor !== 'owner') {
+      document.getElementById('directory-listing-form').hidden = true;
+      directoryLoaded = false;
+    }
+    if (!canInvite(actor)) {
+      renderInvites([], scope);
+      renderJoinRequests([], scope, true);
+      return;
+    }
     setRoleOptions(inviteForm, actor);
     await Promise.all([
-      request('GET', `/v1/workspaces/${id}/invites`).then(result => {
+      request('GET', `/v1/workspaces/${id}/invites`, undefined, undefined, AbortSignal.timeout(8000)).then(result => {
         if (!inRead()) return;
-        renderInvites(result.status === 200 && Array.isArray(result.body.items) ? result.body.items : [], scope);
+        const rows = result.status === 200 && Array.isArray(result.body.items) ? result.body.items : [];
+        if (!keepRows || JSON.stringify(rows) !== JSON.stringify(inviteItems) ||
+            rows.some((item, index) => inviteState(item) !== inviteStates[index])) renderInvites(rows, scope);
+        const empty = document.getElementById('invites-empty');
         if (result.status !== 200) {
-          const empty = document.getElementById('invites-empty');
           empty.hidden = false;
           empty.textContent = '无法读取邀请记录。';
-        } else document.getElementById('invites-empty').textContent = '还没有有效或已记录的邀请。';
+        } else {
+          empty.hidden = rows.length > 0;
+          empty.textContent = '还没有有效或已记录的邀请。';
+        }
       }),
-      loadJoinQueue(scope),
-      loadDirectoryListing(scope, inRead),
+      loadJoinQueue(scope, {keepRows}),
+      keepRows && directoryLoaded ? null : loadDirectoryListing(scope, inRead),
     ]);
   }
 
-  async function loadJoinQueue(scope = workspaceScope()) {
+  async function loadJoinQueue(scope = workspaceScope(), {keepRows = false} = {}) {
     if (!scope.id || !inWorkspace(scope) || !canInvite(actor)) return;
     const seq = ++queueRead;
     const feedback = document.getElementById('join-requests-status');
     const refresh = document.getElementById('refresh-join-requests');
     refresh.disabled = true;
     feedback.textContent = '正在读取加入申请…';
-    const result = await request('GET', `/v1/workspaces/${scope.id}/join-requests`);
+    const result = await request('GET', `/v1/workspaces/${scope.id}/join-requests`, undefined, undefined, AbortSignal.timeout(8000));
     if (seq !== queueRead || !inWorkspace(scope) || !canInvite(actor)) return;
     refresh.disabled = false;
     const valid = result.status === 200 && Array.isArray(result.body.items);
     feedback.textContent = valid ? '' : '无法读取待审批申请，请重试。';
-    if (valid) renderJoinRequests(result.body.items, scope);
-    else document.getElementById('join-requests-empty').hidden = true;
+    if (!valid) document.getElementById('join-requests-empty').hidden = true;
+    else if (!keepRows || JSON.stringify(result.body.items) !== JSON.stringify(joinItems)) renderJoinRequests(result.body.items, scope);
+    else document.getElementById('join-requests-empty').hidden = result.body.items.length > 0;
   }
 
   async function loadDirectoryListing(scope, inRead) {
@@ -832,11 +888,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     if (!form) return;
     form.hidden = actor !== 'owner';
     if (form.hidden) return;
-    const listing = await request('GET', `/v1/workspaces/${scope.id}/directory`);
+    const listing = await request('GET', `/v1/workspaces/${scope.id}/directory`, undefined, undefined, AbortSignal.timeout(8000));
     if (!inRead()) return;
     if (listing.status !== 200 || !listing.body.listing) { form.hidden = true; return; }
     document.getElementById('directory-listed').checked = Boolean(listing.body.listing.listed);
     document.getElementById('directory-summary').value = listing.body.listing.summary || '';
+    directoryLoaded = true;
   }
 
   function renderMyRequests() {
@@ -1057,6 +1114,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     if (!inWorkspace(scope)) return;
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '无法保存目录设置。'));
+      if (accessMayHaveChanged(result)) await refreshWorkspaceAccess(scope, true);
       return;
     }
     show('ok', result.body.listing.listed ? '已在团队目录中公开。' : '已从团队目录移除。');
@@ -1257,8 +1315,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
   const refreshMembers = document.getElementById('refresh-members');
   refreshMembers?.addEventListener('click', async () => {
     refreshMembers.disabled = true;
-    try { await loadWorkspace(); }
+    try { await refreshWorkspaceAccess(workspaceScope(), true); }
     finally { refreshMembers.disabled = false; }
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') void refreshWorkspaceAccess();
+  });
+  view?.addEventListener?.('pageshow', event => {
+    if (event.persisted) void refreshWorkspaceAccess();
   });
   workspaceSelect.addEventListener('change', () => selectWorkspace(workspaceId()));
   view?.addEventListener?.('hashchange', event => {
@@ -1314,6 +1378,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     }
     paintWorkspaceWrites();
     if (saved) await loadWorkspace();
+    else if (accessMayHaveChanged(result)) await refreshWorkspaceAccess(scope, true);
   });
 
   inviteForm.addEventListener('submit', async event => {
@@ -1338,6 +1403,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     if (visibleWrites !== writes) return;
     paintWorkspaceWrites();
     if (result.status === 201) await loadWorkspace();
+    else if (accessMayHaveChanged(result)) await refreshWorkspaceAccess(scope, true);
   });
 
   document.getElementById('copy-issued-invite')?.addEventListener('click', async () => {

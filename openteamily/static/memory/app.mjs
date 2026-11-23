@@ -9,11 +9,12 @@ export function csrfCookie(source) {
   return match ? decodeURIComponent(match[1]) : '';
 }
 
-export function memoryDirectoryQuery({needle, topic, updatedAfter, cursor} = {}) {
+export function memoryDirectoryQuery({needle, topic, updatedAfter, unread, cursor} = {}) {
   const params = new URLSearchParams({order: 'recent', limit: '20'});
   if (needle) params.set('q', needle);
   if (topic) params.set('topic', topic);
   if (updatedAfter != null) params.set('updated_after', String(updatedAfter));
+  if (unread) params.set('unread', '1');
   if (cursor) params.set('cursor', cursor);
   return '?' + params.toString();
 }
@@ -442,6 +443,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let pageChoices = [];
   let browseDirectory = null;
   let activeDirectory = null;
+  let unreadCount = null;
+  let readGeneration = 0;
+  let pageReadQueue = Promise.resolve();
+  const readRevisions = new Map();
   let directoryTimer;
   let workspaceRequest = 0;
   let pageRequest = 0;
@@ -503,7 +508,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const saved = directoryAddress();
     searchInput.value = typeof saved?.query === 'string' ? saved.query.slice(0, 80) : '';
     topicFilter = saved?.filter === 'topics' && typeof saved.topic === 'string' ? saved.topic : '';
-    setDirectoryFilter(['updated', 'topics'].includes(saved?.filter) ? saved.filter : 'all');
+    setDirectoryFilter(['unread', 'updated', 'topics'].includes(saved?.filter) ? saved.filter : 'all');
   }
 
   function setCitationStatus(message) {
@@ -823,6 +828,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     meta.textContent = memoryPageMeta(item);
     if (meta.textContent) text.appendChild(meta);
     button.appendChild(text);
+    if (item.unread) {
+      const badge = document.createElement('span');
+      badge.className = 'memory-unread-badge';
+      badge.textContent = '未读';
+      button.appendChild(badge);
+    }
     button.addEventListener('click', () => openPage(item.id, undefined, undefined, {fromDirectory: true}));
     return button;
   }
@@ -863,8 +874,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     emptyEl.hidden = !state || rows.length > 0 || busy || Boolean(state.error);
     emptyEl.textContent = state?.needle ? MEMORY_EMPTY_NO_MATCH : state?.topic
       ? '这个标签下还没有记忆页。'
+      : state?.unread ? '没有未读的记忆更新。'
       : state?.updatedAfter != null ? '最近 7 天没有更新过的记忆页。' : MEMORY_EMPTY_WORKSPACE;
-    if (resetFilters) resetFilters.hidden = emptyEl.hidden || (!state?.topic && state?.updatedAfter == null);
+    if (resetFilters) resetFilters.hidden = emptyEl.hidden || (!state?.topic && !state?.unread && state?.updatedAfter == null);
     if (clearSearch) clearSearch.hidden = !searchInput.value;
     if (directoryStatus) {
       directoryStatus.textContent = state?.error || (busy ? (state.needle ? '正在搜索…' : '正在加载记忆…')
@@ -879,6 +891,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (count) {
       count.hidden = browseDirectory?.total == null;
       count.textContent = browseDirectory?.total == null ? '' : String(browseDirectory.total);
+    }
+    const badge = document.getElementById('filter-unread-count');
+    if (badge?.parentElement) {
+      badge.parentElement.hidden = unreadCount == null;
+      badge.hidden = !(unreadCount > 0);
+      badge.textContent = unreadCount > 0 ? String(unreadCount) : '';
     }
     if (selectedRow) focusDirectoryRow(selectedRow);
   }
@@ -915,6 +933,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function loadDirectoryPage(state, cursor = null, moveFocus = false) {
     if (!state?.workspace || state.controller || !ownsDirectoryWindow(state)) return false;
     const controller = new AbortController();
+    const generation = readGeneration;
     state.controller = controller;
     state.error = '';
     if (activeDirectory === state) renderDirectory();
@@ -928,9 +947,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return false;
     }
     const {items, total} = response.body;
+    if (generation === readGeneration && Number.isSafeInteger(response.body.unread_total) && response.body.unread_total >= 0) {
+      unreadCount = response.body.unread_total;
+    }
+    for (const item of items) {
+      if ((readRevisions.get(item.id) ?? 0) >= item.revision) item.unread = false;
+    }
     const seen = new Set(cursor ? state.items.map(item => item.id) : []);
     const added = items.filter(item => {
-      if (seen.has(item.id)) return false;
+      if (seen.has(item.id) || (state.unread && item.unread === false)) return false;
       seen.add(item.id);
       return true;
     });
@@ -964,17 +989,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const needle = searchInput.value.trim();
     const topic = listFilter === 'topics' ? topicFilter : '';
     const recent = listFilter === 'updated';
-    if (!needle && !topic && !recent) {
+    const unread = listFilter === 'unread';
+    if (!needle && !topic && !recent && !unread) {
       cancelDirectorySearch();
       activeDirectory = browseDirectory;
       renderDirectory();
       return;
     }
     const current = activeDirectory;
-    if (!force && current?.needle === needle && current.topic === topic && (current.updatedAfter != null) === recent) return;
+    if (!force && current?.needle === needle && current.topic === topic && (current.updatedAfter != null) === recent &&
+        Boolean(current.unread) === unread) return;
     cancelDirectorySearch();
     const updatedAfter = recent ? Math.floor(Date.now() / 1000) - 7 * 86400 : null;
-    const state = directoryWindow({needle, topic, updatedAfter});
+    const state = directoryWindow({needle, topic, updatedAfter, unread});
     activeDirectory = state;
     renderDirectory();
     if (delay) {
@@ -1804,6 +1831,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     browseDirectory = id ? directoryWindow() : null;
     activeDirectory = browseDirectory;
     if (switched) {
+      unreadCount = null;
+      readRevisions.clear();
       restoreDirectoryAddress();
       currentGraph = {nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}};
       renderGraph(currentGraph);
@@ -2337,6 +2366,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const page = seen.body.page;
     hideCitationPreview();
     showPage(page, revision, graphId, fromDirectory && listPanel.dataset.view === 'overview');
+    if (!revision || revision === page.revision) markPageRead(page);
     if (citation) setCitationStatus('');
     if (revision && revision !== page.revision && historyPanel) {
       const listing = openPageHistory({focus:false});
@@ -2345,6 +2375,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (seq === workspaceRequest && token === pageRequest && currentPage?.id === pageId
           && !historyPanel.hidden && preview === historyPreviewToken) await previewPageVersion(revision);
     }
+  }
+
+  function markPageRead(page) {
+    const workspace = workspaceId();
+    const owner = currentUser;
+    const sequence = workspaceRequest;
+    pageReadQueue = pageReadQueue.then(() => savePageRead(page, {workspace, owner, sequence}));
+  }
+
+  async function savePageRead(page, {workspace, owner, sequence}) {
+    const current = () => sequence === workspaceRequest && owner === currentUser && workspace === workspaceId();
+    if (!current()) return;
+    if (unreadCount == null || !MEMORY_ID.test(page.id) || page.workspace_id !== workspace ||
+        !Number.isSafeInteger(page.revision) || page.revision <= (readRevisions.get(page.id) ?? 0)) return;
+    if (browseDirectory?.items.some(item => item.id === page.id && item.revision === page.revision && item.unread === false)) return;
+    const response = await request('POST', `/v1/workspaces/${workspace}/memory/${page.id}/read`,
+      {revision: page.revision}, undefined, AbortSignal.timeout(6000)).catch(() => null);
+    const body = response?.body;
+    if (!current() || response?.status !== 200 ||
+        body?.page_id !== page.id || !Number.isSafeInteger(body.read_revision) || body.read_revision < page.revision ||
+        !Number.isSafeInteger(body.unread_total) || body.unread_total < 0) return;
+    ++readGeneration;
+    unreadCount = body.unread_total;
+    const lastRead = Math.max(body.read_revision, readRevisions.get(page.id) ?? 0);
+    readRevisions.set(page.id, lastRead);
+    for (const state of new Set([browseDirectory, activeDirectory])) {
+      const row = state?.items.find(item => item.id === page.id);
+      if (!row || row.revision > lastRead || row.unread === false) continue;
+      row.unread = false;
+      if (state.unread) {
+        state.items = state.items.filter(item => item !== row);
+        if (state.total > 0) state.total -= 1;
+      }
+    }
+    renderDirectory();
   }
 
   function showPage(page, revision, graphId, push = false) {

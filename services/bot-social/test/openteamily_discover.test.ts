@@ -88,6 +88,42 @@ test("guest Discover pages only contain opted-in records and carry no viewer sta
   await read("/v1/ot/discover",401);
 });
 
+test("work topics scope both directories, pagination and neighbors", async () => {
+  const [publisher, reader] = await Promise.all([home(S.base, "topic-publisher"), home(S.base, "topic-reader")]);
+  const path = "/v1/ot/listings";
+  const publish = (slug: string, category: string) => publisher.ok("PUT", path, {
+    kind:"work", work_kind:"document", ref:slug, slug, title:"Topic fixture " + slug, category,
+  });
+  const first = await publish("topic-fixture-first", "travel");
+  await publish("topic-fixture-other", "education");
+  const last = await publish("topic-fixture-last", "travel");
+  assert.equal(first.category, "travel");
+  assert.equal((await publisher.call("PUT", path, {kind:"agent", ref:"topic-agent", slug:"topic-fixture-agent",
+    title:"Agent with invalid work topic", category:"travel"})).status, 400);
+
+  const guest = "/v1/ot/public/discover/works?kind=document&category=travel&q=Topic+fixture&limit=1";
+  const read = async (id: string) => {
+    const response = await fetch(S.base + id, {headers:{accept:"application/json"}});
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  const page = await read(guest);
+  assert.equal(page.items.length, 1);
+  assert.ok(page.cursor);
+  const rest = await read(guest + "&cursor=" + encodeURIComponent(page.cursor));
+  assert.deepEqual([page.items[0].slug, rest.items[0].slug].sort(), [first.slug, last.slug].sort());
+  assert.equal(rest.cursor, null);
+  const wrongTopic = guest.replace("category=travel", "category=education");
+  assert.equal((await fetch(S.base + wrongTopic + "&cursor=" + encodeURIComponent(page.cursor))).status, 400);
+
+  const signed = await reader.ok("GET", "/v1/ot/discover?kind=work&work_kind=document&category=travel&q=Topic+fixture");
+  assert.deepEqual(signed.items.map((item: {slug: string}) => item.slug).sort(), [first.slug, last.slug].sort());
+  const detail = await reader.ok("GET", `/v1/ot/discover/${first.slug}/detail?category=travel&q=Topic+fixture`);
+  const preview = await read(`/w/${first.slug}?view=preview&nav=latest&topic=travel&q=Topic+fixture`);
+  assert.deepEqual([detail.previous?.slug, detail.next?.slug].filter(Boolean), [last.slug]);
+  assert.deepEqual([preview.previous?.slug, preview.next?.slug].filter(Boolean), [last.slug]);
+});
+
 test("work remix yields only exact listed document or website snapshots", async () => {
   const author = await home(S.base,"remix-author");
   const reader = await home(S.base,"remix-reader");

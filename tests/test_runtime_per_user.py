@@ -2,7 +2,9 @@
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import tempfile
+from threading import Event
 import unittest
+from unittest.mock import patch
 
 from openteamily.app import App, Config
 from openteamily.dsbot_gateway import ensure_schema, record_upstream
@@ -113,8 +115,25 @@ class RuntimePerUserTests(unittest.TestCase):
                         'personal_chat': {'workspace_id': workspace, 'agent_id': agent},
                     })
             self.assertEqual(Client(app).call('GET', status + '?include=personal-chat')['status'], 401)
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                responses = list(pool.map(lambda _: alice.call('POST', start, {}), range(2)))
+            first_saw_stopped = Event()
+            release_first = Event()
+            runtime_readiness = app.runtime_readiness
+
+            def hold_first_start(db, owner):
+                state = runtime_readiness(db, owner)
+                if state == 'stopped' and not first_saw_stopped.is_set():
+                    first_saw_stopped.set()
+                    self.assertTrue(release_first.wait(5))
+                return state
+
+            with patch.object(app, 'runtime_readiness', side_effect=hold_first_start), ThreadPoolExecutor(max_workers=1) as pool:
+                first = pool.submit(alice.call, 'POST', start, {})
+                try:
+                    self.assertTrue(first_saw_stopped.wait(5))
+                    second = alice.call('POST', start, {})
+                finally:
+                    release_first.set()
+                responses = [first.result(timeout=5), second]
             self.assertEqual(sorted(response['status'] for response in responses), [200, 202])
             self.assertTrue(all(response['body'] == {'state': 'starting'} for response in responses))
             self.assertEqual(bob.call('GET', status)['body']['state'], 'stopped')

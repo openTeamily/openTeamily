@@ -86,20 +86,26 @@
             </button>
           </form>
         </header>
-        <div class="feed-filters" id="feed-filters" role="group" aria-label="内容分类">
-          <button type="button" id="feed-creator-filter" hidden>清除作者筛选</button>
-          <button type="button" class="feed-filter-all" id="feed-kind-all" aria-current="true" title="显示全部已公开作品。">全部</button>
-          <button type="button" id="feed-sort-popular" aria-current="false">热门</button>
-          <button type="button" id="feed-kind-website" aria-current="false" title="筛选已公开的网页作品">网页</button>
-          <button type="button" id="feed-kind-document" aria-current="false">文档</button>
-          <button type="button" id="feed-kind-image" aria-current="false" title="筛选已公开的图片作品">图片</button>
-          <button type="button" id="feed-kind-audio" aria-current="false" title="筛选已公开的音乐作品">音乐</button>
-          <button type="button" id="feed-kind-slides" aria-current="false" title="筛选已公开的幻灯片作品">幻灯片</button>
-          <button type="button" id="feed-kind-video" aria-current="false" title="筛选已公开的视频作品">视频</button>
-          <button type="button" id="feed-kind-model3d" aria-current="false">3D 作品</button>
-          <button type="button" id="feed-kind-whiteboard" aria-current="false">白板</button>
-          <button type="button" id="feed-kind-dashboard" aria-current="false">看板</button>
-          <button type="button" id="feed-kind-spreadsheet" aria-current="false">电子表格</button>
+        <div class="feed-filter-line">
+          <div class="feed-topic-field">
+            <label for="feed-topic" class="visually-hidden">作品主题</label>
+            <select id="feed-topic"><option value="">全部主题</option></select>
+          </div>
+          <div class="feed-filters" id="feed-filters" role="group" aria-label="内容分类">
+            <button type="button" id="feed-creator-filter" hidden>清除作者筛选</button>
+            <button type="button" class="feed-filter-all" id="feed-kind-all" aria-current="true" title="显示所有作品类型。">全部</button>
+            <button type="button" id="feed-sort-popular" aria-current="false">热门</button>
+            <button type="button" id="feed-kind-website" aria-current="false" title="筛选已公开的网页作品">网页</button>
+            <button type="button" id="feed-kind-document" aria-current="false">文档</button>
+            <button type="button" id="feed-kind-image" aria-current="false" title="筛选已公开的图片作品">图片</button>
+            <button type="button" id="feed-kind-audio" aria-current="false" title="筛选已公开的音乐作品">音乐</button>
+            <button type="button" id="feed-kind-slides" aria-current="false" title="筛选已公开的幻灯片作品">幻灯片</button>
+            <button type="button" id="feed-kind-video" aria-current="false" title="筛选已公开的视频作品">视频</button>
+            <button type="button" id="feed-kind-model3d" aria-current="false">3D 作品</button>
+            <button type="button" id="feed-kind-whiteboard" aria-current="false">白板</button>
+            <button type="button" id="feed-kind-dashboard" aria-current="false">看板</button>
+            <button type="button" id="feed-kind-spreadsheet" aria-current="false">电子表格</button>
+          </div>
         </div>
         <div class="feed-feedback">
           <p id="feed-error" role="alert" hidden></p>

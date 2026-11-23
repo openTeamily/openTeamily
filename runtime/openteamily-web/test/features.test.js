@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -8,7 +9,8 @@ import { apply } from '../index.js'
 import { PAGE_PATH } from '../src/pages.js'
 import { loadFeatures, registerFeature } from '../src/features.js'
 import { attachRuntime, detachRuntime, runtime } from '../src/host.js'
-import { createDispatch } from '../src/dispatch.js'
+import { createDispatch, LEGACY_PATH } from '../src/dispatch.js'
+import { deliverBundle, fakeCtx, volume } from './helpers.js'
 
 const identity = { instanceId: 'c'.repeat(32) }
 
@@ -70,6 +72,76 @@ test('native documents include saved appearance without waiting for another feat
   } finally {
     latch.block.resolve()
     assert.deepEqual((await features).loaded, ['settings','deferred'])
+  }
+})
+
+test('native Chat serves the migrated owner directory while unrelated features initialize', {timeout: 3000}, async () => {
+  const vol = volume()
+  const gate = join(vol.root, 'gate.mjs')
+  writeFileSync(gate, `
+    export const importAgents = Promise.withResolvers()
+    export const agentsEntered = Promise.withResolvers()
+    export const otherReady = Promise.withResolvers()
+    export const otherEntered = Promise.withResolvers()
+  `)
+  const gateURL = pathToFileURL(gate).href
+  const latch = await import(gateURL)
+  const real = name => JSON.stringify(new URL(`../features/${name}/index.js`, import.meta.url).href)
+  const dir = featuresDir({
+    chat: `export {default} from ${real('chat')}`,
+    personal: `export {default} from ${real('personal')}`,
+    teams: `export {default} from ${real('teams')}`,
+    agents: `import agents from ${real('agents')}; import {importAgents, agentsEntered} from ${JSON.stringify(gateURL)};
+      export default async host => { agentsEntered.resolve(); await importAgents.promise; return agents(host) }`,
+    artifacts: `import {otherReady, otherEntered} from ${JSON.stringify(gateURL)};
+      export default async () => { otherEntered.resolve(); await otherReady.promise; return {} }`,
+  })
+  const workspace = 'a'.repeat(32)
+  const agent = 'b'.repeat(32)
+  const rows = {workspace_agents: [{id:agent, workspace_id:workspace, name:'Owner assistant'}],
+    personal_agents: [{workspace_id:workspace, agent_id:agent}]}
+  const tables = Object.fromEntries(Object.entries(rows).map(([name, value]) => [name, JSON.stringify(value)]))
+  const manifest = Object.fromEntries(Object.entries(tables).map(([name, value]) => [name,
+    { rows: rows[name].length, sha256: createHash('sha256').update(value).digest('hex') }]))
+  deliverBundle(vol, 'agents.bundle', JSON.stringify({format:'openteamily-dsbot-import', version:1, feature:'agents', tables, manifest}))
+
+  const ctx = fakeCtx()
+  const {features} = apply(ctx, {dataDir:vol.data, featuresDir:dir})
+  const fetch = (query, method = 'GET') => ctx.routes.get(LEGACY_PATH).fetch(new Request(`http://bot${LEGACY_PATH}?` +
+    new URLSearchParams({feature:'teams', path:'/v1/workspaces', query}), {method, headers:{'x-ot-owner-username':'directory-owner'}}))
+  const query = 'scope=personal&include=chat'
+  try {
+    await latch.agentsEntered.promise
+    let directoryServed = false
+    const directory = fetch(query).then(response => { directoryServed = true; return response })
+    await new Promise(setImmediate)
+    assert.equal(directoryServed, false, 'the directory waits for personal agent import')
+    latch.importAgents.resolve()
+    await latch.otherEntered.promise
+
+    const response = await directory
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('cache-control'), 'no-store')
+    const body = await response.json()
+    assert.equal(body.viewer_username, 'directory-owner')
+    assert.equal(body.items[0].id, workspace)
+    assert.equal(body.personal_agent_id, agent)
+    assert.equal(body.chat.items[0].id, agent)
+    assert.equal(body.chat.items[0].memory_recall_default, true)
+    const foreign = await (await fetch(`${query}&workspace=${'e'.repeat(32)}`)).json()
+    assert.equal(foreign.chat, undefined)
+
+    let otherResponses = 0
+    const waiting = [fetch(`${query}&workspace=${workspace}&entry_agent=${agent}`), fetch(query, 'POST'),
+      fetch('scope=personal&include=artifacts')].map(promise => promise.then(response => { otherResponses++; return response }))
+    await new Promise(setImmediate)
+    assert.equal(otherResponses, 0, 'snapshot, catalog and writes keep the full feature gate')
+    latch.otherReady.resolve()
+    assert.deepEqual((await Promise.all(waiting)).map(response => response.status), [200, 400, 200])
+  } finally {
+    latch.importAgents.resolve()
+    latch.otherReady.resolve()
+    assert.deepEqual((await features).failed, [])
   }
 })
 

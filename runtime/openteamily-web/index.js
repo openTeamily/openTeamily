@@ -14,7 +14,7 @@ import {
   createReplyStreamDispatch, REPLY_STREAM_PATH,
 } from './src/dispatch.js'
 import { loadIdentity } from './src/identity.js'
-import { loadFeatures } from './src/features.js'
+import { CHAT_DIRECTORY_FEATURES, loadFeatures } from './src/features.js'
 
 export const name = 'openteamily-web'
 export const inject = ['connection']
@@ -29,14 +29,24 @@ export function apply(ctx, config = {}) {
   const identity = loadIdentity({ env: process.env, dataDir })
   const pagesDir = config.pagesDir ?? join(HERE, 'pages')
   const pageSettings = Promise.withResolvers()
+  const chatDirectory = Promise.withResolvers()
   const features = loadFeatures({
     dir: config.featuresDir ?? join(HERE, 'features'), identity, dataDir,
-    onRegistered(name, table) {
+    onRegistered(name, table, loaded) {
       if (name === 'settings') pageSettings.resolve(table['settings/get'])
+      if (name === 'teams' && CHAT_DIRECTORY_FEATURES.every(feature => loaded.includes(feature))) {
+        chatDirectory.resolve(table['teams/v1'])
+      }
     },
   })
   // Even images without the settings feature can serve the default-language document.
-  void features.then(({table}) => pageSettings.resolve(table['settings/get']), () => pageSettings.resolve(undefined))
+  void features.then(({table}) => {
+    pageSettings.resolve(table['settings/get'])
+    chatDirectory.resolve(undefined)
+  }, () => {
+    pageSettings.resolve(undefined)
+    chatDirectory.resolve(undefined)
+  })
   const page = createPageHandler({
     pagesDir, identity,
     async getShellSettings() {
@@ -76,7 +86,7 @@ export function apply(ctx, config = {}) {
     path: LEGACY_PATH,
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE'],
     requestBody: 'buffered',
-    fetch: createLegacyDispatch({ endpoints: async () => (await features).table }),
+    fetch: createLegacyDispatch({ endpoints: async () => (await features).table, chatDirectory: chatDirectory.promise }),
   }), 'openteamily-web: legacy /v1')
   return { identity, features }
 }

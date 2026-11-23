@@ -1375,6 +1375,7 @@ test('group progress updates only the original job and attempt and clears stale 
   let progressReads = 0;
   let pending;
   let signal;
+  let denied = false;
   const {doc, el, restore, fetcher} = groupReplyChat((path, opts, conversation) => {
     if (!path) {
       historyReads += 1;
@@ -1382,6 +1383,7 @@ test('group progress updates only the original job and attempt and clears stale 
     }
     assert.equal(path, '/reply-progress');
     progressReads += 1;
+    if (denied) return json(403, {});
     if (batches.length) return json(200, {items: batches.shift()});
     signal = opts.signal;
     return new Promise(resolve => { pending = resolve; });
@@ -1428,11 +1430,20 @@ test('group progress updates only the original job and attempt and clears stale 
     doc.visibilityState = 'hidden';
     await fire(doc, 'visibilitychange');
     assert.equal(signal.aborted, true);
-    assert.equal(second.hidden, true);
+    assert.equal(second.hidden, false);
+    assert.equal(second.textContent, '另一个智能体的新进度');
     pending(json(200, {items: [{id: 'job-b', message_id: 'source', attempt: 1, text: '迟到的隐藏更新'}]}));
     t.mock.timers.tick(2000); await settle();
     assert.equal(progressReads, 20);
+    assert.equal(second.textContent, '另一个智能体的新进度');
+
+    denied = true;
+    doc.visibilityState = 'visible';
+    await fire(doc, 'visibilitychange');
+    t.mock.timers.tick(500); await settle();
+    assert.equal(progressReads, 21);
     assert.equal(second.hidden, true);
+    assert.equal(second.textContent, '');
   } finally { restore(); }
 });
 
@@ -4256,6 +4267,49 @@ function linkedChatSnapshot(fixture, owner = alice, conversations = [fixture.nat
     items: [{id: linkWork, kind: 'personal', name: 'Personal', owner_id: owner}],
     personal_agent_id: linkAgent,
     chat: {items: [fixture.agent], conversations},
+  });
+}
+
+for (const removed of [false, true]) {
+  test(`global message search ${removed ? 'opens the latest window if the target disappeared' : 'opens the exact group window on the first read'}`, async t => {
+    t.mock.timers.enable({apis:['setTimeout']});
+    const fixture = linkedChatFixture('#workspace=' + linkWork);
+    const base = linkBase(linkWork);
+    const path = base + linkSocialPath;
+    const exact = path + '?around=' + linkSocialOlder;
+    const target = {id:linkSocialOlder, conversation_id:linkSocial, user_id:bob, seq:2, body:'Historical target'};
+    const conversation = {id:linkSocial, workspace_id:linkWork, kind:'group', title:'Linked group',
+      members:[linkMember], unread_count:3};
+    fixture.routes.set(base + '/search/messages?q=historical&limit=20', () => json(200, {items:[
+      {kind:'social', conversation_id:linkSocial, message_id:linkSocialOlder, title:'Linked group', snippet:'Historical target'},
+    ]}));
+    fixture.routes.set(exact, () => removed
+      ? json(404, {error:{code:'history_anchor_missing'}})
+      : json(200, {conversation, items:[target], cursor:null, has_newer:true}));
+    try {
+      await mount(fixture.doc, {fetcher:fixture.fetcher});
+      const input = fixture.el('session-search');
+      await fire(input, 'focus');
+      input.value = 'historical';
+      await fire(input, 'input');
+      await settle();
+      const result = descendants(fixture.el('search-results')).find(node => node.tagName === 'BUTTON' &&
+        node.children.some(child => child.textContent === 'Historical target'));
+      assert.ok(result);
+      const offset = fixture.calls.length;
+      await fire(result, 'click');
+      await settle();
+      const reads = fixture.calls.slice(offset).filter(call => call.path === path || call.path.startsWith(path + '?') ||
+        call.path.startsWith(path + '/messages') || call.path === path + '/read');
+      assert.deepEqual(reads.map(call => [call.method, call.path]), removed
+        ? [['GET', exact], ['GET', path]]
+        : [['GET', exact]]);
+      assert.deepEqual(fixture.messages(), [removed ? linkSocialLatest : linkSocialOlder]);
+      assert.equal(fixture.el('message-list').children[0].dataset.searchJump, removed ? undefined : 'true');
+      assert.equal(fixture.el('status').textContent, removed ? '找不到这条来源消息。' : '');
+    } finally {
+      fixture.restore();
+    }
   });
 }
 

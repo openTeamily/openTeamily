@@ -111,6 +111,7 @@ test('runStatusLabel and runResultText describe durable run rows', () => {
   assert.equal(runStatusLabel({status: 'queued', error_code: 'no_agent'}), '等待已连接的代理');
   assert.equal(runStatusLabel({status: 'queued'}), '已排队');
   assert.equal(runStatusLabel({status: 'running'}), '运行中');
+  assert.equal(runStatusLabel({status: 'running', stop_requested:true}), '正在停止');
   assert.equal(runStatusLabel({status: 'timeout'}), '已超时');
   assert.equal(runStatusLabel({status: 'failed', error_code: 'interrupted'}), '运行中断');
   assert.equal(runResultText({result: {text: 'brief from fake provider'}}), 'brief from fake provider');
