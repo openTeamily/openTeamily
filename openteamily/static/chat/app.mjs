@@ -9793,7 +9793,77 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   return load();
 }
 
+function mountSessionResize(document) {
+  const handle = document.getElementById('session-resize');
+  const pane = document.getElementById('session-pane');
+  const view = document.defaultView;
+  if (!handle || !pane || !view?.matchMedia) return;
+  const desktop = view.matchMedia('(min-width: 901px)');
+  const key = 'openteamily.chat.session-width';
+  const width = () => Math.round(pane.getBoundingClientRect().width);
+  const min = 256;
+  const max = () => Math.min(540, Math.floor(view.innerWidth * 0.38));
+  let preferred = 0;
+  try { preferred = Number(view.localStorage.getItem(key)) || 0; } catch {}
+  let drag;
+
+  function render(value) {
+    const clamped = Math.max(min, Math.min(max(), value));
+    if (value) document.body.style.setProperty('--ot-session-width', clamped + 'px');
+    else document.body.style.removeProperty('--ot-session-width');
+    handle.setAttribute('aria-valuemin', min);
+    handle.setAttribute('aria-valuemax', max());
+    handle.setAttribute('aria-valuenow', value ? clamped : width());
+  }
+  function remember(value) {
+    preferred = value;
+    try {
+      if (value) view.localStorage.setItem(key, value);
+      else view.localStorage.removeItem(key);
+    } catch {}
+    render(value);
+  }
+  handle.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || drag) return;
+    event.preventDefault();
+    handle.focus();
+    handle.setPointerCapture(event.pointerId);
+    const initial = width();
+    drag = {id: event.pointerId, start: event.clientX, width: initial, value: initial};
+    handle.setAttribute('data-dragging', '');
+    document.body.setAttribute('data-chat-resizing', '');
+  });
+  handle.addEventListener('pointermove', event => {
+    if (drag?.id !== event.pointerId) return;
+    drag.value = Math.max(min, Math.min(max(), drag.width + event.clientX - drag.start));
+    render(drag.value);
+  });
+  function finish(event) {
+    if (drag?.id !== event.pointerId) return;
+    const {value, width: initial} = drag;
+    drag = null;
+    handle.removeAttribute('data-dragging');
+    document.body.removeAttribute('data-chat-resizing');
+    if (event.type === 'pointerup' && value !== initial) remember(value);
+    else render(preferred);
+  }
+  for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) handle.addEventListener(name, finish);
+  handle.addEventListener('keydown', event => {
+    const widths = {ArrowLeft:width() - 16, ArrowRight:width() + 16, Home:min, End:max(), Enter:0};
+    if (!Object.hasOwn(widths, event.key) || drag) return;
+    event.preventDefault();
+    const next = widths[event.key];
+    remember(next ? Math.max(min, Math.min(max(), next)) : 0);
+  });
+  handle.addEventListener('dblclick', () => remember(0));
+  // The saved preference stays intact while the viewport limits its rendered width.
+  view.addEventListener('resize', () => { if (desktop.matches && !drag) render(preferred); });
+  handle.hidden = false;
+  if (desktop.matches) render(preferred);
+}
+
 if (globalThis.document && globalThis.document.getElementById('session-pane')) {
+  mountSessionResize(globalThis.document);
   mount(globalThis.document);
 }
 

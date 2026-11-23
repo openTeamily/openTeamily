@@ -102,6 +102,7 @@ export const CHAT_MESSAGES = Object.freeze({
   "chat.auth.username": ["用户名", "Username"],
   "chat.auth.password": ["密码", "Password"],
   "chat.sessions.back": ["返回会话列表", "Back to conversations"],
+  "chat.sessions.resize": ["调整会话列表宽度", "Resize conversation list"],
   "chat.call.audio_or_video": ["语音或视频通话", "Voice or video call"],
   "chat.call.call": ["通话", "Call"],
   "chat.group.info": ["群信息", "Group info"],
