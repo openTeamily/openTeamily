@@ -1242,6 +1242,13 @@ html[data-theme-resolved="dark"] .feed-grid > .feed-entry > .feed-card-actions {
   font-size: .8125rem;
   white-space: nowrap;
 }
+.feed-card-actions > button[aria-busy="true"] { opacity: .65; cursor: progress; }
+.feed-card-feedback {
+  margin: 0;
+  padding: .375rem .75rem .625rem;
+  color: var(--ot-danger);
+  font-size: .8125rem;
+}
 .feed-entry > .feed-card-actions > .feed-detail-toggle {
   align-self: center;
   margin: 0 0 0 auto;

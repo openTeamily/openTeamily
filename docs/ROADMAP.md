@@ -1,6 +1,15 @@
-# Capability map and issue handoff
+# Product roadmap
 
-The target is full functional parity, not just visual parity or a rearrangement of existing FlyBot capabilities. Unsupported backends are implementation work, not permanent exclusions. Do not expose nonfunctional product entry points as completed features.
+OpenTeamily runs its product pages and execution inside each account's own
+DS-Bot. The platform handles login, provisioning and authenticated routing.
+Bot Social handles shared activity across accounts. DS-Bot v0.3.10 has passed
+the [two-account container upgrade and Chromium checks](ACCEPTANCE.md#verified-ds-bot-v0310-upgrade).
+
+The product goal is usable everyday workflows with responsive pages, clear
+controls and fast interaction feedback. Compare each workflow with Teamily when
+there is direct evidence for the same task and user role. The capability map
+below describes the scope of work. [Acceptance records](ACCEPTANCE.md) record
+which flows have passed.
 
 ## Functional domains
 
@@ -12,27 +21,32 @@ The target is full functional parity, not just visual parity or a rearrangement 
 6. Artifacts: persistent creation, browsing, editing, versions, export and sharing.
 7. Workspaces, teams, membership/roles and multi-Agent collaboration.
 8. Channels, app connectors, OAuth/secrets, MCP and skills.
-9. Agent API, runtime registration, routing and scoped access.
+9. Agent API, account provisioning, gateway routing and scoped access.
 10. Settings, appearance, language, shortcuts and message folding.
 11. Discovery, profiles, downloads, calls, guides, help and notifications.
-12. Seats, usage/quotas and configurable open-source equivalents for optional billing/rewards/invites.
+12. Workspace seats, invitations, usage visibility and resource limits for self-hosting.
 13. Browser acceptance, accessibility, keyboard/input methods, responsive layouts and interaction states across all domains.
 
-## Suggested dependency sequence
+Credit balances, purchases, billing and credit-based rewards are outside the
+current product scope. Account invitations and runtime resource limits are
+independent features.
 
-- Foundation: management/runtime architecture decisions, identity/permissions, lifecycle and persistence/isolation.
-- First implementation: authenticated workspace and runtime lifecycle vertical slice with a test adapter, then real container acceptance.
-- Product slices: conversation/collaboration and search; Agent/automation; memory; Artifacts; channels/MCP/skills; Agent API; workspace experience; discovery/calls/help; usage/optional commercial equivalents.
-- Cross-cutting: license/dependency audit, security, migration compatibility and real browser/end-to-end acceptance.
+## Current priorities
 
-Each work package needs scope, dependencies, exclusions limited to that delivery, and executable acceptance criteria. Create native subissue relationships in this repository and read them back. This file is not a claim that new-repository issues have already been created.
+- Complete end-to-end workflows in conversation, group collaboration, agents,
+  automation, memory, artifacts and shared workspaces. Keep execution on the
+  owning DS-Bot.
+- Improve opening time, message send feedback, streaming, and recovery from
+  interrupted requests. Verify mobile layouts and desktop keyboard access in
+  Chromium alongside API tests.
+- Verify runtime upgrades with retained volumes and separate account sessions.
+  Keep deployment, browser and product-comparison evidence tied to tested
+  revisions.
 
 ## Existing planning input (historical, read-only)
 
 An earlier requirement inventory and 11 work-package issues exist in [FlyBot #3110](https://github.com/ThinkFlowLab/FlyBot/issues/3110) and #3113–#3123. They are reference material only: the subsequent decision to create this independent repository supersedes their instructions to develop in the original repository and their fixed branding assumptions. Do not close, rewrite or extend those old issues as part of the new project.
 
-The new plan should adapt that functional breakdown, not blindly copy its implementation or licensing assumptions. Existing FlyBot PRs do not mean features are implemented or tested in OpenTeamily. Original screenshots were hand-authored mockups; the later real-component fixture was blocked before file:// navigation. Neither is browser acceptance for this project.
-
-## Plugin selection
-
-Assess `project`, `timeline` and other plugins against actual capabilities, dependencies, target requirements and licenses. Questions about whether they are needed are not a decision to delete them. No plugin is imported or declared permanently excluded in this bootstrap.
+The earlier inventory provides functional requirements. Use the
+[architecture](DSBOT_PLUGIN_ARCHITECTURE.md) for current plugin boundaries and
+the [licensing notes](LICENSING.md) for reused components.

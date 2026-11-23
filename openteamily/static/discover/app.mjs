@@ -759,6 +759,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   let composingQuery = false;
   const feedPositions = new Map();
   const feedActions = new Map();
+  const engagementPending = new Map();
   const commentButtons = new Map();
   const workTriggers = new Map();
   const searchInput = document.getElementById('feed-query');
@@ -1063,7 +1064,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     for (const [action, flag, label] of engagement) {
       const button = detail[action];
       button.hidden = !canEngage || (action === 'follow' && entry.item.own_work);
-      button.disabled = !canEngage || Boolean(entry.saving);
+      button.disabled = !canEngage || Boolean(entry.saving) ||
+        engagementPending.has(engagementKey(entry.item, action));
       if (canEngage) {
         button.textContent = engagementLabel(entry.item, action, flag, label);
         button.setAttribute('aria-pressed', String(Boolean(entry.item[flag])));
@@ -1220,38 +1222,98 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (result.body?.error?.code === 'title_conflict') { workRemix.name.focus(); workRemix.name.select(); }
   }
 
+  function engagementKey(item, action) {
+    const subject = action === 'follow' ? creatorHandle(item) || item.author || item.slug : item.slug;
+    return JSON.stringify([action, subject]);
+  }
+
+  function sameEngagementSubject(item, source, action) {
+    return item.slug === source.slug || (action === 'follow' && sameWorkCreator(source, item));
+  }
+
+  function applyEngagement(item, change) {
+    if (!sameEngagementSubject(item, change.source, change.action)) return true;
+    item[change.flag] = change.enabled;
+    if (change.action === 'like') item.likes = change.likes;
+    return change.enabled ||
+      !((change.action === 'collect' && feedState.tab === 'collected') ||
+        (change.action === 'follow' && feedState.tab === 'following'));
+  }
+
+  function updateFeedEngagement(change) {
+    if (feedReader) feedReader.changes.set(engagementKey(change.source, change.action), change);
+    if (!matchesFeedViewer(feedViewer)) return;
+    const remaining = feedState.items.filter(item => applyEngagement(item, change));
+    if (remaining.length !== feedState.items.length) {
+      const heldFocus = document.activeElement;
+      const keep = new Set(remaining);
+      let focusIndex = -1;
+      let passed = 0;
+      for (const item of feedState.items) {
+        if (keep.has(item)) {
+          passed += 1;
+          continue;
+        }
+        const controls = feedActions.get(item);
+        if (!controls) continue;
+        if (controls.row.contains(heldFocus)) focusIndex = passed;
+        if (controls.cover) {
+          coverObserver?.unobserve(controls.cover);
+          pendingCovers.delete(controls.cover);
+        }
+        controls.row.remove();
+        feedActions.delete(item);
+        commentButtons.delete(item.slug);
+        workTriggers.delete(item.slug);
+      }
+      feedState.items = remaining;
+      document.getElementById('feed-grid').dataset.empty = String(!remaining.length);
+      updateFeedStatus();
+      if (focusIndex >= 0) {
+        const next = remaining[Math.min(focusIndex, remaining.length - 1)];
+        const target = feedActions.get(next)?.buttons.get(change.action) || workTriggers.get(next?.slug) || searchInput;
+        target?.focus({preventScroll:true});
+      }
+    }
+  }
+
+  async function saveWorkEngagement(item, action, flag) {
+    const viewer = currentUser;
+    const key = engagementKey(item, action);
+    if (!viewer || engagementPending.has(key)) return null;
+    const operation = {};
+    const enabled = !item[flag];
+    engagementPending.set(key, operation);
+    syncPendingEngagement(item, action);
+    const result = await request('POST', '/v1/discover/works/' + item.slug + '/engagement', {action, enabled})
+      .catch(() => ({status: 0}));
+    if (engagementPending.get(key) !== operation) return null;
+    engagementPending.delete(key);
+    if (currentUser !== viewer) return null;
+    if (result.status === 200) {
+      const changes = result.body?.engagement || result.body || {};
+      const confirmed = changes[flag] ?? enabled;
+      const likes = changes.likes ?? Math.max(0, (item.likes || 0) + Number(confirmed) - Number(Boolean(item[flag])));
+      const change = {source:item, action, flag, enabled:confirmed, likes};
+      applyEngagement(item, change);
+      updateFeedEngagement(change);
+      if (activeWork?.item && activeWork.viewer === viewer) applyEngagement(activeWork.item, change);
+    }
+    syncPendingEngagement(item, action);
+    return result.status === 200;
+  }
+
   async function updateWorkEngagement(action, flag) {
     const entry = activeWork;
     if (!entry?.item || entry.saving || !entry.viewer || entry.viewer !== currentUser) return;
-    const me = currentUser;
-    const enabled = !entry.item[flag];
+    if (engagementPending.has(engagementKey(entry.item, action))) return;
     entry.saving = action;
     detail.status.textContent = '';
     setWorkEngagement(entry);
-    const result = await request('POST', '/v1/discover/works/' + entry.slug + '/engagement', {action, enabled})
-      .catch(() => ({status: 0}));
-    if (currentUser !== me) return;
+    const saved = await saveWorkEngagement(entry.item, action, flag);
     entry.saving = '';
-    if (result.status === 200) {
-      const changes = result.body?.engagement || result.body || {};
-      entry.item[flag] = changes[flag] ?? enabled;
-      if (action === 'like') entry.item.likes = changes.likes ?? Math.max(0, (entry.item.likes || 0) + (enabled ? 1 : -1));
-      for (const item of feedState.items) {
-        if (item.slug === entry.slug || (action === 'follow' && sameWorkCreator(entry.item, item))) {
-          item[flag] = entry.item[flag];
-          if (action === 'like') item.likes = entry.item.likes;
-        }
-      }
-      if (action === 'collect' && !enabled && feedState.tab === 'collected') {
-        feedState.items = feedState.items.filter(item => item.slug !== entry.slug);
-      }
-      if (action === 'follow' && !enabled && feedState.tab === 'following') {
-        feedState.items = feedState.items.filter(item => item.slug !== entry.slug && !sameWorkCreator(entry.item, item));
-      }
-      renderFeed();
-    }
-    if (activeWork !== entry) return;
-    if (result.status !== 200) detail.status.textContent = '操作未保存，请重试。';
+    if (activeWork !== entry || entry.viewer !== currentUser) return;
+    if (saved === false) detail.status.textContent = '操作未保存，请重试。';
     setWorkEngagement(entry);
   }
 
@@ -1739,37 +1801,48 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     return nativeCatalog ? matchesNativeViewer(viewer) : Boolean(currentUser && viewer === currentUser);
   }
 
+  function syncFeedEngagementButton(item, controls, action) {
+    const button = controls.buttons.get(action);
+    if (!button) return;
+    const [, flag, label] = engagement.find(([kind]) => kind === action);
+    const pending = engagementPending.has(engagementKey(item, action));
+    if (action === 'like') button.textContent = '点赞 · ' + (item.likes || 0);
+    else if (action === 'follow') button.textContent = item[flag] ? '已关注' : '关注';
+    else button.textContent = item[flag] ? '已收录' : label;
+    button.setAttribute('aria-label', engagementLabel(item, action, flag, label));
+    button.setAttribute('aria-pressed', String(Boolean(item[flag])));
+    button.setAttribute('aria-disabled', String(pending));
+    button.setAttribute('aria-busy', String(pending));
+  }
+
+  function syncPendingEngagement(source, action) {
+    for (const [item, controls] of feedActions) {
+      if (sameEngagementSubject(item, source, action)) syncFeedEngagementButton(item, controls, action);
+    }
+    if (activeWork?.item && sameEngagementSubject(activeWork.item, source, action)) setWorkEngagement(activeWork);
+  }
+
   function addFeedEngagement(item, actions) {
     const viewer = currentUser;
     if (!matchesFeedViewer(feedViewer) || actions.viewer === viewer) return;
     actions.viewer = viewer;
-    const buttons = [];
-    for (const [action, flag, label] of engagement) {
+    for (const [action, flag] of engagement) {
       if (action === 'follow' && item.own_work) continue;
       const button = document.createElement('button');
       button.type = 'button';
-      button.textContent = action === 'like' ? '点赞 · ' + (item.likes || 0) : action === 'follow' ? '关注' : label;
-      button.setAttribute('aria-label', engagementLabel(item, action, flag, label));
-      button.setAttribute('aria-pressed', String(Boolean(item[flag])));
+      actions.buttons.set(action, button);
+      syncFeedEngagementButton(item, actions, action);
       const isCurrent = () => viewer === currentUser && feedActions.get(item) === actions;
       button.addEventListener('click', async () => {
-        if (!isCurrent() || button.disabled) return;
-        button.disabled = true;
-        const result = await request('POST', `/v1/discover/works/${item.slug}/engagement`, {action, enabled: !item[flag]})
-          .catch(() => ({status: 0}));
-        if (!isCurrent()) return;
-        button.disabled = false;
-        if (result.status !== 200) {
-          const error = document.getElementById('feed-error');
-          error.hidden = false;
-          error.textContent = '操作未保存，请重试。';
-          return;
-        }
-        await loadFeed();
+        if (!isCurrent() || engagementPending.has(engagementKey(item, action))) return;
+        actions.feedback.hidden = true;
+        const saved = await saveWorkEngagement(item, action, flag);
+        if (saved !== false || !isCurrent()) return;
+        actions.feedback.textContent = '操作未保存，请重试。';
+        actions.feedback.hidden = false;
       });
-      buttons.push(button);
     }
-    actions.element.prepend(...buttons);
+    actions.element.prepend(...actions.buttons.values());
   }
 
   function renderFeed(start = 0) {
@@ -1807,11 +1880,15 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         });
         actions.append(button);
         commentButtons.set(item.slug, button);
-        const controls = {element: actions, viewer: null};
+        const feedback = document.createElement('p');
+        feedback.className = 'feed-card-feedback';
+        feedback.setAttribute('role', 'alert');
+        feedback.hidden = true;
+        const controls = {row:entry, cover, element:actions, feedback, buttons:new Map(), viewer:null};
         feedActions.set(item, controls);
         addFeedEngagement(item, controls);
         bindWorkDetail(actions, card, item);
-        entry.append(actions);
+        entry.append(actions, feedback);
       }
       grid.append(entry);
     }
@@ -1864,7 +1941,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (feedState.loading && append) return;
     const seq = ++feedRequest;
     const scope = sessionRequest;
-    feedReader?.abort();
+    feedReader?.controller.abort();
     if (!append && !refresh) {
       if (!retainItems) feedState.items = [];
       feedState.cursor = '';
@@ -1886,10 +1963,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const params = feedQuery(feedState.query, append ? feedState.cursor : '', feedState.kind, sort, feedState.creator);
     const tab = feedState.tab === 'activity' ? 'all' : feedState.tab;
     const path = privateFeed ? `/v1/discover/me/works?${params}&tab=${tab}` : `/v1/discover/works?${params}`;
-    const reader = new AbortController();
+    const reader = {controller:new AbortController(), changes:new Map()};
     feedReader = reader;
     let result;
-    try { result = await request('GET', path, undefined, undefined, reader.signal); }
+    try { result = await request('GET', path, undefined, undefined, reader.controller.signal); }
     catch { result = {status: 0, body: {}}; }
     if (seq !== feedRequest || scope !== sessionRequest) return;
     feedReader = null;
@@ -1916,7 +1993,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return;
     }
     const start = append ? feedState.items.length : 0;
-    const incoming = catalogItems(result.body);
+    let incoming = catalogItems(result.body);
+    if (!mismatch && matchesFeedViewer(nativeCatalog ? nativeViewer : (privateFeed ? viewer : null))) {
+      for (const change of reader.changes.values()) incoming = incoming.filter(item => applyEngagement(item, change));
+    }
     if (append) {
       const seen = new Set(feedState.items.map(item => item.slug));
       for (const item of incoming) {
@@ -2651,6 +2731,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   async function load() {
     const attempt = ++sessionRequest;
     currentUser = null;
+    engagementPending.clear();
     sessionState = 'pending';
     cancelSearch();
     composingQuery = false;

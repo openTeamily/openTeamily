@@ -440,6 +440,14 @@ class Lifecycle:
             fail(409, 'stale_observation', 'Stale or invalid manager lease/revision')
         return row, job
 
+    @staticmethod
+    def runtime_model_workspace(db, instance):
+        if instance['backend_mode'] == 'compose' and runtime_autoprovision.is_auto(db, instance['id']):
+            # The account's DS-Bot applies its own override. Its manager mount
+            # supplies only the operator default, including after a key is cleared.
+            return None
+        return instance['workspace_id']
+
     def runtime_secret(self, manager, iid, jid, revision, lease, *, http_policy=None, capability=None):
         """Lease-gated resolved model API for container start. The key is not stored on the job."""
         self.expire()
@@ -447,7 +455,10 @@ class Lifecycle:
             row, job = self.leased(db, manager, iid, jid, revision, lease)
             if job['operation_type'] not in ('create', 'start', 'restart'):
                 fail(409, 'secret_not_applicable', 'Model API secret is only issued for create, start or restart')
-            public, key, source = model_api.resolve(db, self.store, workspace_id=row['workspace_id'], user_id=row['owner_id'])
+            workspace_id = self.runtime_model_workspace(db, row)
+            public, key, source = model_api.resolve(
+                db, self.store, workspace_id=workspace_id, user_id=row['owner_id'] if workspace_id else None,
+            )
             try:
                 payload = model_api.container_payload(public, key, source, http_policy=http_policy, capability=capability)
             except model_api.ModelEndpointError as error:

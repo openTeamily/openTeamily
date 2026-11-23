@@ -184,6 +184,17 @@ class AutoProvisionPollTests(unittest.TestCase):
         self.assertNotEqual(first, second)
         self.assertEqual(carol.call('GET', f'/v1/instances/{second}')['status'], 404)
         self.assertEqual(dana.call('GET', f'/v1/instances/{first}')['status'], 404)
+        carol_instance = carol.call('GET', f'/v1/instances/{first}')['body']['instance']
+        personal_workspace = carol_instance['workspace_id']
+        old_account_key = 'synthetic-legacy-account-key'
+        old_workspace_key = 'synthetic-legacy-workspace-key'
+        self.put_model_api('account', old_account_key, account_id=carol_instance['owner_id'])
+        workspace_settings = f'/v1/workspaces/{personal_workspace}/model-api'
+        workspace_saved = carol.call('POST', workspace_settings, {'revision': 0, 'changes': {
+            'provider': 'openai', 'base_url': 'https://workspace.example/v1', 'model': 'workspace-model',
+            'api_key': old_workspace_key,
+        }})
+        self.assertEqual(workspace_saved['status'], 200)
 
         def start(iid):
             # The Docker stub keeps a single project's state per fixture directory.
@@ -210,6 +221,16 @@ class AutoProvisionPollTests(unittest.TestCase):
         first_worker, first_secret, first_process = start(first)
         _, second_secret, _ = start(second)
         self.assertNotEqual(first_secret, second_secret)
+        for api, response in (
+            (f'/v1/instances/{first}', 'instance'),
+            (f'/v1/workspaces/{personal_workspace}/instances', 'items'),
+        ):
+            body = carol.call('GET', api)['body']
+            snapshot = body[response][0] if response == 'items' else body[response]
+            self.assertEqual(snapshot['model_api']['source'], 'platform')
+            self.assertNotIn(old_account_key, json.dumps(body))
+            self.assertNotIn(old_workspace_key, json.dumps(body))
+        self.assertEqual(carol.call('POST', workspace_settings, {'revision': 1, 'changes': {'api_key': None}})['status'], 200)
         with self.store.transaction() as db:
             blob = model_api.wrap(model_api.wrapping_key(self.store), rotated)
             db.execute("UPDATE model_api_configs SET key_blob=?, revision=revision+1 WHERE scope='platform'", (blob,))
