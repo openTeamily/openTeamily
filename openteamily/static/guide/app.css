@@ -111,7 +111,8 @@
 }
 
 .guide-category .cat-icon,
-.guide-item .item-icon {
+.guide-item .item-icon,
+.guide-group-title .cat-icon {
   display: inline-flex;
   width: 1.15rem;
   height: 1.15rem;

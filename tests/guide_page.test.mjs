@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as guideModule from '../openteamily/static/guide/app.mjs';
-import {CATALOG, CATEGORIES, countByCategory, filterCatalog, formatPath, groupCatalog, guideHref, guideInitialQuery} from '../openteamily/static/guide/app.mjs';
+import {CATALOG, CATEGORIES, CATEGORY_ICON_PATHS, ITEM_ICON_PATHS, countByCategory, filterCatalog, formatPath, groupCatalog, guideHref, guideIconPath, guideInitialQuery} from '../openteamily/static/guide/app.mjs';
 
 test('catalog only contains known categories and no Teamily guide prose', () => {
   const ids = new Set(CATEGORIES.map((item) => item.id));
@@ -353,6 +353,51 @@ test('a fruitless search says there is no match and how to clear it', async () =
     const empty = page.el('guide-empty');
     assert.equal(empty.hidden, false);
     assert.equal(empty.textContent, '没有匹配的条目。换个词，或按 Esc 清空搜索。');
+  } finally {
+    page.restore();
+  }
+});
+
+test('each category and catalog row has its own dedicated icon path', () => {
+  const generic = 'M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18zm0 2a7 7 0 1 0 0 14 7 7 0 0 0 0-14zm-1 3h2v5h-2V8zm0 6h2v2h-2v-2z';
+  const categoryPaths = CATEGORIES.map((category) => guideIconPath('category', category.id));
+  assert.equal(categoryPaths.length, CATEGORIES.length);
+  assert.equal(new Set(categoryPaths).size, CATEGORIES.length, 'category icons must not reuse a single glyph');
+  assert.ok(categoryPaths.every((path) => path && path !== generic));
+  assert.deepEqual(Object.keys(CATEGORY_ICON_PATHS).sort(), CATEGORIES.map((item) => item.id).sort());
+  const itemPaths = CATALOG.map((item) => guideIconPath('item', item.id));
+  assert.equal(itemPaths.length, CATALOG.length);
+  assert.equal(new Set(itemPaths).size, CATALOG.length, 'catalog row icons must be dedicated, not a shared info mark');
+  assert.ok(itemPaths.every((path) => path && path !== generic));
+  assert.deepEqual(Object.keys(ITEM_ICON_PATHS).sort(), CATALOG.map((item) => item.id).sort());
+});
+
+test('the mounted guide paints those dedicated icons in chips, titles and rows', async () => {
+  const page = await mountGuide('?category=all');
+  try {
+    const pathOf = (node) => {
+      const svg = node && node.children && node.children[0];
+      const path = svg && svg.children && svg.children[0];
+      return path && path.attributes ? path.attributes.d : '';
+    };
+    const chips = page.el('guide-categories').children;
+    assert.equal(chips.length, CATEGORIES.length);
+    const chipPaths = chips.map((chip) => pathOf(chip.children[0]));
+    assert.deepEqual(chipPaths, CATEGORIES.map((category) => guideIconPath('category', category.id)));
+    const seenItems = [];
+    for (const section of page.el('guide-list').children) {
+      const heading = section.children[0];
+      assert.equal(heading.className, 'guide-group-title');
+      const groupId = CATALOG.find((item) => item.id === section.children[1].dataset.itemId).category;
+      assert.equal(pathOf(heading.children[0]), guideIconPath('category', groupId));
+      assert.equal(heading.children[1].textContent, CATEGORIES.find((item) => item.id === groupId).label);
+      for (const child of section.children) {
+        if (child.className !== 'guide-item') continue;
+        seenItems.push(child.dataset.itemId);
+        assert.equal(pathOf(child.children[0]), guideIconPath('item', child.dataset.itemId));
+      }
+    }
+    assert.deepEqual(seenItems, CATALOG.map((item) => item.id));
   } finally {
     page.restore();
   }
