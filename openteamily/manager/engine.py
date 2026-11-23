@@ -14,6 +14,7 @@ import subprocess
 import time
 
 from .client import check_agent_bootstrap, check_id
+from .network import reserve_bridge, runtime_pool
 from .safety import LIMIT, ManagerError, require, trusted_path, read_private, write_new, replace_private, json_loads
 
 IMAGE = re.compile(r'[a-z0-9][a-z0-9./:_-]{0,118}@sha256:[0-9a-f]{64}')
@@ -181,8 +182,10 @@ class Registry:
         self.adopted = {}
         cfg = self.config
         base = {'version', 'execution_enabled', 'base_url', 'server_host', 'manager_id', 'token', 'docker', 'socket', 'instances'}
-        require(isinstance(cfg, dict) and set(cfg) - {'auto_instances', 'dsbot_gateway', 'bot_social_socket'} == base, 'config_fields')
+        optional = {'auto_instances', 'dsbot_gateway', 'bot_social_socket', 'runtime_ipv4_pool'}
+        require(isinstance(cfg, dict) and set(cfg) - optional == base, 'config_fields')
         require(type(cfg['version']) is int and cfg['version'] == 1 and type(cfg['execution_enabled']) is bool, 'config_version')
+        self.runtime_ipv4_pool = runtime_pool(cfg['runtime_ipv4_pool']) if 'runtime_ipv4_pool' in cfg else None
         self.bot_social_socket = cfg.get('bot_social_socket', False)
         require(type(self.bot_social_socket) is bool, 'bot_social_socket')
         if self.bot_social_socket:
@@ -446,6 +449,8 @@ class ComposeEngine:
             'logs': ['logs', '--no-color', '--no-log-prefix', '--tail', str(tail), 'flybot']}
         require(operation in commands, 'operation_not_allowed')
         require('--force-recreate' not in commands[operation] or '-v' not in commands[operation], 'operation_not_allowed')
+        if self.registry.runtime_ipv4_pool is not None and operation in ('create', 'start', 'create-recreate', 'start-recreate'):
+            reserve_bridge(self.registry, self.runner, iid, heartbeat)
         return self.runner.run(['compose', '--env-file', '/dev/null', '-f', str(path), '--project-directory', str(self.registry.root),
                                 '-p', 'ot-' + iid, *commands[operation]], heartbeat=heartbeat,
                                timeout=60 if operation in ('create', 'start', 'create-recreate', 'start-recreate', 'stop', 'restart', 'recover') else 10)
