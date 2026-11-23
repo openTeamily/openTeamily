@@ -208,7 +208,8 @@ function errorText(result) {
   return '发送失败，点击重试。';
 }
 
-export function mountChatFiles(document, {context, ownerId, csrfToken, createKey, confirmDelivery, sent, onDraftChange}) {
+export function mountChatFiles(document, {context, ownerId, csrfToken, createKey, confirmDelivery, sent, onDraftChange,
+  uiLabel = zh => zh}) {
   const input = document.getElementById('chat-attachment');
   if (!input) return {render() {}, reset() {}};
   const view = document.defaultView;
@@ -220,6 +221,11 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
   const drafts = new Map();
   const draftRail = document.getElementById('agent-file-draft');
   const field = document.getElementById('chat-body');
+  const form = document.getElementById('chat-form');
+  const dropHint = document.getElementById('composer-file-drop');
+  let dragDepth = 0;
+  let dragScope;
+  let feedbackScope;
   const draftFiles = scope => (drafts.get(scope) || []).map(item => item.file);
   const make = (tag, text) => {
     const el = document.createElement(tag);
@@ -229,6 +235,11 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
 
   function render() {
     const current = context();
+    if (dropHint) dropHint.hidden = !dragDepth || !canDrop(current);
+    if (feedbackScope !== current?.scope) {
+      feedbackScope = current?.scope;
+      status.textContent = '';
+    }
     for (const job of jobs) {
       if (current?.scope === job.destination.scope) messageList.append(job.node);
       else job.node.remove();
@@ -353,22 +364,28 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
     onDraftChange?.();
   }
 
-  function stageFiles(scope, files, privateChat) {
+  function stageFiles(scope, files, privateChat, issues) {
     const existing = drafts.get(scope) || [];
     const valid = privateChat ? files.filter(file => AGENT_FILE_EXT.has(file.name.toLowerCase().split('.').at(-1))) : files;
-    if (valid.length !== files.length) status.textContent = '智能体私聊支持图片、PDF、Office 文档和文本文件。';
+    if (valid.length !== files.length) issues.push(uiLabel('智能体私聊支持图片、PDF、Office 文档和文本文件。',
+      'Private agent chat supports images, PDFs, Office documents and text files.'));
     let bytes = existing.reduce((sum,item) => sum + item.file.size,0);
     const before = existing.length;
+    let reachedLimit = false;
     for (const file of valid) {
-      if (existing.length >= 4 || (privateChat && bytes + file.size > MAX_CHAT_FILE_BYTES)) {
-        status.textContent = privateChat ? '每条消息最多 4 个附件，合计 8 MB。' : '一次最多选择 4 个附件。';
+      if (existing.length >= 4) {
+        reachedLimit = true;
         break;
+      }
+      if (privateChat && bytes + file.size > MAX_CHAT_FILE_BYTES) {
+        reachedLimit = true;
+        continue;
       }
       bytes += file.size;
       const {card, preview} = localChatFile(document, file);
       const remove = make('button','×');
       remove.type = 'button';
-      remove.setAttribute('aria-label','移除 '+file.name);
+      remove.setAttribute('aria-label', uiLabel('移除 ', 'Remove ') + file.name);
       remove.className = 'agent-file-remove';
       remove.addEventListener('click',() => {
         const current = context();
@@ -377,6 +394,9 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
       card.append(remove);
       existing.push({file,card,preview});
     }
+    if (reachedLimit) issues.push(privateChat
+      ? uiLabel('每条消息最多 4 个附件，合计 8 MB。', 'Use up to 4 attachments totaling 8 MB per message.')
+      : uiLabel('一次最多选择 4 个附件。', 'Choose up to 4 attachments at a time.'));
     if (existing.length) drafts.set(scope,existing);
     render();
     onDraftChange?.();
@@ -386,12 +406,17 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
   function addFiles(picked, scope, {stage = false} = {}) {
     const destination = context();
     if (!destination || destination.blocked || !picked.length || (scope !== undefined && destination.scope !== scope)) return 0;
-    status.textContent = '';
+    const issues = [];
     const accepted = picked.filter(file => file.size > 0 && file.size <= MAX_CHAT_FILE_BYTES);
-    if (accepted.length !== picked.length) status.textContent = '空文件和超过 8 MB 的文件无法发送。';
+    if (accepted.length !== picked.length) issues.push(uiLabel('空文件和超过 8 MB 的文件无法发送。',
+      'Choose nonempty files no larger than 8 MB each.'));
+    feedbackScope = destination.scope;
     if (destination.private || stage) {
-      return stageFiles(destination.scope, accepted, destination.private);
+      const added = stageFiles(destination.scope, accepted, destination.private, issues);
+      status.textContent = issues.join(' ');
+      return added;
     }
+    status.textContent = issues.join(' ');
     for (const file of accepted) enqueue(file, destination);
     render();
     if (accepted.length) scroller.scrollTop = scroller.scrollHeight;
@@ -404,6 +429,48 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
     input.value = '';
     addFiles(picked, undefined, {stage:true});
   });
+
+  field?.addEventListener('paste', event => {
+    const destination = context();
+    const clipboard = event.clipboardData;
+    if (event.defaultPrevented || !destination || destination.blocked || !clipboard?.files?.length) return;
+    // A textarea can still insert the text part of a mixed clipboard item normally.
+    if (!clipboard.getData('text/plain')) event.preventDefault();
+    addFiles([...clipboard.files], destination.scope, {stage:true});
+  });
+
+  const fileDrag = event => Array.from(event.dataTransfer?.types || []).includes('Files');
+  function canDrop(destination) {
+    return Boolean(dragScope != null && destination && !destination.blocked && destination.scope === dragScope);
+  }
+  function clearFileDrag() {
+    dragDepth = 0;
+    dragScope = undefined;
+    if (dropHint) dropHint.hidden = true;
+  }
+  form?.addEventListener('dragenter', event => {
+    if (!fileDrag(event)) return;
+    event.preventDefault();
+    const destination = context();
+    if (dragDepth === 0) dragScope = destination && !destination.blocked ? destination.scope : null;
+    dragDepth += 1;
+    if (dropHint) dropHint.hidden = !canDrop(destination);
+  });
+  form?.addEventListener('dragover', event => {
+    if (!fileDrag(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = canDrop(context()) ? 'copy' : 'none';
+  });
+  form?.addEventListener('dragleave', () => {
+    if (dragDepth && --dragDepth === 0) clearFileDrag();
+  });
+  form?.addEventListener('drop', event => {
+    if (!fileDrag(event)) return;
+    event.preventDefault();
+    if (canDrop(context())) addFiles([...event.dataTransfer.files], dragScope, {stage:true});
+    clearFileDrag();
+  });
+
   return {render,confirmFromHistory,draftFiles,clearDraft,addFiles, forget(scope) {
     clearDraft(scope);
     for (const job of jobs) if (job.destination.scope === scope) remove(job);
@@ -415,6 +482,7 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
     }
     render();
   }, reset() {
+    clearFileDrag();
     for (const scope of drafts.keys()) clearDraft(scope);
     for (const job of jobs) remove(job);
     status.textContent = '';

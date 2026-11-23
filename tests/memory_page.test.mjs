@@ -556,6 +556,13 @@ test('applyMarkdown wraps or prefixes the selected textarea text', () => {
   assert.equal(applyMarkdown(link, 'link'), '[docs](https://)');
 });
 
+test('applyMarkdown builds checklist rows and appends a table after selected text', () => {
+  const area = {value:'前言\n核对草稿\n发布\n结语', selectionStart:3, selectionEnd:10, dispatchEvent() {}};
+  assert.equal(applyMarkdown(area, 'tasks'), '前言\n\n- [ ] 核对草稿\n- [ ] 发布\n\n结语');
+  const table = {value:'保留本段\n下文', selectionStart:0, selectionEnd:4, dispatchEvent() {}};
+  assert.equal(applyMarkdown(table, 'table'), '保留本段\n\n| 列 1 | 列 2 |\n| --- | --- |\n|  |  |\n\n下文');
+});
+
 import { safeHref, markdownToBlocks, renderMarkdown, domToMarkdown } from '../openteamily/static/memory/rich.mjs';
 
 function richDocument() {
@@ -566,7 +573,8 @@ function richDocument() {
     append(...kids) { for (const kid of kids) this.appendChild(typeof kid === 'string' ? new Node(3, null, kid) : kid); }
     removeChild(child) { this.childNodes = this.childNodes.filter(item => item !== child); return child; }
     setAttribute(key, value) { this.attrs[key] = String(value); }
-    getAttribute(key) { return key in this.attrs ? this.attrs[key] : null; }
+    getAttribute(key) { return this.hasAttribute(key) ? this.attrs[key] : null; }
+    hasAttribute(key) { return Object.hasOwn(this.attrs, key); }
     get textContent() { return this.nodeType === 3 ? this.nodeValue : this.childNodes.map(child => child.textContent).join(''); }
     set textContent(value) { this.childNodes = []; if (value) this.appendChild(new Node(3, null, String(value))); }
   }
@@ -585,6 +593,19 @@ test('rich memory editor round-trips stored markdown through the DOM', () => {
   for (const part of ['# 标题', '**加粗**', '`代码`', '[[项目简报]]', '- 第一点', '1. 步骤一', '> 引用', '```', '---', '[链接](https://example.com)']) {
     assert.ok(once.includes(part), part);
   }
+});
+
+test('Memory task checkboxes persist their checked state while read-only checkboxes are disabled', () => {
+  const doc = richDocument();
+  const root = doc.createElement('div');
+  const body = '- [ ] 草稿\n- 备注';
+  renderMarkdown(doc, root, body);
+  assert.equal(root.firstChild.firstChild.firstChild.disabled, true);
+  renderMarkdown(doc, root, body, {interactiveTasks:true});
+  const checkbox = root.firstChild.firstChild.firstChild;
+  assert.equal(checkbox.disabled, false);
+  checkbox.checked = true;
+  assert.equal(domToMarkdown(root), '- [x] 草稿\n- 备注');
 });
 
 test('malformed Markdown fence remains literal and does not block subsequent headings', () => {

@@ -110,9 +110,10 @@ function json(status, body) {
   return {status, json: async () => body};
 }
 
-function directoryFetcher(requests, {agents, conversations} = {}) {
-  const space = {id: 'ws-1', name: 'Desk', owner_id: 'user-1'};
-  const user = {id: 'user-1', username: 'alice'};
+function directoryFetcher(requests, {agents, conversations, workspaceId = 'ws-1', userId = 'user-1'} = {}) {
+  const space = {id: workspaceId, name: 'Desk', owner_id: userId};
+  const user = {id: userId, username: 'alice'};
+  const base = '/v1/workspaces/' + workspaceId;
   const items = agents || [
     {id: 'ag-writer', name: '写作助手', summary: '帮助起草文案', revision: 1, category: 'content-creation'},
     {id: 'ag-ops', name: '运维助手', summary: '查看发布状态', revision: 1, category: 'operations'},
@@ -124,16 +125,16 @@ function directoryFetcher(requests, {agents, conversations} = {}) {
   return async (path, options) => {
     requests.push({path, method: (options && options.method) || 'GET',
       body: options && options.body ? JSON.parse(options.body) : undefined});
-    if (path === '/v1/workspaces/ws-1/agents' && options.method === 'POST') {
+    if (path === base + '/agents' && options.method === 'POST') {
       const body = JSON.parse(options.body);
-      return json(201, {agent: {id: 'ag-new', revision: 1, ...body, homepage: {visibility: 'restricted'}}});
+      return json(201, {agent: {id: 'a'.repeat(32), workspace_id:workspaceId, revision: 1, ...body, homepage: {visibility: 'restricted'}}});
     }
     if (path === '/v1/auth/session') return json(200, {user});
     if (path === '/v1/workspaces?limit=100') return json(200, {items: [space]});
-    if (path === '/v1/workspaces/ws-1') return json(200, {workspace: space});
-    if (path === '/v1/workspaces/ws-1/members') return json(200, {items: [{user_id: 'user-1', role: 'owner'}]});
-    if (path === '/v1/workspaces/ws-1/agents?limit=100') return json(200, {items});
-    const agentMatch = /^\/v1\/workspaces\/ws-1\/agents\/([^/?]+)$/.exec(path);
+    if (path === base) return json(200, {workspace: space});
+    if (path === base + '/members') return json(200, {items: [{user_id:userId, role: 'owner'}]});
+    if (path === base + '/agents?limit=100') return json(200, {items});
+    const agentMatch = new RegExp(`^${base}/agents/([^/?]+)$`).exec(path);
     if (agentMatch) {
       const agent = items.find((row) => row.id === agentMatch[1]);
       return json(200, {agent});
@@ -287,12 +288,14 @@ test('an exact agent link opens the authorized workspace and never falls back to
 test('the create and edit forms carry the category and offer all 17 options', async () => {
   const requests = [];
   const {doc, el} = fakeDocument();
-  await mount(doc, {fetcher: directoryFetcher(requests)});
+  const workspaceId = 'b'.repeat(32);
+  await mount(doc, {fetcher: directoryFetcher(requests, {workspaceId, userId:'c'.repeat(32)})});
   await tick();
   const select = el('create-form').elements.category;
   assert.equal(select.options.length, 17);
   assert.equal(el('edit-form').elements.category.options.length, 17);
 
+  el('open-create').handlers.click();
   const form = el('create-form');
   form.elements.name.value = '销售助手';
   form.elements.category.value = 'sales';
@@ -308,10 +311,11 @@ test('the create and edit forms carry the category and offer all 17 options', as
   } finally {
     globalThis.FormData = fakeData;
   }
-  const post = requests.find((row) => row.method === 'POST' && row.path === '/v1/workspaces/ws-1/agents');
+  const post = requests.find((row) => row.method === 'POST' && row.path === '/v1/workspaces/' + workspaceId + '/agents');
   assert.equal(post.body.category, 'sales');
 
-  await el('agent-list').handlers.click({target: el('agent-list').children[1].children[1].children[0]});
+  const buttons = el('agent-list').children.map(row => row.children[1].children[0]);
+  await el('agent-list').handlers.click({target:buttons.find(button => button.dataset.id === 'ag-ops')});
   await tick();
   assert.equal(el('edit-form').elements.category.value, 'operations');
   assert.equal(el('edit-form').elements.category.disabled, false);

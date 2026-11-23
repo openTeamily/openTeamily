@@ -2070,8 +2070,8 @@
     "services/bot-social/src/openteamily/meeting-shares.ts": {
       "destination": "services/bot-social",
       "path": "src/openteamily/meeting-shares.ts",
-      "new_sha256": "daf7b641adf31fec18bb11b853431c87c4ebbe642de02e69cfbf2eee87142af4",
-      "bytes": 17046,
+      "new_sha256": "5daeee1d7878a4f523e7a12b0274dbd6b8766c057b4ce896b851eeabb6a58fd1",
+      "bytes": 19001,
       "reason": "DSH cutover modification/addition in the imported snapshot; see docs/DSBOT_PLUGIN_ARCHITECTURE.md.",
       "license_notice": "MIT (Bot Social snapshot)"
     },
@@ -2166,8 +2166,8 @@
     "services/bot-social/test/openteamily_meeting_shares.test.ts": {
       "destination": "services/bot-social",
       "path": "test/openteamily_meeting_shares.test.ts",
-      "new_sha256": "480d1a63303898510422975411287659b12afc5181929dd43fd222a4820fbe56",
-      "bytes": 27422,
+      "new_sha256": "1363ffef8cfeb3c0c099be6d145ad2b0e298ca0dd81bf2cba05530be4a6f24ff",
+      "bytes": 29798,
       "reason": "DSH cutover modification/addition in the imported snapshot; see docs/DSBOT_PLUGIN_ARCHITECTURE.md.",
       "license_notice": "MIT (Bot Social snapshot)"
     },

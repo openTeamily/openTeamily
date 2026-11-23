@@ -139,12 +139,24 @@ function messageFor(error, fallback) {
   return fallback;
 }
 
+function validCreateReceipt(attempt) {
+  const {values, key} = attempt || {};
+  return typeof key === 'string' && /^[A-Za-z0-9_-]{16,64}$/.test(key) &&
+    values && typeof values.name === 'string' && values.name.trim() &&
+    ['name', 'summary', 'instructions'].every(field => typeof values[field] === 'string' && values[field].length <= editLimits[field]) &&
+    (values.category === null || AGENT_CATEGORY_SLUGS.has(values.category)) &&
+    (values.quick_starts === undefined || (Array.isArray(values.quick_starts) && values.quick_starts.length <= 5 &&
+      values.quick_starts.every(line => typeof line === 'string' && line.length <= 80)));
+}
+
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
   const workspaceSelect = document.getElementById('workspace');
   const createForm = document.getElementById('create-form');
+  const createStatus = document.getElementById('agent-create-status');
+  const cancelCreate = document.getElementById('cancel-create');
   const editForm = document.getElementById('edit-form');
   const editConflict = document.getElementById('agent-edit-conflict');
   const reloadSettings = document.getElementById('reload-agent-settings');
@@ -178,6 +190,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let workspaceLoad = 0;
   let loadedWorkspace = '';
   let directoryLoaded = false;
+  const createAttempts = new Map();
   fillCategoryOptions(createForm.elements.category, document);
   fillCategoryOptions(editForm.elements.category, document);
   const categoryButtons = [...document.querySelectorAll('.filter-row .pill[data-category]')];
@@ -246,11 +259,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     status.textContent = text;
   }
 
-  async function request(method, path, body, extra) {
+  async function request(method, path, body, extra, signal) {
     const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie), ...(extra || {})};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     const response = await fetcher(path, {
-      method, headers, credentials: 'same-origin',
+      method, headers, credentials: 'same-origin', signal,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     let parsed = {};
@@ -360,6 +373,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function workspaceId() {
     return workspaceSelect.value;
+  }
+
+  function createScope() {
+    const user = currentUser?.id, workspace = workspaceId();
+    return directoryId.test(user || '') && directoryId.test(workspace) ? `ot-agent-create:${user}:${workspace}` : '';
+  }
+
+  function readCreateReceipt(scope) {
+    const active = createAttempts.get(scope);
+    if (active || !scope) return active;
+    try {
+      const saved = JSON.parse(document.defaultView.sessionStorage.getItem(scope));
+      if (!validCreateReceipt(saved)) return;
+      const attempt = {key:saved.key, values:saved.values, saved:true};
+      createAttempts.set(scope, attempt);
+      return attempt;
+    } catch { return; }
+  }
+
+  function paintCreateControls(attempt) {
+    if (openCreate) openCreate.textContent = attempt ? '继续创建智能体' : '创建我的智能体';
+    if (createForm.hidden) return;
+    for (const field of editFields) {
+      if (createForm.elements[field]) createForm.elements[field].disabled = Boolean(attempt);
+    }
+    const submit = createForm.querySelector('button[type="submit"]');
+    submit.disabled = Boolean(attempt?.sending);
+    submit.textContent = attempt?.sending ? '创建中…' : attempt ? '核对创建结果' : '创建';
+    if (cancelCreate) cancelCreate.textContent = attempt ? '关闭' : '取消';
+    if (createStatus) {
+      createStatus.hidden = !attempt;
+      createStatus.textContent = attempt?.sending ? '正在创建智能体…' : attempt?.saved
+        ? '暂时无法确认创建结果。可核对原请求，智能体只会创建一次。'
+        : attempt ? '暂时无法确认创建结果。浏览器无法保留记录，请在此页重试。' : '';
+    }
   }
 
   function writeDirectoryTarget(agent, {push = false} = {}) {
@@ -726,6 +774,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return false;
     }
     if (openCreate) openCreate.hidden = archived || !canManage(actor);
+    paintCreateControls(archived || !canManage(actor) ? null : readCreateReceipt(createScope()));
     directoryAgents = listed.body.items || [];
     loadedWorkspace = id;
     loadedArchived = archived;
@@ -966,28 +1015,57 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   createForm.addEventListener('submit', async event => {
     event.preventDefault();
-    if (!canManage(actor) || archivedOnly) return;
+    if (createForm.hidden || !canManage(actor) || archivedOnly) return;
     const id = workspaceId();
-    const user = currentUser?.id;
-    const form = event.currentTarget;
-    const values = readAgentForm(form);
-    if (invalidQuickStarts(values.quick_starts)) return;
-    if (!values.name) {
-      show('error', '请填写名称。');
+    const scope = createScope();
+    if (!scope) return;
+    let attempt = readCreateReceipt(scope);
+    if (attempt?.sending) return;
+    if (!attempt) {
+      const values = readAgentForm(createForm);
+      if (invalidQuickStarts(values.quick_starts)) return;
+      if (!values.name) {
+        show('error', '请填写名称。');
+        return;
+      }
+      attempt = {key:idempotencyKey('agent-create-'), values, saved:false};
+      createAttempts.set(scope, attempt);
+      try {
+        document.defaultView.sessionStorage.setItem(scope, JSON.stringify({key:attempt.key, values}));
+        attempt.saved = true;
+      } catch {}
+    }
+    attempt.sending = true;
+    paintCreateControls(attempt);
+    const result = await request('POST', `/v1/workspaces/${id}/agents`, attempt.values,
+      {'Idempotency-Key': attempt.key}, AbortSignal.timeout(20000)).catch(() => ({status:0, body:{}}));
+    attempt.sending = false;
+    const agent = result.body?.agent;
+    const accepted = [200, 201].includes(result.status) && directoryId.test(agent?.id || '') && agent.workspace_id === id;
+    const certainFailure = [400, 401, 403, 404, 409, 413, 422].includes(result.status) || result.body?.error?.code === 'quota';
+    const sameDirectory = scope === createScope() && loadedWorkspace === id && directoryLoaded && !archivedOnly && canManage(actor);
+    if (!accepted && !certainFailure) {
+      if (sameDirectory) paintCreateControls(attempt);
       return;
     }
-    const result = await request('POST', `/v1/workspaces/${id}/agents`, values, {
-      'Idempotency-Key': idempotencyKey(),
-    });
-    if (id !== workspaceId() || user !== currentUser?.id || archivedOnly) return;
-    if (result.status !== 201 && result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法创建智能体。'));
+    createAttempts.delete(scope);
+    try { document.defaultView.sessionStorage.removeItem(scope); } catch {}
+    if (!sameDirectory) return;
+    paintCreateControls(null);
+    if (!accepted) {
+      if (!createForm.hidden && createStatus) {
+        createStatus.hidden = false;
+        createStatus.textContent = messageFor(result.body?.error, '无法创建智能体。');
+      }
       return;
     }
-    form.reset();
-    if (await loadWorkspace({directoryOnly: true}) && result.body.agent) {
-      fillEdit(result.body.agent);
-      writeDirectoryTarget(result.body.agent.id, {push: true});
+    directoryAgents = [agent, ...directoryAgents.filter(item => item.id !== agent.id)];
+    fillCreatorOptions(creatorFilter, directoryAgents, memberNames, document);
+    renderDirectory();
+    if (!createForm.hidden) {
+      createForm.reset();
+      fillEdit(agent);
+      writeDirectoryTarget(agent.id, {push: true});
       show('ok', '已创建智能体。');
     }
   });
@@ -1067,7 +1145,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     hideDrawer();
     writeDirectoryTarget(null);
   });
-  document.getElementById('cancel-create')?.addEventListener('click', () => {
+  cancelCreate?.addEventListener('click', () => {
     hideDrawer();
     openCreate?.focus?.();
   });
@@ -1083,7 +1161,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   openCreate?.addEventListener('click', () => {
-    if (!canManage(actor) || archivedOnly) return;
+    if (!canManage(actor) || archivedOnly || !createForm.hidden) return;
     hideDrawer();
     writeDirectoryTarget(null);
     if (drawer) {
@@ -1091,7 +1169,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       drawer.scrollTop = 0;
     }
     createForm.hidden = false;
-    createForm.elements.name.focus?.();
+    createForm.reset?.();
+    const attempt = readCreateReceipt(createScope());
+    if (attempt) {
+      const {values} = attempt;
+      for (const field of ['name', 'summary', 'instructions', 'category']) {
+        if (createForm.elements[field]) createForm.elements[field].value = values[field] ?? '';
+      }
+      if (createForm.elements.quick_starts) createForm.elements.quick_starts.value = (values.quick_starts || []).join('\n');
+    }
+    paintCreateControls(attempt);
+    if (attempt) createForm.querySelector('button[type="submit"]').focus?.();
+    else createForm.elements.name.focus?.();
   });
   directoryStatus?.addEventListener('change', () => {
     if (!canManage(actor)) return;

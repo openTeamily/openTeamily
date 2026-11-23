@@ -2,6 +2,7 @@ import {mountCandidates, sourceHref} from './candidates.mjs';
 import {ACTION_EDIT_FIELDS, actionSaveAttempt, encodeActionReview, decodeActionReview, decodeNewActionAttempt,
   actionEditCommitted, advanceActionEdit, decodeActionEdit, reconcileActionEdit} from './action-review.mjs';
 import { domToMarkdown, renderMarkdown, safeHref } from './rich.mjs';
+import { readMarkdownTable, renderMarkdownTable } from '../shell/markdown-table.mjs';
 import { readWorkspaceChoices } from '../shell/dsbot-api.mjs';
 import { actionFollowupChannel } from '../shell/action-followup-events.mjs';
 export function csrfCookie(source) {
@@ -73,6 +74,13 @@ export function parseTopics(value) {
 }
 
 
+function memoryBlock(kind, selection) {
+  if (kind === 'table') return '| 列 1 | 列 2 |\n| --- | --- |\n|  |  |';
+  if (kind === 'tasks') return (selection.trim() || '待办事项').split(/\r?\n/)
+    .map(line => line.trim()).filter(Boolean).map(line => '- [ ] ' + line).join('\n');
+  return '';
+}
+
 export function applyMarkdown(textarea, kind) {
   if (!textarea) return '';
   const value = textarea.value;
@@ -93,12 +101,18 @@ export function applyMarkdown(textarea, kind) {
     quote: ['> ', '', '引用'],
     link: ['[', '](https://)', '链接文字'],
   };
-  const [pre, post, fallback] = wraps[kind] || ['', '', '文本'];
-  const body = selected || fallback;
-  const next = value.slice(0, start) + pre + body + post + value.slice(end);
+  const block = memoryBlock(kind, selected);
+  const offset = kind === 'table' ? end : start;
+  const before = value.slice(0, offset);
+  const after = value.slice(end);
+  const prefix = !before || before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n';
+  const suffix = !after || after.startsWith('\n\n') ? '' : after.startsWith('\n') ? '\n' : '\n\n';
+  const [pre, post, fallback] = block ? [prefix, suffix, ''] : wraps[kind] || ['', '', '文本'];
+  const body = block || selected || fallback;
+  const next = before + pre + body + post + after;
   textarea.value = next;
   if (typeof textarea.setSelectionRange === 'function') {
-    textarea.setSelectionRange(start + pre.length, start + pre.length + body.length);
+    textarea.setSelectionRange(offset + pre.length, offset + pre.length + body.length);
   }
   textarea.dispatchEvent(new Event('input', { bubbles: true }));
   return next;
@@ -1910,7 +1924,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   function loadRichBody(markdown) {
     if (!rich) return;
-    renderMarkdown(document, rich, markdown);
+    renderMarkdown(document, rich, markdown, {readTable:readMarkdownTable, renderTable:renderMarkdownTable, interactiveTasks:true});
     richDirty = false;
   }
   function setSourceMode(next) {
@@ -2095,6 +2109,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         after.selectNodeContents(code);
         selection.addRange(after);
       }
+    } else if (kind === 'tasks' || kind === 'table') {
+      const selection = document.getSelection();
+      if (!selection?.rangeCount || !rich.contains(selection.anchorNode) || !rich.contains(selection.focusNode)) return;
+      const selected = selection.toString();
+      const generated = document.createElement('div');
+      renderMarkdown(document, generated, memoryBlock(kind, selected),
+        {readTable:readMarkdownTable, renderTable:renderMarkdownTable, interactiveTasks:true});
+      if (kind === 'table') {
+        const range = selection.getRangeAt(0);
+        const block = Array.from(rich.children).find(child => child.contains(range.endContainer));
+        const next = block ? block.nextSibling : rich.childNodes[range.endOffset];
+        const table = generated.firstChild;
+        rich.insertBefore(table, next ?? null);
+        range.selectNodeContents(table.querySelector('th'));
+      } else {
+        // Only the markup produced by the safe Markdown renderer enters the editor.
+        document.execCommand('insertHTML', false, generated.innerHTML);
+      }
     } else if (kind === 'link') {
       const answer = globalThis.prompt ? globalThis.prompt('链接地址（https://、mailto: 或站内 /路径）', 'https://') : '';
       const href = safeHref(answer);
@@ -2103,6 +2135,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     richDirty = true;
     syncBodyFromRich();
+    if (kind === 'table') pageDraftChanged();
   }
 
   const exportButton = document.getElementById('page-export');
@@ -2335,7 +2368,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (Number.isSafeInteger(latest) && latest > revision) {
       citationVersion.textContent += ' · 当前修订 ' + latest;
     }
-    if (version.body.trim()) renderMarkdown(document, citationBody, version.body);
+    if (version.body.trim()) renderMarkdown(document, citationBody, version.body,
+      {readTable:readMarkdownTable, renderTable:renderMarkdownTable});
     else citationBody.textContent = '（空白正文）';
     citationEdit.hidden = false;
     setCitationStatus('');

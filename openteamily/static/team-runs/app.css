@@ -37,6 +37,11 @@
 .team-run-page :is(button, a):focus-visible { outline: 2px solid var(--ot-focus); outline-offset: 2px; }
 
 .team-run-page h2 { font-size: 1.15rem; margin: 0 0 .65rem; }
+.team-run-filters { display: flex; flex-wrap: wrap; gap: .55rem; align-items: end; margin: 0 0 .75rem; }
+.team-run-filters label { display: grid; gap: .25rem; flex: 0 1 auto; margin: 0; min-width: 0; }
+.team-run-filters label:first-child { flex: 1 1 13rem; }
+.team-run-filters :is(input, select) { box-sizing: border-box; min-height: 2.75rem; width: 100%; min-width: 0; }
+.team-run-filter-count { margin: -.15rem 0 .6rem; }
 .team-run-list, .team-run-results { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
 .result-step[data-linked-step] { border-color: var(--ot-accent); }
 .team-run-row {
@@ -56,6 +61,15 @@
 .team-run-row:hover { background: var(--ot-surface-2); border-color: var(--ot-accent); }
 .team-run-row strong { overflow-wrap: anywhere; }
 .team-run-row .note { white-space: nowrap; }
+.team-run-row .team-run-goal-match {
+  display: -webkit-box;
+  grid-column: 1 / -1;
+  color: var(--ot-muted);
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
 
 .team-run-pill {
   display: inline-flex;

@@ -127,6 +127,7 @@
         </div>
       </div>
       <div class="filter-wrap">
+        <button type="button" id="catalog-document-tree" aria-haspopup="dialog" aria-controls="document-tree" hidden>文档树</button>
         <button type="button" id="filter-button" aria-expanded="false" aria-haspopup="dialog" aria-controls="filter-panel">筛选</button>
         <div id="filter-panel" role="dialog" aria-label="筛选" hidden>
           <div class="filter-heading">
@@ -338,6 +339,11 @@
       <p role="status">正在打开作品…</p>
     </div>
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>
+      <nav id="editor-document-nav" aria-label="文档位置" hidden>
+        <button type="button" id="editor-document-tree" aria-haspopup="dialog" aria-controls="document-tree">文档树</button>
+        <a id="editor-parent-document" hidden></a>
+        <button type="button" id="new-child-document" hidden>新建子文档</button>
+      </nav>
       <label for="editor-title">标题 <textarea id="editor-title" name="title" rows="1" maxlength="80" required autocomplete="off" enterkeyhint="done" placeholder="输入标题"></textarea></label>
       <p id="editor-meta" class="note"></p>
       <button type="button" id="studio-copy-open" class="secondary" aria-haspopup="dialog" aria-controls="studio-copy-dialog" hidden>复制到团队协作</button>
@@ -596,6 +602,15 @@
       <button type="button" id="shared-work-copy-retry" hidden>重新查看</button>
       <button type="button" id="shared-work-copy-confirm" class="primary" hidden>保存副本</button>
     </div>
+  </dialog>
+  <dialog id="document-tree" class="send-dialog-card" aria-labelledby="document-tree-heading">
+    <header class="document-tree-header">
+      <h2 id="document-tree-heading">文档树</h2>
+      <button type="button" id="close-document-tree" autofocus>关闭</button>
+    </header>
+    <p id="document-tree-status" class="note" role="status"></p>
+    <button type="button" id="retry-document-tree" hidden>重试</button>
+    <ol id="document-tree-list"></ol>
   </dialog>
   <dialog id="duplicate-artifact-dialog" class="send-dialog-card" aria-labelledby="duplicate-artifact-heading">
     <form id="duplicate-artifact-form">
