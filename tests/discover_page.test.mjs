@@ -354,6 +354,83 @@ test('the signed-in native feed refreshes once when a different account provided
   assert.deepEqual(requests, ['/v1/auth/session', '/v1/discover/works?limit=12', '/v1/discover/works?limit=12']);
 });
 
+test('native following and collected links start one scoped feed read and confirm the viewer before rendering', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  for (const tab of ['following', 'collected']) {
+    const doc = fakeDocument();
+    doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+    const session = Promise.withResolvers();
+    const paths = [];
+    const workPath = '/v1/discover/me/works?limit=12&q=release&kind=document&tab=' + tab;
+    const mounted = mount(doc, {location:{search:'?feed=' + tab + '&kind=document&q=release'}, fetcher:async path => {
+      paths.push(path);
+      if (path === '/v1/auth/session') return session.promise;
+      if (path === workPath) return commentResponse({viewer_username:'alice', items:[detailFixture({collected:true})]});
+      throw new Error(path);
+    }});
+    const grid = doc.getElementById('feed-grid');
+    await flush();
+    assert.deepEqual(paths, ['/v1/auth/session', workPath]);
+    assert.equal(grid.children.length, 0);
+    assert.match(doc.getElementById('feed-count').textContent, /正在加载作品/);
+    session.resolve(commentResponse({user:{id:'owner', username:'alice'}}));
+    await mounted;
+    assert.deepEqual(paths, ['/v1/auth/session', workPath]);
+    assert.equal(grid.children.length, 1);
+    assert.equal(grid.children[0].children[1].children[1].attributes['aria-pressed'], 'true');
+  }
+});
+
+test('an unverified native visitor never sees the scoped feed and need not wait for it', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const session = Promise.withResolvers();
+  const pending = Promise.withResolvers();
+  let signal;
+  const mounted = mount(doc, {location:{search:'?feed=collected'}, fetcher:async (path, options) => {
+    if (path === '/v1/auth/session') return session.promise;
+    if (path === '/v1/discover/me/works?limit=12&tab=collected') {
+      signal = options.signal;
+      return pending.promise;
+    }
+    throw new Error(path);
+  }});
+  await flush();
+  assert.equal(signal.aborted, false);
+  session.resolve(commentResponse({}, 401));
+  await mounted;
+  assert.equal(signal.aborted, true);
+  assert.match(doc.getElementById('feed-note').textContent, /请先登录/);
+  pending.resolve(commentResponse({viewer_username:'alice', items:[detailFixture()]}));
+  await flush();
+  assert.equal(doc.getElementById('feed-grid').children.length, 0);
+  assert.equal(doc.getElementById('login-panel').hidden, false);
+});
+
+test('a native signed-in feed retries an early unauthorized response once after verifying the account', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const session = Promise.withResolvers();
+  let reads = 0;
+  const mounted = mount(doc, {location:{search:'?feed=collected'}, fetcher:async path => {
+    if (path === '/v1/auth/session') return session.promise;
+    if (path === '/v1/discover/me/works?limit=12&tab=collected') {
+      if (++reads === 1) return commentResponse({}, 401);
+      return commentResponse({viewer_username:'alice', items:[detailFixture()]});
+    }
+    throw new Error(path);
+  }});
+  await flush();
+  assert.equal(reads, 1);
+  assert.equal(doc.getElementById('feed-error').hidden, true);
+  session.resolve(commentResponse({user:{id:'owner', username:'alice'}}));
+  await mounted;
+  assert.equal(reads, 2);
+  assert.equal(doc.getElementById('feed-grid').children.length, 1);
+});
+
 test('the native feed discards private rows with an unproven viewer after a single retry', async () => {
   const {mount} = await import('../openteamily/static/discover/app.mjs');
   const doc = fakeDocument();
@@ -2002,6 +2079,79 @@ test('work navigation keeps the signed-in feed context and sharing copies the ca
   await doc.getElementById('work-share-copy').handlers.click();
   assert.deepEqual(copies, ['https://management.test/w/second-work']);
   assert.equal(doc.getElementById('work-share-status').textContent, '已复制链接。');
+});
+
+test('a signed-in Discover work can share its canonical link to one selected chat and retry a lost receipt', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const work = detailFixture();
+  const workspace = 'a'.repeat(32);
+  const activeChat = '/v1/workspaces/' + workspace + '/social/conversations';
+  const writes = [];
+  const requests = [];
+  const url = 'https://discover.test/w/' + work.slug;
+  await mount(doc, {location:{origin:'https://discover.test', search:'?work=' + work.slug}, fetcher:async (path, options) => {
+    requests.push(path);
+    if (path === '/v1/auth/session') return commentResponse({user:{id:'owner',username:'alice'}});
+    if (path.startsWith('/v1/discover/works?')) return commentResponse({items:[],viewer_username:'alice'});
+    if (path === '/v1/discover/works/' + work.slug) return commentResponse({work,viewer_username:'alice'});
+    if (path.startsWith('/w/')) return commentResponse({preview:null},404);
+    if (path === '/v1/workspaces?limit=100') return commentResponse({items:[{id:workspace,name:'个人空间'}]});
+    if (path === activeChat + '?limit=100') return commentResponse({items:[
+      {id:'example-group',kind:'group',title:'项目讨论'},
+      {id:'private-dm',kind:'dm',title:'朋友',direct:{open:true}},
+      {id:'closed-dm',kind:'dm',title:'关闭的私聊',direct:{open:false}},
+      {id:'public-agent',public_agent:{slug:'agent'}},
+    ]});
+    if (path === activeChat + '/example-group/messages') {
+      writes.push({method:options.method,body:JSON.parse(options.body),key:options.headers['Idempotency-Key']});
+      if (writes.length === 1) throw new Error('Lost receipt');
+      return commentResponse({message:{workspace_id:workspace,conversation_id:'example-group',id:'receipt-id'}},201);
+    }
+    throw new Error(path);
+  }});
+  const share = id => doc.getElementById('work-chat-share-' + id);
+  assert.equal(requests.includes('/v1/workspaces?limit=100'), false);
+  await doc.getElementById('work-detail-share').handlers.click();
+  assert.equal(share('panel').hidden, false);
+  assert.equal(requests.includes('/v1/workspaces?limit=100'), false);
+  share('panel').open = true;
+  await share('panel').handlers.toggle();
+  assert.deepEqual(share('conversation').children.map(option => option.value), ['', 'example-group', 'private-dm']);
+  assert.equal(share('send').disabled, true);
+  share('conversation').value = 'example-group';
+  share('conversation').handlers.change();
+  assert.equal(share('send').disabled, false);
+  assert.equal(writes.length, 0);
+  await share('form').handlers.submit({preventDefault(){}});
+  assert.match(share('status').textContent, /未能确认发送结果/);
+  await share('form').handlers.submit({preventDefault(){}});
+  assert.equal(writes.length, 2);
+  assert.match(writes[0].key, /^work-share-/);
+  assert.deepEqual(writes, [writes[0],writes[0]]);
+  assert.deepEqual(writes[0].body,{body:url});
+  assert.equal(writes[0].method,'POST');
+  assert.equal(share('receipt').href, '/chat#workspace=' + workspace + '&social=example-group&message=receipt-id');
+  assert.equal(share('send').disabled, true);
+});
+
+test('guest Discover sharing keeps the public link and leaves the conversation picker closed', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const work = detailFixture();
+  const requests = [];
+  await mount(doc, {location:{origin:'https://discover.test', search:'?work=' + work.slug}, fetcher:async path => {
+    requests.push(path);
+    if (path === '/v1/auth/session') return commentResponse({},401);
+    if (path.startsWith('/v1/discover/works?')) return commentResponse({items:[]});
+    if (path.startsWith('/w/')) return commentResponse({...work,preview:'可见的公开内容'});
+    throw new Error(path);
+  }});
+  doc.getElementById('work-detail-share').handlers.click();
+  assert.equal(doc.getElementById('work-share-url').value, 'https://discover.test/w/' + work.slug);
+  assert.equal(doc.getElementById('work-chat-share-panel').hidden, true);
+  assert.ok(!requests.some(path => path.startsWith('/v1/workspaces')));
 });
 
 test('the native direct excerpt paints before auth and is retained through a mismatched viewer reply', async () => {

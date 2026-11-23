@@ -1,5 +1,6 @@
 import {mountMeetingAudio} from './audio.mjs';
 import {mountMeetingDiscussion} from './discussion.mjs';
+import {mountMeetingPrint} from './print.mjs';
 import {mountTranscriptSearch, renderTranscriptMatch} from './transcript-search.mjs';
 import {readWorkspaceChoices, servedByDsBot} from '../shell/dsbot-api.mjs';
 import {isMeetingCallId, meetingArchiveHref, takeMeetingFromChat} from '../shell/meeting-link.mjs';
@@ -135,6 +136,20 @@ function linkedMeetingAction(params) {
   const completed = inbox && params.getAll('status').length === 1 && params.get('status') === 'completed';
   return {index:Number(index), revision:Number(revision), inbox, mine:inbox && params.get('mine') === '1', completed};
 }
+
+function automationFollowupHref(workspace, meeting, action, revision) {
+  return '/automations?' + new URLSearchParams({workspace, meeting, action, revision});
+}
+
+function automationFollowupLink(document) {
+  const link = document.createElement('a');
+  link.className = 'action-followup';
+  link.textContent = '跟进自动化';
+  link.target = '_blank';
+  link.rel = 'noopener';
+  return link;
+}
+
 const unavailable = {status: 0, body: {}};
 const DETAIL_READ_TIMEOUT_MS = 15000;
 const SAVE_TIMEOUT_MS = 12000;
@@ -520,6 +535,10 @@ function sharedActionLink(document, action) {
   return link;
 }
 
+function isSavedMeetingAction(action) {
+  return meetingIdPattern.test(action?.id || '') && meetingIdPattern.test(action?.workspace_id || '');
+}
+
 export function renderSharedMeeting(document, meeting, {copy, saved = []} = {}) {
   const title = document.getElementById('shared-meeting-title');
   title.textContent = meeting.title;
@@ -655,17 +674,25 @@ function mount() {
     historyWorkspace: () => servedByDsBot(document) && !document.getElementById('meeting-list-pane')?.hidden
       ? workspaceId() : '',
   });
+  function notesContext() {
+    const workspace = workspaceId();
+    if (!native || !meetingIdPattern.test(viewerId)) return null;
+    if (receivedMeeting?.workspace === workspace && !sharedDetail.hidden) {
+      return {owner:viewerId, workspace, meeting:receivedMeeting.meeting, shared:true};
+    }
+    return current?.id && current.workspace_id === workspace && !form.hidden &&
+      layout?.dataset.view !== 'catalogue' ? {owner:viewerId, workspace, meeting:current, shared:false} : null;
+  }
+  const printing = mountMeetingPrint(document, {
+    context: () => {
+      const notes = notesContext();
+      return form.inert && !notes?.shared ? null : notes;
+    },
+    formatTime,
+  });
   const discussion = mountMeetingDiscussion(document, {
     request,
-    context: () => {
-      const workspace = workspaceId();
-      if (!native || !meetingIdPattern.test(viewerId)) return null;
-      if (receivedMeeting?.workspace === workspace && !sharedDetail.hidden) {
-        return {owner:viewerId, workspace, meeting:receivedMeeting.meeting, shared:true};
-      }
-      return current?.id && current.workspace_id === workspace && !form.hidden && layout?.dataset.view !== 'catalogue'
-        ? {owner:viewerId, workspace, meeting:current} : null;
-    },
+    context: notesContext,
     isDirty: hasUnsavedChanges,
     openChat: href => document.defaultView.location.assign(href),
   });
@@ -783,12 +810,13 @@ function mount() {
   const sameInboxScope = state => state.owner === viewerId && state.viewer === viewer && state.workspace === workspaceId();
   const currentInbox = state => state === inboxView && sameInboxScope(state);
   const inboxKey = (state, item) => `${state.viewer}/${state.workspace}/${item.meeting_id}`;
+  const receivedActionKey = (state, item) => `${inboxKey(state, item)}/${item.revision}/${item.action_index}`;
 
-  function inboxPosition(button = document.activeElement) {
-    const row = button?.closest?.('li[data-action]');
-    if (row?.parentElement !== inboxList || !button.dataset.inboxControl) return null;
+  function inboxPosition(control = document.activeElement) {
+    const row = control?.closest?.('li[data-action]');
+    if (row?.parentElement !== inboxList || !control.dataset.inboxControl) return null;
     return {key:row.dataset.action, index:Array.from(inboxList.children).indexOf(row),
-      control:button.dataset.inboxControl, top:button.getBoundingClientRect().top};
+      control:control.dataset.inboxControl, top:control.getBoundingClientRect().top};
   }
 
   function focusInboxPosition(position, restorePosition = false) {
@@ -796,11 +824,11 @@ function mount() {
     const rows = Array.from(inboxList.children);
     const original = rows.find(item => item.dataset.action === position.key);
     const row = original || rows[Math.min(position.index, rows.length - 1)];
-    const button = row?.querySelector(`button[data-inbox-control="${position.control}"]:enabled`) ||
+    const control = row?.querySelector(`[data-inbox-control="${position.control}"]:not(:disabled)`) ||
       row?.querySelector('button[data-inbox-control="source"]');
-    (button || inboxHeading).focus({preventScroll:true});
-    if (restorePosition && original && button) {
-      main.scrollTop += button.getBoundingClientRect().top - position.top;
+    (control || inboxHeading).focus({preventScroll:true});
+    if (restorePosition && original && control) {
+      main.scrollTop += control.getBoundingClientRect().top - position.top;
     }
   }
 
@@ -847,7 +875,26 @@ function mount() {
         });
       });
       buttons.append(source);
-      if (!state.received) {
+      if (state.received) {
+        const saved = item.saved_action;
+        const hasSaved = isSavedMeetingAction(saved);
+        const pending = inboxWrites.has(receivedActionKey(state, item));
+        const control = hasSaved ? sharedActionLink(document, saved) : document.createElement('button');
+        if (!hasSaved) {
+          control.type = 'button';
+          control.textContent = pending ? '正在保存…' : '存入我的待办';
+          control.disabled = pending;
+          control.addEventListener('click', () => copyReceivedInboxAction(state, item, control));
+        }
+        control.dataset.inboxControl = 'memory';
+        buttons.append(control);
+      } else {
+        if (!state.completed) {
+          const followup = automationFollowupLink(document);
+          followup.dataset.inboxControl = 'followup';
+          followup.href = automationFollowupHref(state.workspace, item.meeting_id, item.action_index, item.revision);
+          buttons.append(followup);
+        }
         const done = document.createElement('button');
         done.type = 'button';
         done.dataset.inboxControl = 'status';
@@ -1005,6 +1052,29 @@ function mount() {
     await loadInbox(state, {notice, minimum});
   }
 
+  async function copyReceivedInboxAction(state, item, button) {
+    const key = receivedActionKey(state, item);
+    if (!currentInbox(state) || inboxWrites.has(key)) return;
+    const position = inboxPosition(button);
+    inboxWrites.add(key);
+    button.disabled = true;
+    button.textContent = '正在保存…';
+    const result = await copySharedAction(state, item.meeting_id, item.revision, item.action_index);
+    inboxWrites.delete(key);
+    if (!sameInboxScope(state)) return;
+    if (result.action) item.saved_action = result.action;
+    const visible = inboxView;
+    if (!visible?.received || !currentInbox(visible)) return;
+    const shown = visible.items.find(action => receivedActionKey(visible, action) === key);
+    if (!shown) return;
+    if (result.action) shown.saved_action = result.action;
+    const notice = result.action ? '已保存到个人空间。' : result.error;
+    const keepPosition = document.activeElement === button || (button.isConnected && document.activeElement === document.body);
+    inboxStatus.textContent = notice;
+    renderInbox(visible, keepPosition ? position : inboxPosition());
+    if (result.sourceUnavailable || visible.request) void loadInbox(visible, {notice});
+  }
+
   function setInbox(open, {focus = true, notice = '', retryMeeting = null} = {}) {
     if (!inbox || !native || (open && (!viewer || !workspaceId()))) return;
     if (inboxView?.request) {
@@ -1080,6 +1150,7 @@ function mount() {
 
   function syncSavedActions(pending) {
     discussion.sync(pending);
+    printing.sync(pending);
     const saved = native && Boolean(current?.id);
     for (const {button} of copyDestinations) {
       button.hidden = !saved;
@@ -1098,9 +1169,7 @@ function mount() {
         link.title = '请先保存行动项';
         continue;
       }
-      link.href = '/automations?' + new URLSearchParams({
-        workspace: workspaceId(), meeting: current.id, action: action.savedIndex, revision: current.revision,
-      });
+      link.href = automationFollowupHref(workspaceId(), current.id, action.savedIndex, current.revision);
       link.removeAttribute('aria-disabled');
       link.title = '';
     }
@@ -1679,11 +1748,7 @@ function mount() {
         actions.splice(index, 1);
         renderActions();
       });
-      const link = document.createElement('a');
-      link.className = 'action-followup';
-      link.textContent = '跟进自动化';
-      link.target = '_blank';
-      link.rel = 'noopener';
+      const link = automationFollowupLink(document);
       const copy = document.createElement('button');
       copy.type = 'button';
       copy.className = 'secondary action-memory';
@@ -1828,6 +1893,7 @@ function mount() {
     if (!receipt && sharedDetail) sharedDetail.hidden = true;
     sharing.sync();
     discussion.sync();
+    printing.sync();
   }
 
   function syncRecord() {
@@ -1978,6 +2044,7 @@ function mount() {
   }
 
   async function openMeeting(id, read, transcriptQuery, actionReference) {
+    printing.close();
     const pendingSave = writing?.kind === 'save' && active(writing) ? writing
       : saveRetry && active(saveRetry) ? saveRetry : null;
     const owner = viewer;
@@ -2069,18 +2136,13 @@ function mount() {
     }
     const copy = native && result.body.received === true ? async index => {
       if (!active(target)) return;
-      const saved = await saveRequest('POST', `/v1/workspaces/${target.workspace}/meetings/shared/${id}/action`,
-        {revision:meeting.revision, index});
-      if (!active(target)) return;
-      const action = saved.body.action;
-      if ([200, 201].includes(saved.status) && saved.body.viewer_username === target.viewer &&
-          meetingIdPattern.test(action?.id) && meetingIdPattern.test(action?.workspace_id)) return {action};
-      return {error:saved.status === 404 ? '这份共享纪要已撤回或你没有查看权限。'
-        : messageFor(saved.body.error, '暂时无法保存待办，请重试。')};
+      const saved = await copySharedAction(target, id, meeting.revision, index);
+      if (active(target)) return saved;
     } : null;
     renderSharedMeeting(document, meeting, {copy, saved:result.body.saved_actions});
     if (result.body.received === true) receivedMeeting = {workspace:target.workspace, meeting};
     discussion.sync();
+    printing.sync();
     show('', '');
     if (actionReference && result.body.received === true && sharedInboxReturn && inboxSource) {
       const item = meeting.action_items?.[actionReference.index];
@@ -2094,6 +2156,27 @@ function mount() {
       } else show('ok', '这条待办已有更新，当前展示收到的纪要。');
     }
     return true;
+  }
+
+  async function copySharedAction({workspace, viewer}, shareId, revision, index) {
+    const path = `/v1/workspaces/${workspace}/meetings/shared/${shareId}`;
+    const result = await saveRequest('POST', path + '/action', {revision, index});
+    const {action, viewer_username} = result.body;
+    const accepted = [200, 201].includes(result.status);
+    if (accepted && viewer_username === viewer && isSavedMeetingAction(action)) return {action};
+    let sourceUnavailable = [403, 404].includes(result.status);
+    if (accepted || ambiguousSave(result.status)) {
+      const checked = await saveRequest('GET', path);
+      const {meeting, saved_actions, received} = checked.body;
+      if (checked.status === 200 && checked.body.viewer_username === viewer && received === true &&
+          meeting?.shared === true && meeting.id === shareId && meeting.revision === revision && Array.isArray(saved_actions)) {
+        const observed = saved_actions.find(item => item.index === index && isSavedMeetingAction(item));
+        if (observed) return {action:observed};
+      }
+      sourceUnavailable = [403, 404].includes(checked.status);
+    }
+    return {sourceUnavailable, error:sourceUnavailable ? '这份共享纪要已撤回或你没有查看权限。'
+      : messageFor(result.body.error, '暂时无法保存待办，请重试。')};
   }
 
   function syncLibraryLink() {
@@ -2162,6 +2245,7 @@ function mount() {
   }
 
   async function load() {
+    printing.close();
     const seq = ++workspaceLoad;
     clearOpenRetry();
     inboxResume = null;

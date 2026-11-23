@@ -646,19 +646,27 @@ test('received meeting actions are copied once into personal memory and every re
   const meeting = {id:shareId, title:'周会', revision:3, shared:true, action_items:[
     {text,owner:'Alice',due_date:'2032-02-29',done:false}, {text:'已确认的事项',done:true},
   ]}
+  const assigned = {share_id:shareId, revision:3, action_index:0, text, owner:'Alice', meeting_title:meeting.title}
+  const another = {...assigned, share_id:'d'.repeat(32)}
   let received = true, revoked = false
   setSharedBotSocial({async request(method, path) {
     assert.equal(method, 'GET')
+    if (path.includes('/meeting-shares?view=actions')) return {items:revoked ? [another] : [assigned,another],cursor:null}
     assert.equal(path, `/v1/ot/workspaces/${team}/meeting-shares/${shareId}`)
     if (revoked) throw Object.assign(new Error('Meeting share not found'), {status:404,code:'social/not_found'})
     return {meeting, received}
   }})
   t.after(() => setSharedBotSocial(undefined))
   const receipt = base('shared/' + shareId, team)
+  const list = base('shared?view=actions&limit=2', team)
+  const gateway = new Request('http://fixture', {headers:{'x-ot-owner-username':'Alice'}})
+  const loadActions = () => bot.features.table['meetings/v1']({method:'GET',path:list}, {request:gateway})
   const copy = (input) => bot.call('meetings', 'POST', receipt + '/action', input)
   const actions = '/v1/workspaces/' + WS + '/memory/actions'
   const item = {revision:3,index:0}
   assert.equal((await bot.endpoint('memory/saveSharedMeetingAction', {})).ok,false)
+  assert.equal((await bot.endpoint('memory/sharedMeetingActions', {})).ok,false)
+  assert.deepEqual((await loadActions()).body.items,[assigned,another])
   assert.equal((await copy({...item,workspace_id:team})).status,400)
   assert.equal((await copy({...item,revision:2})).status,409)
   assert.equal((await copy({...item,index:1})).status,409)
@@ -678,12 +686,14 @@ test('received meeting actions are copied once into personal memory and every re
   assert.deepEqual(saved.source,{kind:'shared_meeting',workspace_id:team,share_id:shareId,revision:3,action_index:0})
   await bot.call('memory','POST',privatePath,{revision:1,changes:{status:'done',notes:'已自行处理'}})
   assert.deepEqual((await bot.call('meetings','GET',receipt)).body.saved_actions,[{index:0,...action}])
+  assert.deepEqual((await loadActions()).body.items,[{...assigned,saved_action:action},another])
   assert.equal((await copy(item)).status,200)
   assert.equal((await bot.call('memory','GET',privatePath)).body.action.notes,'已自行处理')
   assert.equal((await bot.call('memory','GET',actions.replace(WS,team))).body.items.length,0)
   assert.deepEqual((await bot.call('meetings','GET',receipt)).body.meeting,meeting)
   revoked = true
   assert.equal((await copy(item)).status,404)
+  assert.deepEqual((await loadActions()).body.items,[another])
   assert.equal((await bot.call('memory','GET',actions)).body.items.length,1)
 })
 

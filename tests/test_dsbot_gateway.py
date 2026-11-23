@@ -216,6 +216,8 @@ class GatewayTest(unittest.TestCase):
         self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/shares/{aid}/link/extra'))
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/discover'), 'discover')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/messages/{aid}/files/0'), 'agents')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/draft'), 'agents')
+        self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/agents/draft/extra'))
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/attachments'), 'agents')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/reply-progress'), 'agents')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/reply-stop'), 'agents')

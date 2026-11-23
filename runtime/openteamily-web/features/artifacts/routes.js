@@ -4,7 +4,7 @@ import { sharedBotSocial } from '../../lib/c/bot-social.js'
 import { digest, FeatureError, nowSeconds, pagination, refuse, requireBodyKeys, validLongText } from '../../featurekit/http.js'
 import {
   canEdit, catalogFacets, content, createArtifact, createMedia, createShare, detailView, documentTree, duplicateArtifact, exportResult, HEX32, listShares, listing,
-  load, mediaDigests, parseExportFormat, recordVersion, recoverShareToken, replaceMedia, restoreArtifact, revokeShare, shareView,
+  load, mediaDigests, moveDocument, parseExportFormat, recordVersion, recoverShareToken, replaceMedia, restoreArtifact, revokeShare, shareView,
   uniqueTitle, unlinkMedia, updateArtifact, usernames, view, versionView,
 } from './library.js'
 import { decodeUpload } from './media.js'
@@ -501,11 +501,24 @@ async function artifactDraft(req, workspaceId, kind) {
   }
 }
 
+const documentId = value => typeof value === 'string' && HEX32.test(value)
+const parentId = value => value === null || documentId(value)
+
+async function documentTreeRequest(req, workspace) {
+  if (!req.queryString) {
+    if (req.method === 'GET') return {body: {items: documentTree(req.store, workspace)}}
+    if (req.method === 'POST') {
+      const body = requireBodyKeys(await req.json(2048), ['artifact_id', 'parent_id', 'expected_parent_id'])
+      if (documentId(body.artifact_id) && parentId(body.parent_id) && parentId(body.expected_parent_id)) {
+        return {body: moveDocument(req.store, workspace, body.artifact_id, body.parent_id, body.expected_parent_id)}
+      }
+    }
+  }
+  refuse(400, 'invalid', '无效的文档树请求。')
+}
+
 export const routes = [
-  { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/document-tree$/, handle(req, workspace) {
-    if (req.method !== 'GET' || req.queryString) refuse(400, 'invalid', '无效的文档树请求。')
-    return {body: {items: documentTree(req.store, workspace)}}
-  } },
+  { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/document-tree$/, handle: documentTreeRequest },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/studio-personal-copy$/, handle: copyStudioToPersonal },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/shared-copy$/, handle: copySharedText },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/activity$/, handle: activity },

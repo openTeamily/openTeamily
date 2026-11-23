@@ -2602,6 +2602,11 @@ test('own message editing and confirmed retraction call versioned endpoints', as
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: original} = sessionFetcher();
   let text = 'Original', revision = 1, retracted = false;
+  const message = () => ({id:'mine-1', seq:1, user_id:alice, workspace_id:'ws-1', conversation_id:'conv-1',
+    body:text, revision, retracted, edited:revision > 1 ? 15 : null});
+  const waiting = Promise.withResolvers();
+  let holdDirectory = false;
+  let transcriptReads = 0;
   const posts = [];
   const restore = installChatGlobals({narrow: true});
   try {
@@ -2612,13 +2617,20 @@ test('own message editing and confirmed retraction call versioned endpoints', as
         revision += 1;
         if (path.endsWith('/edit')) text = payload.body;
         else { text = ''; retracted = true; }
-        return json(200, {message: {}});
+        return json(200, {message:message()});
       }
+      if (holdDirectory && path.endsWith('/agents?limit=100&include=conversations')) await waiting.promise;
       const result = await original(path), body = await result.json();
-      if (path.endsWith('/social/conversations/conv-1')) body.items = [{id: 'mine-1', user_id: alice, body: text, revision, retracted}];
+      if (path.endsWith('/social/conversations/conv-1')) {
+        transcriptReads += 1;
+        body.items = [message()];
+      }
       return json(result.status, body);
     }});
     await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    holdDirectory = true;
+    const transcriptBefore = transcriptReads;
+    el('chat-body').value = 'Independent draft';
     let li = el('message-list').children[0];
     await fire(li.children[3], 'click'); // edit opens inline controls
     li.children[5].children[0].value = 'Edited';
@@ -2632,13 +2644,17 @@ test('own message editing and confirmed retraction call versioned endpoints', as
     await fire(li.children[5].children[0], 'click');
     assert.equal(posts.length, 2);
     assert.equal(el('message-list').children[0].children[1].textContent, '此消息已撤回');
-  } finally { restore(); }
+    assert.equal(transcriptReads, transcriptBefore);
+    assert.equal(el('chat-body').value, 'Independent draft');
+  } finally { waiting.resolve(); await settle(); restore(); }
 });
 
 test('editing a sent message adds a confirm step before the text is replaced', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: original} = sessionFetcher();
   let text = 'Original', revision = 1;
+  const message = () => ({id:'mine-1', seq:1, user_id:alice, workspace_id:'ws-1', conversation_id:'conv-1',
+    body:text, revision, retracted:false, edited:revision > 1 ? 15 : null});
   const posts = [];
   const restore = installChatGlobals({narrow: true});
   try {
@@ -2646,11 +2662,11 @@ test('editing a sent message adds a confirm step before the text is replaced', a
       if (path.includes('/messages/mine-1/')) {
         const payload = JSON.parse(options.body); posts.push([path, payload]);
         revision += 1; text = payload.body;
-        return json(200, {message: {}});
+        return json(200, {message:message()});
       }
       const result = await original(path), body = await result.json();
       if (path.endsWith('/social/conversations/conv-1')) {
-        body.items = [{id: 'mine-1', user_id: alice, body: text, revision, retracted: false}];
+        body.items = [message()];
       }
       return json(result.status, body);
     }});
@@ -2832,6 +2848,51 @@ test('mention notifications show a badge, open the conversation and mark read', 
     assert.equal(el('notification-count').hidden, true);
     assert.equal(el('notifications-empty').textContent, '暂无未读提及。');
   } finally { restore(); }
+});
+
+test('native mentions open their exact messages while acknowledgements arrive out of order', async () => {
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+  const {doc,el,routes,calls,restore} = fixture;
+  const notices = `${linkBase(linkWork)}/notifications`;
+  const otherRoom = 'otc_' + 'B'.repeat(26);
+  const otherMessage = 'otm_' + 'C'.repeat(26);
+  const first = {id:'first', kind:'messenger.mention', conversation_id:linkSocial, message_id:linkSocialOlder};
+  const second = {id:'second', kind:'messenger.mention', conversation_id:otherRoom, message_id:otherMessage};
+  const pending = {first:Promise.withResolvers(),second:Promise.withResolvers()};
+  const otherPath = `${linkBase(linkWork)}/social/conversations/${otherRoom}?around=${otherMessage}`;
+  routes.set(notices,()=>json(200,{unread_count:2,items:[first,second]}));
+  routes.set(notices + '/read',({body})=>pending[body.notification_id].promise);
+  routes.set(otherPath,()=>json(200,{conversation:{id:otherRoom,workspace_id:linkWork,kind:'group',title:'Other group'},
+    items:[{id:otherMessage,conversation_id:otherRoom,user_id:bob,body:'Second target',seq:3}],has_newer:true}));
+  const clickNotice = async index => {
+    await fire(el('notifications-toggle'),'click');
+    await fire(el('notification-list').children[index].children[0],'click');
+  };
+  try {
+    await mount(doc,{fetcher:fixture.fetcher});
+    await clickNotice(0);
+    assert.equal(el('notifications-panel').hidden,true);
+    assert.equal(el('notification-count').textContent,'2');
+    assert.equal(el('message-list').children[0].dataset.searchJump,'true');
+    assert.deepEqual(fixture.messages(),[linkSocialOlder]);
+    await clickNotice(1);
+    assert.deepEqual(fixture.messages(),[otherMessage]);
+    assert.equal(el('message-list').children[0].dataset.searchJump,'true');
+    pending.second.resolve(json(200,{unread_count:0}));
+    await settle();
+    assert.equal(el('notification-count').textContent,'1');
+    pending.first.resolve(json(200,{unread_count:1}));
+    await settle();
+    assert.equal(el('notification-count').hidden,true);
+    assert.deepEqual(fixture.messages(),[otherMessage]);
+    assert.equal(calls.filter(call=>call.path===otherPath).length,1);
+    assert.deepEqual(calls.filter(call=>call.path===notices+'/read').map(call=>call.body),
+      [{notification_id:first.id},{notification_id:second.id}]);
+  } finally {
+    pending.first.resolve(json(503,{}));
+    pending.second.resolve(json(503,{}));
+    restore();
+  }
 });
 
 test('automation notification opens only the exact run, keeps raw output out of the inbox and marks all workspace notices read', async () => {
@@ -4612,6 +4673,59 @@ test('a native group send releases the next message only after activity confirms
   }
 });
 
+for (const unavailable of [false,true]) {
+  test(`sending from a historical group keeps the receipt ${unavailable ? 'visible when the latest read fails' : 'until the latest window arrives'}`, async () => {
+    const base = linkBase(linkWork);
+    const path = base + linkSocialPath;
+    const fixture = linkedChatFixture(`#workspace=${linkWork}&social=${linkSocial}&message=${linkSocialOlder}`);
+    const {el, routes, calls, restore} = fixture;
+    const conversation = {id:linkSocial, workspace_id:linkWork, kind:'group', title:'Linked group', members:[linkMember]};
+    const latest = {id:linkSocialLatest, conversation_id:linkSocial, user_id:bob, seq:110, body:'Latest group context'};
+    const sending = Promise.withResolvers();
+    const returning = Promise.withResolvers();
+    let message;
+    let retriedLatest = false;
+    routes.set(path + '/messages', (call, opts) => {
+      message = {...latest,id:'otm_' + 'B'.repeat(26),user_id:alice,workspace_id:linkWork,
+        client_key:opts.headers['Idempotency-Key'],seq:111,body:call.body.body};
+      return sending.promise;
+    });
+    routes.set(path, () => retriedLatest ? json(200,{conversation,items:[latest,message]}) : returning.promise);
+    const pendingRow = () => el('message-list').children.find(node=>node.dataset.sendPending==='pending');
+    try {
+      await mount(fixture.doc,{fetcher:fixture.fetcher});
+      el('chat-body').value = 'Send while reading the group history';
+      await fire(el('chat-form'),'submit',{preventDefault() {}});
+      assert.equal(el('chat-body').value,'');
+      assert.ok(pendingRow());
+      el('chat-body').value = 'Independent next message';
+      sending.resolve(json(201,{message}));
+      await settle();
+      assert.match(descendants(pendingRow()).find(node=>node.classList.contains('send-feedback')).textContent,/已发送/);
+      assert.deepEqual(fixture.messages().filter(Boolean),[linkSocialOlder]);
+      assert.equal(calls.filter(call=>call.path===path).length,1);
+      assert.equal(el('chat-back-to-latest').disabled,true);
+      returning.resolve(unavailable ? json(503,{}) : json(200,{conversation,items:[latest,message]}));
+      await settle();
+      if (unavailable) {
+        assert.ok(pendingRow());
+        assert.equal(el('chat-back-to-latest').disabled,false);
+        retriedLatest = true;
+        await fire(el('chat-back-to-latest'),'click');
+        await settle();
+      }
+      assert.deepEqual(fixture.messages(),[latest.id,message.id]);
+      assert.equal(pendingRow(),undefined);
+      assert.equal(el('chat-body').value,'Independent next message');
+      assert.equal(calls.filter(call=>call.path===path + '/messages' && call.method==='POST').length,1);
+    } finally {
+      sending.resolve(json(503,{}));
+      returning.resolve(json(503,{}));
+      restore();
+    }
+  });
+}
+
 test('switching workspaces records the original thread and updates the new history entry when a conversation opens', async () => {
   const original = `#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`;
   const fixture = linkedChatFixture(original, {narrow:true});
@@ -5136,7 +5250,7 @@ test('an exact team workspace private chat opens before personal startup and kee
 test('group settings adds an owned workspace agent alongside a teammate with the same agent ID', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
   const {doc, el, routes, fetcher, calls, restore} = linkedChatFixture(
-    `#workspace=${linkTeam}&social=${linkSocial}`, {narrow:true});
+    `#workspace=${linkTeam}&social=${linkSocial}&message=${linkSocialOlder}`, {narrow:true});
   const settingsAdd = id => el('group-info-add-agent' + (id ? `-${id}` : ''));
   const dialog = settingsAdd('dialog');
   dialog.showModal = () => { dialog.open = true; };
@@ -5147,20 +5261,20 @@ test('group settings adds an owned workspace agent alongside a teammate with the
   const mine = {id:'mine', name:'Already added', owner_id:alice, mine:true};
   const peer = {id:'shared-id', name:'Teammate agent', owner_id:bob, mine:false};
   const selected = {id:peer.id, name:'My workspace agent', owner_id:alice, mine:true};
-  const roster = [mine, peer];
+  const older = {id:linkSocialOlder, conversation_id:linkSocial, user_id:bob, seq:2, body:'Earlier group text'};
+  const before = {id:linkSocial, kind:'group', workspace_id:linkTeam, title:'Release group', members:[linkMember],
+    activity_version:'5.2.0.0', agent_members:[mine,peer], group_agent_requests:true, group_management:{role:'owner',revision:1}};
   let reads = 0;
   let writes = 0;
-  routes.set(groupPath, () => json(200, {conversation:{id:linkSocial, kind:'group', workspace_id:linkTeam,
-    title:'Release group', members:[linkMember], agent_members:roster, group_agent_requests:true,
-    group_management:{role:'owner', revision:1}}, items:[]}));
+  routes.set(groupPath + '?around=' + linkSocialOlder, () => json(200,{conversation:before,items:[older],has_newer:true}));
+  routes.set(groupPath, () => json(200,{conversation:before,items:[]}));
   routes.set(cataloguePath, () => ++reads === 1 ? json(503, {}) : json(200,
     {items:[mine,{id:'archived',name:'Archived',archived:true}], cursor:'more'}));
   routes.set(cataloguePath + '&cursor=more', () => json(200, {items:[selected]}));
   routes.set(groupPath + '/agents', ({method}) => {
     assert.equal(method, 'POST');
     if (++writes === 1) return json(503, {});
-    roster.push(selected);
-    return json(201, {});
+    return json(201, {roster:{id:linkSocial,workspace_id:linkTeam,activity_version:'5.3.0.0',agent_members:[mine,peer,selected]}});
   });
   try {
     await mount(doc, {fetcher});
@@ -5194,6 +5308,11 @@ test('group settings adds an owned workspace agent alongside a teammate with the
     assert.equal(settingsAdd().focused, true);
     assert.match(settingsAdd('feedback').textContent, /已添加/);
     assert.equal(el('group-info-agents').children.length, 3);
+    assert.equal(el('message-list').children[0].dataset.messageId,linkSocialOlder);
+    assert.equal(calls.filter(call=>call.path===groupPath).length,0);
+    await fire(el('chat-back-to-latest'),'click');
+    await settle();
+    assert.equal(el('group-info-agents').children.length, 3, 'a stale transcript snapshot cannot undo the accepted roster');
     assert.deepEqual(calls.filter(call => call.path === groupPath + '/agents').map(call => call.body),
       [{agent_ids:[peer.id]}, {agent_ids:[peer.id]}]);
   } finally {

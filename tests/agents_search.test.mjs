@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mount } from '../openteamily/static/agents/app.mjs';
+import { agentPortraitLook } from '../openteamily/static/look/app.mjs';
 
 class Element {
   constructor(tag = 'div') {
@@ -293,7 +294,9 @@ test('native directory renders the updated look only for the signed account and 
   const pending = Promise.withResolvers();
   returnLook = pending.promise;
   await load();
-  assert.equal(avatar().className, 'avatar', 'the directory must render before the look read finishes');
+  const fallback = agentPortraitLook(agent.id);
+  assert.notEqual(fallback.color,look.color);
+  assert.equal(avatar().dataset.color, fallback.color, 'the directory must render before the look read finishes');
   pending.resolve();
   await tick();
   assert.equal(avatar().className, 'look-avatar');
@@ -303,12 +306,12 @@ test('native directory renders the updated look only for the signed account and 
   snapshot = {...snapshot, viewer_username: 'another-user'};
   await load();
   await tick();
-  assert.equal(avatar().className, 'avatar', 'a different signed-in viewer must never apply the look');
+  assert.equal(avatar().dataset.color, fallback.color, 'a different signed-in viewer must never apply the look');
 
   snapshot = {...snapshot, viewer_username: 'alice', items: [{...workspace, id: 'c'.repeat(32)}]};
   await load();
   await tick();
-  assert.equal(avatar().className, 'avatar', 'the personal look must only decorate the bound workspace');
+  assert.equal(avatar().dataset.color, fallback.color, 'the personal look must only decorate the bound workspace');
 });
 
 

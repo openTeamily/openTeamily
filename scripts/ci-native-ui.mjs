@@ -174,7 +174,11 @@ export async function startNativeUI() {
           onProgress?.(fixtureResponse);
           return {text:fixtureResponse,sessionId,turnId:uid()};
         },
-        backgroundTextOnly:async (_prompt,{onProgress}={}) => {
+        backgroundTextOnly:async (_prompt,{onProgress,system}={}) => {
+          if (system?.startsWith('Draft a configuration for an AI assistant')) {
+            return JSON.stringify({name:'访谈整理员',summary:'提取访谈中的需求。',instructions:'按主题归纳访谈，列出待确认问题。',
+              quick_starts:['整理这次访谈。']});
+          }
           onProgress?.(fixtureResponse);
           return fixtureResponse;
         },

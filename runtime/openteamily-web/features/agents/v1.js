@@ -79,6 +79,11 @@ export function agentsV1({ endpoints, chatDirectory, host, log }) {
 
   const routes = [
     ...agentCopyRoutes(host,endpoints),
+    { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/draft$`), handle: wrap(async (req, workspaceId) => {
+      if (req.method !== 'POST' || req.query.size) throw new FeatureError(405, 'method', 'Only POST is supported')
+      const {prompt} = requireBodyKeys(await req.json(8192), ['prompt'])
+      return {body:await call('draft', {workspace_id:workspaceId,prompt})}
+    }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/reply-stop$`),
       handle: wrap(async (req, workspaceId, id, conversationId) => {
         if (req.method !== 'POST') throw new FeatureError(405, 'method', 'Only POST is supported')
@@ -277,7 +282,7 @@ export function agentsV1({ endpoints, chatDirectory, host, log }) {
         const body = await req.json()
         const { revision, ...fields } = body
         const changes = {}
-        for (const key of ['name', 'summary', 'instructions', 'category', 'quick_starts']) if (key in fields) changes[key] = fields[key]
+        for (const key of ['name', 'summary', 'instructions', 'category', 'quick_starts', 'portrait']) if (key in fields) changes[key] = fields[key]
         const result = await call('update', { workspace_id: workspaceId, id, revision, changes })
         return { status: 200, body: { agent: publicAgent(result.agent) } }
       }
