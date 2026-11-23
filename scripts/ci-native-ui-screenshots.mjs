@@ -234,10 +234,12 @@ async function spaceCatalogQueryReturn(page, account) {
 
   await openNative(page,'/space?workspace='+workspace,workspace,'#search');
   const search = page.locator('#search');
-  const item = page.locator('#artifact-list').getByRole('button',{name:title,exact:true});
+  const titleButton = page.getByRole('button',{name:title,exact:true});
+  const row = page.locator('#artifact-list .artifact-item').filter({has:titleButton});
+  const item = row.getByRole('button',{name:title,exact:true});
   await search.fill(title);
   await search.press('Enter');
-  await item.click();
+  await row.locator('.artifact-cover').click();
   await page.locator('#editor-title').waitFor();
   assert.equal(await page.locator('#editor-title').inputValue(),title);
   await page.reload({waitUntil:'domcontentloaded'});
@@ -247,6 +249,27 @@ async function spaceCatalogQueryReturn(page, account) {
   assert.equal(await search.inputValue(),title,'a workspace-qualified catalog URL restores its saved search');
   assert.equal(await item.evaluate(el => el === document.activeElement),true);
   assert.deepEqual([...new URL(page.url()).searchParams],[['workspace',workspace]]);
+
+  const grid = page.getByRole('tab',{name:'网格视图'});
+  const list = page.getByRole('tab',{name:'列表视图'});
+  const originalRow = await item.elementHandle();
+  await grid.press('ArrowRight');
+  assert.equal(await list.getAttribute('aria-selected'),'true');
+  assert.equal(await originalRow.evaluate(el => el.isConnected),true);
+  await originalRow.dispose();
+  assert.equal(await row.getByRole('button',{name:'收藏',exact:true}).isVisible(),true);
+  const more = row.getByRole('button',{name:title+'：更多操作'});
+  await more.click();
+  await page.getByRole('menuitem',{name:'发送到聊天'}).waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(await more.evaluate(el => el === document.activeElement),true);
+
+  await search.fill(title+' 未匹配');
+  await search.press('Enter');
+  await page.locator('#reset-artifact-search').click();
+  await item.waitFor();
+  assert.equal(await search.inputValue(),'');
+  assert.equal(await search.evaluate(el => el === document.activeElement),true);
 }
 
 async function memoryGraphReturn(page, account) {

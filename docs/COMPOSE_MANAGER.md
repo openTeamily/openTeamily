@@ -98,6 +98,25 @@ The runtime must be stopped with a confirmed lifecycle revision and no active
 job. Restoring requires a free reservation. Once restored, the owner can start
 the same runtime from the startup page.
 
+### Reserve address space for account bridges
+
+Reserve a private IPv4 CIDR on the Docker host for new OpenTeamily account
+bridges. Check the host's routes, VPN routes, and existing Docker subnets before
+choosing the range. Keep the range exclusive to the manager and record it in
+the host's network plan. Add `runtime_ipv4_pool` at the top level of the private
+manager configuration. An example reserved range is `10.240.240.0/20`.
+
+The manager assigns a separate `/28` bridge to each new account from the pool.
+A `/20` supplies 256 such bridges. Existing account bridges retain their current
+subnets, including bridges for stopped accounts. Account reservations and
+available bridge addresses are separate capacity limits. Size both for the
+number of accounts the host should support.
+
+Install a manager build that supports the setting, apply the private
+configuration, and restart the OpenTeamily manager after current lifecycle jobs
+finish. Verify that a fresh test account gets its own bridge, starts its runtime,
+and can send a first message with the configured platform model.
+
 ### Upgrade existing runtimes
 
 Changing the image for **existing** account volumes is a separate operator
@@ -159,8 +178,8 @@ for rollback.
 
 `manager.json` exact fields: version1, execution_enabled(boolean), base_url,
 server_host, manager_id, token, docker (absolute executable), socket (absolute local
-Unix socket), instances, and optional `auto_instances`, `dsbot_gateway` and
-`bot_social_socket`. Each of at most 100 explicit instance entries has image,
+Unix socket), instances, and optional `auto_instances`, `dsbot_gateway`,
+`bot_social_socket`, and `runtime_ipv4_pool`. Each of at most 100 explicit instance entries has image,
 healthcheck (CMD argv or null), and publish_port (integer 1024–65535 or null). Repeated
 host ports, unknown keys, mutable images and caller-selected Compose files fail.
 

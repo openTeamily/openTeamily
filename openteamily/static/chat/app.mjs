@@ -3265,7 +3265,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const heading = document.createElement('p');
       heading.className = 'reply-state';
       heading.setAttribute('role', 'status');
-      heading.textContent = item.status === 'running' && !partial ? uiLabel('正在生成回复', 'Writing a reply')
+      heading.textContent = partial ? privateReplyLabel(item.status, 'preparing', '')
+        : item.status === 'running' ? uiLabel('正在生成回复', 'Writing a reply')
         : uiLabel('正在准备回复', 'Preparing a reply');
       bubble.append(heading);
       if (partial) replyView = {bubble, heading, body};
@@ -3361,19 +3362,35 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       && !(narrowScreen() && document.body.classList.contains('sessions-open'));
   }
 
-  function paintReplyProgress(view, snapshot) {
+  function privateReplyLabel(state, phase, text, reconnecting = false) {
+    if (reconnecting) return uiLabel('正在重新连接回复…', 'Reconnecting to the reply…');
+    const thinking = phase === 'thinking' || (state === 'running' && phase !== 'preparing' && !text);
+    if (text) return thinking ? uiLabel('正在思考', 'Thinking') : uiLabel('正在生成回复', 'Writing a reply');
+    const name = currentAgent?.name || uiLabel('智能体', 'Agent');
+    return thinking ? uiLabel(`${name} 正在思考…`, `${name} is thinking…`)
+      : uiLabel(`${name} 正在准备回复…`, `${name} is preparing a reply…`);
+  }
+
+  function paintReplyProgress(view, snapshot, reconnecting) {
     const state = snapshot.state === 'running' ? 'running' : 'queued';
     if (view.bubble.dataset.state !== state) view.bubble.dataset.state = state;
-    const label = snapshot.phase === 'thinking' ? uiLabel('正在思考', 'Thinking')
-      : state === 'queued' || (snapshot.phase === 'preparing' && !snapshot.text) ? uiLabel('正在准备回复', 'Preparing a reply')
-      : uiLabel('正在生成回复', 'Writing a reply');
+    const previous = streamingReplySource(view.body);
+    const text = typeof snapshot.text === 'string' ? snapshot.text : previous;
+    const label = privateReplyLabel(state, snapshot.phase, text.trim(), reconnecting);
     if (view.heading.textContent !== label) view.heading.textContent = label;
-    if (typeof snapshot.text !== 'string' || streamingReplySource(view.body) === snapshot.text) return;
+    if (previous === text) return;
     const scroller = document.getElementById('message-scroller');
     const follow = messageScrollerAtBottom(scroller);
-    paintStreamingReply(document, view.body, snapshot.text);
+    paintStreamingReply(document, view.body, text);
     if (follow) scroller.scrollTop = scroller.scrollHeight;
     else updateLatestMessageControl();
+  }
+
+  function paintReplyWatch(watch) {
+    const reconnecting = watch.failures >= 2 && Boolean(watch.snapshot || !watch.posting);
+    if (!watch.snapshot && !reconnecting) return;
+    const snapshot = watch.snapshot || {state:watch.view.bubble.dataset.state};
+    paintReplyProgress(watch.view, snapshot, reconnecting);
   }
 
   function scheduleReplyProgress(watch, delay = 400) {
@@ -3403,8 +3420,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }, 250);
   }
 
-  async function settleReplyProgress(watch) {
-    watch.terminal = true;
+  async function settleReplyProgress(watch, {terminal = true} = {}) {
+    watch.terminal ||= terminal;
     globalThis.clearTimeout(watch.receiptTimer);
     if (watch.posting) {
       if (!await acceptPostingReply(watch)) scheduleReplyProgress(watch, 1200);
@@ -3434,7 +3451,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (['succeeded','failed','cancelled'].includes(snapshot?.state)) return settleReplyProgress(watch);
     watch.failures += 1;
-    if (!watch.posting && watch.failures >= 4) return settleReplyProgress(watch);
+    paintReplyWatch(watch);
+    if (!watch.posting && watch.failures >= 4) return settleReplyProgress(watch, {terminal: false});
     scheduleReplyProgress(watch, watch.failures < 3 ? 400 : 1200);
   }
 
@@ -3503,7 +3521,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (replyWatch?.scope === scope && replyWatch.key === key) {
       replyWatch.view = view;
       replyWatch.posting = posting;
-      if (replyWatch.snapshot) paintReplyProgress(view, replyWatch.snapshot);
+      paintReplyWatch(replyWatch);
       return true;
     }
     stopReplyProgress();
@@ -4938,7 +4956,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const queue = pendingSends.get(scope);
     if (servedByDsbot && queue?.social) {
       for (const job of queue.jobs) {
-        if (lastSocialItems.some(item => ownSocialReceipt(item, queue, job.key))) removeSendJob(queue, job);
+        const receipt = lastSocialItems.find(item => ownSocialReceipt(item, queue, job.key));
+        if (receipt) {
+          job.acceptReceipt?.({status:200, body:{message:receipt}});
+          removeSendJob(queue, job);
+        }
       }
     }
     if (currentConversation?.kind === 'group' && !currentConversation.public_agent) {
@@ -5443,8 +5465,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!allowed && currentSource !== 'social') return;
     }
     if (next && viewingSocialMessages() && socialHistory?.cid === cid
-      && next.activity_version !== currentConversation.activity_version && !pendingSends.get(sendScope())?.active) {
-      if (readingSocialContext()) {
+      && next.activity_version !== currentConversation.activity_version) {
+      const scope = sendScope();
+      const queue = pendingSends.get(scope);
+      if (queue?.active) {
+        // An active send keeps the history view stable. A newly stored message
+        // can still confirm the exact send and release the next queued message.
+        const sending = queue.jobs.find(job => job.acceptReceipt);
+        if (sending && Number.isSafeInteger(next.last_seq) && next.last_seq > (lastSocialItems.at(-1)?.seq ?? 0) &&
+            next.last_seq > (sending.activityReceiptSeq ?? 0)) {
+          sending.activityReceiptSeq = next.last_seq;
+          const current = () => sendScope() === scope && pendingSends.get(scope) === queue &&
+            queue.jobs.includes(sending) && Boolean(sending.acceptReceipt);
+          const message = await socialSendReceipt(queue, sending.key, current);
+          if (message) sending.acceptReceipt?.({status:200, body:{message}});
+        }
+      } else if (readingSocialContext()) {
         if (liveBanner) liveBanner.hidden = false;
       } else {
         await openSocialConversation(cid, {refresh: true});
@@ -9446,9 +9482,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           let anchor;
           if (!result) {
             const payload = nativePrivate && !job.files.length && !job.sticker ? {...job.message, accept_pending: true} : job.message;
-            const receipt = nativePrivate ? Promise.withResolvers() : null;
-            job.acceptReceipt = receipt?.resolve;
             const nativeSocial = servedByDsbot && queue.social;
+            const receipt = nativePrivate || nativeSocial ? Promise.withResolvers() : null;
+            job.acceptReceipt = receipt?.resolve;
             const currentJob = () => pendingSends.get(queue.scope) === queue && queue.jobs.includes(job);
             try {
               const onProgress = percent => {
@@ -9468,7 +9504,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
                 : request('POST', path, payload, headers, nativePrivate ? AbortSignal.timeout(240000)
                   : nativeSocial ? AbortSignal.timeout(15000) : undefined);
               if (!progress) beginReply();
-              const posted = receipt || nativeSocial ? response.catch(() => ({status: 0, body: {}})) : response;
+              const posted = receipt ? response.catch(() => ({status: 0, body: {}})) : response;
               result = await (receipt ? Promise.race([posted, receipt.promise]) : posted);
               if (nativeSocial && !currentJob()) continue;
               if (nativeSocial && !result.body?.message?.id && unclearSocialDelivery(result.status)) {

@@ -69,14 +69,11 @@ def _store_launch(registry, iid, process_ref, url):
     os.replace(tmp, path)
 
 
-def launch_url(engine, iid, process_ref, heartbeat):
-    cached = _cached_launch(engine.registry, iid, process_ref)
-    if cached:
-        return cached
-    stdout, stderr = engine.compose(iid, 'logs', heartbeat=heartbeat, tail=100)
+def launch_url(engine, iid, started_at, heartbeat):
+    require(isinstance(started_at, str) and started_at, 'process_identity')
+    stdout, stderr = engine.compose(iid, 'logs', heartbeat=heartbeat, tail=100, since=started_at)
     found = LAUNCH.findall(stdout + '\n' + stderr)
     require(found, 'launch_url_missing')
-    _store_launch(engine.registry, iid, process_ref, found[-1])
     return found[-1]
 
 
@@ -106,10 +103,18 @@ def publish(engine, client, iid, heartbeat=lambda: None, exchange=dsbot_gateway.
         raise ManagerError('runtime_address') from None
     network = 'ot-' + iid + '_default'
     ensure_attached(engine.runner, cfg['web_container'], network, heartbeat)
-    url = launch_url(engine, iid, state['process_ref'], heartbeat)
-    try:
-        cookie = exchange(url, address)
-    except (OSError, ValueError):
-        raise ManagerError('dsh_exchange') from None
-    client.dsbot_upstream(iid, address, cookie, state['process_ref'])
-    return {'status': 'published', 'instance_id': iid, 'address': address}
+    process = state['process_ref']
+    cached = _cached_launch(engine.registry, iid, process)
+    for reuse_cache in ((True, False) if cached else (False,)):
+        url = cached if reuse_cache else launch_url(engine, iid, state.get('started_at'), heartbeat)
+        if not reuse_cache and url == cached:
+            break
+        try:
+            cookie = exchange(url, address)
+        except (OSError, ValueError):
+            continue
+        client.dsbot_upstream(iid, address, cookie, process)
+        if not reuse_cache:
+            _store_launch(engine.registry, iid, process, url)
+        return {'status': 'published', 'instance_id': iid, 'address': address}
+    raise ManagerError('dsh_exchange')
