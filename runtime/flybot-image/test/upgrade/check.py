@@ -43,7 +43,7 @@ const task = (original?.tasks ?? []).find(task => task.id === a.taskId)
 if (!original || !chief || !task) throw Error('Native Chief, original Bot, or unrelated task was lost')
 const db = new DatabaseSync('/data/openteamily/features/agents/agents.sqlite3', {readOnly:true})
 const binding = db.prepare('SELECT bot_id FROM native_agent_objects WHERE agent_id=?').get(a.agentId)
-const thread = part => ({head:part.sessionId, segments:(part.segments ?? []).map(segment=>segment.sessionId)})
+const thread = part => ({head:part.sessionId ?? part.id, segments:(part.segments ?? []).map(segment=>segment.sessionId)})
 const data = {
   sentinel: fs.readFileSync('/data/volume-sentinel', 'utf8'),
   workspace: chief.openteamily?.workspace_id,
