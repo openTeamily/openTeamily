@@ -269,6 +269,10 @@ function clearLookup() {
   lookupButton.disabled = false;
 }
 
+function readLookup(handle) {
+  return request(root + '/lookup?' + new URLSearchParams({handle}));
+}
+
 function showLookup(peer, relationship) {
   located = {peer, relationship};
   const accepted = relationship?.status === 'accepted';
@@ -299,7 +303,7 @@ byId('contact-lookup-form').addEventListener('submit', async event => {
   lookupButton.disabled = true;
   lookupState.textContent = '正在查找…';
   try {
-    const {peer, relationship} = await request(root + '/lookup?' + new URLSearchParams({handle:handleField.value.trim()}));
+    const {peer, relationship} = await readLookup(handleField.value.trim());
     if (sequence !== lookupSequence || !dialog.open) return;
     lookupState.textContent = '';
     showLookup(peer, relationship);
@@ -318,16 +322,18 @@ sendRequest.addEventListener('click', async () => {
   }
   const sequence = lookupSequence;
   const writing = epoch;
+  const accepting = relationship?.status === 'pending' && relationship.incoming;
+  const stillLooking = () => writing === epoch && sequence === lookupSequence && dialog.open;
+  let recovered = false;
   submitting = true;
   sendRequest.disabled = true;
   try {
-    const accepting = relationship?.status === 'pending' && relationship.incoming;
     const item = accepting
       ? await request(root + '/' + encodeURIComponent(relationship.id), {action:'accept'})
       : await request(root, {handle:peer.handle});
     if (writing !== epoch) return;
     replaceRecord(item);
-    if (sequence !== lookupSequence || !dialog.open) {
+    if (!stillLooking()) {
       render();
       return;
     }
@@ -343,11 +349,27 @@ sendRequest.addEventListener('click', async () => {
     notify(accepting ? '已添加联系人。' : item.status === 'accepted' ? '已经是联系人。' : '已发送申请。');
     render();
   } catch (error) {
-    if (sequence === lookupSequence && dialog.open) lookupState.textContent = error.message;
+    if (!stillLooking()) return;
+    lookupState.textContent = error.message;
+    if (!accepting) return;
+    // Approval can commit before its receipt reaches the browser. Confirm the
+    // exact relationship so an already accepted request becomes a Chat action.
+    const confirmed = await readLookup(peer.handle).catch(() => null);
+    if (!stillLooking() || confirmed?.relationship?.status !== 'accepted' ||
+        confirmed.relationship.id !== relationship.id || confirmed.peer?.handle !== peer.handle) return;
+    replaceRecord({...confirmed.relationship,peer:confirmed.peer});
+    showLookup(confirmed.peer, confirmed.relationship);
+    lookupState.textContent = '';
+    section = 'accepted';
+    search.value = '';
+    rememberDirectory();
+    recovered = true;
+    render();
   } finally {
     if (writing === epoch) {
       submitting = false;
       sendRequest.disabled = false;
+      if (recovered) sendRequest.focus({preventScroll:true});
     }
   }
 });

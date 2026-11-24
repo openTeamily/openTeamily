@@ -57,6 +57,53 @@ async function openNative(page, path, instanceId, selector) {
     sheet.href === new URL(asset,location.href).href),stylesheet),true,path);
 }
 
+async function contactApprovalRecovery(sender, receiver) {
+  const lookup = async (page, account) => {
+    await page.locator('#add-contact').click();
+    await page.locator('#contact-handle').fill('@' + account.profile.handle);
+    await page.locator('#lookup-contact').click();
+    await page.locator('#lookup-handle').getByText('@' + account.profile.handle, {exact:true}).waitFor();
+  };
+  await openNative(sender,'/contacts',fixture.owner.instanceId,'#add-contact');
+  await lookup(sender,fixture.peer);
+  await sender.getByRole('button',{name:'发送申请',exact:true}).click();
+  await sender.locator('#status').getByText('已发送申请。',{exact:true}).waitFor();
+
+  await openNative(receiver,'/contacts',fixture.peer.instanceId,'#add-contact');
+  await lookup(receiver,fixture.owner);
+  const routePath = '**/b/api/openteamily';
+  let approvals = 0;
+  const loseReceipt = async route => {
+    const {endpoint,payload} = route.request().postDataJSON() || {};
+    if (endpoint !== 'social/v1' || payload?.method !== 'POST' || payload.body?.action !== 'accept' ||
+        !/^\/v1\/contacts\/otcpt_/.test(payload.path)) return route.fallback();
+    approvals++;
+    if (approvals !== 1) return route.fallback();
+    const saved = await route.fetch();
+    const result = (await saved.json()).value;
+    assert.equal(result.status,200);
+    assert.equal(result.body.status,'accepted');
+    return route.fulfill({json:{ok:true,value:{status:503,body:{error:{message:'确认结果暂未收到。'}}}}});
+  };
+  await receiver.route(routePath,loseReceipt);
+  try {
+    await receiver.getByRole('button',{name:'接受申请',exact:true}).click();
+    await receiver.locator('#lookup-relationship').getByText('已添加',{exact:true}).waitFor();
+    assert.equal(await receiver.locator('#request-contact').textContent(),'聊天');
+    assert.equal(approvals,1);
+    await screenshot(receiver,'mobile-contact-approval-recovered');
+    await receiver.getByRole('button',{name:'关闭',exact:true}).click();
+  } finally {
+    await receiver.unroute(routePath,loseReceipt);
+  }
+  for (const [page,account] of [[sender,fixture.peer],[receiver,fixture.owner]]) {
+    await page.reload();
+    await page.locator('[data-section=accepted]').click();
+    await page.locator('#contacts-list li').filter({hasText:'@'+account.profile.handle})
+      .getByRole('button',{name:'聊天',exact:true}).waitFor();
+  }
+}
+
 async function chat(page, name, send) {
   const owner = fixture.owner;
   await openNative(page,chatPath(owner),owner.instanceId,'#chat-body');
@@ -510,6 +557,7 @@ try {
   await agentDraftFromCatalog(peer.page,fixture.peer,'mobile-agent-draft');
   await memoryHistory(peer.page,fixture.peer,'mobile-memory-history');
   await memoryTableEditing(peer.page,fixture.peer,'mobile-memory-table');
+  await contactApprovalRecovery(page,peer.page);
   await peer.context.close();
   await desktop.context.close();
   assert.deepEqual(errors,[]);

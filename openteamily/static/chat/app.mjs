@@ -1269,6 +1269,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const quoteBlocksSend = scope => replyDrafts.get(scope)?.available === false;
   document.getElementById('chat-body').addEventListener('input', renderGroupComposerRouting);
 
+  function groupUsesLegacyAutoReplies(conversation) {
+    const routing = conversation?.group_agent_routing;
+    const mode = routing?.policy?.mode ?? 'default';
+    return conversation?.kind === 'group' && !conversation.public_agent && !routing?.native_group_host && mode === 'default';
+  }
+
   function renderGroupComposerRouting() {
     const node = document.getElementById('group-composer-routing');
     const conversation = currentSource === 'social' && currentConversation?.kind === 'group' &&
@@ -1285,7 +1291,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const people = countMentionedGroupMembers(body, {members:conversation.members, viewerId:currentUser?.id});
     const hasFiles = Boolean(attachmentSender?.draftFiles(scope).length);
     const quote = routing && activeGroupAgent(conversation, replyDrafts.get(scope)?.agentTarget);
-    const auto = agents.some(agent => agent.auto_reply);
+    const auto = groupUsesLegacyAutoReplies(conversation) && agents.some(agent => agent.auto_reply);
     let text, kind = 'default';
     let asksAgents = false;
     if (everyone) {
@@ -5928,9 +5934,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const text = document.createElement('span');
     const strong = document.createElement('strong');
     strong.textContent = name;
-    const small = document.createElement('small');
-    small.textContent = note;
-    text.append(strong, small);
+    text.append(strong);
+    if (note) {
+      const small = document.createElement('small');
+      small.textContent = note;
+      text.append(small);
+    }
     row.append(avatar, text);
     return row;
   }
@@ -6073,7 +6082,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         summary.textContent = uiLabel('优先智能体不可用，由其他群内智能体判断是否回复。',
           'The preferred agent is unavailable. Other group agents decide whether to reply.');
       }
-    } else if (conversation.agent_members?.some(agent => !agent.archived && !agent.native_deleted && agent.auto_reply)) {
+    } else if (groupUsesLegacyAutoReplies(conversation) && conversation.agent_members?.some(
+      agent => !agent.archived && !agent.native_deleted && agent.auto_reply)) {
       summary.textContent = uiLabel('跟随群组默认 · 由开启自动回复的智能体判断',
         'Group default · Agents with auto-reply enabled decide');
     } else summary.textContent = uiLabel('跟随群组默认 · 由群内智能体判断', 'Group default · Group agents decide');
@@ -6087,6 +6097,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+  function syncGroupAutoReplyNote(conversation) {
+    const note = document.getElementById('group-agent-auto-reply-note');
+    const supported = groupUsesLegacyAutoReplies(conversation);
+    note.hidden = !supported || document.getElementById('group-info-agents').hidden;
+    if (!supported) document.getElementById('group-agent-auto-reply-status').hidden = true;
+  }
+
   function setGroupInfoTab(which) {
     const agentsTab = document.getElementById('group-info-tab-agents');
     const peopleTab = document.getElementById('group-info-tab-people');
@@ -6095,8 +6112,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('group-info-agents').hidden = which !== 'agents';
     document.getElementById('group-info-add-agent').hidden = which !== 'agents';
     document.getElementById('group-info-add-agent-feedback').hidden = which !== 'agents';
-    const autoNote = document.getElementById('group-agent-auto-reply-note');
-    if (autoNote) autoNote.hidden = which !== 'agents';
+    syncGroupAutoReplyNote(currentConversation);
     document.getElementById('group-info-people').hidden = which !== 'people';
     document.getElementById('group-info-invite').hidden = which !== 'people';
   }
@@ -6411,12 +6427,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const pendingAutoReplies = new Set();
 
   function renderGroupAgent(conversation, agent) {
-    const mode = agent.auto_reply ? '自动回复已开启' : '自动回复已关闭';
     const name = conversation.group_agent_requests === true
       ? groupAgentName(agent.name, groupAgentOwnerLabel(agent), agent.owner_id, agent.mine === false ? agent.owner_handle : '')
       : agent.name;
-    const row = memberRow(name, agent.archived ? '已归档' : mode, 'agent');
-    if (!agent.mine || agent.archived) return row;
+    const canAutoReply = groupUsesLegacyAutoReplies(conversation) && !agent.archived && !agent.native_deleted;
+    let note = '';
+    if (agent.archived) note = uiLabel('已归档', 'Archived');
+    else if (agent.native_deleted) note = uiLabel('已不可用', 'Unavailable');
+    else if (canAutoReply) note = agent.auto_reply ? '自动回复已开启' : '自动回复已关闭';
+    const row = memberRow(name, note, 'agent');
+    if (!agent.mine || !canAutoReply) return row;
     const wid = workspaceId();
     const key = `${wid}/${conversation.id}/${agent.id}`;
     const toggle = document.createElement('button');
@@ -6443,13 +6463,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const currentAgent = currentConversation.agent_members?.find(item => item.id === agent.id && item.mine);
         if (currentAgent) currentAgent.auto_reply = enabled;
         renderGroupComposerRouting();
+        renderGroupReplyPolicy(currentConversation);
         if (currentConversation === activeConversation && currentAgent === agent) {
           toggle.setAttribute('aria-checked', String(enabled));
           const description = row.children[1]?.children[1];
           if (description) description.textContent = enabled ? '自动回复已开启' : '自动回复已关闭';
         }
       } catch {
-        if (notice && workspaceId() === wid && currentConversation?.id === conversation.id) {
+        if (notice && workspaceId() === wid && currentConversation?.id === conversation.id && groupUsesLegacyAutoReplies(currentConversation)) {
           notice.textContent = '自动回复设置保存失败，请重试。';
           notice.hidden = false;
         }
@@ -6473,6 +6494,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const panel = document.getElementById('group-info-panel');
     if (!toggle || !panel) return;
     renderGroupReplyPolicy(conversation);
+    syncGroupAutoReplyNote(conversation);
     const group = Boolean(conversation && conversation.kind === 'group' && !conversation.public_agent);
     const feedbackScope = group ? sendScope() : '';
     if (feedbackScope !== groupInfoFeedbackScope) groupInfoAddFeedback.textContent = '';
