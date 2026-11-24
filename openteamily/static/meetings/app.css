@@ -520,3 +520,24 @@
   #main-panel:has(.meeting-layout[data-view="editor"]:not([hidden])) .meeting-page-top { display: none; }
   .meeting-layout[data-view="editor"] #save-meeting { display: none; }
 }
+
+body.app-workspace :is(.meeting-list-pane, .meeting-editor-pane) {
+  border-color: var(--ot-glass-line);
+  border-radius: 1.125rem;
+  background: var(--ot-grouped-surface);
+  box-shadow: var(--ot-card-shadow);
+}
+
+body.app-workspace .meeting-list-pane {
+  background-image: linear-gradient(165deg, var(--ot-accent-soft), transparent 36%);
+}
+
+body.app-workspace :is(#new-meeting, #save-meeting, #save-meeting-mobile):enabled {
+  background: var(--ot-action-gradient);
+  color: var(--ot-on-accent);
+}
+
+body.app-workspace :is(.meeting-editor-pane, #meeting-inbox) h2 {
+  font-weight: 660;
+  letter-spacing: -.015em;
+}

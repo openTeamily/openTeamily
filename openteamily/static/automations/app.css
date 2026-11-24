@@ -1,7 +1,7 @@
 /* Automation catalogue, grouped editor and run history. */
 
 body.app-workspace > #main {
-  background: var(--ot-grouped-bg);
+  background-color: var(--ot-grouped-bg);
 }
 
 body.app-workspace #main-panel {
@@ -1037,3 +1037,22 @@ body.app-workspace .page-heading h1 {
   border-radius: .65rem;
 }
 .run-share-team { margin-inline-start: .55rem; }
+
+#new-automation:enabled, #save-automation:enabled, #save-and-sample:enabled {
+  background: var(--ot-action-gradient);
+  color: var(--ot-on-accent);
+  box-shadow: 0 4px 10px rgb(67 34 126 / .19), inset 0 1px 0 rgb(255 255 255 / .16);
+}
+
+#automation-list:not(.template-catalog):has(.automation-entry),
+#editor-form fieldset, #run-panel {
+  border-color: var(--ot-glass-line);
+  box-shadow: var(--ot-card-shadow);
+}
+
+.tabs button[aria-selected="true"] { background-image: var(--ot-select-gradient); }
+
+body.app-workspace .pill-search input {
+  background-image: linear-gradient(165deg, var(--ot-grouped-surface), transparent 95%);
+  border-color: var(--ot-glass-line);
+}

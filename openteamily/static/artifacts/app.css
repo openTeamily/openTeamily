@@ -1294,7 +1294,7 @@ html[data-theme-resolved="dark"] #list-empty .empty-cta-icon[data-tone] { backgr
    soft cover; list view with 名称/来源/创建时间/最近动态 columns; item menus
    (grid and list share one menu: 发送到聊天 is enabled for media artifacts via the social attachment API). */
 #artifact-list { list-style: none; margin: 0; padding: 0; }
-#artifact-list .artifact-list-head { display: none; }
+#artifact-list .artifact-list-head, #artifact-list[data-layout="grid"] .artifact-list-head { display: none; }
 #artifact-list[data-layout="grid"] { grid-template-columns: repeat(auto-fill, minmax(min(100%, 13.5rem), 15rem)); gap: .875rem; }
 #artifact-list[data-layout="grid"] li.artifact-item {
   position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "kind more" "cover cover" "title title" "meta meta";
@@ -2840,3 +2840,117 @@ html[data-theme-resolved="dark"] :is(#main-panel, #studio-dialog) {
 #document-draft-body { max-height: 24rem; overflow: auto; overflow-wrap: anywhere; margin-bottom: .75rem; }
 #document-draft-body table { border-collapse: collapse; min-width: 12rem; }
 #document-draft-body :is(th,td) { padding: .35rem .5rem; border: 1px solid var(--ot-line); }
+
+.app-space {
+  --space-float: var(--ot-glass, color-mix(in srgb, var(--ot-surface-solid) 92%, transparent));
+  --space-float-line: var(--ot-glass-line, var(--ot-line));
+  --space-float-shadow: var(--ot-float-shadow, var(--ot-shadow-lg));
+  --space-wash: var(--ot-canvas-wash, linear-gradient(155deg, var(--ot-surface) 0%, var(--ot-grouped-bg) 85%));
+  --space-action: var(--ot-action-gradient, linear-gradient(150deg, var(--ot-accent), color-mix(in srgb, var(--ot-accent) 92%, var(--ot-ink))));
+}
+
+.app-space #main-panel:not(.is-meetings):has(> :is(#list-panel, #editor-form):not([hidden])) {
+  background: var(--space-wash);
+}
+.app-space #main-panel:not(.is-meetings) :is(#artifact-list[data-layout="grid"] li.artifact-item, .empty-cta-list .empty-cta) {
+  border-color: var(--space-float-line);
+  border-radius: var(--ot-radius-lg);
+  background: var(--space-float);
+  box-shadow: var(--ot-shadow-sm);
+}
+.app-space #main-panel:not(.is-meetings) #artifact-list[data-layout="grid"] li.artifact-item:is(:hover, :focus-within) {
+  border-color: color-mix(in srgb, var(--ot-accent) 25%, var(--space-float-line));
+  box-shadow: var(--ot-shadow);
+}
+.app-space :is(#main-panel #new-menu-button, #editor-save, #document-save, #mobile-editor-save,
+               #studio-add, #studio-save, dialog button.primary, .send-dialog-card button.primary) {
+  background: var(--space-action);
+  border-color: transparent;
+  color: var(--ot-on-accent);
+  box-shadow: var(--ot-shadow-sm);
+}
+.app-space :is(#main-panel #new-menu-button, #editor-save, #document-save, #mobile-editor-save,
+               #studio-add, #studio-save, dialog button.primary, .send-dialog-card button.primary):hover:not(:disabled) {
+  background: var(--space-action);
+  filter: brightness(.95);
+}
+
+.app-space #main-panel > #editor-form:not([hidden]) {
+  min-width: 0;
+  box-sizing: border-box;
+  margin-block: .75rem 1rem;
+  border: 1px solid var(--space-float-line);
+  border-radius: var(--ot-radius-lg);
+  background: var(--space-float);
+  box-shadow: var(--ot-shadow);
+}
+.app-space #editor-form #editor-title { font-weight: 730; letter-spacing: -.025em; }
+.app-space #editor-form :is(#document-rich, #body-label textarea) { line-height: 1.75; }
+.app-space #editor-form .document-toolbar {
+  padding-inline: .375rem;
+  border: 1px solid var(--space-float-line);
+  border-radius: var(--ot-radius);
+  background: var(--space-float);
+}
+.app-space #editor-form .document-toolbar button[aria-pressed="true"] {
+  color: var(--ot-accent-hover);
+  background: var(--ot-accent-soft);
+}
+.app-space #document-editor:focus-within .document-toolbar { border-color: var(--ot-focus); }
+.app-space .artifact-editor-panel {
+  margin-block: .45rem;
+  padding: .25rem .75rem .375rem;
+  border: 1px solid var(--space-float-line);
+  border-radius: var(--ot-radius);
+  background: color-mix(in srgb, var(--ot-surface) 84%, transparent);
+}
+.app-space .artifact-editor-panel[open] { padding-block-end: .75rem; }
+.app-space .artifact-editor-panel > summary { min-height: 2.25rem; align-content: center; }
+.app-space .artifact-editor-panel[open] > summary { border-block-end: 1px solid var(--space-float-line); }
+
+.app-space :is(#new-menu, #filter-panel, .artifact-item-menu, .mobile-editor-popover,
+                .send-dialog-card, #studio-dialog, #studio-history, #studio-discussion-dialog,
+                #artifact-notifications, #space-upload-dialog) {
+  border: 1px solid var(--space-float-line);
+  background: var(--space-float);
+  box-shadow: var(--space-float-shadow);
+  backdrop-filter: blur(14px) saturate(130%);
+}
+.app-space :is(#new-menu, #filter-panel, .artifact-item-menu, .mobile-editor-popover) { border-radius: var(--ot-radius-lg); }
+.app-space :is(.send-dialog-card, #studio-dialog, #studio-history, #studio-discussion-dialog, #artifact-notifications, #space-upload-dialog) {
+  border-radius: var(--ot-radius-xl);
+}
+.app-space :is(dialog.send-dialog-card, #studio-dialog, #studio-history, #studio-discussion-dialog, #artifact-notifications, #space-upload-dialog)::backdrop {
+  background: rgb(30 23 44 / .30);
+}
+.app-space :is(.send-dialog-card, #studio-dialog, #studio-history, #studio-discussion-dialog, #artifact-notifications, #space-upload-dialog) h2 {
+  font-weight: 720;
+  line-height: 1.25;
+  letter-spacing: -.02em;
+}
+.app-space :is(#work-version-dialog, #studio-history) > header {
+  margin: 0 0 .6rem;
+  padding: 0 0 .625rem;
+  border: 0;
+  border-block-end: 1px solid var(--space-float-line);
+  background: transparent;
+  box-shadow: none;
+}
+.app-space :is(#studio-list, .studio-document-fields, #work-version-preview, #studio-history-preview, #studio-copy-preview, #studio-personal-preview):not(:empty) {
+  border-color: var(--space-float-line);
+  border-radius: var(--ot-radius);
+  background: var(--ot-surface);
+}
+.app-space #studio-history-preview { padding: .625rem; border: 1px solid var(--space-float-line); }
+.app-space #studio-history-list button { box-shadow: none; }
+.app-space :is(.artifact-item-menu, #new-menu, .mobile-editor-popover) :is(button, a):is(:hover, :focus-visible):not(:disabled) {
+  background: var(--ot-accent-soft);
+}
+.app-space .artifact-item-menu .artifact-menu-danger { color: var(--ot-danger); }
+@media (max-width: 700px) {
+  .app-space #main-panel > #editor-form:not([hidden]) { width: calc(100% - .75rem); margin-block-start: .375rem; }
+  .app-space :is(.artifact-editor-panel > summary, .mobile-editor-popover > button) { min-height: 2.75rem; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .app-space { --space-float: var(--ot-surface-solid); }
+}

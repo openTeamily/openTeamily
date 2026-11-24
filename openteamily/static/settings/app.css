@@ -702,7 +702,7 @@ body.app-workspace > main > #settings-panel { width: 100%; max-width: 42rem; mar
   .settings-shortcut-row { flex-wrap: wrap; }
 }
 
-body.app-workspace > main:has(> #settings-panel:not([hidden])) { background: var(--ot-grouped-bg); }
+body.app-workspace > main:has(> #settings-panel:not([hidden])) { background-color: var(--ot-grouped-bg); }
 body.app-workspace > main > #settings-panel { max-width: 34rem; padding: clamp(1.25rem, 4vw, 2.25rem) clamp(1rem, 4vw, 1.5rem) 3rem; }
 #settings-panel .page-top { margin: 0 0 1rem; padding: 0; border: 0; background: transparent; box-shadow: none; min-height: 0; }
 #settings-panel .page-top h1 { font-size: clamp(2rem, 5vw, 2.35rem); line-height: 1.16; letter-spacing: -.02em; font-weight: 720; margin: 0; }
@@ -1018,4 +1018,23 @@ html[data-theme-resolved="dark"] .connector-status[data-state="failed"], html[da
   box-shadow: var(--ot-shadow-sm);
   -webkit-backdrop-filter: var(--ot-blur);
   backdrop-filter: var(--ot-blur);
+}
+
+#settings-panel .settings-group,
+#settings-panel .settings-card,
+#settings-panel [data-settings-hub] > #whoami {
+  border-color: var(--ot-glass-line);
+  box-shadow: var(--ot-card-shadow);
+}
+
+#settings-panel .settings-row-icon { background: var(--ot-select-gradient); }
+
+#settings-panel :is(#appearance, #appearance-schedule-card, #message-display) .choice:has(input:checked) {
+  color: var(--ot-accent-hover);
+}
+
+#settings-panel :is(#appearance, #appearance-schedule-card, #message-display) .choice:has(input:focus-visible) {
+  outline: 2px solid var(--ot-focus);
+  outline-offset: -2px;
+  border-radius: .5rem;
 }

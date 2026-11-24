@@ -376,8 +376,10 @@ export function syncAppearanceButton(doc, values, now, media) {
   const button = doc.getElementById('appearance-toggle');
   if (!button) return;
   const theme = resolveTheme(values || { appearance: 'system' }, now, media);
-  const labels = doc.documentElement?.lang === 'en' ? {light:'Light', dark:'Dark'} : {light:'浅色', dark:'深色'};
+  const english = doc.documentElement?.lang === 'en';
+  const labels = english ? {light:'Light', dark:'Dark'} : {light:'浅色', dark:'深色'};
   button.textContent = labels[theme];
+  button.setAttribute('title', english ? 'Switch appearance' : '切换浅色或深色外观');
   button.setAttribute('aria-pressed', theme === 'dark' ? 'true' : 'false');
 }
 

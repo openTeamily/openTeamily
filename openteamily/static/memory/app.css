@@ -1661,3 +1661,23 @@ html[data-theme-resolved="dark"] /* Aurora Glass: memory */
 }
 
 body.app-workspace .memory-editor-back:focus-visible { outline-offset: -2px; }
+
+body.memory-page .memory-editor {
+  border-radius: 1.125rem;
+  background: var(--ot-grouped-surface);
+  box-shadow: var(--ot-card-shadow), 0 0 0 1px var(--ot-glass-line);
+}
+
+body.memory-page .memory-editor .editor-title-field input {
+  font-size: clamp(1.5rem, 5vw, 2.125rem);
+  font-weight: 680;
+}
+
+body.memory-page .memory-editor :is(.editor-topbar, .editor-toolbar) {
+  border-color: var(--ot-glass-line);
+  background-image: linear-gradient(150deg, var(--ot-accent-soft), transparent 65%);
+}
+
+body.memory-page .memory-editor :is(.editor-topbar, .editor-toolbar) :is(button, a) {
+  border-radius: .65rem;
+}
