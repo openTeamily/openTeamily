@@ -291,6 +291,46 @@ test('recent filter delegates the whole seven-day range and clears back to the s
   assert.deepEqual(pageTitles(el), ['项目简报', '运维手册']);
 });
 
+test('connected memories push a same-workspace page entry and searchable choices omit existing links', async () => {
+  const {doc, el} = fakeDocument();
+  const workspace = 'a'.repeat(32);
+  const [source, linked, other] = ['b','c','d'].map((char, index) => ({...pages[index], id:char.repeat(32), workspace_id:workspace}));
+  const base = `/v1/workspaces/${workspace}/memory`;
+  const address = id => '/memory?' + new URLSearchParams({workspace,page:id});
+  const visits = [];
+  const view = {location:new URL(address(source.id),'https://memory.test')};
+  view.history = {
+    state:{},
+    replaceState(state, _title, path) { this.state = state; view.location = new URL(path,view.location); },
+    pushState(state, title, path) { visits.push({from:this.state, path}); this.replaceState(state,title,path); },
+  };
+  doc.defaultView = view;
+  await mount(doc, {fetcher:async path => {
+    if (path === '/v1/auth/session') return json(200,{user:{id:'owner',username:'alice'}});
+    if (path === '/v1/workspaces') return json(200,{items:[{id:workspace,name:'Desk'}]});
+    if (path === base + '/graph') return json(200,{nodes:[source,linked,other],topics:[],
+      edges:[{source:source.id,target:linked.id,kind:'mention'}]});
+    if (path.startsWith(base + '?')) return json(200,{items:[source,linked,other],total:3});
+    if (path === base + '/' + source.id || path === base + '/' + linked.id) {
+      return json(200,{page:path.endsWith(source.id) ? source : linked});
+    }
+    return json(200,{items:[]});
+  }});
+  await tick();
+  const link = el('page-links').children[0].children[0];
+  assert.equal(link.href,address(linked.id));
+  assert.deepEqual(el('link-target').options.map(option => option.value),['',other.id]);
+  el('link-search').value = '无匹配';
+  el('link-search').handlers.input({});
+  assert.equal(el('link-target').disabled,true);
+  assert.equal(el('link-target').options[0].textContent,'没有匹配的记忆页');
+  await link.handlers.click({button:0,preventDefault(){}});
+  assert.equal(el('editor-form').elements.title.value,linked.title);
+  assert.equal(visits[0].from.memoryDirectory.reopenPage,true);
+  assert.equal(visits[0].path,address(linked.id));
+  assert.equal(view.history.state.memoryDirectory.returnPage,source.id);
+});
+
 test('memory directory restores a private search only for the matching account and workspace', async () => {
   const history = {state: {other: 'untouched'}, replaceState(state, _title, url) {
     this.state = state;

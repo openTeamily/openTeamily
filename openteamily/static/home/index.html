@@ -97,9 +97,12 @@
       <div>
         <h1 id="home-greeting">欢迎回来</h1>
       </div>
-      <label class="home-workspace">工作区
-        <select id="home-workspace" disabled></select>
-      </label>
+      <div class="home-workspace-actions">
+        <label class="home-workspace">工作区
+          <select id="home-workspace" disabled></select>
+        </label>
+        <button type="button" id="home-create" class="home-primary" aria-haspopup="dialog" disabled>新建</button>
+      </div>
     </header>
     <p id="home-status" role="status"></p>
     <section id="home-personal" class="home-personal" aria-labelledby="home-personal-title" hidden>
@@ -130,6 +133,35 @@
       <a href="/skills"><strong>技能</strong><span>浏览技能库</span></a>
       <a href="/discover"><strong>发现</strong><span>浏览公开目录</span></a>
     </nav>
+
+    <dialog id="home-create-dialog" aria-labelledby="home-create-title" aria-describedby="home-create-workspace">
+      <header class="home-create-head">
+        <div>
+          <h2 id="home-create-title">新建</h2>
+          <p id="home-create-workspace" class="note"></p>
+        </div>
+        <form method="dialog"><button type="submit" class="home-secondary">关闭</button></form>
+      </header>
+      <section aria-labelledby="home-create-work-title">
+        <h3 id="home-create-work-title">作品</h3>
+        <div class="home-create-options">
+          <a data-home-create-path="/space?new=document" autofocus>文档</a>
+          <a data-home-create-path="/space?new=slides">幻灯片</a>
+          <a data-home-create-path="/space?new=spreadsheet">电子表格</a>
+          <a data-home-create-path="/space?new=dashboard">看板</a>
+          <a data-home-create-path="/space?new=website">网页</a>
+          <a data-home-create-path="/space?new=whiteboard">白板</a>
+          <a data-home-create-path="/space?new=media">上传文件</a>
+        </div>
+      </section>
+      <section id="home-create-agents" aria-labelledby="home-create-agent-title" hidden>
+        <h3 id="home-create-agent-title">智能体与团队</h3>
+        <div class="home-create-options">
+          <a data-home-create-path="/agents?new=1">创建智能体</a>
+          <a data-home-create-path="/agents?tab=teams&amp;new=1">从模板创建 AI 团队</a>
+        </div>
+      </section>
+    </dialog>
 
     <div class="home-columns">
       <section class="home-card" aria-labelledby="home-conversations-title">

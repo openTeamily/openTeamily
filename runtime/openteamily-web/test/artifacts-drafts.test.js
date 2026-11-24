@@ -40,6 +40,26 @@ function bootDrafts(t, currentRuntime, messenger) {
   }
 }
 
+test('a document draft returns bounded Markdown from the authorized native workspace without saving', async t => {
+  const markdown = '# 入门指南\n\n| 环节 | 下一步 |\n| --- | --- |\n| 资料 | 阅读交付说明 |'
+  const prompts = []
+  const {request} = bootDrafts(t, () => ({
+    async backgroundTextOnly(prompt) {
+      prompts.push(prompt)
+      return JSON.stringify({title:'  入门指南  ', markdown})
+    },
+  }))
+  const path = workspace => base(workspace) + '/document/draft'
+  assert.equal((await request('POST', path(FOREIGN), {prompt:'整理入门指南'})).status, 404)
+  assert.deepEqual(prompts, [])
+  const next = await request('POST', path(TEAM), {prompt:'整理入门指南'})
+  assert.equal(next.status, 200)
+  assert.equal(prompts.length, 1)
+  assert.match(prompts[0], /^Draft an editable Markdown document/)
+  assert.deepEqual(next.body, {title:'入门指南', document:markdown})
+  assert.deepEqual((await request('GET', base(TEAM))).body.items, [])
+})
+
 test('a native slide draft is workspace-gated, editable and explicitly saved before PPTX export', async t => {
   const prompts = []
   const { request, attachment } = bootDrafts(t, () => ({

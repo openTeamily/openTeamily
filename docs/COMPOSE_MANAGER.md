@@ -48,6 +48,21 @@ fencing.
 Use the loopback WSGI runner for development. An Internet-facing deployment needs
 its own WSGI service and HTTPS gateway configuration.
 
+## Build the operator manager image
+
+Build each release from the same verified dependency base. The base provides
+Python, Node, Docker, and Compose with the manager's runtime configuration.
+Keep its image ID in the release configuration and verify the local tag
+against that ID before building.
+
+Run [the manager release builder](../deploy/isolated/build_manager_release.py)
+with the matching web image and a release context containing
+`release/openteamily/`, `release/manager/`, `wsgi.py`, and `manager-poll.py`.
+The builder checks the image ancestry, runtime configuration, and every
+application and planner file against the staged release. The fixed dependency
+base keeps the layer count independent of earlier releases. Update the base
+when the dependency or runtime configuration changes.
+
 ## Account provisioning and deployment
 
 1. Preload the exact runtime image by digest on the Docker host and configure the

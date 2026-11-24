@@ -282,6 +282,9 @@ test('native Discover feeds and work detail bind the viewer to the trusted reque
   assert.equal(await viewer('/v1/discover/works/trusted-work?tab=collected', 'trusted.viewer'), 'trusted.viewer')
   assert.equal(await viewer('/v1/discover/works/trusted-work?tab=following', 'bad name'), undefined)
   assert.equal(await viewer('/v1/discover/works/trusted-work'), undefined)
+  assert.equal(await viewer('/v1/profile/social?view=following', 'trusted.viewer'), 'trusted.viewer')
+  assert.equal(await viewer('/v1/profile/social?view=following', 'bad name'), undefined)
+  assert.equal(await viewer('/v1/profile/social?view=following'), undefined)
 })
 
 test('discover endpoints publish only the whitelisted projection and browse the shared feed', async () => {
@@ -556,9 +559,13 @@ test('native Discover passes the full work query and scoped cursor while returni
   assert.equal(first.body.items[1].match, undefined)
   assert.equal((await call({method: 'GET', path: path + '&cursor=' + position})).body.cursor, null)
   assert.equal((await call({method: 'GET', path: path + '&cursor=l.invalid'})).status, 400)
+  assert.equal((await call({method:'GET',path:'/v1/discover/me/works?tab=following&sort=collected'})).status,400)
+  assert.equal((await call({method:'GET',path:'/v1/discover/me/works?tab=collected&sort=collected&cursor=42'})).status,400)
+  assert.equal((await call({method:'GET',path:'/v1/discover/me/works?tab=collected&sort=collected&cursor=' + position})).status,200)
   assert.deepEqual(calls, [
     {kind: 'work', tab: 'following', q: query, work_kind: 'dashboard', pagination: 'keyset', limit: '12'},
     {kind: 'work', tab: 'following', q: query, work_kind: 'dashboard', pagination: 'keyset', cursor: position, limit: '12'},
+    {kind:'work',tab:'collected',pagination:'keyset',cursor:position,sort:'collected'},
   ])
 })
 

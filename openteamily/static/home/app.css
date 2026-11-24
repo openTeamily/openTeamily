@@ -44,6 +44,8 @@ body.app-workspace .home-hero-head h1 {
 }
 
 #home-status:empty { display: none; }
+.home-workspace-actions { display: flex; align-items: end; gap: .625rem; }
+.home-workspace-actions #home-create { min-height: 2.625rem; flex: none; }
 .home-workspace {
   display: grid;
   gap: 0.35rem;
@@ -51,6 +53,46 @@ body.app-workspace .home-hero-head h1 {
   font-size: 0.75rem;
   color: var(--ot-muted);
 }
+
+#home-create-dialog {
+  box-sizing: border-box;
+  width: min(32rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  padding: clamp(1rem, 4vw, 1.5rem);
+  border: 1px solid var(--ot-line);
+  border-radius: 1rem;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+}
+#home-create-dialog::backdrop { background: rgb(12 22 17 / 42%); }
+.home-create-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: .75rem;
+  margin: 0;
+  padding: 0 0 .875rem;
+  border-bottom: 1px solid var(--ot-line);
+  background: transparent;
+  box-shadow: none;
+}
+.home-create-head :is(h2, p, form) { margin: 0; }
+.home-create-head h2 { font-size: 1.25rem; }
+#home-create-dialog h3 { margin: 1rem 0 .5rem; font-size: .875rem; }
+.home-create-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
+.home-create-options a {
+  display: flex;
+  min-height: 2.75rem;
+  align-items: center;
+  padding: .375rem .75rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .625rem;
+  color: var(--ot-ink);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.home-create-options a:hover { background: var(--ot-accent-soft); }
+.home-create-options a:focus-visible { outline: 2px solid var(--ot-accent); outline-offset: 2px; }
 
 .home-workspace select {
   min-height: 2.625rem;
@@ -268,7 +310,7 @@ body.app-workspace .home-card-head h2 { margin: 0; font-size: 1rem; font-weight:
 
 @media (max-width: 620px) {
   .home-hero-head { flex-direction: column; align-items: stretch; }
-  .home-workspace { width: 100%; flex-basis: auto; }
+  .home-workspace { min-width: 0; flex: 1 1 auto; }
   .home-personal { grid-template-columns: auto minmax(0, 1fr); }
   .home-personal-actions { grid-column: 1 / -1; justify-content: flex-start; }
   .home-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }

@@ -1,6 +1,7 @@
 import '../shell/dsbot-api.mjs';
 import { meetingCodeFromHash, meetingHref } from '../shell/meeting-link.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
+import { canManage } from '../shell/chat-utils.mjs';
 import { confirmSignupSession, csrfCookie, runtimeHoldNotice, signupSessionError, waitForRuntime, workspaceLoginHash, workspaceLoginTarget, workspacePageTarget } from './runtime-readiness.mjs';
 
 export const KIND_LABELS = {
@@ -86,6 +87,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
   const workspaceSelect = document.getElementById('home-workspace');
   const greeting = document.getElementById('home-greeting');
   const whoami = document.getElementById('whoami');
+  const create = document.getElementById('home-create');
+  const createDialog = document.getElementById('home-create-dialog');
   if (!loginPanel || !mainPanel || !form || !workspaceSelect) return null;
 
   const view = document.defaultView ?? globalThis;
@@ -290,7 +293,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         link.setAttribute('aria-disabled', 'true');
       }
     }
+    if (create) create.disabled = !currentUser || !/^[0-9a-f]{32}$/.test(selectedId) ||
+      !workspaces.some(workspace => workspace.id === selectedId);
   }
+
+  create?.addEventListener('click', () => {
+    const workspace = workspaces.find(item => item.id === selectedId);
+    if (!currentUser || !workspace || create.disabled || !createDialog || createDialog.open) return;
+    document.getElementById('home-create-workspace').textContent = workspace.name || workspaceSelect.selectedOptions[0]?.textContent || '当前工作区';
+    const manage = personal?.workspace?.id === selectedId ||
+      (workspace.role ? canManage(workspace.role) : workspace.owner_id === currentUser.id);
+    document.getElementById('home-create-agents').hidden = !manage;
+    for (const link of createDialog.querySelectorAll('[data-home-create-path]')) {
+      link.href = workspaceLink(link.dataset.homeCreatePath, selectedId);
+    }
+    createDialog.showModal();
+  });
 
   function clearOverview() {
     renderConversations([]);

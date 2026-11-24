@@ -1586,6 +1586,7 @@ test('group retry submits the displayed attempt and refreshes an outdated failur
       const latest = attempts.length ? {...job, attempt: 2} : job;
       return json(200, {conversation, items: [{...original, reply_jobs: [latest]}]});
     }
+    if (path === '/messages?around=source&limit=1&scope=workspace') return json(404,{});
     assert.equal(path, '/messages/source/agent-retry');
     attempts.push(JSON.parse(opts.body));
     return json(409, {error: {code: 'reply_job_unavailable', message: '这次回复的状态已更新。'}});
@@ -1599,6 +1600,51 @@ test('group retry submits the displayed attempt and refreshes an outdated failur
     assert.deepEqual(attempts, [{job_id: job.id, attempt: 1}]);
     const row = list.children.find(node => node.dataset.replyJobId === job.id);
     assert.equal(row.dataset.replyAttempt, '2');
+  } finally { restore(); }
+});
+
+test('a lost group retry acknowledgement resumes progress for only the matching owner and attempt', async t => {
+  t.mock.timers.enable({apis:['setTimeout']});
+  const original = {id:'source',user_id:alice,workspace_id:'ws-1',conversation_id:'conv-1',body:'请求核对',seq:1};
+  const job = {id:'retry-job',agent_id:'agent-1',agent_owner_id:alice,agent_name:'核对助手',status:'failed',attempt:1,can_retry:true};
+  const accepted = {...job,status:'running',attempt:2,can_retry:false};
+  const writes = [];
+  let transcriptReads = 0;
+  let receipts = 0;
+  const {doc,el,restore,fetcher} = groupReplyChat((path,opts,conversation)=>{
+    if (!path) {
+      transcriptReads++;
+      return json(200,{conversation,items:[{...original,reply_jobs:[job]}]});
+    }
+    if (path === '/messages/source/agent-retry') {
+      writes.push(JSON.parse(opts.body));
+      return json(503,{});
+    }
+    if (path === '/messages?around=source&limit=1&scope=workspace') {
+      receipts++;
+      return json(200,{items:[{...original,user_id:bob,reply_jobs:[{...accepted,attempt:4}]},
+        {...original,reply_jobs:[accepted]}]});
+    }
+    assert.equal(path,'/reply-progress');
+    return json(200,{items:[{id:job.id,message_id:original.id,status:'running',attempt:2,text:'正在核对内容'}]});
+  });
+  try {
+    await mount(doc,{fetcher});
+    const list = el('message-list');
+    const row = list.children.find(node=>node.dataset.replyJobId===job.id);
+    const retry = descendants(row).find(node=>node.classList.contains('group-reply-retry'));
+    el('chat-body').value = '下一条群聊草稿';
+    await fire(retry,'click');
+    assert.equal(row.dataset.replyAttempt,'2');
+    assert.equal(row.dataset.state,'running');
+    assert.equal(list.children.find(node=>node.dataset.replyJobId===job.id),row);
+    t.mock.timers.tick(500);
+    await settle();
+    assert.equal(descendants(row).find(node=>node.classList.contains('group-reply-preview')).textContent,'正在核对内容');
+    assert.equal(el('chat-body').value,'下一条群聊草稿');
+    assert.equal(transcriptReads,1);
+    assert.equal(receipts,1);
+    assert.deepEqual(writes,[{job_id:job.id,attempt:1}]);
   } finally { restore(); }
 });
 
@@ -3075,6 +3121,46 @@ test('reaction chips post the toggle and re-render server counts', async () => {
   } finally { restore(); }
 });
 
+test('rapid reaction toggles update immediately and preserve the last intent across server receipts', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const posts = [];
+  const replies = [];
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async (path, options = {}) => {
+      if (path.endsWith('/messages/m-1/reactions')) {
+        posts.push(JSON.parse(options.body));
+        return new Promise(resolve => replies.push(resolve));
+      }
+      const result = await original(path), body = await result.json();
+      if (path.endsWith('/social/conversations/conv-1')) body.items[0].reactions = [{emoji: '👍', count: 1, mine: false}];
+      return json(result.status, body);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    const bar = el('message-list').children[0].querySelector('.message-reactions');
+    const chip = () => bar.querySelector('.reaction-chip');
+
+    const first = fire(chip(), 'click');
+    assert.equal(chip().textContent, '👍 2');
+    assert.equal(chip().getAttribute('aria-pressed'), 'true');
+    await fire(chip(), 'click');
+    assert.equal(chip().textContent, '👍 1');
+    assert.equal(chip().getAttribute('aria-pressed'), 'false');
+    assert.deepEqual(posts, [{emoji: '👍', active: true}]);
+
+    replies[0](json(200, {reactions: [{emoji: '👍', count: 2, mine: true}]}));
+    await settle();
+    assert.deepEqual(posts, [{emoji: '👍', active: true}, {emoji: '👍', active: false}]);
+    assert.equal(chip().getAttribute('aria-pressed'), 'false');
+
+    replies[1](json(200, {reactions: [{emoji: '👍', count: 3, mine: false}]}));
+    await first;
+    assert.equal(chip().textContent, '👍 3');
+    assert.equal(chip().getAttribute('aria-pressed'), 'false');
+  } finally { restore(); }
+});
+
 test('team mode needs a selected template', () => {
   assert.equal(composeCreateEnabled({composeMode: 'group', groupMode: 'team', selectedCount: 3}), false);
   assert.equal(composeCreateEnabled({composeMode: 'group', groupMode: 'team', templateSelected: true}), true);
@@ -3132,6 +3218,47 @@ test('pin a message and multi-select forward call the real endpoints', async () 
     await fire(el('forward-submit'), 'click');
     await settle();
     assert.deepEqual(posts[1][1], {message_ids: ['m-1'], target_conversation_id: 'conv-2'});
+    assert.equal(el('forward-bar').hidden, true);
+  } finally { restore(); }
+});
+
+test('a forward shows progress and retries an uncertain receipt with the same native key', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const calls = [];
+  let rejectForward;
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async (path, options = {}) => {
+      if (!path.endsWith('/conv-1/forward')) return original(path);
+      calls.push({path, key:options.headers['Idempotency-Key'], body:JSON.parse(options.body)});
+      if (calls.length === 1) return new Promise((_, reject) => { rejectForward = reject; });
+      return json(201, {forwarded:1, target_conversation_id:'conv-2'});
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await fire(el('multi-select-toggle'), 'click');
+    const box = el('message-list').children[0].querySelector('input');
+    box.checked = true;
+    await fire(box, 'change');
+    const target = el('forward-target'), submit = el('forward-submit'), status = el('forward-status');
+    target.value = 'conv-2';
+    await fire(target, 'change');
+
+    const sending = fire(submit, 'click');
+    assert.equal(status.textContent, '正在转发 1 条消息…');
+    assert.equal(target.disabled, true);
+    assert.equal(submit.disabled, true);
+    await fire(submit, 'click');
+    assert.equal(calls.length, 1);
+
+    rejectForward(new Error('receipt lost'));
+    await sending;
+    assert.equal(status.textContent, '未能确认转发结果，可以重试。');
+    assert.equal(target.value, 'conv-2');
+    assert.equal(submit.disabled, false);
+    await fire(submit, 'click');
+    assert.deepEqual(calls, [calls[0], calls[0]]);
+    assert.ok(calls[0].key);
     assert.equal(el('forward-bar').hidden, true);
   } finally { restore(); }
 });
@@ -3932,6 +4059,36 @@ test('assistant Markdown tables render scoped table headers and delegate only ce
   assert.deepEqual(cells, ['名称','数据','**本周**','<img src=x>']);
   assert.deepEqual(body.children[0].children.map(cell => cell.tagName), ['TD','TD']);
   assert.equal(body.children[0].children[1].textContent, '<img src=x>');
+});
+
+test('copying a streaming Chat table uses the current cells and keeps the same control', async () => {
+  const {renderStreamingMarkdown} = await import('../openteamily/static/chat/rich-content.mjs');
+  const {doc} = fakeChatDocument(chatHtml());
+  const copied = [];
+  doc.documentElement = {lang:'zh-CN'};
+  doc.defaultView = {navigator:{clipboard:{async writeText(text) {copied.push(text);}}}};
+  const create = doc.createElement;
+  doc.createElement = tag => {
+    const node = create(tag);
+    Object.defineProperty(node,'firstElementChild',{get:()=>node.children[0]});
+    if (tag === 'table') Object.defineProperty(node,'rows',{get:()=>node.children.flatMap(section=>section.children)});
+    if (tag === 'tr') Object.defineProperty(node,'cells',{get:()=>node.children});
+    return node;
+  };
+  const body = doc.createElement('div');
+  const source = '| 名称 | 状态 |\n| --- | --- |\n| **第一项** | `dev|prod` |';
+  renderStreamingMarkdown(doc,body,source);
+  const button = body.querySelector('.chat-table-copy');
+  const region = body.querySelector('.chat-markdown-table-scroll');
+  region.scrollLeft = 24;
+  await fire(button,'click');
+  assert.deepEqual(copied,['名称\t状态\n第一项\tdev|prod']);
+  renderStreamingMarkdown(doc,body,source + '\n| 第二项 | 已完成 |');
+  assert.equal(body.querySelector('.chat-table-copy'),button);
+  assert.equal(body.querySelector('.chat-markdown-table-scroll'),region);
+  assert.equal(region.scrollLeft,24);
+  await fire(button,'click');
+  assert.equal(copied.at(-1),'名称\t状态\n第一项\tdev|prod\n第二项\t已完成');
 });
 
 test('the inbox entry leaves Markdown modules outside its static dependency graph', () => {

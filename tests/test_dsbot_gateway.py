@@ -192,6 +192,7 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/shared/{aid}/discussion'), 'meetings')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/spreadsheet/draft'), 'artifacts')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/slides/draft'), 'artifacts')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/document/draft'), 'artifacts')
         work = '/v1/discover/works/work-demo'
         comment = 'otwc_' + '0' * 26
         for path in (work, work + '/remix', work + '/comments', work + '/comments/' + comment + '/like',
@@ -353,7 +354,7 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('location = /onboarding { return 418; }', conf)
         self.assertIn('location = /artifacts { return 418; }', conf)
         self.assertIn('location ^~ /artifacts/ { return 418; }', conf)
-        self.assertIn('location ~ "^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:activity|document-tree|shared-copy|studio-personal-copy|(?:spreadsheet|slides)/draft)$" { return 418; }', conf)
+        self.assertIn('location ~ "^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:activity|document-tree|shared-copy|studio-personal-copy|(?:document|spreadsheet|slides)/draft)$" { return 418; }', conf)
         self.assertIn('location ~ "^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|studio-copy|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/(?:revoke|link))?)?))?)?$" { return 418; }', conf)
         self.assertIn('location = /members { return 418; }', conf)
         self.assertIn('location = /discover { return 418; }', conf)
@@ -663,11 +664,14 @@ class GatewayTest(unittest.TestCase):
             (f'/v1/agent-copy-grants/{grant}/remix', 'agents'),
             ('/v1/profile/follow-work', 'discover'),
             ('/v1/onboarding/automations', 'automations'),
+            (f'/v1/workspaces/{ws}/automations/draft', 'automations'),
+            (f'/v1/workspaces/{ws}/automations/schedule-preview', 'automations'),
             (f'/v1/workspaces/{ws}/agents/{ident}/conversations', 'agents'),
             (f'/v1/workspaces/{ws}/agents/{ident}/shares/{grant}/revoke', 'agents'),
             (f'/v1/workspaces/{ws}/agents/{ident}/access/{conversation}/revoke', 'agents'),
             (f'/v1/workspaces/{ws}/memory/actions/from-chat', 'memory'),
             (f'/v1/workspaces/{ws}/memory/{ident}/versions/123/restore', 'memory'),
+            (f'/v1/workspaces/{ws}/memory/{ident}/pin', 'memory'),
             (f'/v1/workspaces/{ws}/team-runs/automation-results/{ident}/{ident}', 'team-runs'),
         ):
             with self.subTest(uri=uri):

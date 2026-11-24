@@ -48,7 +48,48 @@ async function showFlowchart(document, container, code, text) {
   }
 }
 
-const markdownOptions = {readTable:readMarkdownTable, renderTable:renderMarkdownTable, renderCode};
+function renderChatTable(document, block, appendCell) {
+  const english = document.documentElement?.lang === 'en';
+  const label = (zh,en) => english ? en : zh;
+  const card = document.createElement('div');
+  card.className = 'chat-table-block';
+  const region = renderMarkdownTable(document, block, appendCell);
+  const toolbar = document.createElement('div');
+  toolbar.className = 'chat-table-toolbar';
+  const status = document.createElement('span');
+  status.className = 'chat-table-status';
+  status.setAttribute('role', 'status');
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'chat-table-copy';
+  copy.textContent = label('复制表格', 'Copy table');
+  copy.addEventListener('click', async () => {
+    const table = region.firstElementChild;
+    const view = document.defaultView;
+    const text = Array.from(table.rows, row => Array.from(row.cells, cell =>
+      (cell.innerText ?? cell.textContent ?? '').replace(/[\r\n\t]+/g, ' ').trim()).join('\t')).join('\n');
+    try {
+      await view.navigator.clipboard.writeText(text);
+      status.textContent = label('表格已复制。', 'Table copied.');
+    } catch {
+      if (!region.isConnected) return;
+      const selection = view?.getSelection?.();
+      if (selection) {
+        const range = document.createRange();
+        range.selectNodeContents(region.firstElementChild);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      status.textContent = selection ? label('已选中表格，请手动复制。', 'Table selected. Copy it manually.')
+        : label('无法访问剪贴板。', 'Clipboard unavailable.');
+    }
+  });
+  toolbar.append(status, copy);
+  card.append(toolbar, region);
+  return card;
+}
+
+const markdownOptions = {readTable:readMarkdownTable, renderTable:renderChatTable, renderCode};
 
 export function renderChatMarkdown(document, node, source) {
   node.className = 'chat-markdown';
@@ -72,15 +113,17 @@ export function renderStreamingMarkdown(document, node, source, {complete = fals
   while (unchanged < signatures.length && previous[unchanged] === signatures[unchanged]) unchanged += 1;
 
   const tail = node.children[unchanged];
-  const table = blocks[unchanged]?.type === 'table' && tail?.classList.contains('chat-markdown-table-scroll') ? tail : null;
-  const keep = table ? unchanged + 1 : unchanged;
+  const region = blocks[unchanged]?.type === 'table' && tail?.classList.contains('chat-table-block')
+    ? tail.querySelector('.chat-markdown-table-scroll') : null;
+  const keep = region ? unchanged + 1 : unchanged;
   while (node.children.length > keep) node.children[node.children.length - 1].remove();
-  if (table) {
+  if (region) {
     const replacement = document.createElement('div');
-    renderMarkdownBlocks(document, replacement, [blocks[unchanged]], markdownOptions);
-    const left = table.scrollLeft;
-    table.replaceChildren(...replacement.firstChild.children);
-    table.scrollLeft = left;
+    renderMarkdownBlocks(document, replacement, [blocks[unchanged]], {...markdownOptions, renderTable:renderMarkdownTable});
+    const left = region.scrollLeft;
+    region.replaceChildren(...replacement.firstElementChild.children);
+    region.scrollLeft = left;
+    tail.querySelector('.chat-table-status').textContent = '';
   }
   renderMarkdownBlocks(document, node, blocks.slice(keep), complete ? markdownOptions : {...markdownOptions, renderCode:renderStreamingCode});
   streamingBlocks.set(node, signatures);

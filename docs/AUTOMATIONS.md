@@ -2,6 +2,10 @@
 
 Open **Automations** in a workspace to create an automation from a template or write your own instructions. You can run it immediately or choose a daily, weekly, monthly, weekdays-only, or one-time schedule. The editor and list show the schedule in its configured time zone.
 
+In **My automations**, select **Upcoming runs** to see enabled schedules in chronological
+order, with due runs first. Search within that list and open any automation to edit it or
+review its run history. Each row displays the automation's configured time zone.
+
 ## Where runs execute
 
 The [OpenTeamily plugin](../runtime/openteamily-web/features/automations/README.md) stores the automation, schedule, and run history on your account's DS-Bot volume. The scheduler starts when the runtime attaches. It checks enabled schedules and dispatches each eligible run as a native DS-Bot turn, using the runtime's configured model. Workspace switches keep using the same account runtime.

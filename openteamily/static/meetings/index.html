@@ -165,6 +165,14 @@
           <label>参会人 <input id="meeting-attendees" maxlength="2000" placeholder="用逗号分隔"></label>
           <ul id="attendee-matches" class="attendee-matches" role="listbox" aria-label="成员候选" hidden></ul>
           <label>转写/正文 <textarea id="meeting-transcript" maxlength="40000" rows="6"></textarea></label>
+          <div id="meeting-transcript-import" class="meeting-transcript-import" hidden>
+            <input type="file" id="meeting-transcript-import-file" accept=".txt,.md,.markdown,.vtt,.srt" hidden>
+            <div class="meeting-actions">
+              <button type="button" id="meeting-transcript-import-open" class="secondary" aria-haspopup="dialog">导入文字转写</button>
+              <button type="button" id="meeting-transcript-import-undo" class="secondary" hidden>撤销导入</button>
+            </div>
+            <p id="meeting-transcript-import-status" class="note" role="status"></p>
+          </div>
           <div id="meeting-transcript-find" class="meeting-transcript-find" role="search" aria-label="查找会议转写" hidden>
             <label>查找转写 <input id="meeting-transcript-search" type="search" maxlength="80"></label>
             <div class="meeting-transcript-navigation">
@@ -237,6 +245,19 @@
       </section>
     </div>
   </section>
+  <dialog id="meeting-transcript-import-dialog" aria-labelledby="meeting-transcript-import-heading">
+    <h2 id="meeting-transcript-import-heading">核对导入的转写</h2>
+    <p id="meeting-transcript-import-filename" class="note"></p>
+    <label for="meeting-transcript-import-preview">文字预览
+      <textarea id="meeting-transcript-import-preview" rows="7" readonly></textarea>
+    </label>
+    <p id="meeting-transcript-import-feedback" class="note" role="status"></p>
+    <div class="meeting-actions">
+      <button type="button" id="meeting-transcript-import-cancel" class="secondary" autofocus>取消</button>
+      <button type="button" id="meeting-transcript-import-replace" class="secondary" hidden>替换正文</button>
+      <button type="button" id="meeting-transcript-import-append" class="primary">追加到正文</button>
+    </div>
+  </dialog>
   <dialog id="meeting-print-dialog" aria-labelledby="meeting-print-heading" aria-describedby="meeting-print-description">
     <div class="meeting-print-controls">
       <div>

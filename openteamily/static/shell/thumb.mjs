@@ -192,6 +192,7 @@ export function saveableAgentMessage(item) {
 }
 
 export function artifactKindLabel(kind, mime) {
+  if (kind === 'media' && mime === 'application/octet-stream') return '文件';
   if (kind === 'media') return mime === 'model/gltf-binary' ? '3D 模型' : '媒体';
   const labels = {website: '网站', whiteboard: '白板', slides: '幻灯片', dashboard: '看板', spreadsheet: '电子表格'};
   return Object.hasOwn(labels, kind) ? labels[kind] : '文档';
