@@ -974,7 +974,8 @@ html[data-theme-resolved="dark"] #settings-panel :is(a.settings-row, .settings-r
   border-radius: var(--ot-radius, .9rem);
   background: var(--ot-surface);
 }
-.composio-key-head { display: flex; align-items: flex-start; gap: .75rem; }
+.composio-key-head { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: .75rem; }
+#composio-key-state { grid-column: 2; justify-self: start; overflow-wrap: anywhere; }
 .composio-key-mark {
   flex: 0 0 auto;
   width: 2.25rem;
@@ -993,6 +994,7 @@ html[data-theme-resolved="dark"] #settings-panel :is(a.settings-row, .settings-r
 .composio-key-message { margin: 0; color: var(--ot-muted); font-size: .8rem; }
 .composio-key-message:empty { display: none; }
 .composio-key-message[data-kind="error"] { color: var(--ot-danger); }
+#composio-retry { justify-self: start; min-height: 2.75rem; }
 .connector-status[data-state="unconfigured"],
 .connector-status[data-state="needs-auth-config"] { color: #92400e; }
 .connector-status[data-state="connecting"] { color: var(--ot-accent-hover); }

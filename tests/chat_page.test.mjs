@@ -3315,7 +3315,7 @@ test('group info panel counts members and agents honestly and picks a readable g
   assert.match(html, /id="group-translate-language"/);
 });
 
-test('group members can change automatic replies for their own agent only', async () => {
+test('legacy default group members can change automatic replies for their own agent only', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: original} = sessionFetcher();
   const restore = installChatGlobals({narrow: true});
@@ -3340,6 +3340,8 @@ test('group members can change automatic replies for their own agent only', asyn
       return json(result.status, body);
     }});
     await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await fire(el('group-info-tab-agents'), 'click');
+    assert.equal(el('group-agent-auto-reply-note').hidden, false);
     const [own, other] = el('group-info-agents').children;
     assert.equal(other.children.some(child => child.tagName === 'BUTTON'), false);
     const toggle = own.children.find(child => child.tagName === 'BUTTON');
@@ -5591,11 +5593,12 @@ test('group reply policy opens from the header and updates settings and composer
   const dialog = control('dialog');
   dialog.showModal = () => { dialog.open = true; };
   dialog.close = () => { dialog.open = false; dialog.dispatchEvent({type:'close'}); };
-  const own = {id:linkAgent, owner_id:alice, name:'文案助手', mine:true};
+  const own = {id:linkAgent, owner_id:alice, name:'文案助手', mine:true, auto_reply:true};
   const peer = {id:linkAgent, owner_id:bob, name:'文案助手', owner_name:'小周', mine:false};
   const path = linkBase(linkTeam) + linkSocialPath;
   const conversation = {id:linkSocial, workspace_id:linkTeam, title:'编辑部', kind:'group', members:[linkMember],
-    agent_members:[own, peer], group_agent_requests:true, group_agent_routing:{mode:'shared',can_edit:true,policy:{mode:'default'}},
+    agent_members:[own, peer], group_agent_requests:true,
+    group_agent_routing:{mode:'shared',can_edit:true,policy:{mode:'default'},native_group_host:alice},
     group_management:{revision:4}};
   const writes = [];
   routes.set(path, () => json(200, {conversation, items:[]}));
@@ -5610,7 +5613,14 @@ test('group reply policy opens from the header and updates settings and composer
     await mount(doc, {fetcher:fixture.fetcher});
     assert.equal(el('group-info-panel').hidden, true);
     assert.equal(el('group-reply-shortcut').hidden, false);
-    assert.match(el('group-reply-shortcut').getAttribute('aria-description'), /跟随群组默认/);
+    assert.equal(el('group-reply-shortcut').getAttribute('aria-description'), '跟随群组默认 · 由群内智能体判断');
+    assert.match(el('group-composer-routing-text').textContent, /由群内智能体按内容决定是否回复/);
+    await fire(el('group-info-toggle'),'click');
+    await fire(el('group-info-tab-agents'),'click');
+    assert.equal(el('group-agent-auto-reply-note').hidden, true);
+    assert.equal(el('group-info-agents').children.flatMap(row => row.children).some(child => child.tagName === 'BUTTON'), false);
+    assert.doesNotMatch(el('group-info-agents').textContent, /自动回复/);
+    await fire(el('group-info-toggle'),'click');
     await fire(el('group-reply-shortcut'),'click');
     assert.equal(dialog.open, true);
     assert.equal(el('group-info-panel').hidden, true);
