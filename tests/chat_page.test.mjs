@@ -4489,6 +4489,23 @@ test('pending private text keeps its send key alongside an independent newer dra
   assert.equal(readChatDrafts(view,alice).get(scope),'后写的草稿');
 });
 
+test('a pending first private message keeps its creation key and preferences scoped to the draft agent', () => {
+  const {view} = publicOpeningView();
+  const blank = (owner,workspace,agent) => JSON.stringify([owner,workspace,'agent',agent,null]);
+  const scope = blank(alice,linkWork,linkAgent);
+  const key = 'chat-original-creation-key';
+  const message = {body:'创建会话时发送的第一条',chat_language:'zh-CN',memory_scope:'off'};
+  assert.equal(savePendingChatText(view,scope,key,message),true);
+  assert.equal(writeChatDrafts(view,alice,new Map([[scope,'后写的草稿']])),true);
+  assert.deepEqual(readPendingChatText(view,scope),[{key,message}]);
+  assert.deepEqual(readPendingChatText(view,blank(bob,linkWork,linkAgent)),[]);
+  assert.deepEqual(readPendingChatText(view,blank(alice,linkTeam,linkAgent)),[]);
+  assert.deepEqual(readPendingChatText(view,blank(alice,linkWork,linkAgentOlder)),[]);
+  assert.equal(savePendingChatText(view,scope,key),true);
+  assert.deepEqual(readPendingChatText(view,scope),[]);
+  assert.equal(readChatDrafts(view,alice).get(scope),'后写的草稿');
+});
+
 test('pending shared text preserves the exact quote, mention and destination alongside a newer draft', () => {
   const {view} = publicOpeningView();
   const scope = JSON.stringify([alice,linkTeam,'social',null,linkSocial]);
@@ -4669,6 +4686,62 @@ test('a native group send releases the next message only after activity confirms
     assert.equal(calls.filter(call => call.path === receiptPath).length, 2);
   } finally {
     heldResponse.resolve(json(502,{}));
+    restore();
+  }
+});
+
+test('a lost native voice response recognizes only the owner’s matching recording receipt', async () => {
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&social=${linkSocial}`);
+  const {doc,el,routes,calls,restore} = fixture;
+  const path = linkBase(linkWork) + linkSocialPath;
+  const media = new Map(['navigator','MediaRecorder'].map(name=>[name,Object.getOwnPropertyDescriptor(globalThis,name)]));
+  const keys = [];
+  let stored;
+  let stopped = 0;
+  class Recorder extends EventTarget {
+    static isTypeSupported() { return true; }
+    start() { this.state = 'recording'; }
+    stop() {
+      this.state = 'inactive';
+      this.dispatchEvent(Object.assign(new Event('dataavailable'),{data:new Blob(['audio'])}));
+      this.dispatchEvent(new Event('stop'));
+    }
+  }
+  Object.defineProperty(globalThis,'MediaRecorder',{configurable:true,value:Recorder});
+  Object.defineProperty(globalThis,'navigator',{configurable:true,value:{mediaDevices:{
+    async getUserMedia() { return {getTracks:()=>[{stop(){stopped++;}}]}; },
+  }}});
+  routes.set(path + '/messages',(call,opts)=>{
+    assert.equal(call.body.voice.mime,'audio/webm');
+    keys.push(opts.headers['Idempotency-Key']);
+    stored = {id:'otm_' + 'D'.repeat(26),workspace_id:linkWork,conversation_id:linkSocial,user_id:alice,
+      client_key:keys[0],body:'',voice:{mime:'audio/webm'},seq:9};
+    return json(503,{});
+  });
+  routes.set(path + '/messages?limit=50',()=>json(200,{items:[{...stored,user_id:bob},...(keys.length>1?[stored]:[])]}));
+  try {
+    await mount(doc,{fetcher:fixture.fetcher});
+    el('chat-body').value = 'Separate text draft';
+    await fire(el('voice-record'),'click');
+    await fire(el('voice-stop'),'click');
+    assert.equal(stopped,1);
+    await fire(el('voice-send'),'click');
+    assert.equal(el('voice-draft-panel').hidden,false);
+    assert.equal(el('voice-send').disabled,false);
+    assert.deepEqual(fixture.messages(),[linkSocialLatest]);
+    await fire(el('voice-send'),'click');
+    assert.equal(keys.length,2);
+    assert.equal(keys[0],keys[1]);
+    assert.equal(el('voice-draft-panel').hidden,true);
+    assert.deepEqual(fixture.messages(),[linkSocialLatest,stored.id]);
+    assert.equal(el('chat-body').value,'Separate text draft');
+    assert.deepEqual(calls.filter(call=>call.path===path || call.path===path+'?start=unread').map(call=>call.path),
+      [path+'?start=unread']);
+  } finally {
+    for (const [name,descriptor] of media) {
+      if (descriptor) Object.defineProperty(globalThis,name,descriptor);
+      else delete globalThis[name];
+    }
     restore();
   }
 });

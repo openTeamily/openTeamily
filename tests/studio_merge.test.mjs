@@ -1,9 +1,27 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {mergeStudioDraft} from '../openteamily/static/artifacts/studio-merge.mjs';
+import {compareDocumentLines, mergeStudioDraft} from '../openteamily/static/artifacts/studio-merge.mjs';
 
 const doc = (body, title = '共同大纲') => ({title, body});
 const merge = (base, local, remote) => mergeStudioDraft(doc(base), doc(local), doc(remote))?.body ?? null;
+
+test('saved version comparison preserves exact lines and describes changes after a reorder', () => {
+  const historical = '计划  \r\n初稿\n交付\n验证';
+  const current = '计划  \r\n交付\n初稿\n验证完成';
+  const result = compareDocumentLines(historical, current);
+  assert.equal(result.before.join(''), historical);
+  assert.equal(result.after.join(''), current);
+  const replay = [...result.before];
+  for (const {from, to, items} of result.edits.toReversed()) replay.splice(from, to - from, ...items);
+  assert.equal(replay.join(''), current);
+  assert.deepEqual(compareDocumentLines(historical, historical).edits, []);
+
+  const before = '甲\n'.repeat(1500), after = '乙\n'.repeat(1500);
+  const bounded = compareDocumentLines(before, after);
+  assert.equal(bounded.edits, null);
+  assert.equal(bounded.before.join(''), before);
+  assert.equal(bounded.after.join(''), after);
+});
 
 test('combines several disjoint edits and preserves exact whitespace and line endings', () => {
   const base = '计划  \r\n版本 1\n\n\t交付\n验证\r备注';

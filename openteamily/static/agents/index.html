@@ -122,9 +122,16 @@
       <p id="agents-empty" class="note" hidden>这个工作区还没有智能体。</p>
     </section>
     <section id="teams-panel" tabindex="-1" aria-labelledby="tab-teams" hidden>
-      <p class="note">模板来自服务端：选一个模板会在当前工作区创建（或复用同名的）三个智能体，并建一个群会话。只有工作区所有者或管理员可以建团队。</p>
-      <ul id="team-template-list" class="card-grid" aria-live="polite"></ul>
-      <p id="teams-empty" class="note" hidden>模板列表没有加载出来；可以稍后重试。</p>
+      <div class="team-template-filters">
+        <label>搜索团队模板 <input id="team-template-search" type="search" placeholder="团队、角色或用途" autocomplete="off"></label>
+        <div class="team-template-category">
+          <label for="team-template-category">分类</label>
+          <select id="team-template-category"><option value="">全部分类</option></select>
+        </div>
+      </div>
+      <p id="teams-status" class="note" role="status"></p>
+      <button type="button" id="team-template-reload" hidden>重新加载</button>
+      <ul id="team-template-list" class="card-grid"></ul>
     </section>
     <aside id="manage-drawer" hidden>
       <form id="create-form" method="post" action="/v1/workspaces" hidden>
@@ -218,6 +225,20 @@
     </aside>
   </section>
   </main>
+  <dialog id="team-template-dialog" aria-labelledby="team-template-title">
+    <h2 id="team-template-title">创建 AI 团队</h2>
+    <p id="team-template-context" class="note"></p>
+    <form id="team-template-form">
+      <label>群组名称 <input id="team-template-name" required maxlength="80" autocomplete="off"></label>
+      <h3>团队智能体</h3>
+      <ul id="team-template-roles"></ul>
+      <p id="team-template-feedback" class="note" role="status" hidden></p>
+      <div class="team-template-actions">
+        <button type="button" id="team-template-close">关闭</button>
+        <button type="submit" id="team-template-create" class="primary">创建群组</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="agent-share-dialog" aria-labelledby="agent-share-title">
     <h2 id="agent-share-title">私下分享智能体</h2>
     <p id="agent-share-name" class="note"></p>

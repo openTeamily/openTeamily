@@ -539,6 +539,19 @@ function isSavedMeetingAction(action) {
   return meetingIdPattern.test(action?.id || '') && meetingIdPattern.test(action?.workspace_id || '');
 }
 
+function hasMeetingActionStatus(action) {
+  return isSavedMeetingAction(action) && Number.isSafeInteger(action.revision) && action.revision > 0 &&
+    (action.status === 'open' || action.status === 'done');
+}
+
+function personalMeetingActionStatus(document, action) {
+  const label = document.createElement('span');
+  label.className = 'received-action-personal-status';
+  label.dataset.done = String(action.status === 'done');
+  label.textContent = action.status === 'done' ? '我的待办 · 已完成' : '我的待办 · 未完成';
+  return label;
+}
+
 export function renderSharedMeeting(document, meeting, {copy, saved = []} = {}) {
   const title = document.getElementById('shared-meeting-title');
   title.textContent = meeting.title;
@@ -568,6 +581,7 @@ export function renderSharedMeeting(document, meeting, {copy, saved = []} = {}) 
       const savedAction = saved.find(action => action.index === index);
       if (savedAction) {
         controls.append(sharedActionLink(document, savedAction));
+        if (hasMeetingActionStatus(savedAction)) controls.append(personalMeetingActionStatus(document, savedAction));
       } else {
         const button = document.createElement('button');
         button.type = 'button';
@@ -585,6 +599,7 @@ export function renderSharedMeeting(document, meeting, {copy, saved = []} = {}) 
             const link = sharedActionLink(document, result.action);
             button.replaceWith(link);
             feedback.textContent = '已保存到个人空间。';
+            if (hasMeetingActionStatus(result.action)) controls.append(personalMeetingActionStatus(document, result.action));
             link.focus({preventScroll:true});
           } else {
             button.disabled = false;
@@ -888,6 +903,18 @@ function mount() {
         }
         control.dataset.inboxControl = 'memory';
         buttons.append(control);
+        if (hasMeetingActionStatus(saved)) {
+          copy.append(personalMeetingActionStatus(document, saved));
+          const statusButton = document.createElement('button');
+          statusButton.type = 'button';
+          statusButton.className = 'secondary';
+          statusButton.dataset.inboxControl = 'memory-status';
+          statusButton.textContent = pending ? '正在更新…' : saved.status === 'done' ? '重开我的待办' : '完成我的待办';
+          statusButton.disabled = pending;
+          statusButton.addEventListener('click', () => runReceivedInboxAction(state, item, statusButton, '正在更新…',
+            () => changePersonalMeetingActionStatus(state, item, saved)));
+          buttons.append(statusButton);
+        }
       } else {
         if (!state.completed) {
           const followup = automationFollowupLink(document);
@@ -1052,27 +1079,59 @@ function mount() {
     await loadInbox(state, {notice, minimum});
   }
 
-  async function copyReceivedInboxAction(state, item, button) {
+  function copyReceivedInboxAction(state, item, button) {
+    return runReceivedInboxAction(state, item, button, '正在保存…', async () => {
+      const copied = await copySharedAction(state, item.meeting_id, item.revision, item.action_index);
+      return {...copied, notice:copied.action ? '已保存到个人空间。' : copied.error};
+    });
+  }
+
+  async function runReceivedInboxAction(state, item, button, pendingLabel, perform) {
     const key = receivedActionKey(state, item);
     if (!currentInbox(state) || inboxWrites.has(key)) return;
     const position = inboxPosition(button);
     inboxWrites.add(key);
     button.disabled = true;
-    button.textContent = '正在保存…';
-    const result = await copySharedAction(state, item.meeting_id, item.revision, item.action_index);
+    button.textContent = pendingLabel;
+    const result = await perform().catch(() => ({notice:'暂时无法确认个人待办，请重试。'}));
     inboxWrites.delete(key);
     if (!sameInboxScope(state)) return;
-    if (result.action) item.saved_action = result.action;
     const visible = inboxView;
     if (!visible?.received || !currentInbox(visible)) return;
     const shown = visible.items.find(action => receivedActionKey(visible, action) === key);
     if (!shown) return;
-    if (result.action) shown.saved_action = result.action;
-    const notice = result.action ? '已保存到个人空间。' : result.error;
+    if (result.action !== undefined && (!result.action || !(shown.saved_action?.revision > result.action.revision))) {
+      shown.saved_action = result.action;
+    }
+    const {notice} = result;
     const keepPosition = document.activeElement === button || (button.isConnected && document.activeElement === document.body);
     inboxStatus.textContent = notice;
     renderInbox(visible, keepPosition ? position : inboxPosition());
     if (result.sourceUnavailable || visible.request) void loadInbox(visible, {notice});
+  }
+
+  async function changePersonalMeetingActionStatus(state, item, saved) {
+    const status = saved.status === 'done' ? 'open' : 'done';
+    const path = `/v1/workspaces/${saved.workspace_id}/memory/actions/${saved.id}`;
+    const result = await saveRequest('POST', path, {revision:saved.revision, changes:{status}});
+    let action = result.status === 200 ? result.body?.action : result.body?.error?.current;
+    let unavailable = result.status === 404;
+    if (!action && sameInboxScope(state) && (ambiguousSave(result.status) || result.status === 200)) {
+      const checked = await saveRequest('GET', path);
+      if (checked.status === 200) action = checked.body?.action;
+      unavailable = checked.status === 404;
+    }
+    if (unavailable) return {action:null, sourceUnavailable:true, notice:'找不到这条个人待办。可以重新存入。'};
+    const source = action?.source;
+    const valid = hasMeetingActionStatus(action) && action.id === saved.id &&
+      action.workspace_id === saved.workspace_id && action.revision > saved.revision &&
+      source?.kind === 'shared_meeting' && source.workspace_id === state.workspace &&
+      source.share_id === item.meeting_id && source.revision === item.revision && source.action_index === item.action_index;
+    if (!valid) return {notice:'暂时无法确认个人待办的状态，请刷新后重试。'};
+    const {id, workspace_id, revision} = action;
+    return {action:{id, workspace_id, revision, status:action.status},
+      notice:action.status !== status ? '我的待办已在别处更新。请核对后重试。'
+        : status === 'done' ? '已完成我的待办。' : '已重开我的待办。'};
   }
 
   function setInbox(open, {focus = true, notice = '', retryMeeting = null} = {}) {

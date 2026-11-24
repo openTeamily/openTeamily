@@ -61,7 +61,7 @@ test('listQuery encodes search and omits empty q', () => {
   ]);
 });
 
-test('native Space shows title, body and filename matches as safe text', async () => {
+test('native Space shows safe excerpts and opens a body match in the document Find panel', async () => {
   const title = '蓝图🌱提纲';
   const text = '会议正文 <img src=x onerror=alert(1)> 蓝图🌱 交付计划';
   const filename = '附件蓝图🌱.png';
@@ -72,6 +72,9 @@ test('native Space shows title, body and filename matches as safe text', async (
   };
   const item = (id, title, match) => ({id, title, match, kind: 'document'});
   const page = await openArtifactsPage({native: true, extraRequest(path) {
+    if (path === '/v1/workspaces/w1/artifacts/body') {
+      return reply({body:{artifact:{...item('body','周会备忘'),body:text,revision:1}}});
+    }
     if (path === '/v1/workspaces/w1/artifacts?q=' + encodeURIComponent(needle) + '&order=recent') {
       return reply({body: {items: [
         item('title', title, hit('title', title)),
@@ -97,6 +100,10 @@ test('native Space shows title, body and filename matches as safe text', async (
       [needle, needle]);
     assert.equal(contexts[2], undefined, 'an offset splitting a surrogate is discarded');
     assert.equal(page.created.some(node => node.tagName === 'IMG'), false, 'stored text never becomes HTML');
+    await rows[1].children[0].dispatch('click');
+    assert.equal(page.elements.get('document-find').hidden, false);
+    assert.equal(page.elements.get('document-find-query').value, needle);
+    assert.equal(page.form.elements.body.value, text);
   } finally { page.close(); }
 });
 

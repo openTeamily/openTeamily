@@ -125,11 +125,11 @@ export function runErrorReason(run) {
   return '';
 }
 
-export function runDetailFields(run) {
+export function runDetailFields(run, {includeResult = true} = {}) {
   const fields = [];
   if (!run) return fields;
   const text = runResultText(run);
-  if (text) fields.push({label: '摘要', value: text});
+  if (includeResult && text) fields.push({label: '摘要', value: text});
   const code = typeof run.error_code === 'string' ? run.error_code : '';
   const reason = runErrorReason(run);
   if (code) fields.push({label: '状态码', value: code});
@@ -150,6 +150,13 @@ export function runDetailFields(run) {
   }
   if (typeof dispatch.task_id === 'string' && dispatch.task_id) fields.push({label: '任务', value: dispatch.task_id});
   return fields;
+}
+
+function formatRunResult(document, output, text) {
+  if (!output || output.dataset.rendered) return;
+  void import('./result-markdown.mjs').then(({renderRunMarkdown}) => {
+    if (output.isConnected && !output.dataset.rendered) renderRunMarkdown(document, output, text);
+  }).catch(() => { /* Keep the original result readable if formatting is unavailable. */ });
 }
 
 // Destructive controls on this page ask before they act. The wording is
@@ -1371,7 +1378,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const detail = document.createElement('div');
       detail.className = 'run-detail';
       detail.hidden = !open;
-      const fields = runDetailFields(item);
+      const text = runResultText(item);
+      let output;
+      if (text) {
+        const result = document.createElement('section');
+        result.className = 'run-output';
+        const heading = document.createElement('h3');
+        heading.textContent = '运行结果';
+        output = document.createElement('div');
+        output.className = 'run-output-text';
+        output.textContent = text;
+        result.appendChild(heading);
+        result.appendChild(output);
+        detail.appendChild(result);
+      }
+      const fields = runDetailFields(item, {includeResult: false});
       if (fields.length) {
         const terms = document.createElement('dl');
         for (const field of fields) {
@@ -1383,7 +1404,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           terms.appendChild(value);
         }
         detail.appendChild(terms);
-      } else {
+      } else if (!output) {
         const note = document.createElement('p');
         note.className = 'note';
         note.textContent = runActive(item) ? '正在等待本次结果…' : RUN_DETAIL_EMPTY;
@@ -1396,7 +1417,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           nextFocus = [...related.children].find(control => control.dataset.runControl === focusedControl) || nextFocus;
         }
       }
-      if (item.status === 'succeeded' && runResultText(item).trim() && current?.id) {
+      if (item.status === 'succeeded' && text.trim() && current?.id) {
         if (native && exactRunForTarget(item, target)) {
           const exports = resultExportControls(item, target);
           if (restore && focusRow.dataset.runId === item.id) {
@@ -1462,6 +1483,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         }
         detail.hidden = !next;
         toggle.setAttribute('aria-expanded', next ? 'true' : 'false');
+        if (next) formatRunResult(document, output, text);
       });
       head.appendChild(toggle);
       if ((item.status === 'queued' || (native && item.status === 'running')) && current?.id) {
@@ -1512,6 +1534,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       row.appendChild(head);
       row.appendChild(detail);
       list.appendChild(row);
+      if (open) formatRunResult(document, output, text);
     }
     nextFocus?.focus({preventScroll: true});
   }

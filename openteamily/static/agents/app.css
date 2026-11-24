@@ -251,6 +251,14 @@ body.app-workspace:not(.chat-open) > main > #main-panel:has(> .directory-top) { 
 }
 .filter-row > label select#creator-filter { flex: 0 0 auto; width: auto; min-width: 6rem; max-width: 14rem; }
 
+.team-template-filters { display: flex; flex-wrap: wrap; align-items: end; gap: .75rem; }
+.team-template-filters label { display: grid; gap: .25rem; margin: 0; font-size: .8125rem; }
+.team-template-filters > label { flex: 1 1 14rem; max-width: 25rem; }
+.team-template-category { display: grid; gap: .25rem; }
+.team-template-filters :is(input, select) { min-height: 2.75rem; width: 100%; }
+#main-panel:has(#tab-teams[aria-selected="true"]) :is(.directory-search, #open-create, .filter-row) { display: none; }
+#main-panel:has(#tab-teams[aria-selected="true"]) .directory-top { grid-template-areas: "tabs tabs" "who ws"; grid-template-columns: minmax(0, 1fr) auto; }
+#teams-status { margin: .75rem 0; }
 #team-template-list .team-template-card {
   display: flex;
   flex-direction: column;
@@ -277,9 +285,11 @@ body.app-workspace:not(.chat-open) > main > #main-panel:has(> .directory-top) { 
 }
 
 #team-template-list .primary {
-  margin-top: 0.35rem;
+  margin-top: auto;
+  min-height: 2.75rem;
   align-self: flex-start;
 }
+#team-template-list .category-tag { align-self: flex-start; color: var(--ot-muted); font-size: .75rem; }
 
 .directory-list-heading { display:flex; justify-content:space-between; align-items:center; gap:.75rem; margin-bottom:.5rem; }
 .directory-list-heading .directory-count { margin:0; }
@@ -289,7 +299,7 @@ body.app-workspace:not(.chat-open) > main > #main-panel:has(> .directory-top) { 
 #agent-list .agent-card .archive-label { flex:none; color:var(--ot-muted); font-size:.75rem; }
 #api-key-token { overflow-wrap: anywhere; }
 #api-key-value { display: block; margin-bottom: .5rem; user-select: all; }
-#agent-share-dialog {
+#agent-share-dialog, #team-template-dialog {
   box-sizing: border-box;
   width: min(28rem, calc(100vw - 2rem));
   max-height: min(43rem, 88dvh);
@@ -301,9 +311,17 @@ body.app-workspace:not(.chat-open) > main > #main-panel:has(> .directory-top) { 
   overflow: auto;
   overflow-wrap: anywhere;
 }
-#agent-share-dialog::backdrop { background: rgb(12 22 17 / 42%); }
-#agent-share-dialog h2 { margin: 0 0 .5rem; font-size: 1.125rem; }
-#agent-share-dialog h3 { font-size: .875rem; }
+#agent-share-dialog::backdrop, #team-template-dialog::backdrop { background: rgb(12 22 17 / 42%); }
+:is(#agent-share-dialog, #team-template-dialog) h2 { margin: 0 0 .5rem; font-size: 1.125rem; }
+:is(#agent-share-dialog, #team-template-dialog) h3 { font-size: .875rem; }
+#team-template-form > label { display: grid; gap: .25rem; }
+#team-template-name { box-sizing: border-box; width: 100%; font-size: 1rem; }
+#team-template-roles { list-style: none; padding: 0; margin: .5rem 0 1rem; border: 1px solid var(--ot-line); border-radius: .75rem; }
+#team-template-roles li { display: grid; gap: .125rem; padding: .625rem .75rem; font-size: .8125rem; }
+#team-template-roles li + li { border-top: 1px solid var(--ot-line); }
+#team-template-roles .note { margin: 0; }
+.team-template-actions { display: flex; justify-content: end; gap: .5rem; }
+.team-template-actions button { min-height: 2.75rem; }
 #agent-share-form { margin: .75rem 0; padding: 0; border: 0; background: transparent; box-shadow: none; }
 #agent-share-form > label, #agent-share-link-field { display: grid; gap: .35rem; }
 #agent-share-dialog :is(select, input[readonly]) { box-sizing: border-box; width: 100%; min-width: 0; font-size: 1rem; }

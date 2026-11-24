@@ -25,45 +25,24 @@ function renderCode(document, block) {
   queueMicrotask(() => {
     if (!container.isConnected) return;
     const fold = container.closest('details:not([open])');
-    if (!fold) void showFlowchart(document, container, code, block.text, english);
+    if (!fold) void showFlowchart(document, container, code, block.text);
     else fold.addEventListener('toggle', function onOpen() {
       if (!fold.open) return;
       fold.removeEventListener('toggle', onOpen);
-      void showFlowchart(document, container, code, block.text, english);
+      void showFlowchart(document, container, code, block.text);
     });
   });
   return container;
 }
 
-async function showFlowchart(document, container, code, text, english) {
-  flowchartModule ??= import('./flowchart.mjs').catch(() => {
+async function showFlowchart(document, container, code, text) {
+  flowchartModule ??= import('../shell/flowchart.mjs').catch(() => {
     flowchartModule = undefined;
     return null;
   });
   try {
     const module = await flowchartModule;
-    if (!container.isConnected || !module) return;
-    const diagram = await module.renderMermaidDiagram(document, text);
-    if (!container.isConnected) return;
-    if (!diagram) return;
-    const scroller = container.closest('#message-scroller');
-    const atBottom = scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32;
-    const source = document.createElement('details');
-    const summary = document.createElement('summary');
-    const hint = document.createElement('p');
-    hint.className = 'chat-diagram-scroll-hint';
-    hint.hidden = true;
-    hint.setAttribute('aria-hidden', 'true');
-    hint.textContent = english ? 'Scroll sideways to see the full diagram' : '横向滚动查看完整图表';
-    const focused = code.contains(document.activeElement) ? document.activeElement : null;
-    source.className = 'chat-diagram-source';
-    source.open = Boolean(focused);
-    summary.textContent = english ? 'Diagram source' : '图表源码';
-    source.append(summary, code);
-    container.replaceChildren(diagram, hint, source);
-    module.observeDiagramSize(diagram, hint);
-    focused?.focus({preventScroll:true});
-    if (atBottom) scroller.scrollTop = scroller.scrollHeight;
+    await module?.replaceMermaidSource(document, container, code, text);
   } catch {
     // Leave the original code visible if the chart renderer fails.
   }

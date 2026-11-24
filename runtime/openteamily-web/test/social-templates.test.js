@@ -35,11 +35,16 @@ function setup(calls) {
   }
 }
 
-test('list exposes the three public templates and the Discover create-team entry (#313)', async () => {
+test('list exposes categorized public templates and the Discover create-team entry (#313)', async () => {
   const { templates, create_entry } = await teamTemplates(setup([])).endpoints.list()
-  assert.equal(templates.length, 3)
+  assert.deepEqual(templates.slice(0, 3).map(t => t.slug), ['product-squad', 'content-studio', 'research-desk'])
   assert.deepEqual(templates.map((t) => t.slug), TEMPLATES.map((t) => t.slug))
-  assert.ok(!JSON.stringify(templates).includes('你负责'), 'instructions are not listed')
+  assert.ok(templates.some(t => t.category === 'education'))
+  for (const template of templates) {
+    assert.ok(template.category)
+    assert.equal(template.agents.length, 3)
+    assert.ok(template.agents.every(agent => !Object.hasOwn(agent, 'instructions')))
+  }
   assert.equal(create_entry, '/agents?tab=teams&new=1')
 })
 
