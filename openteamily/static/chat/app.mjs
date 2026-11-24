@@ -7945,6 +7945,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     const openStartingAgent = async () => {
+      const emptyScope = JSON.stringify([owner.id, workspaceId(), 'agent', start.agent, null]);
+      if (servedByDsbot && readPendingChatText(view, emptyScope).length) {
+        openEmptyAgentChat(start.agent);
+        return;
+      }
       const personalRoute = start.workspace === personalWorkspace && workspaceId() === personalWorkspace && start.agent === personalAgentId;
       const personalTarget = servedByDsbot && personalRoute && personalDraftScope(view, owner.id, {
         workspace_id: personalWorkspace, agent_id: personalAgentId,
@@ -9422,6 +9427,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function queueChatMessage(message, files, reply, sticker) {
     const queue = currentChatSendQueue();
     const {social,scope} = queue;
+    if (!queue.conversationId && queue.jobs.some(job => job.key === queue.createKey && job.failed && job.storedText)) {
+      show('error', uiLabel('请先重试或移除未确认的首条消息。', 'Retry or remove the unconfirmed first message first.'));
+      return;
+    }
     if (social && files.length) {
       // The social message store accepts one attachment per message. A
       // multi-file draft is sent in order, with its caption on the first file.
@@ -9432,9 +9441,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else {
       const job = makeSendJob(queue, message, files, reply, sticker);
       if (!social && chatSettings && !chatSettings.ready) job.preferences = chatSettings;
-      if (!files.length && !sticker && (social ? currentSharedTextConversation() : !reply && currentPrivateThread())) {
+      const first = servedByDsbot && !social && !queue.conversationId && job.key === queue.createKey;
+      if (!files.length && !sticker && (social ? currentSharedTextConversation() : !reply && (first || currentPrivateThread()))) {
         // A reload can interrupt the request after the composer clears.
-        job.storedText = savePendingChatText(document.defaultView, scope, job.key, message);
+        job.storedText = savePendingChatText(document.defaultView, scope, job.key,
+          first ? {...message, memory_scope:queue.memoryScope} : message);
       }
       queue.jobs.push(job);
     }
@@ -9475,10 +9486,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function restorePendingPrivateText(items) {
-    if (!currentPrivateThread()) return;
+    const starting = servedByDsbot && currentSource === 'agent' && currentAgent && !currentConversation;
+    if (!starting && !currentPrivateThread()) return;
     const scope = sendScope();
     const stored = readPendingChatText(document.defaultView, scope);
     if (!stored.length) return;
+    if (starting) {
+      const queue = currentChatSendQueue();
+      if (queue.jobs.length) return;
+      const {key,message:{memory_scope,...message}} = stored[0];
+      queue.createKey = key;
+      queue.memoryScope = memory_scope;
+      if (memory_scope !== undefined) memoryDrafts.set(scope,memory_scope);
+      const job = makeSendJob(queue, message, [], null, null, key);
+      job.storedText = true;
+      job.failed = true;
+      job.state = uiLabel('上次发送未确认，可重试。', 'Delivery wasn’t confirmed. You can retry.');
+      queue.jobs.push(job);
+      void recoverFirstPrivateText(queue, job);
+      return;
+    }
     const delivered = new Set(items.filter(item => item.role === 'user' && item.client_key).map(item => item.client_key));
     for (const {key,message} of stored) {
       if (delivered.has(key)) {
@@ -9500,6 +9527,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         renderPendingSend();
         if (!queue.active && !readingPrivateContext()) void openAgentConversation(queue.agentId, queue.conversationId, {refresh:true});
       });
+    }
+  }
+
+  async function recoverFirstPrivateText(queue, job) {
+    const {scope, owner, wid, agentId} = queue;
+    const open = socialOpen;
+    const current = () => open === socialOpen && sendScope() === scope && pendingSends.get(scope) === queue &&
+      queue.jobs.includes(job) && job.failed;
+    try {
+      // Match the deterministic native conversation ID used by DS-Bot for this create key.
+      const bytes = new TextEncoder().encode(`conversation:${agentId}:${job.key}`);
+      const hash = await document.defaultView.crypto.subtle.digest('SHA-256', bytes);
+      if (!current()) return;
+      const cid = Array.from(new Uint8Array(hash,0,16), byte=>byte.toString(16).padStart(2,'0')).join('');
+      const result = await request('GET', `${queue.base}/${cid}?limit=${HISTORY_PAGE_SIZE}&snapshot=1`,
+        undefined, undefined, AbortSignal.timeout(4500));
+      if (!current() || result.status !== 200 || !validStartupTranscript(result.body,wid,agentId,cid) ||
+          !result.body.items.some(item=>item.role==='user' && item.client_key===job.key)) return;
+      const destination = JSON.stringify([owner,wid,'agent',agentId,cid]);
+      if (!publicDraft.lookup(destination)) publicDraft.move(scope,destination);
+      removeSendJob(queue,job);
+      await openAgentConversation(agentId,cid,{startupSnapshot:()=>result});
+    } catch {
+      // Keep the same-key retry available when the recorded first send cannot be confirmed.
     }
   }
 
@@ -9583,7 +9634,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             await job.preferences.promise;
             if (pendingSends.get(queue.scope) !== queue || queue.owner !== currentUser?.id) return;
             job.message = {...job.message,...messagePayload(job.message.body, chatLanguage)};
-            if (job.storedText) savePendingChatText(document.defaultView, queue.scope, job.key, job.message);
+            if (job.storedText) savePendingChatText(document.defaultView, queue.scope, job.key,
+              queue.conversationId ? job.message : {...job.message, memory_scope:queue.memoryScope});
             job.preferences = null;
           }
           if (!queue.conversationId) {
@@ -9613,6 +9665,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             if (firstText) initialResult = created;
             const previous = queue.scope;
             const visible = isCurrent();
+            if (firstText && job.storedText) {
+              savePendingChatText(document.defaultView, previous, job.key);
+              job.storedText = false;
+            }
             queue.conversationId = conversation.id;
             queue.scope = JSON.stringify([queue.owner, queue.wid, 'agent', queue.agentId, conversation.id]);
             pendingSends.delete(previous);

@@ -156,6 +156,9 @@ test('the Discover team-template link opens and focuses templates without creati
   assert.equal(el('list-panel').hidden, true);
   assert.equal(el('team-template-list').children.length, 3);
   assert.equal(requests.filter(call => call.path === '/v1/team-templates').length, 1);
+  assert.equal(requests.some(call => call.path.startsWith('/v1/workspaces/ws-1/agents?')), false);
+  await el('tab-agents').handlers.click();
+  assert.equal(requests.filter(call => call.path.startsWith('/v1/workspaces/ws-1/agents?')).length, 1);
   assert.equal(requests.some(call => call.method === 'POST'), false);
 });
 

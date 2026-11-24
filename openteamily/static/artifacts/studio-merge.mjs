@@ -100,6 +100,13 @@ function changes(base, other, budget, useLineAnchors) {
   return edits;
 }
 
+export function compareDocumentLines(historical, current) {
+  const before = lines(historical), after = lines(current);
+  const budget = () => ({remaining:DIFF_BUDGET});
+  const edits = changes(before, after, budget(), true) ?? changes(before, after, budget(), false);
+  return {before, after, edits};
+}
+
 function reversedChanges(base, other, budget, useLineAnchors) {
   const edits = changes(base.toReversed(), other.toReversed(), budget, useLineAnchors);
   return edits?.reverse().map(({from, to, items}) => ({

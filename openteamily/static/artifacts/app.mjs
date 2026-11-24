@@ -3360,6 +3360,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const canRestore = () => nativeCatalog && currentSelection() && current.revision !== revision;
     workVersion.instance.open({current:currentSelection, id:artifact.id, workspace, revision, title:artifact.title, href, trigger,
       path:editorPath(selection,artifact.id) + '/versions/' + revision,
+      latestPath:editorPath(selection,artifact.id),
       canRestore,
       reviewRestore: () => restoreReviewMessage(selection) || {revision:current.revision, key:idempotencyKey()},
       submitRestore: review => restoreWorkVersion(selection, artifact.id, revision, review),

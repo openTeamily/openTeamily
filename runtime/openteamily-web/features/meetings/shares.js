@@ -50,8 +50,8 @@ async function shared(req, workspace) {
       workspace_id:workspace, actions,
     }).catch(() => []) : []
     const key = ({share_id, revision, action_index}) => `${share_id}.${revision}.${action_index}`
-    const receipts = new Map((Array.isArray(saved) ? saved : []).map(({id, workspace_id, ...source}) =>
-      [key(source), {id, workspace_id}]))
+    const receipts = new Map((Array.isArray(saved) ? saved : []).map(({id, workspace_id, status, action_revision, ...source}) =>
+      [key(source), {id, workspace_id, status, revision:action_revision}]))
     const items = receipts.size ? data.items.map(item => {
       const saved_action = receipts.get(key(item))
       return saved_action ? {...item, saved_action} : item

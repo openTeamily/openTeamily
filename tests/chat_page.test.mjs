@@ -4489,6 +4489,23 @@ test('pending private text keeps its send key alongside an independent newer dra
   assert.equal(readChatDrafts(view,alice).get(scope),'后写的草稿');
 });
 
+test('a pending first private message keeps its creation key and preferences scoped to the draft agent', () => {
+  const {view} = publicOpeningView();
+  const blank = (owner,workspace,agent) => JSON.stringify([owner,workspace,'agent',agent,null]);
+  const scope = blank(alice,linkWork,linkAgent);
+  const key = 'chat-original-creation-key';
+  const message = {body:'创建会话时发送的第一条',chat_language:'zh-CN',memory_scope:'off'};
+  assert.equal(savePendingChatText(view,scope,key,message),true);
+  assert.equal(writeChatDrafts(view,alice,new Map([[scope,'后写的草稿']])),true);
+  assert.deepEqual(readPendingChatText(view,scope),[{key,message}]);
+  assert.deepEqual(readPendingChatText(view,blank(bob,linkWork,linkAgent)),[]);
+  assert.deepEqual(readPendingChatText(view,blank(alice,linkTeam,linkAgent)),[]);
+  assert.deepEqual(readPendingChatText(view,blank(alice,linkWork,linkAgentOlder)),[]);
+  assert.equal(savePendingChatText(view,scope,key),true);
+  assert.deepEqual(readPendingChatText(view,scope),[]);
+  assert.equal(readChatDrafts(view,alice).get(scope),'后写的草稿');
+});
+
 test('pending shared text preserves the exact quote, mention and destination alongside a newer draft', () => {
   const {view} = publicOpeningView();
   const scope = JSON.stringify([alice,linkTeam,'social',null,linkSocial]);

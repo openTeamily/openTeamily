@@ -1540,6 +1540,10 @@ body #main-panel > #editor-form:not([hidden]) { max-width: 46rem; width: 100%; j
 .work-version-header div { min-width: 0; overflow-wrap: anywhere; }
 .work-version-header p { margin: .3rem 0 .6rem; }
 #work-version-dialog button { min-height: 2.75rem; }
+.work-version-view-tools { display: flex; flex-wrap: wrap; gap: .5rem; margin: .25rem 0 .75rem; }
+.work-version-view-tools:not(:has(> button:not([hidden]))),
+#work-version-dialog:has(#work-version-restore-review:not([hidden])) .work-version-view-tools { display: none; }
+.work-version-view-tools button[aria-pressed="true"] { background: var(--ot-bg-accent); color: var(--ot-ink); }
 #work-version-preview {
   max-height: min(44dvh, 24rem);
   overflow: auto;
@@ -1552,8 +1556,19 @@ body #main-panel > #editor-form:not([hidden]) { max-width: 46rem; width: 100%; j
 #work-version-preview:empty, #work-version-status:empty { display: none; }
 #work-version-preview pre { margin: 0; white-space: pre-wrap; font: inherit; }
 #work-version-preview :is(img, video, audio) { display: block; max-width: 100%; margin: auto; }
+#work-version-preview :is(h1, h2, h3, p):first-child { margin-top: 0; }
+#work-version-preview .chat-markdown-table-scroll { max-width: 100%; overflow: auto; }
 #work-version-preview table { border-collapse: collapse; margin: .5rem 0; }
-#work-version-preview td { padding: .3rem; border: 1px solid var(--ot-line); min-width: 3rem; }
+#work-version-preview :is(th, td) { padding: .4rem .65rem; border: 1px solid var(--ot-line); min-width: 3rem; }
+#work-version-preview th { background: var(--ot-surface); }
+#work-version-preview [data-align="center"] { text-align: center; }
+#work-version-preview [data-align="right"] { text-align: right; }
+#work-version-preview .work-version-diff { border-top: 1px solid var(--ot-line); padding-block: .65rem; }
+.work-version-diff h3 { font-size: .9rem; margin-bottom: .45rem; }
+.work-version-diff p { margin: .35rem 0 .15rem; color: var(--ot-muted); }
+#work-version-preview .work-version-diff pre { padding: .45rem .65rem; border-radius: .35rem; border-inline-start: 2px solid var(--ot-line); }
+#work-version-preview .work-version-diff [data-change="historical"] { background: var(--ot-surface); }
+#work-version-preview .work-version-diff [data-change="current"] { background: var(--ot-bg-accent); border-inline-start-color: var(--ot-accent); }
 #work-version-link { margin-top: .5rem; width: 100%; }
 .work-version-actions {
   display: flex;

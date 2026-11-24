@@ -296,14 +296,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   for (const button of categoryButtons) {
     button.addEventListener('click', () => selectCategory(button.dataset.category, true));
   }
-  if (globalThis.addEventListener) {
-    globalThis.addEventListener('popstate', () => {
-      selectedCategory = categoryFromSearch(globalThis.location.search);
-      renderCategoryFilter();
-      if (currentUser && workspaces.length) return restoreDirectory();
-    });
-  }
-
   function show(kind, text) {
     status.dataset.kind = kind;
     status.textContent = text;
@@ -616,9 +608,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     workspaceSelect.value = workspace;
     archivedOnly = target.archived;
     syncTeamRunLink();
-    if (!directoryLoaded || loadedWorkspace !== workspace || loadedArchived !== archivedOnly) {
-      if (!await loadWorkspace({directoryOnly: true}) || globalThis.location?.hash !== hash) return;
-    } else {
+    const loadAgents = !teamsTabSelected || Boolean(target.agent);
+    if (loadedWorkspace !== workspace || (loadAgents && (!directoryLoaded || loadedArchived !== archivedOnly))) {
+      if (!await loadWorkspace({directoryOnly:true, loadAgents}) || globalThis.location?.hash !== hash) return;
+    } else if (loadAgents) {
       renderDirectory();
     }
     if (target.agent && target.agent !== currentAgent?.id) {
@@ -662,6 +655,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     archivedOnly = false;
     if (directoryStatus) directoryStatus.value = 'active';
     document.getElementById('agent-list').replaceChildren();
+    if (teamsTabSelected) void loadTeamTemplates();
     const personalPath = nativeSharing ? '/v1/workspaces?scope=personal&include=personal-agent' : '/v1/personal-agent';
     void request('GET', personalPath).catch(() => unavailable).then(personal => {
       if (seq !== sessionLoad || personal.status !== 200) return;
@@ -867,7 +861,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return {status: 200, body: {items: [...(first.body.items || []), ...(next.body.items || [])]}};
   }
 
-  async function loadWorkspace({directoryOnly = false} = {}) {
+  async function loadWorkspace({directoryOnly = false, loadAgents = !teamsTabSelected} = {}) {
     const id = workspaceId();
     if (!id) return false;
     const seq = ++workspaceLoad;
@@ -888,17 +882,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       document.getElementById('agent-list').replaceChildren();
       document.getElementById('agents-empty').hidden = true;
       if (includeWorkspace) document.getElementById('role-note').textContent = '';
-      show('loading', '正在加载智能体…');
+      show('loading', loadAgents ? '正在加载智能体…' : '正在加载工作区…');
     }
     const unavailable = {status: 0, body: {}};
     const base = `/v1/workspaces/${id}`;
     const nativeWorkspace = nativeSharing ? workspaces.find(space => space.id === id) : null;
     const readList = status => listAgents(base, status).catch(() => unavailable);
     const stillCurrent = () => seq === workspaceLoad && id === workspaceId() && user === currentUser?.id;
-    const [detail, members, active] = await Promise.all([
+    const active = loadAgents && !archived ? readList(false) : null;
+    const [detail, members] = await Promise.all([
       includeWorkspace && !nativeSharing ? request('GET', base).catch(() => unavailable) : null,
       includeWorkspace ? request('GET', base + '/members').catch(() => unavailable) : null,
-      archived ? null : readList(false),
     ]);
     if (!stillCurrent()) return false;
     if (includeWorkspace) {
@@ -919,6 +913,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       document.getElementById('role-note').textContent = canManage(actor)
         ? '你可以管理这个工作区中的智能体。'
         : '你可以查看这个工作区中的智能体。';
+      loadedWorkspace = id;
       if (teamTemplatesLoaded) renderTeamTemplates();
     }
     if (archived && !canManage(actor)) {
@@ -926,7 +921,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       writeDirectoryTarget(null);
     }
     syncDirectoryStatus();
-    const listed = active ?? await readList(archived);
+    if (!loadAgents) {
+      show('', '');
+      return true;
+    }
+    const listed = await (active ?? readList(archived));
     if (!stillCurrent()) return false;
     if (listed.status !== 200) {
       show('error', messageFor(listed.body.error, '无法加载智能体目录。'));
@@ -1418,25 +1417,42 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   const tabAgents = document.getElementById('tab-agents');
   const tabTeams = document.getElementById('tab-teams');
-  if (tabAgents && tabTeams) {
-    function selectDirectoryTab(teams) {
-      teamsTabSelected = teams;
-      tabAgents.setAttribute('aria-selected', String(!teams));
-      tabTeams.setAttribute('aria-selected', String(teams));
-      document.getElementById('list-panel').hidden = teams;
-      document.getElementById('teams-panel').hidden = !teams;
-      if (!teams) closeTeamTemplate();
-    }
-    tabAgents.addEventListener('click', () => {
-      focusTemplates = false;
-      selectDirectoryTab(false);
-    });
-    tabTeams.addEventListener('click', async () => {
-      selectDirectoryTab(true);
-      await loadTeamTemplates();
-    });
-    if (teamsTabSelected) selectDirectoryTab(true);
+  function selectDirectoryTab(teams) {
+    teamsTabSelected = teams;
+    tabAgents?.setAttribute('aria-selected', String(!teams));
+    tabTeams?.setAttribute('aria-selected', String(teams));
+    document.getElementById('list-panel').hidden = teams;
+    document.getElementById('teams-panel').hidden = !teams;
+    if (teams) hideDrawer();
+    else closeTeamTemplate();
   }
+
+  function visitDirectoryTab(teams) {
+    if (teams === teamsTabSelected) {
+      if (teams) return loadTeamTemplates();
+      return;
+    }
+    focusTemplates = false;
+    selectDirectoryTab(teams);
+    const {location, history} = globalThis;
+    const search = teams ? '?tab=teams' : searchWithCategory('', selectedCategory);
+    const id = workspaceId();
+    const hash = directoryId.test(id) ? '#'+new URLSearchParams({workspace:id}) : '';
+    history?.pushState(null, '', location.pathname + search + hash);
+    if (teams) return loadTeamTemplates();
+    if (currentUser && workspaces.length) return restoreDirectory();
+  }
+  tabAgents?.addEventListener('click', () => visitDirectoryTab(false));
+  tabTeams?.addEventListener('click', () => visitDirectoryTab(true));
+  if (teamsTabSelected) selectDirectoryTab(true);
+  globalThis.addEventListener?.('popstate', () => {
+    const search = globalThis.location.search;
+    selectDirectoryTab(teamDirectoryLink(search));
+    selectedCategory = categoryFromSearch(search);
+    renderCategoryFilter();
+    if (teamsTabSelected) void loadTeamTemplates();
+    if (currentUser && workspaces.length) return restoreDirectory();
+  });
 
   return load();
 }

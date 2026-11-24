@@ -591,6 +591,10 @@
       </div>
       <button type="button" id="work-version-close" autofocus>关闭</button>
     </header>
+    <div class="work-version-view-tools" role="group" aria-label="版本查看方式">
+      <button type="button" id="work-version-source" aria-controls="work-version-preview" aria-pressed="false" hidden>Markdown 原文</button>
+      <button type="button" id="work-version-compare" aria-controls="work-version-preview" aria-pressed="false" hidden>对比当前版本</button>
+    </div>
     <div id="work-version-preview" tabindex="0" aria-label="历史版本内容"></div>
     <p id="work-version-status" class="note" role="status"></p>
     <button type="button" id="work-version-retry" hidden>重试</button>

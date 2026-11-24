@@ -13,14 +13,14 @@ export async function sharedMeetingActions({store, host}, source, call) {
   if (!workspace) return []
   if (Array.isArray(source.actions)) {
     if (source.actions.length > 50) refuse(400, 'invalid', 'Too many shared action references')
-    return store.all(`SELECT s.share_id, s.revision, s.action_index, a.id, a.workspace_id
+    return store.all(`SELECT s.share_id, s.revision, s.action_index, a.id, a.workspace_id, a.status, a.revision AS action_revision
       FROM memory_shared_meeting_action_sources s JOIN memory_actions a ON a.id=s.action_id
       WHERE a.workspace_id=? AND s.workspace_id=? AND (s.share_id, s.revision, s.action_index) IN (
         SELECT json_extract(value,'$.share_id'), json_extract(value,'$.revision'), json_extract(value,'$.action_index')
         FROM json_each(?)
       )`, workspace, source.workspace_id, JSON.stringify(source.actions))
   }
-  return store.all(`SELECT s.action_index AS "index", a.id, a.workspace_id
+  return store.all(`SELECT s.action_index AS "index", a.id, a.workspace_id, a.status, a.revision
     FROM memory_shared_meeting_action_sources s JOIN memory_actions a ON a.id=s.action_id
     WHERE a.workspace_id=? AND s.workspace_id=? AND s.share_id=? AND s.revision=?`,
   workspace, source.workspace_id, source.share_id, source.revision)
@@ -54,6 +54,6 @@ export async function saveSharedMeetingAction(context, payload, call) {
       store.run('INSERT INTO memory_shared_meeting_action_sources VALUES(?,?,?,?,?)',
         action.id, workspace_id, share_id, revision, action_index)
     }
-    return {status, body:{action:{id:action.id, workspace_id:workspace}}}
+    return {status, body:{action:{id:action.id, workspace_id:workspace, status:action.status, revision:action.revision}}}
   })
 }

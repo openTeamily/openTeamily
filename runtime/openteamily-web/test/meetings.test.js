@@ -679,15 +679,21 @@ test('received meeting actions are copied once into personal memory and every re
   const action = copied[0].body.action
   assert.deepEqual(copied[1].body.action,action)
   assert.equal(action.workspace_id,WS)
+  assert.equal(action.status,'open')
   const privatePath = actions + '/' + action.id
   const saved = (await bot.call('memory','GET',privatePath)).body.action
   assert.match(saved.notes,/在周五前确认议程/)
   assert.equal(saved.due_at,Date.parse('2032-02-29') / 1000)
   assert.deepEqual(saved.source,{kind:'shared_meeting',workspace_id:team,share_id:shareId,revision:3,action_index:0})
-  await bot.call('memory','POST',privatePath,{revision:1,changes:{status:'done',notes:'已自行处理'}})
-  assert.deepEqual((await bot.call('meetings','GET',receipt)).body.saved_actions,[{index:0,...action}])
-  assert.deepEqual((await loadActions()).body.items,[{...assigned,saved_action:action},another])
-  assert.equal((await copy(item)).status,200)
+  const updated = (await bot.call('memory','POST',privatePath,
+    {revision:action.revision,changes:{status:'done',notes:'已自行处理'}})).body.action
+  const completed = {...action,status:'done',revision:updated.revision}
+  assert.ok(completed.revision > action.revision)
+  assert.deepEqual((await bot.call('meetings','GET',receipt)).body.saved_actions,[{index:0,...completed}])
+  assert.deepEqual((await loadActions()).body.items,[{...assigned,saved_action:completed},another])
+  const replay = await copy(item)
+  assert.equal(replay.status,200)
+  assert.deepEqual(replay.body.action,completed)
   assert.equal((await bot.call('memory','GET',privatePath)).body.action.notes,'已自行处理')
   assert.equal((await bot.call('memory','GET',actions.replace(WS,team))).body.items.length,0)
   assert.deepEqual((await bot.call('meetings','GET',receipt)).body.meeting,meeting)
