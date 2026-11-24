@@ -1,4 +1,7 @@
 import {artifactKindLabel} from '../shell/thumb.mjs';
+import {renderMarkdown} from '../shell/markdown.mjs';
+import {tableMarkdownOptions} from '../shell/markdown-table.mjs';
+import {compareDocumentLines} from './studio-merge.mjs';
 
 const FORMATS = {
   document: [['docx','Word DOCX'], ['pdf','文本 PDF']],
@@ -37,9 +40,11 @@ function previewWorkbook(root, sheets) {
   display();
 }
 
-export function renderWorkVersion(root, version, exportPath) {
+export function renderWorkVersion(root, version, exportPath, {source = false} = {}) {
   root.replaceChildren();
-  if (typeof version.body === 'string') {
+  if (version.kind === 'document' && typeof version.body === 'string' && version.body.trim() && !source) {
+    renderMarkdown(root.ownerDocument, root, version.body, tableMarkdownOptions);
+  } else if (typeof version.body === 'string') {
     if (version.kind === 'website') appendText(root,'p','已保存的网站源代码');
     appendText(root,'pre',version.body || '此版本的正文为空。');
   } else if (version.slides?.slides?.length) {
@@ -81,6 +86,42 @@ export function renderWorkVersion(root, version, exportPath) {
   }
 }
 
+function renderVersionComparison(root, historical, current) {
+  root.replaceChildren();
+  appendText(root, 'p', `历史修订 ${historical.revision} → 当前已保存修订 ${current.revision}`);
+  if (historical.title !== current.title) {
+    appendText(root, 'h3', '标题变化');
+    appendText(root, 'p', '历史 · ' + historical.title);
+    appendText(root, 'p', '当前 · ' + current.title);
+  }
+  const {before, after, edits} = compareDocumentLines(historical.body, current.body);
+  if (!edits || edits.length > 120) {
+    appendText(root, 'p', '显示两份完整正文。');
+    appendText(root, 'h3', '历史正文');
+    appendText(root, 'pre', before.join(''));
+    appendText(root, 'h3', '当前正文');
+    appendText(root, 'pre', after.join(''));
+    return;
+  }
+  if (!edits.length) {
+    appendText(root, 'p', '正文相同。');
+    return;
+  }
+  for (const {from, to, items} of edits) {
+    const group = appendText(root, 'section', '');
+    group.className = 'work-version-diff';
+    appendText(group, 'h3', `历史正文第 ${from + 1} 行附近`);
+    if (to > from) {
+      appendText(group, 'p', '仅在历史版本');
+      appendText(group, 'pre', before.slice(from, to).join('')).dataset.change = 'historical';
+    }
+    if (items.length) {
+      appendText(group, 'p', '仅在当前版本');
+      appendText(group, 'pre', items.join('')).dataset.change = 'current';
+    }
+  }
+}
+
 export function mountWorkVersion(document, {read, closeAddress}) {
   const get = name => document.getElementById('work-version-' + name);
   const dialog = get('dialog');
@@ -88,6 +129,7 @@ export function mountWorkVersion(document, {read, closeAddress}) {
   const title = get('title'), meta = get('meta'), preview = get('preview'), status = get('status');
   const tools = get('tools'), format = get('format'), download = get('download');
   const field = get('link'), copy = get('copy'), retry = get('retry');
+  const source = get('source'), compare = get('compare');
   const closeButton = get('close'), restore = get('restore'), review = get('restore-review');
   const restoreSummary = get('restore-summary'), cancelRestore = get('restore-cancel'), confirmRestore = get('restore-confirm');
   const view = document.defaultView;
@@ -98,6 +140,7 @@ export function mountWorkVersion(document, {read, closeAddress}) {
     if (user && previous?.restoring) return;
     state = null;
     previous?.controller.abort();
+    previous?.comparison?.abort();
     if (dialog.open) dialog.close();
     preview.replaceChildren();
     field.value = status.textContent = '';
@@ -110,6 +153,19 @@ export function mountWorkVersion(document, {read, closeAddress}) {
     }
   }
 
+  function showSnapshot(target, raw = false) {
+    target.comparison?.abort();
+    target.comparison = null;
+    target.mode = raw ? 'source' : 'preview';
+    source.setAttribute('aria-pressed', String(raw));
+    compare.setAttribute('aria-pressed', 'false');
+    preview.setAttribute('aria-label', '历史版本内容');
+    restore.disabled = Boolean(target.restoring);
+    status.textContent = '';
+    renderWorkVersion(preview, target.version, target.path + '/export', {source:raw});
+    preview.scrollTop = 0;
+  }
+
   function syncExport(target) {
     const selected = format.value;
     download.href = target.path + '/export' + (selected === 'original' ? '' : '?format=' + encodeURIComponent(selected));
@@ -118,6 +174,7 @@ export function mountWorkVersion(document, {read, closeAddress}) {
   async function load(target) {
     status.textContent = '正在读取此版本…';
     tools.hidden = retry.hidden = true;
+    source.hidden = compare.hidden = true;
     const signal = AbortSignal.any([target.controller.signal, AbortSignal.timeout(12000)]);
     const result = await read(target.path, signal).catch(() => ({status:0,body:{}}));
     if (state !== target || !target.current()) return;
@@ -136,12 +193,52 @@ export function mountWorkVersion(document, {read, closeAddress}) {
       const option = appendText(format,'option',label);
       option.value = value;
     }
-    renderWorkVersion(preview,version,target.path + '/export');
+    target.version = version;
+    showSnapshot(target);
+    const documentVersion = version.kind === 'document' && typeof version.body === 'string';
+    source.hidden = !documentVersion;
+    compare.hidden = !documentVersion || !target.latestPath;
     syncExport(target);
     status.textContent = '';
     tools.hidden = false;
     restore.hidden = !target.canRestore?.();
   }
+
+  source.addEventListener('click', () => {
+    const target = state;
+    if (target?.current() && review.hidden && target.version?.kind === 'document') showSnapshot(target, target.mode !== 'source');
+  });
+  compare.addEventListener('click', async () => {
+    const target = state;
+    if (!target?.current() || !review.hidden || target.version?.kind !== 'document' || !target.latestPath) return;
+    if (target.mode === 'comparison') return showSnapshot(target);
+    target.mode = 'comparison';
+    target.comparedRevision = null;
+    source.setAttribute('aria-pressed', 'false');
+    compare.setAttribute('aria-pressed', 'true');
+    restore.disabled = true;
+    const controller = new AbortController();
+    target.comparison = controller;
+    status.textContent = '正在读取当前已保存版本…';
+    const signal = AbortSignal.any([target.controller.signal, controller.signal, AbortSignal.timeout(12000)]);
+    const result = await read(target.latestPath, signal).catch(() => ({status:0}));
+    if (state !== target || target.comparison !== controller || !target.current()) return;
+    target.comparison = null;
+    const current = result.body?.artifact;
+    if (result.status !== 200 || current?.id !== target.id || current.workspace_id !== target.workspace ||
+        current.kind !== 'document' || !Number.isSafeInteger(current.revision) ||
+        typeof current.title !== 'string' || typeof current.body !== 'string') {
+      showSnapshot(target);
+      status.textContent = '无法读取当前已保存版本，请重试对比。';
+      return;
+    }
+    target.comparedRevision = current.revision;
+    restore.disabled = false;
+    preview.setAttribute('aria-label', '与当前已保存版本的对比');
+    renderVersionComparison(preview, target.version, current);
+    preview.scrollTop = 0;
+    status.textContent = '';
+  });
 
   closeButton.addEventListener('click',()=>close({user:true}));
   dialog.addEventListener('cancel',event=>{
@@ -166,10 +263,14 @@ export function mountWorkVersion(document, {read, closeAddress}) {
   });
   restore.addEventListener('click',() => {
     const target = state;
-    if (!target?.current() || target.restoring || !target.canRestore?.()) return;
+    if (!target?.current() || target.comparison || target.restoring || !target.canRestore?.()) return;
     const initial = target.reviewRestore();
     if (typeof initial === 'string') {
       status.textContent = initial;
+      return;
+    }
+    if (target.comparedRevision != null && initial.revision !== target.comparedRevision) {
+      status.textContent = '当前已保存修订已变化。关闭预览并查看最新版本后，再恢复。';
       return;
     }
     target.restoreReview ??= initial;

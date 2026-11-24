@@ -1,6 +1,7 @@
 // Original, dependency-free markdown document surface. No stored HTML is executed.
 import { renderMarkdown, domToMarkdown } from './markdown.mjs';
 import { editRichTable, insertRichTable, MAX_TABLE_COLUMNS, MAX_TABLE_ROWS, tableMarkdownOptions } from './markdown-table.mjs';
+import { bindDocumentFind } from './document-find.mjs';
 
 export function bindDocumentEditor(document, form) {
   const root = document.getElementById('document-rich');
@@ -9,6 +10,7 @@ export function bindDocumentEditor(document, form) {
   const toggle = document.getElementById('document-source-toggle');
   const count = document.getElementById('document-length');
   const tableActions = document.getElementById('document-table-actions');
+  const find = bindDocumentFind(document, root, form);
   let active = false, sourceMode = false, dirty = false;
   let activeCell;
   const render = markdown => renderMarkdown(document, root, markdown, tableMarkdownOptions);
@@ -27,6 +29,7 @@ export function bindDocumentEditor(document, form) {
     if (source) source.hidden = !sourceMode;
     if (toggle) toggle.setAttribute('aria-pressed', String(sourceMode));
     for (const button of document.querySelectorAll('[data-doc-format]')) button.disabled = sourceMode;
+    find.setEnabled(active && !sourceMode);
     syncTableActions();
   };
 
@@ -130,9 +133,12 @@ export function bindDocumentEditor(document, form) {
   }
   return {
     flush,
+    find: find.open,
+    closeFind: find.close,
     load(markdown, enabled) {
       active = enabled; dirty = false; sourceMode = false;
       activeCell = null;
+      find.close();
       if (panel) panel.hidden = !enabled;
       if (!enabled) syncTableActions();
       if (!enabled || !root || !source) return;

@@ -49,7 +49,8 @@ dialog to print or save the preview as PDF.
 
 The meeting action inbox lists tasks assigned to you in received meeting notes. Save an item
 directly from the list to your personal Memory to-dos, then reopen the saved copy from the same
-row. Each saved copy has its own completion status in Memory.
+row. You can also complete or reopen the personal copy there. The inbox shows its current
+Memory status beside the shared action.
 
 The container launch overlay activates DSH's local SenseVoice recognizer. Profiles with the
 official Voice Input bundle use its configured local recognizer. The first preparation downloads
