@@ -473,4 +473,5 @@ export async function replaceMermaidSource(document, container, code, text) {
   observeDiagramSize(diagram, hint);
   focused?.focus({preventScroll:true});
   if (atBottom) scroller.scrollTop = scroller.scrollHeight;
+  return diagram;
 }

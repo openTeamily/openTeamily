@@ -2343,6 +2343,51 @@ test('a failed public detail cannot block the native scoped work or its preview'
   assert.equal(requests.filter(path => path === publicPath + '/preview').length, 1);
 });
 
+test('a signed Discover card starts a fresh public preview while confirming viewer actions', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const responses = [Promise.withResolvers(), Promise.withResolvers()];
+  const work = detailFixture({liked:true});
+  const publicPath = '/w/' + work.slug + '?view=preview';
+  const scopedPath = '/v1/discover/works/' + work.slug;
+  const requests = [];
+  let scoped = 0;
+  await mount(doc, {location:{search:''}, fetcher:async path => {
+    requests.push(path);
+    if (path === '/v1/auth/session') return commentResponse({user:{id:'reader-id',username:'alice'}});
+    if (path === '/v1/discover/works?limit=12') return commentResponse({viewer_username:'alice',items:[work]});
+    if (path === publicPath) return commentResponse({...work,preview:'Fresh published excerpt'});
+    if (path === '/w/' + work.slug + '/preview') return commentResponse({preview:'Cached cover excerpt'});
+    if (path === scopedPath) return responses[scoped++].promise;
+    throw new Error(path);
+  }});
+  const el = id => doc.getElementById('work-detail-' + id);
+  const [card] = classHits(doc.getElementById('feed-grid'), 'feed-detail-toggle');
+  const open = card.handlers.click();
+  await flush();
+  assert.deepEqual(requests.filter(path => path === publicPath || path === scopedPath), [publicPath,scopedPath]);
+  const [excerpt] = classHits(el('preview'), 'feed-detail-lines');
+  assert.equal(excerpt.children[0].textContent, 'Fresh published excerpt');
+  for (const action of ['comments','like','collect','follow']) assert.equal(el(action).hidden, true);
+  assert.equal(el('next').disabled, true);
+  responses[0].resolve(commentResponse({viewer_username:'alice',work}));
+  await open;
+  assert.equal(classHits(el('preview'), 'feed-detail-lines')[0], excerpt);
+  assert.equal(el('comments').hidden, false);
+  assert.equal(el('like').attributes['aria-pressed'], 'true');
+
+  await el('back').handlers.click();
+  const reopen = card.handlers.click();
+  await flush();
+  assert.equal(classHits(el('preview'), 'feed-detail-lines').length, 1);
+  responses[1].resolve(commentResponse({},404));
+  await reopen;
+  assert.equal(classHits(el('preview'), 'feed-detail-lines').length, 0);
+  assert.equal(el('actions').hidden, true);
+  assert.match(el('status').textContent, /下架或不可访问/);
+});
+
 test('an authoritative withdrawal clears the optimistic public preview and actions', async () => {
   const {mount} = await import('../openteamily/static/discover/app.mjs');
   const doc = feedDocument();
