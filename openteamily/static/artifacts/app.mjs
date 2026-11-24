@@ -615,7 +615,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const workspaceSelect = document.getElementById('workspace');
   const workspacePending = document.getElementById('workspace-pending');
   const createButtons = [newMenuButton, ...[
-    ...Object.values(NEW_KIND_BUTTONS), 'new-agent-website', 'new-save-message',
+    ...Object.values(NEW_KIND_BUTTONS), 'new-agent-document', 'new-agent-website', 'new-save-message',
     'empty-new-document', 'empty-agent-website', 'empty-save-message', 'empty-starred-save-message',
     'resume-draft-document', 'resume-draft-website',
   ].map(id => document.getElementById(id))].filter(Boolean);
@@ -1227,6 +1227,101 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const { bindDocumentEditor } = await import('../shell/rich-editor.mjs');
     return bindDocumentEditor(document, form);
   });
+  const documentDraftPanel = document.getElementById('document-draft');
+  const documentDraftPrompt = document.getElementById('document-draft-prompt');
+  const documentDraftStatus = document.getElementById('document-draft-status');
+  const documentDraftGenerate = document.getElementById('document-draft-generate');
+  const documentDraftPreview = document.getElementById('document-draft-preview');
+  let documentDraftRequest;
+  let documentDraftResult;
+
+  function resetDocumentDraft(enabled = false) {
+    documentDraftRequest?.abort();
+    documentDraftRequest = documentDraftResult = null;
+    if (!documentDraftPanel) return;
+    documentDraftPanel.hidden = !enabled;
+    documentDraftPanel.open = false;
+    documentDraftPrompt.value = documentDraftStatus.textContent = '';
+    documentDraftGenerate.disabled = false;
+    documentDraftPreview.hidden = true;
+    document.getElementById('document-draft-body').replaceChildren();
+  }
+
+  function acceptsDocumentDraft(selection) {
+    return nativeCatalog && activeEditor(selection) && current?.kind === 'document' && !current.id && !form.hidden && !form.inert;
+  }
+
+  documentDraftPrompt?.addEventListener('input', () => {
+    if (!documentDraftResult) return;
+    documentDraftResult = null;
+    documentDraftPreview.hidden = true;
+    documentDraftStatus.textContent = '描述已修改，请重新生成。';
+  });
+
+  documentDraftGenerate?.addEventListener('click', async () => {
+    const selection = editor;
+    if (!acceptsDocumentDraft(selection) || documentDraftRequest) return;
+    const prompt = documentDraftPrompt.value.trim();
+    if (!prompt) {
+      documentDraftStatus.textContent = '请填写主题或要点。';
+      documentDraftPrompt.focus();
+      return;
+    }
+    const controller = documentDraftRequest = new AbortController();
+    documentDraftResult = null;
+    documentDraftPreview.hidden = true;
+    documentDraftGenerate.disabled = true;
+    documentDraftStatus.textContent = '正在起草文档…';
+    const active = () => documentDraftRequest === controller && acceptsDocumentDraft(selection);
+    try {
+      const signal = AbortSignal.any([controller.signal, selection.controller.signal, AbortSignal.timeout(45000)]);
+      const result = await request('POST', `/v1/workspaces/${selection.workspace}/artifacts/document/draft`, {prompt}, undefined, signal);
+      if (!active()) return;
+      const {title, document: markdown} = result.body;
+      if (result.status !== 200 || typeof title !== 'string' || title.length > 80 ||
+          typeof markdown !== 'string' || !markdown.trim() || markdown.length > 8000) {
+        throw new Error(messageFor(result.body.error, '无法生成草稿，请重试。'));
+      }
+      const [{renderMarkdown}, {tableMarkdownOptions}] = await Promise.all([
+        import('../shell/markdown.mjs'), import('../shell/markdown-table.mjs'),
+      ]);
+      if (!active()) return;
+      if (prompt !== documentDraftPrompt.value.trim()) {
+        documentDraftStatus.textContent = '描述已修改，请重新生成。';
+        return;
+      }
+      documentDraftResult = {selection, title, markdown};
+      document.getElementById('document-draft-title').textContent = title;
+      renderMarkdown(document, document.getElementById('document-draft-body'), markdown, tableMarkdownOptions);
+      documentDraftPreview.hidden = false;
+      documentDraftStatus.textContent = '草稿已生成，可以预览并采用。';
+    } catch (error) {
+      if (active()) documentDraftStatus.textContent = error.name === 'Error' ? error.message : '无法生成草稿，请重试。';
+    } finally {
+      if (documentDraftRequest === controller) {
+        documentDraftRequest = null;
+        documentDraftGenerate.disabled = false;
+      }
+    }
+  });
+
+  document.getElementById('document-draft-apply')?.addEventListener('click', () => {
+    const preview = documentDraftResult;
+    if (!preview || !acceptsDocumentDraft(preview.selection) || !richDocument.instance) return;
+    richDocument.instance.flush();
+    if (form.elements.body.value.trim()) {
+      documentDraftStatus.textContent = '已保留你的正文。清空正文后可以采用预览，也可以复制其中需要的部分。';
+      return;
+    }
+    if (!form.elements.title.value.trim()) form.elements.title.value = preview.title;
+    form.elements.body.value = preview.markdown;
+    richDocument.instance.load(preview.markdown, true);
+    persistDraft();
+    resetDocumentDraft(true);
+    document.getElementById('document-rich').focus();
+    show('ok', '已采用草稿，可以编辑后保存。');
+  });
+
   const spreadsheet = lazyEditor(async () => {
     const { mountSpreadsheet } = await import('./spreadsheet.mjs');
     return mountSpreadsheet(document, {
@@ -1310,6 +1405,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     form.elements.body.value = item && typeof item.body === 'string' ? item.body : '';
     const kind = (item && item.kind) || draftKind;
     richDocument.instance?.load(form.elements.body.value, kind === 'document');
+    resetDocumentDraft(nativeCatalog && kind === 'document' && !item?.id);
     updateEditorMeta(item, kind);
     document.getElementById('body-label').hidden = kind !== 'website';
     document.getElementById('media-editor').hidden = kind !== 'media';
@@ -2734,6 +2830,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   function hideEditor() {
     closeDocumentTree();
     richDocument.instance?.closeFind();
+    resetDocumentDraft();
     workVersion.instance?.close();
     if (pendingDeleteCancel) pendingDeleteCancel();
     closeDuplicateDialog();
@@ -4304,6 +4401,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   }
 
   bindCreate('empty-agent-website', () => { closeNewMenu(); openWebsiteBriefDialog(); });
+  const createAgentDocument = document.getElementById('new-agent-document');
+  if (createAgentDocument) createAgentDocument.hidden = !nativeCatalog;
+  bindCreate('new-agent-document', async () => {
+    if (await openEditor({kind:'document'}) && acceptsDocumentDraft(editor)) {
+      documentDraftPanel.open = true;
+      documentDraftPrompt.focus();
+    }
+  });
   bindCreate('new-agent-website', () => { closeNewMenu(); openWebsiteBriefDialog(); });
   bindCreate('empty-save-message', () => { closeNewMenu(); openSaveMessageDialog(); });
   bindCreate('empty-starred-save-message', () => { closeNewMenu(); openSaveMessageDialog(); });

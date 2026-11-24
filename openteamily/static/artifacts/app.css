@@ -2794,3 +2794,25 @@ html[data-theme-resolved="dark"] :is(#main-panel, #studio-dialog) {
 #space-upload-status:empty { display: none; }
 .space-upload-actions { display: flex; justify-content: end; gap: .5rem; }
 .space-upload-actions button { min-height: 2.75rem; }
+.document-draft {
+  margin: .75rem 0;
+  padding: .625rem .875rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .75rem;
+  background: var(--ot-surface-2);
+}
+.document-draft summary { min-height: 2rem; cursor: pointer; font-weight: 650; }
+.document-draft-input { display: grid; gap: .375rem; margin: .5rem 0; }
+.document-draft-input button, #document-draft-apply { min-height: 2.75rem; justify-self: start; }
+.document-draft-input textarea { box-sizing: border-box; width: 100%; min-width: 0; }
+#document-draft-status:empty { display: none; }
+#document-draft-preview {
+  padding: .75rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .625rem;
+  background: var(--ot-surface);
+}
+#document-draft-preview h3 { margin: 0 0 .5rem; font-size: 1rem; }
+#document-draft-body { max-height: 24rem; overflow: auto; overflow-wrap: anywhere; margin-bottom: .75rem; }
+#document-draft-body table { border-collapse: collapse; min-width: 12rem; }
+#document-draft-body :is(th,td) { padding: .35rem .5rem; border: 1px solid var(--ot-line); }

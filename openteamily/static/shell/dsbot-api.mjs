@@ -41,7 +41,7 @@ export const MOVED = [
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory\/(?:candidates(?:\/[0-9a-f]{32})?|profile(?:\/dream)?|graph|(?:actions|links|preferences)(?:\/[0-9a-f]{32}(?:\/remove)?)?)$/, 'memory'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/search\/(?:messages|resources)$/, 'search'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/studio\/documents(?:\/[0-9a-f]{32}(?:\/(?:remove|restore|live|versions(?:\/[1-9][0-9]{0,15})?))?)?$/, 'studio'],
-  [/^\/v1\/workspaces\/[0-9a-f]{32}\/artifacts\/(?:activity|document-tree|shared-copy|studio-personal-copy|(?:spreadsheet|slides)\/draft)$/, 'artifacts'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/artifacts\/(?:activity|document-tree|shared-copy|studio-personal-copy|(?:document|spreadsheet|slides)\/draft)$/, 'artifacts'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/artifacts(?:\/[0-9a-f]{32}(?:\/(?:remove|favorite|preview|file|export|restore|studio-copy|versions(?:\/\d{1,8}(?:\/export)?)?|shares(?:\/[0-9a-f]{32}(?:\/(?:revoke|link))?)?))?)?$/, 'artifacts'],
   // B4: account settings, onboarding and look live in the user's DS-Bot.
   // Auth and the Composio callback bounce page stay on the platform.

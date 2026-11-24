@@ -3121,6 +3121,46 @@ test('reaction chips post the toggle and re-render server counts', async () => {
   } finally { restore(); }
 });
 
+test('rapid reaction toggles update immediately and preserve the last intent across server receipts', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const posts = [];
+  const replies = [];
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async (path, options = {}) => {
+      if (path.endsWith('/messages/m-1/reactions')) {
+        posts.push(JSON.parse(options.body));
+        return new Promise(resolve => replies.push(resolve));
+      }
+      const result = await original(path), body = await result.json();
+      if (path.endsWith('/social/conversations/conv-1')) body.items[0].reactions = [{emoji: '👍', count: 1, mine: false}];
+      return json(result.status, body);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    const bar = el('message-list').children[0].querySelector('.message-reactions');
+    const chip = () => bar.querySelector('.reaction-chip');
+
+    const first = fire(chip(), 'click');
+    assert.equal(chip().textContent, '👍 2');
+    assert.equal(chip().getAttribute('aria-pressed'), 'true');
+    await fire(chip(), 'click');
+    assert.equal(chip().textContent, '👍 1');
+    assert.equal(chip().getAttribute('aria-pressed'), 'false');
+    assert.deepEqual(posts, [{emoji: '👍', active: true}]);
+
+    replies[0](json(200, {reactions: [{emoji: '👍', count: 2, mine: true}]}));
+    await settle();
+    assert.deepEqual(posts, [{emoji: '👍', active: true}, {emoji: '👍', active: false}]);
+    assert.equal(chip().getAttribute('aria-pressed'), 'false');
+
+    replies[1](json(200, {reactions: [{emoji: '👍', count: 3, mine: false}]}));
+    await first;
+    assert.equal(chip().textContent, '👍 3');
+    assert.equal(chip().getAttribute('aria-pressed'), 'false');
+  } finally { restore(); }
+});
+
 test('team mode needs a selected template', () => {
   assert.equal(composeCreateEnabled({composeMode: 'group', groupMode: 'team', selectedCount: 3}), false);
   assert.equal(composeCreateEnabled({composeMode: 'group', groupMode: 'team', templateSelected: true}), true);

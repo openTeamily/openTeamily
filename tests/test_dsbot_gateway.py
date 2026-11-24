@@ -192,6 +192,7 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/shared/{aid}/discussion'), 'meetings')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/spreadsheet/draft'), 'artifacts')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/slides/draft'), 'artifacts')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/document/draft'), 'artifacts')
         work = '/v1/discover/works/work-demo'
         comment = 'otwc_' + '0' * 26
         for path in (work, work + '/remix', work + '/comments', work + '/comments/' + comment + '/like',

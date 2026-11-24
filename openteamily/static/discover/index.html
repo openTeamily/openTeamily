@@ -88,6 +88,13 @@
         </header>
         <div class="feed-filter-line">
           <button type="button" id="feed-followed-creators" aria-haspopup="dialog" aria-controls="followed-creators-dialog" hidden>选择作者</button>
+          <div class="feed-topic-field" id="feed-collected-sort-field" hidden>
+            <label for="feed-collected-sort" class="visually-hidden">已收录作品排序</label>
+            <select id="feed-collected-sort">
+              <option value="latest">最近更新</option>
+              <option value="collected">最近收录</option>
+            </select>
+          </div>
           <div class="feed-topic-field">
             <label for="feed-topic" class="visually-hidden">作品主题</label>
             <select id="feed-topic"><option value="">全部主题</option></select>

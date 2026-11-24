@@ -687,6 +687,15 @@ export function reactionToggle(reactions, emoji) {
   return {emoji, active: !(current && current.mine)};
 }
 
+function applyReaction(reactions, {emoji,active}) {
+  const old = reactions.find(item=>item.emoji===emoji);
+  if (Boolean(old?.mine) === active) return reactions;
+  const count = (old?.count ?? 0) + (active ? 1 : -1);
+  if (!old) return [...reactions,{emoji,count,mine:active}];
+  return count > 0 ? reactions.map(item=>item===old ? {...item,count,mine:active} : item)
+    : reactions.filter(item=>item!==old);
+}
+
 export function forwardTargets(conversations, currentId, userId) {
   return (conversations || []).filter(item => item.id !== currentId && !item.public_agent && item.direct?.open !== false)
     .map(item => ({id: item.id, label: (item.kind === 'dm' ? '单聊 · ' : '群聊 · ') + conversationLabel(item, userId)}));
@@ -966,6 +975,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const pinButton = document.getElementById('pin-conversation');
   const groupPin = document.getElementById('group-info-pin');
   const conversationPins = new Map();
+  const reactionWrites = new Map();
   let pinReceipt = 0;
   let sessionTransition = null;
   let currentSource = 'agent';
@@ -1750,6 +1760,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       for (const job of queue.jobs) removeSendJob(queue,job,{keepStored:true});
     }
     pendingSends.clear();
+    reactionWrites.clear();
     privateReplyRetries.clear();
     stoppingPrivateReplies.clear();
     privateThreadWrites.clear();
@@ -3771,54 +3782,101 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function reactionBar(item) {
     const bar = document.createElement('div');
     bar.className = 'message-reactions';
-    fillReactionBar(bar, item);
+    const scope = sendScope();
+    const queue = reactionWrites.get(JSON.stringify([scope,item.id]));
+    if (queue) Object.assign(queue,{bar,item});
+    fillReactionBar(bar, item, scope);
     return bar;
   }
 
-  function fillReactionBar(bar, item) {
+  async function drainReactions(key, queue) {
+    if (queue.active) return;
+    queue.active = true;
+    const current = () => reactionWrites.get(key) === queue && currentUser?.id === queue.owner;
+    try {
+      while (current() && queue.actions.length) {
+        const action = queue.actions[0];
+        const result = await request('POST',queue.path,action,undefined,AbortSignal.timeout(5000))
+          .catch(() => ({status:0,body:{}}));
+        if (!current()) return;
+        queue.actions.shift();
+        const saved = result.status === 200 && Array.isArray(result.body?.reactions);
+        if (saved) queue.saved = result.body.reactions;
+        queue.item.reactions = queue.saved;
+        if (queue.scope === sendScope() && queue.bar.isConnected !== false) {
+          fillReactionBar(queue.bar,queue.item,queue.scope);
+          if (!saved && !queue.actions.some(next=>next.emoji===action.emoji)) {
+            show('error',messageFor(result.body?.error,uiLabel('表情回应未保存。','Could not save the reaction.')));
+          }
+        }
+      }
+    } finally {
+      if (reactionWrites.get(key) === queue) reactionWrites.delete(key);
+    }
+  }
+
+  function fillReactionBar(bar, item, scope, focusEmoji) {
+    const key = JSON.stringify([scope,item.id]);
+    const queue = reactionWrites.get(key);
+    const reactions = queue ? queue.actions.reduce(applyReaction,queue.saved) : item.reactions || [];
+    const focused = bar.contains?.(document.activeElement) ? document.activeElement : null;
+    const restore = focusEmoji || focused;
+    const keptPicker = !focusEmoji && bar.querySelector('.reaction-add')?.getAttribute('aria-expanded') === 'true';
+    const emojiToFocus = focusEmoji || focused?.dataset.reactionEmoji;
     bar.replaceChildren();
-    const react = async (emoji) => {
-      const wid = workspaceId(), cid = currentConversation && currentConversation.id;
-      if (!cid) return;
-      const result = await request('POST', `${socialBase()}/${cid}/messages/${item.id}/reactions`,
-        reactionToggle(item.reactions, emoji));
-      if (workspaceId() !== wid || !currentConversation || currentConversation.id !== cid) return;
-      if (result.status !== 200) { show('error', messageFor(result.body.error, '表情回应未保存。')); return; }
-      item.reactions = result.body.reactions;
-      fillReactionBar(bar, item);
+    const react = emoji => {
+      if (scope !== sendScope() || !currentConversation || bar.isConnected === false) return;
+      let pending = reactionWrites.get(key);
+      if (!pending) {
+        pending = {scope,owner:currentUser?.id,bar,item,saved:item.reactions || [],actions:[],
+          path:`${socialBase()}/${currentConversation.id}/messages/${item.id}/reactions`};
+        reactionWrites.set(key,pending);
+      }
+      pending.actions.push(reactionToggle(reactions,emoji));
+      fillReactionBar(bar,item,scope,emoji);
+      return drainReactions(key,pending);
     };
-    for (const reaction of item.reactions || []) {
+    let nextFocus;
+    for (const reaction of reactions) {
       const chip = document.createElement('button');
       chip.type = 'button';
       chip.className = 'reaction-chip' + (reaction.mine ? ' is-mine' : '');
+      chip.dataset.reactionEmoji = reaction.emoji;
       chip.setAttribute('aria-pressed', reaction.mine ? 'true' : 'false');
       chip.setAttribute('aria-label', `${reaction.emoji} ${reaction.count} 人回应${reaction.mine ? '，含我' : ''}`);
       chip.textContent = `${reaction.emoji} ${reaction.count}`;
       chip.addEventListener('click', () => react(reaction.emoji));
       bar.append(chip);
+      if (reaction.emoji === emojiToFocus) nextFocus = chip;
     }
     const add = document.createElement('button');
     add.type = 'button';
     add.className = 'reaction-add';
     add.textContent = '+😊';
     add.setAttribute('aria-label', '添加表情回应');
-    add.setAttribute('aria-expanded', 'false');
+    add.setAttribute('aria-expanded', String(keptPicker));
     const picker = document.createElement('span');
     picker.className = 'reaction-picker';
-    picker.hidden = true;
+    picker.hidden = !keptPicker;
     for (const emoji of MESSAGE_REACTIONS) {
       const choice = document.createElement('button');
       choice.type = 'button';
       choice.textContent = emoji;
+      choice.dataset.reactionEmoji = emoji;
       choice.setAttribute('aria-label', '回应 ' + emoji);
       choice.addEventListener('click', () => react(emoji));
       picker.append(choice);
+      if (keptPicker && focused?.parentElement?.classList.contains('reaction-picker') && emoji === emojiToFocus) nextFocus = choice;
     }
     add.addEventListener('click', () => {
       picker.hidden = !picker.hidden;
       add.setAttribute('aria-expanded', picker.hidden ? 'false' : 'true');
     });
     bar.append(add, picker);
+    if (restore) {
+      const overflow = narrowScreen() && !reactions.length && !keptPicker ? bar.closest('[data-message-id]')?.querySelector('.message-more') : null;
+      (nextFocus || overflow || add).focus({preventScroll:true});
+    }
   }
 
   let messageMenuTarget = null;

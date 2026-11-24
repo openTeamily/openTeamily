@@ -225,6 +225,7 @@
             <button type="button" id="new-dashboard" role="menuitem">看板</button>
             <button type="button" id="new-board" role="menuitem">白板</button>
             <button type="button" id="new-media" role="menuitem">上传</button>
+            <button type="button" id="new-agent-document" role="menuitem" hidden>让智能体起草文档</button>
             <button type="button" id="new-agent-website" role="menuitem">让智能体搭建网站</button>
             <button type="button" id="new-save-message" role="menuitem">从对话保存</button>
           </div>
@@ -367,6 +368,20 @@
         </details>
       </section>
       <section id="document-editor" hidden aria-label="文档编辑器">
+        <details id="document-draft" class="document-draft" hidden>
+          <summary>让智能体起草</summary>
+          <div class="document-draft-input">
+            <label for="document-draft-prompt">主题和要点</label>
+            <textarea id="document-draft-prompt" rows="3" maxlength="1600" placeholder="例如：为新成员写一份项目入门指南"></textarea>
+            <button type="button" id="document-draft-generate">生成草稿</button>
+          </div>
+          <p id="document-draft-status" role="status" class="note"></p>
+          <section id="document-draft-preview" aria-labelledby="document-draft-title" hidden>
+            <h3 id="document-draft-title"></h3>
+            <div id="document-draft-body"></div>
+            <button type="button" id="document-draft-apply">采用草稿</button>
+          </section>
+        </details>
         <div class="document-toolbar" role="toolbar" aria-label="文档格式">
           <button type="button" data-doc-format="undo" aria-label="撤销">↶</button>
           <button type="button" data-doc-format="redo" aria-label="重做">↷</button>

@@ -748,6 +748,22 @@ function mount() {
   const titleInput = document.getElementById('meeting-title');
   const transcript = document.getElementById('meeting-transcript');
   const transcriptSearch = mountTranscriptSearch(document, transcript);
+  let transcriptImporter, transcriptImporterLoad;
+  function transcriptImportScope() {
+    const workspace = workspaceId();
+    if (!native || !editorReady || form.hidden || form.inert || layout?.dataset.view !== 'editor' || layout.hidden ||
+        !meetingIdPattern.test(viewerId) || !meetingIdPattern.test(workspace)) return '';
+    return JSON.stringify([viewerId, workspace, selection]);
+  }
+  function syncTranscriptImport() {
+    if (!transcriptImportScope()) return;
+    transcriptImporterLoad ??= import('./transcript-import.mjs').then(({mountTranscriptImport}) => {
+      const dialog = document.getElementById('meeting-transcript-import-dialog');
+      if (typeof dialog?.showModal !== 'function') return;
+      transcriptImporter = mountTranscriptImport(document, {transcript, scope:transcriptImportScope});
+    }).catch(() => { transcriptImporterLoad = undefined; });
+    void transcriptImporterLoad.then(() => transcriptImporter?.sync());
+  }
   const audio = mountMeetingAudio(document, {request, base, transcript, onPendingChange: syncLeaveProtection});
   const summary = document.getElementById('meeting-summary');
   const reviewConflict = document.getElementById('review-meeting-conflict');
@@ -1143,6 +1159,8 @@ function mount() {
     inboxView = null;
     inbox.hidden = !open;
     layout.hidden = open;
+    if (open) transcriptImporter?.reset();
+    else syncTranscriptImport();
     inboxOpen.setAttribute('aria-expanded', String(open));
     if (open) {
       clearOpenRetry();
@@ -1944,6 +1962,7 @@ function mount() {
   }
 
   function setReceiptMode(receipt) {
+    transcriptImporter?.reset();
     const pane = document.getElementById('meeting-list-pane');
     if (pane) pane.hidden = receipt;
     layout?.classList?.toggle('is-reading-receipt', receipt);
@@ -2013,6 +2032,7 @@ function mount() {
     editorBaseRevision = meeting?.revision || 0;
     if (recover) recoverEditor();
     editorReady = true;
+    syncTranscriptImport();
     renderActions();
     syncRecord();
   }
@@ -2104,6 +2124,7 @@ function mount() {
 
   async function openMeeting(id, read, transcriptQuery, actionReference) {
     printing.close();
+    transcriptImporter?.reset();
     const pendingSave = writing?.kind === 'save' && active(writing) ? writing
       : saveRetry && active(saveRetry) ? saveRetry : null;
     const owner = viewer;
@@ -2121,6 +2142,7 @@ function mount() {
     form.inert = false;
     if (result.status !== 200 || (native && result.body.viewer_username !== viewer) ||
         result.body.meeting?.id !== id || result.body.meeting.workspace_id !== workspace) {
+      syncTranscriptImport();
       if (pendingSave && !form.hidden) {
         saveRetry = {...pendingSave, selection};
         showSave('error', '上次保存结果还未确认。草稿已保留，请重试。');
@@ -2305,6 +2327,7 @@ function mount() {
 
   async function load() {
     printing.close();
+    transcriptImporter?.reset();
     const seq = ++workspaceLoad;
     clearOpenRetry();
     inboxResume = null;
@@ -2830,6 +2853,7 @@ function mount() {
   mobileBack?.addEventListener('click', () => {
     if (!layout || form.hidden) return;
     layout.dataset.view = 'catalogue';
+    transcriptImporter?.reset();
     resume.hidden = false;
     sharing.sync();
     document.getElementById('main').scrollTop = 0;
@@ -2840,6 +2864,7 @@ function mount() {
   resume.addEventListener('click', () => {
     if (!layout || form.hidden) return;
     layout.dataset.view = 'editor';
+    syncTranscriptImport();
     resume.hidden = true;
     sharing.sync();
     syncDraft();
