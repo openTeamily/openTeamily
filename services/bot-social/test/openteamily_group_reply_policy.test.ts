@@ -35,7 +35,7 @@ test("named group reply policy is owner-only and revisioned, with authoritative 
   await teammate.ok("PUT", room + "/agents/shared", {name:"Teammate helper"});
   await teammate.ok("PUT", room + "/agents/other:helper", {name:"Second teammate helper"});
   const selected = pair(teammateId, "shared");
-  assert.deepEqual(group.group_agent_routing, {mode:"shared",policy:{mode:"default"},can_edit:true});
+  assert.deepEqual(group.group_agent_routing, {mode:"shared",policy:{mode:"default"},can_edit:true,native_group_host:ownerId,native_group_coordinator:true});
   const initial = await owner.ok("GET", room);
   const revision = initial.group_management.revision;
   const chooseLead = {revision,mode:"lead",lead:selected};
@@ -51,7 +51,7 @@ test("named group reply policy is owner-only and revisioned, with authoritative 
   assert.notEqual(saved.activity_version, initial.activity_version);
   assert.deepEqual(saved.group_agent_routing.policy, {mode:"lead",lead:selected});
   assert.deepEqual((await teammate.ok("GET", room)).group_agent_routing,
-    {mode:"shared",policy:{mode:"lead",lead:selected},can_edit:false});
+    {mode:"shared",policy:{mode:"lead",lead:selected},can_edit:false,native_group_host:ownerId});
   assert.equal((await change(owner, {...chooseLead,lead:{agent_id:"shared",owner_id:teammateId}})).data.conversation.group_management.revision, revision + 1);
   assert.equal((await change(owner, {revision,mode:"everyone"})).data.error.code, "group_management_conflict");
   const noOp = await change(owner, {...chooseLead,revision:revision + 1});

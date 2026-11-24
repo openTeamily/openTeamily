@@ -6,6 +6,6 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "test": "node --test test/recipe.test.js test/model-api.test.js test/bot-social-config.test.js test/inventory.test.js test/notices.test.js"
+    "test": "node --test test/recipe.test.js test/model-api.test.js test/bot-social-config.test.js test/inventory.test.js test/notices.test.js test/native-shared-groups.test.mjs"
   }
 }

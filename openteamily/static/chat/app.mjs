@@ -4644,7 +4644,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       bots.set(key, view.job);
     }
     for (const bot of workingBots) {
-      if (GROUP_AGENT_ID.test(bot?.id || '') && typeof bot.name === 'string' && bot.name) {
+      if (groupAgentTarget(bot?.id) && typeof bot.name === 'string' && bot.name) {
         bots.set('native:' + bot.id, {agent_name:bot.name});
       }
     }

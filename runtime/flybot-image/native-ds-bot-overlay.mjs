@@ -35,7 +35,7 @@ const files = {
   ],
   'src/host/groups.js': [
     '06c261868b55ee7cdc53dc3b98759779c1d0e5cd60ad6f39beeca24458e7a91c',
-    '337425d9d91ec2bfd51d0caf6e8222e6e02f33fb50ae7534533261ca47ab2605',
+    '5d43add77c3a7dd0ddc1e4dfcb14e05be11b95c0029ff04b8405bfff8575b0fb',
   ],
   'src/host/capabilities.js': [
     '656fcc0b0fb7fd597dfd0f62bd49522d92becd4ed1c77dd53ba016f045614c89',
