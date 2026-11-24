@@ -388,7 +388,7 @@ function requireOrdinaryGroup(conv: any) {
   assert(!fixedPublicThread(conv), 409, "public_chat_fixed", "公开智能体会话使用固定成员。");
 }
 
-function memberOf(ot: OtContext, convId: string, ownerId: string) {
+export function memberOf(ot: OtContext, convId: string, ownerId: string) {
   const conv = ot.get<any>(`SELECT c.* FROM ot_conversations c JOIN ot_conversation_members m ON m.conversation_id=c.id
     WHERE c.id=? AND m.owner_id=? AND c.group_archived_at IS NULL
       AND (c.team_id IS NULL OR EXISTS (SELECT 1 FROM ot_team_members active

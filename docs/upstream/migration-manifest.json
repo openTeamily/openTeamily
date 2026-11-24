@@ -1884,8 +1884,8 @@
       "path": "src/openteamily/index.ts",
       "reason": "OpenTeamily-authored addition (MIT): shared social state for users' own DS-Bots (phase C, docs/DSBOT_PLUGIN_ARCHITECTURE.md).",
       "license_notice": "MIT (Bot Social snapshot) file added or modified by OpenTeamily; see OPENTEAMILY.md.",
-      "new_sha256": "2be9a5757d552b713df8352e703813f380b3c5a7efab51af0b52b8f3797c845d",
-      "bytes": 1671
+      "new_sha256": "aaf5d0adccd5e7f7d2594e58305095d3f3ae5ec50cffcd42af7fa90d79bcb35d",
+      "bytes": 1769
     },
     "services/bot-social/test/openteamily_teams.test.ts": {
       "destination": "services/bot-social",
@@ -1900,8 +1900,8 @@
       "path": "src/openteamily/messenger.ts",
       "reason": "OpenTeamily-authored addition (MIT): shared social state for users' own DS-Bots (phase C, docs/DSBOT_PLUGIN_ARCHITECTURE.md).",
       "license_notice": "MIT (Bot Social snapshot) file added or modified by OpenTeamily; see OPENTEAMILY.md.",
-      "new_sha256": "3cbcec62487ace92625a18cbb70efacc89f8068e9a7b07b95c09fae26009a9db",
-      "bytes": 182044
+      "new_sha256": "c817548427385bf10a00403338b8647fe11277f5dd747ed395a1eb1f94acfbd1",
+      "bytes": 182051
     },
     "services/bot-social/test/openteamily_messenger.test.ts": {
       "destination": "services/bot-social",
@@ -2250,6 +2250,22 @@
       "bytes": 9691,
       "reason": "DSH cutover modification/addition in the imported snapshot; see docs/DSBOT_PLUGIN_ARCHITECTURE.md.",
       "license_notice": "MIT (Bot Social snapshot)"
+    },
+    "services/bot-social/src/openteamily/polls.ts": {
+      "destination": "services/bot-social",
+      "path": "src/openteamily/polls.ts",
+      "reason": "OpenTeamily-authored addition (MIT): polls held in a member conversation, stored in Bot Social (#586).",
+      "license_notice": "MIT (Bot Social snapshot) file added or modified by OpenTeamily; see OPENTEAMILY.md.",
+      "new_sha256": "a32afd8a9c744b2c8421ccfd24e2909049b02e436520f06e7230bb24efc79a7d",
+      "bytes": 11324
+    },
+    "services/bot-social/test/openteamily_polls.test.ts": {
+      "destination": "services/bot-social",
+      "path": "test/openteamily_polls.test.ts",
+      "reason": "OpenTeamily-authored addition (MIT): polls held in a member conversation, stored in Bot Social (#586).",
+      "license_notice": "MIT (Bot Social snapshot) file added or modified by OpenTeamily; see OPENTEAMILY.md.",
+      "new_sha256": "6886152e76c8dd94c35493c02fc770a2e2fdec13aba16fa6003d53fbf4dfcc21",
+      "bytes": 15588
     },
     "services/bot-social/test/openteamily_native_group_rounds.test.ts": {
       "destination": "services/bot-social",
