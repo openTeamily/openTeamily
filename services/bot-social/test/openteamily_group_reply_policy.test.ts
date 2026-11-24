@@ -168,3 +168,47 @@ test("the personal group retains unavailable-lead metadata with an empty roster 
   assert.deepEqual(updated.group_agent_routing.policy,{mode:"lead",lead:pair(teammateId,"replacement")});
   assert.deepEqual(targets(await owner.ok("POST",room+"/messages",{body:"新主答可以回复"})),[[teammateId,"replacement"]]);
 });
+
+test("native group routing ignores old automatic Chief bindings and keeps deliberate members and leads", async () => {
+  const [owner, peer] = await Promise.all([home(service.base,"native-admin-owner"),home(service.base,"native-admin-peer")]);
+  const ownerId = await idOf(owner), peerId = await idOf(peer);
+  const chief = "a".repeat(32), helper = "implementation-helper";
+  const create = (title: string, members: string[]) => owner.ok("POST","/v1/ot/conversations",{
+    kind:"group",account_group:true,title,members,agents:[{agent_ref:helper,name:"实施助手"}],
+  });
+  const group = await create("Personal group without a Chief", []);
+  const room = "/v1/ot/conversations/" + group.id;
+  const send = (actor: Actor, body: string, extra = {}) => actor.ok("POST", room + "/messages", {body,...extra});
+  assert.equal((await owner.call("PUT",room+"/native-chief",{agent_id:chief,name:"个人智能体"})).status,404);
+  assert.deepEqual((await owner.ok("GET",room)).agents.map((agent: any) => agent.agent_ref),[helper]);
+  assert.deepEqual(targets(await send(owner,"请主持下一步")),[[ownerId,helper]]);
+
+  await owner.ok("PUT",room+"/agents/"+chief,{name:"个人智能体"});
+  // Simulate a database upgraded from the release that inferred a group Chief.
+  service.platform.db.exec(`CREATE TABLE IF NOT EXISTS ot_group_native_chiefs (
+    conversation_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, agent_ref TEXT NOT NULL)`);
+  service.platform.db.prepare("INSERT INTO ot_group_native_chiefs VALUES (?,?,?)").run(group.id,ownerId,chief);
+
+  const opened = await owner.ok("GET",room);
+  assert.equal(opened.group_agent_routing.native_chief,undefined);
+  assert.deepEqual(opened.agents.map((agent: any) => agent.agent_ref),[helper,chief]);
+  assert.deepEqual(targets(await send(owner,"请核对下一步")),[[ownerId,helper],[ownerId,chief]]);
+  assert.deepEqual(targets(await send(owner,"请专门确认",{agent_mentions:[pair(ownerId,helper)]})),[[ownerId,helper]]);
+  assert.deepEqual(targets(await send(owner,"@所有人 请看看")),[[ownerId,helper],[ownerId,chief]]);
+  const custom = (await owner.ok("POST",room+"/management",{action:"reply_policy",mode:"lead",lead:pair(ownerId,chief),
+    revision:opened.group_management.revision,direct:true})).conversation;
+  assert.deepEqual(custom.group_agent_routing.policy,{mode:"lead",lead:pair(ownerId,chief)});
+  assert.deepEqual(targets(await send(owner,"请确认负责下一步")),[[ownerId,chief]]);
+  assert.deepEqual(targets(await send(owner,"@all 请一起核对")),[[ownerId,chief],[ownerId,helper]]);
+  await owner.ok("POST",room+"/management",{action:"reply_policy",mode:"everyone",
+    revision:custom.group_management.revision,direct:true});
+  assert.deepEqual(targets(await send(owner,"请依次核对")),[[ownerId,helper],[ownerId,chief]]);
+
+  const contact = await owner.ok("POST","/v1/ot/contacts",{handle:peer.handle});
+  await peer.ok("POST",`/v1/ot/contacts/${contact.id}`,{action:"accept"});
+  const shared = await create("Shared group without admin", [peer.handle]);
+  const sharedPath = "/v1/ot/conversations/" + shared.id;
+  await peer.ok("PUT",sharedPath+"/agents/peer",{name:"伙伴助手"});
+  assert.deepEqual(targets(await peer.ok("POST",sharedPath+"/messages",{body:"普通群消息"})),
+    [[ownerId,helper],[peerId,"peer"]]);
+});

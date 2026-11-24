@@ -2796,15 +2796,6 @@ html[data-chat-keyboard] body.app-workspace.chat-open {
 #main-panel[data-chat-kind="group"] #message-scroller > #message-list { max-width: 54rem; margin-block-start: 0; gap: .65rem; }
 #main-panel[data-chat-kind="group"] #message-list > li[data-chat-author="agent"] { border-inline-start: 2px solid var(--ot-accent); }
 #main-panel[data-chat-kind="group"] #message-list > li[data-chat-author="agent"] > .role { color: var(--ot-ink); font-weight: 650; }
-#main-panel[data-chat-kind="group"] #message-list > li.group-reply-thinking {
-  width: max-content;
-  max-width: 100%;
-  min-height: 0;
-  padding: .125rem .375rem;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-}
 #main-panel[data-chat-kind="group"] #message-list > li.group-reply-job[data-state="failed"] {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -2827,14 +2818,7 @@ html[data-chat-keyboard] body.app-workspace.chat-open {
   grid-area: 1 / 2 / span 2;
   margin: 0;
 }
-#message-list > .group-reply-job[hidden],
-#message-list > .group-reply-thinking > :not(.group-reply-state) { display: none; }
-#message-list > .group-reply-thinking > .group-reply-state {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  line-height: 1.35;
-}
+#message-list > .group-reply-job[hidden] { display: none; }
 #main-panel[data-chat-kind="group"] #chat-empty:not([hidden]) { margin: clamp(1.1rem, 5vh, 3.5rem) auto 0; }
 .empty-group { display: grid; gap: .35rem; padding: .75rem; font-size: .875rem; }
 .empty-group strong { color: var(--ot-ink); font-size: 1rem; }
@@ -3346,7 +3330,7 @@ body.app-workspace .mobile-inbox-heading h1 {
   margin: 0 auto;
   gap: .85rem;
 }
-#message-list > :is(li.user, li.mine, li.assistant, li.other):not(.group-reply-thinking):not(.group-reply-job) {
+#message-list > :is(li.user, li.mine, li.assistant, li.other):not(.group-reply-job) {
   padding: .625rem .8rem;
   border: 1px solid var(--ot-line);
   font-size: .9rem;
@@ -3357,7 +3341,7 @@ body.app-workspace .mobile-inbox-heading h1 {
   border-start-end-radius: .375rem;
   border-color: var(--ot-accent-soft);
 }
-#message-list > :is(li.assistant, li.other):not(.group-reply-thinking):not(.group-reply-job) {
+#message-list > :is(li.assistant, li.other):not(.group-reply-job) {
   background: var(--ot-surface);
   border-start-start-radius: .375rem;
   box-shadow: var(--ot-shadow-sm);
@@ -3446,6 +3430,17 @@ body.app-workspace .mobile-inbox-heading h1 {
   box-shadow: var(--ot-shadow-sm);
 }
 #chat-form .composer:focus-within { border-color: var(--ot-focus); box-shadow: 0 0 0 2px var(--ot-accent-soft); }
+#group-bot-activity {
+  box-sizing: border-box;
+  max-width: var(--chat-reading-width);
+  margin: 0 auto .25rem;
+  padding-inline: .65rem;
+  color: var(--ot-muted);
+  font-size: .75rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+#group-bot-activity:empty { display: none; }
 .composer-row textarea { font-size: .94rem; }
 .composer-plus > summary, .composer-tools button { border-radius: .55rem; }
 #chat-form .composer-tools :is(button, .composer-send):not(#chat-reply-stop) { border-color: transparent; }

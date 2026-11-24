@@ -4255,6 +4255,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let searchHighlightTimer;
   let groupReplyWatch = null;
   const groupReplyViews = new Map();
+  const groupBotActivity = document.getElementById('group-bot-activity');
   const groupReplyRetries = new Map();
   let groupReplyScope = null;
   const olderMessages = document.getElementById('chat-load-older');
@@ -4624,11 +4625,35 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return servedByDsbot && currentSource === 'social' && (currentConversation?.kind === 'group' || directAgentRoom(currentConversation))
       && !currentConversation.public_agent && socialHistory?.cid === currentConversation.id
       && !socialHistory.readingHistory && !socialHistory.loading
-      && canWatchReply() && groupReplyViews.size > 0;
+      && canWatchReply() && (groupReplyViews.size > 0 || Boolean(compactGroupReplies() && currentConversation.native_room_id));
   }
 
   function matchesGroupReply(snapshot, view) {
     return snapshot?.message_id === view.messageId && snapshot.attempt === view.attempt;
+  }
+
+  function activeGroupBotLabel(items, workingBots) {
+    if (!groupBotActivity || !compactGroupReplies()) return '';
+    const bots = new Map();
+    for (const [id, snapshot] of items) {
+      const view = groupReplyViews.get(id);
+      if (!view || snapshot.status !== 'running' || !matchesGroupReply(snapshot, view)) continue;
+      const {agent_id, agent_name, agent_owner_id} = view.job;
+      if (!agent_name) continue;
+      const key = JSON.stringify([agent_owner_id, agent_id ?? agent_name]);
+      bots.set(key, view.job);
+    }
+    for (const bot of workingBots) {
+      if (GROUP_AGENT_ID.test(bot?.id || '') && typeof bot.name === 'string' && bot.name) {
+        bots.set('native:' + bot.id, {agent_name:bot.name});
+      }
+    }
+    if (!bots.size) return '';
+    const active = [...bots.values()];
+    const names = active.map(bot => bot.agent_owner_id && active.some(other => other !== bot && other.agent_name === bot.agent_name)
+      ? groupAgentName(bot.agent_name, bot.agent_owner_name, bot.agent_owner_id, bot.agent_owner_handle)
+      : bot.agent_name).join(uiLabel('、', ', '));
+    return uiLabel(`${names} 正在工作…`, `${names} ${bots.size === 1 ? 'is' : 'are'} working…`);
   }
 
   function visibleGroupReply(id) {
@@ -4653,7 +4678,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!follow) updateLatestMessageControl();
   }
 
-  function paintGroupReplyProgress(items, {preserveMissing = false} = {}) {
+  function paintGroupReplyProgress(items, {preserveMissing = false, showActivity = true, workingBots = []} = {}) {
     const changes = [];
     for (const [id, view] of groupReplyViews) {
       const item = items.get(id);
@@ -4675,8 +4700,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const state = snapshot?.status === 'running' || text ? 'running' : view.job.status;
       if (previousText !== text || view.row.dataset.state !== state) changes.push({view, text, state});
     }
-    if (!changes.length) return;
+    const activity = showActivity ? activeGroupBotLabel(items, workingBots) : '';
+    const activityChanged = groupBotActivity && activity !== groupBotActivity.textContent;
+    if (!changes.length && !activityChanged) return;
     withGroupReplyScroll(() => {
+      if (activityChanged) groupBotActivity.textContent = activity;
       for (const {id, view, text, state, passed} of changes) {
         if (passed) {
           view.row.remove();
@@ -4685,7 +4713,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         }
         if (streamingReplySource(view.preview) !== text) paintStreamingReply(document, view.preview, text);
         view.row.dataset.state = state;
-        view.note.textContent = groupReplyLabel(state, view.job, compactGroupReplies() && !text.trim());
+        view.note.textContent = groupReplyLabel(state, view.job);
       }
       updateGroupReplyVisibility();
     });
@@ -4702,6 +4730,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     // A hidden pane pauses polling. Keep its scoped text and scroll anchor
     // available while the same reply reconnects.
     if (!preservePreview || groupReplyScope !== sendScope()) paintGroupReplyProgress(new Map());
+    else if (groupBotActivity) groupBotActivity.textContent = '';
   }
 
   function currentGroupReplyWatch(watch) {
@@ -4735,9 +4764,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       });
       const transitioned = missing.some(([id, view]) => matchesGroupReply(watch.items.get(id), view));
       watch.items = items;
+      watch.workingBots = Array.isArray(result.body.working_bots) ? result.body.working_bots : [];
       if (watch.degraded) stopPolling();
       watch.degraded = false;
-      paintGroupReplyProgress(items, {preserveMissing: true});
+      paintGroupReplyProgress(items, {preserveMissing: true, workingBots:watch.workingBots});
       // Replies can settle before the first progress poll, between tab visits,
       // or while Social activity delivery is reconnecting. Reconcile from the
       // durable transcript even when this watch never saw an active snapshot.
@@ -4761,12 +4791,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           schedulePoll(350);
         }
       }
-      scheduleGroupReplyProgress(watch);
+      scheduleGroupReplyProgress(watch, groupReplyViews.size || watch.workingBots.length ? 500 : 1500);
     } else if ([401, 403, 404].includes(result?.status)) {
       stopGroupReplyProgress();
       if (!pollTimer) scheduleSocialPoll(currentConversation);
     } else {
       watch.degraded = true;
+      if (groupBotActivity) groupBotActivity.textContent = '';
       if (!pollTimer) scheduleSocialPoll(currentConversation);
       scheduleGroupReplyProgress(watch, 1500);
     }
@@ -4779,7 +4810,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const scope = sendScope();
     if (groupReplyWatch?.scope === scope) {
-      paintGroupReplyProgress(groupReplyWatch.items, {preserveMissing: true});
+      paintGroupReplyProgress(groupReplyWatch.items, {
+        preserveMissing:true, showActivity:!groupReplyWatch.degraded, workingBots:groupReplyWatch.workingBots,
+      });
       return;
     }
     if (groupReplyWatch) stopGroupReplyProgress();
@@ -4801,34 +4834,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function updateGroupReplyVisibility(list = document.getElementById('message-list')) {
     if (!compactGroupReplies()) return;
-    const pending = [];
-    let running;
-    let streaming = false;
     for (const row of list.children) {
       if (!row.classList.contains('group-reply-job')) continue;
       const state = row.dataset.state;
       const waiting = state === 'queued' || state === 'running';
       const preview = groupReplyViews.get(row.dataset.replyJobId)?.preview;
-      const hasText = Boolean(streamingReplySource(preview).trim());
-      row.classList.toggle('group-reply-thinking', waiting && !hasText);
-      if (waiting && !hasText) {
-        pending.push(row);
-        if (state === 'running') running ??= row;
-      } else {
-        row.hidden = false;
-        streaming ||= waiting && hasText;
-      }
+      row.hidden = waiting && !streamingReplySource(preview).trim();
     }
-    const shown = running || (!streaming && pending[0]);
-    for (const row of pending) row.hidden = row !== shown;
   }
 
-  function groupReplyLabel(state, job, compact = false) {
-    if (compact && (state === 'queued' || state === 'running')) {
-      const name = job?.agent_name || uiLabel('智能体', 'Agent');
-      if (state === 'running') return uiLabel(`${name} 正在思考…`, `${name} is thinking…`);
-      return uiLabel(`正在等待 ${name}…`, `Waiting for ${name}…`);
-    }
+  function groupReplyLabel(state, job) {
     if (state === 'failed' && job?.error_code === 'reply_timeout') {
       return uiLabel('回复超时', 'The reply timed out');
     }
@@ -4887,7 +4902,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         missingSince: sameAttempt ? previous?.missingSince : null});
       row.append(preview);
     } else groupReplyViews.delete(job.id);
-    note.textContent = groupReplyLabel(row.dataset.state, job, compactGroupReplies() && !streamingReplySource(previewBefore).trim());
+    note.textContent = groupReplyLabel(row.dataset.state, job);
     if (job.can_retry) {
       const button = document.createElement('button');
       button.type = 'button';

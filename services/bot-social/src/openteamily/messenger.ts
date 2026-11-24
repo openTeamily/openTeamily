@@ -67,6 +67,13 @@ CREATE TABLE IF NOT EXISTS ot_messages (
   created_at INTEGER NOT NULL, edited_at INTEGER, retracted INTEGER NOT NULL DEFAULT 0, pinned_by TEXT, forwarded_author TEXT,
   UNIQUE (conversation_id, seq), UNIQUE (conversation_id, author_id, client_key)
 );
+CREATE TABLE IF NOT EXISTS ot_native_group_rounds (
+  message_id TEXT PRIMARY KEY REFERENCES ot_messages(id) ON DELETE CASCADE,
+  conversation_id TEXT NOT NULL REFERENCES ot_conversations(id) ON DELETE CASCADE,
+  owner_id TEXT NOT NULL, body TEXT NOT NULL, agent_mentions TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'queued' CHECK (state IN ('queued','running','finished'))
+);
+CREATE INDEX IF NOT EXISTS ot_native_group_rounds_owner ON ot_native_group_rounds(owner_id,state,conversation_id);
 CREATE TABLE IF NOT EXISTS ot_group_memories (
   id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES ot_conversations(id) ON DELETE CASCADE,
   author_id TEXT NOT NULL, client_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
@@ -713,10 +720,23 @@ function ordinaryAgentGroup(conv: {kind: string; dm_key?: string | null; group_a
   return conv.kind === "group" && !conv.group_archived_at && !fixedPublicThread(conv);
 }
 
+function requireLocalNativeGroup(ot: OtContext, conv: Group, ownerId: string, roster = conversationAgents(ot, conv.id)) {
+  assert(ordinaryAgentGroup(conv) && conv.account_group === 1 && !conv.team_id && groupOwner(conv) === ownerId &&
+    readGroupReplyPolicy(conv).mode !== "mentions" && roster.length >= 2 && roster.length <= 12 &&
+    roster.every(agent => agent.owner_id === ownerId && !agent.direct_grant_id) &&
+    !ot.get("SELECT 1 FROM ot_conversation_members WHERE conversation_id=? AND owner_id<>?", conv.id, ownerId),
+  409, "native_round_unavailable", "This conversation is unavailable for a local native group round");
+}
+
 function selectedLead(policy: ReturnType<typeof readGroupReplyPolicy>, agents: ConversationAgent[]) {
   return policy.mode === "lead"
     ? agents.find(agent => agent.owner_id === policy.lead.owner_id && agent.agent_ref === policy.lead.agent_id)
     : undefined;
+}
+
+function nativeRoomOpeningOrder(agents: ConversationAgent[], policy: ReturnType<typeof readGroupReplyPolicy>) {
+  const admin = selectedLead(policy, agents);
+  return admin ? [admin, ...agents.filter(agent => agent !== admin)] : agents;
 }
 
 function groupHasOtherMember(ot: OtContext, conv: Group, viewer: string) {
@@ -740,10 +760,8 @@ function unaddressedGroupTurn(agents: ConversationAgent[], quote: ReturnType<typ
   if (quote?.author_kind === "agent") {
     return {agents: agents.filter(agent => agent.owner_id === quote.author_id && agent.agent_ref === quote.agent_ref), discretionary: false};
   }
-  if (policy.mode === "lead") {
-    const lead = selectedLead(policy, agents);
-    if (lead) return {agents: [lead], discretionary: true};
-  }
+  const admin = selectedLead(policy, agents);
+  if (admin) return {agents: [admin], discretionary: true};
   // Keep the existing opt-in auto inbox and its rate limit. With no opt-ins,
   // the DS-Bot workers decide whether the ordinary message warrants a reply.
   if (policy.mode === "default" && agents.some(agent => agent.auto_reply)) return undefined;
@@ -760,7 +778,7 @@ function explicitAgentKey(target: any) {
 function agentMessageRequest(b: any, clientKey: string | null, replyTo: string | null, scope: "group" | "direct") {
   const flag = scope === "direct" ? "direct_agent_request" : "group_agent_request";
   if (b[flag] === undefined) return null;
-  const extra = scope === "direct" ? ["workspace"] : ["workspace", "studio_reference"];
+  const extra = scope === "direct" ? ["workspace"] : ["workspace", "studio_reference", "native_round"];
   assert(b[flag] === true && clientKey && (scope === "direct" ? b.direct === true : b.direct === undefined || typeof b.direct === "boolean")
     && Array.isArray(b.agent_mentions) && b.agent_mentions.length >= 1 && b.agent_mentions.length <= 5
     && Object.keys(b).every(key => ["body","direct","agent_mentions","client_key","reply_to",flag,...extra].includes(key)),
@@ -1435,9 +1453,13 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       400, "invalid_request", "Send a single file per message");
     const clientKey = optText(b.client_key, "client_key", { min: 1, max: 80 }) ?? null;
     const replyTo = optText(b.reply_to, "reply_to", {min: 1, max: 80}) ?? null;
+    const nativeRound = b.native_round === true;
     const groupRequest = agentMessageRequest(b, clientKey, replyTo, "group");
     const directRequest = agentMessageRequest(b, clientKey, replyTo, "direct");
     const studio = studioMessageRequest(b, clientKey, replyTo);
+    if (nativeRound) assert(clientKey && !replyTo && !sourceConversation && b.voice === undefined &&
+      b.attachment === undefined && !studio && !directRequest && typeof b.body === "string",
+    400, "invalid_request", "A native group round requires a plain text message with a request key");
     const wakeOwners = new Set<string>();
     const msg = ot.tx(() => {
       const direct = b.direct === true;
@@ -1470,6 +1492,8 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
             "group_agent_request_conflict", "这次发送已用于不同的智能体请求。");
           const prior = ot.get<{request_hash: string}>("SELECT request_hash FROM ot_studio_message_references WHERE message_id=?", previous.id);
           assert(prior?.request_hash === studio?.fingerprint, 409, "studio_reference_changed", "这次发送已用于不同的消息。");
+          if (nativeRound) assert(ot.get("SELECT 1 FROM ot_native_group_rounds WHERE message_id=?", previous.id),
+            409, "native_round_conflict", "This message was sent through a different reply route");
           return previous;
         }
       }
@@ -1507,22 +1531,29 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       }
       const addressText = conv.kind === "group" ? mentionText(file && !hasCaption ? "" : bodyText) : bodyText;
       const parsed = parseMentions(ot, conv, b.mentions, bodyText, addressText, selected, roster, scope, Boolean(studio));
-      const addressed = selected !== undefined || parsed.mentions.length > 0 || parsed.named || TYPED_ADDRESS.test(addressText);
+      if (nativeRound) requireLocalNativeGroup(ot, conv, me.ownerId, roster);
       const canQueueGroup = group && !voice && !sourceConversation && (!file || captionCanMentionAgents);
       const allPeople = group && !sourceConversation && ALL_PEOPLE_ADDRESS.test(addressText);
       const policy = readGroupReplyPolicy(conv);
+      const addressed = selected !== undefined || parsed.agents.length > 0 ||
+        parsed.mentions.length > 0 || parsed.named || TYPED_ADDRESS.test(addressText);
       const explicitlyAll = canQueueGroup && !studio && (allPeople || ALL_AGENT_ADDRESS.test(addressText));
       const unaddressed = canQueueGroup && !file && !studio && !addressed && !explicitlyAll
         ? unaddressedGroupTurn(roster, quote, policy) : undefined;
-      const targets = explicitlyAll ? roster : unaddressed?.agents ?? parsed.agents;
+      const targets = explicitlyAll ? nativeRoomOpeningOrder(roster, policy) : unaddressed?.agents ?? parsed.agents;
       const suppressed = canQueueGroup && !file && targets.length === 0 &&
         (parsed.named || policy.mode !== "default" || quote?.author_kind === "agent");
       if (studio) requireStudioMessageScope(ot, conv, studio, parsed.agents);
       const mentions = parsed.mentions;
       const m = insertMessage(ot, conv, { author: me.ownerId, kind: "member", body: parsed.body, mentions, replyTo, clientKey });
+      if (nativeRound) {
+        const picked = selected === undefined ? [] : parsed.agents.map(agent => ({owner_id:agent.owner_id, agent_id:agent.agent_ref}));
+        ot.run("INSERT INTO ot_native_group_rounds(message_id,conversation_id,owner_id,body,agent_mentions) VALUES(?,?,?,?,?)",
+          m.id, conv.id, me.ownerId, bodyText, JSON.stringify(picked));
+      }
       if (groupRequest) ot.run("INSERT INTO ot_group_agent_message_requests VALUES (?,?)", m.id, groupRequest);
       if (directRequest) ot.run("INSERT INTO ot_direct_agent_message_requests VALUES (?,?,?)", m.id, directRequest, quote?.revision ?? null);
-      if (suppressed) ot.run("INSERT INTO ot_group_reply_suppressions(message_id) VALUES (?)", m.id);
+      if (suppressed || nativeRound) ot.run("INSERT INTO ot_group_reply_suppressions(message_id) VALUES (?)", m.id);
       if (studio) ot.run("INSERT INTO ot_studio_message_references VALUES (?,?,?,?)",
         m.id, studio.document_id, studio.revision, studio.fingerprint);
       if (voice) ot.run("INSERT INTO ot_voice_messages VALUES (?,?,?)", m.id, voice.mime, voice.data);
@@ -1538,7 +1569,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
           for (const recipient of recipients) ot.notify(recipient.owner_id, "artifact.shared", notice);
         }
       }
-      if (directRequest || canQueueGroup) {
+      if (!nativeRound && (directRequest || canQueueGroup)) {
         for (const agent of targets) {
           ot.run(`INSERT INTO ot_agent_reply_jobs(id,message_id,owner_id,agent_ref,agent_name,status,updated_at,direct_grant_id,discretionary)
             VALUES (?,?,?,?,?,'queued',?,?,?)`, newId("otj"), m.id, agent.owner_id, agent.agent_ref, agent.name, ot.now(), agent.direct_grant_id,
@@ -1546,7 +1577,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
           wakeOwners.add(agent.owner_id);
         }
       }
-      if (!voice && !file && !groupRequest && !studio && !suppressed &&
+      if (!nativeRound && !voice && !file && !groupRequest && !studio && !suppressed &&
           (fixedPublicThread(conv) || (!addressed && targets.length === 0))) {
         for (const {owner_id} of legacyWakeOwners(conv, m.seq)) wakeOwners.add(owner_id);
       }
@@ -2216,6 +2247,86 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const me = ot.me(req);
     return {...readAgentInbox(me.ownerId, after, limit, managed), wake_supported: true};
   });
+  type NativeRound = {message_id:string; conversation_id:string; body:string; seq:number;
+    state:"queued"|"running"|"finished"; agent_mentions:string};
+  function findNativeRound(conv: Group, messageId: string, ownerId: string) {
+    const round = ot.get<NativeRound>(`SELECT r.*,m.seq FROM ot_native_group_rounds r JOIN ot_messages m ON m.id=r.message_id
+      WHERE r.message_id=? AND r.conversation_id=? AND r.owner_id=? AND m.retracted=0`, messageId, conv.id, ownerId);
+    assert(round, 404, "native_round_not_found", "Native group round was not found");
+    return round;
+  }
+  const roundStatus = ({message_id,conversation_id,body,state,seq,agent_mentions}:NativeRound) =>
+    ({message_id,conversation_id,body,state,seq,agent_mentions:JSON.parse(agent_mentions)});
+
+  app.get("/v1/ot/native-group-inbox", async (req, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    const me = ot.me(req);
+    const pending = (state:"running"|"queued") => ot.all<NativeRound>(`SELECT r.*,m.seq FROM ot_native_group_rounds r
+      JOIN ot_messages m ON m.id=r.message_id JOIN ot_conversations c ON c.id=r.conversation_id
+      JOIN ot_conversation_members member ON member.conversation_id=c.id AND member.owner_id=r.owner_id
+      WHERE r.owner_id=? AND r.state=? AND m.retracted=0
+        AND c.kind='group' AND c.account_group=1 AND c.team_id IS NULL AND c.group_archived_at IS NULL
+        AND COALESCE(c.group_owner_id,c.created_by)=r.owner_id
+        AND NOT EXISTS (SELECT 1 FROM ot_conversation_members peer WHERE peer.conversation_id=c.id AND peer.owner_id<>r.owner_id)
+      ORDER BY m.rowseq ${state === "queued" ? "LIMIT 60" : ""}`, me.ownerId, state);
+    return {items:[...pending("running"), ...pending("queued")].map(roundStatus)};
+  });
+
+  app.post("/v1/ot/conversations/:id/native-rounds/:messageId", {bodyLimit:1024}, async req => {
+    const me = ot.me(req);
+    const ids = params(req);
+    const data = body(req);
+    assert(Object.keys(data).length === 1 && (data.action === "start" || data.action === "finish"),
+      400, "invalid_request", "Invalid native group action");
+    return ot.tx(() => {
+      const conv = accountConversation(ot, ids.id, me.ownerId);
+      const round = findNativeRound(conv, ids.messageId, me.ownerId);
+      if (data.action === "finish") {
+        if (round.state !== "finished") ot.run("UPDATE ot_native_group_rounds SET state='finished' WHERE message_id=?", round.message_id);
+        return {state:"finished"};
+      }
+      requireLocalNativeGroup(ot, conv, me.ownerId);
+      if (round.state === "finished") return {started:false,state:"finished"};
+      if (round.state === "running") return {started:false,state:"running"};
+      assert(!ot.get(`SELECT 1 FROM ot_native_group_rounds older JOIN ot_messages source ON source.id=older.message_id
+        JOIN ot_messages current ON current.id=?
+        WHERE older.conversation_id=? AND older.state<>'finished' AND source.retracted=0 AND source.seq<current.seq`, round.message_id, conv.id),
+      409, "native_round_busy", "A previous native group round is still active");
+      ot.run("UPDATE ot_native_group_rounds SET state='running' WHERE message_id=?", round.message_id);
+      return {started:true,state:"running"};
+    });
+  });
+
+  app.post("/v1/ot/conversations/:id/native-rounds/:messageId/lines", {bodyLimit:32768}, async (req, reply) => {
+    const me = ot.me(req);
+    const ids = params(req);
+    const data = body(req);
+    assert(Object.keys(data).length === 3 && Object.hasOwn(data, "agent_ref") &&
+      Object.hasOwn(data, "body") && Object.hasOwn(data, "client_key"), 400, "invalid_request", "Invalid native group line");
+    const agentRef = text(data.agent_ref, "agent_ref", {min:1,max:80});
+    const output = text(data.body, "body", {min:1,max:BODY_MAX,multiline:true});
+    const key = text(data.client_key, "client_key", {min:1,max:80});
+    const clientKey = "native:" + createHash("sha256").update(key).digest("hex");
+    const result = ot.tx(() => {
+      const conv = accountConversation(ot, ids.id, me.ownerId);
+      const round = findNativeRound(conv, ids.messageId, me.ownerId);
+      const prior = ot.get<any>("SELECT * FROM ot_messages WHERE conversation_id=? AND author_id=? AND client_key=?", conv.id, me.ownerId, clientKey);
+      if (prior) {
+        assert(prior.author_kind === "agent" && prior.agent_ref === agentRef && prior.reply_to === round.message_id && prior.body === output,
+          409, "native_line_conflict", "This native line key was already used");
+        return prior;
+      }
+      assert(round.state === "running", 409, "native_round_unavailable", "The native group round is no longer active");
+      const roster = conversationAgents(ot, conv.id);
+      requireLocalNativeGroup(ot, conv, me.ownerId, roster);
+      const agent = roster.find(item => item.agent_ref === agentRef);
+      assert(agent, 404, "agent_not_found", "This Bot is no longer in the native group");
+      return insertMessage(ot, conv, {author:me.ownerId,kind:"agent",agentRef,agentName:agent.name,
+        body:output,mentions:[],replyTo:round.message_id,clientKey});
+    });
+    return reply.status(201).send(messageView(ot, result, me.ownerId));
+  });
+
   app.post("/v1/ot/conversations/:id/agent-messages", async (req, reply) => {
     const me = ot.me(req);
     const b = body(req);
