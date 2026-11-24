@@ -234,11 +234,17 @@ test('ambiguous skill-run retry keeps its idempotency key; only server history i
   assert.equal(keys.length,2);assert.equal(keys[0],keys[1]);
 });
 
-test('a load receipt without task success does not create a save or verified-success control', async () => {
+test('a recognized skill with an unfinished run only offers cancellation', async () => {
   const {doc,el}=fakeDocument();el('skills-scope').value='account';
-  const record={scope:'account',skill_id:SKILLS[0].id,loaded:true,verified:false,task:{id:'actual',status:'claimed',prompt:'task',result:null}};
+  const record = {
+    scope: 'account', skill_id: SKILLS[0].id, loaded: true, verified: false,
+    skills: [{id: SKILLS[0].id}],
+    task: {id: 'actual', status: 'claimed', prompt: 'task', result: null},
+  };
   const request=async(method,path)=>path.includes('/readiness')?{ready:true,code:'ready'}:{items:path.endsWith('/runs')?[record]:[]};
   const app=mountSkillExecution(doc,{request,scope:el('skills-scope')});await app.refresh();
-  const row=el('skill-run-history').children[0];assert.match(row.children[1].textContent,/尚未成功/);
+  const row = el('skill-run-history').children[0];
+  assert.equal(row.children[1].textContent, '已确认所选技能可用。');
+  assert.doesNotMatch(row.children[3].textContent, /@undefined/);
   assert.equal(row.children.filter(e=>e.tagName==='BUTTON').length,1);assert.equal(row.children[4].textContent,'取消此任务');
 });
