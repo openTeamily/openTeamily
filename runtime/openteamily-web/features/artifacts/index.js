@@ -15,6 +15,7 @@ import { GLB_MIME, MAX_GLB_BYTES } from '../../lib/glb.js'
 import { exportOffice } from './office.js'
 import { decodeStructured } from './structured.js'
 import { artifactContextExcerpt } from './catalog-search.js'
+import { annotationEndpoints } from './annotations.js'
 import { teamRunWorkKey } from '../shares/team-run-source.js'
 
 function generatedMedia(ctx, input, call, type, mime, extension, limit) {
@@ -45,6 +46,9 @@ export default defineFeature({
   endpoints: (context) => {
     const ctx = { ...context, featureDir: context.host.featureDir() }
     return {
+    // Threaded annotations live in this feature because the artifact row (and
+    // its revision) is their parent; see annotations.js for the endpoint table.
+    ...annotationEndpoints(ctx),
     async remixPublicWork(payload, call) {
       if (!call?.internal) refuse(404,'not_found','Internal endpoint')
       return remixPublicWork(ctx,payload ?? {})
