@@ -1040,3 +1040,5 @@ html[data-theme-resolved="dark"] .connector-status[data-state="failed"], html[da
   outline-offset: -2px;
   border-radius: .5rem;
 }
+
+#retry-model-api { min-height: 2.75rem; margin-block-start: .5rem; }

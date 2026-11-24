@@ -73,8 +73,19 @@ export function mountSkills(document, {fetcher = globalThis.fetch.bind(globalThi
   if (!list || !input) return null;
   const error = document.getElementById('skills-error');
   const scope = document.getElementById('skills-scope');
+  const review = document.getElementById('skills-review');
+  const reviewTitle = document.getElementById('skills-review-title');
+  const reviewVersion = document.getElementById('skills-review-version');
+  const reviewScope = document.getElementById('skills-review-scope');
+  const reviewContent = document.getElementById('skills-review-content');
+  const reviewDigest = document.getElementById('skills-review-digest');
+  const reviewInstall = document.getElementById('skills-review-install');
+  const reviewError = document.getElementById('skills-review-error');
+  const confirmButton = document.getElementById('skills-review-confirm');
+  const closeButton = document.getElementById('skills-review-close');
   const permission = document.getElementById('skills-permission');
-  let catalogue = given || [], bindings = [], busy = false;
+  const cardControls = new Map();
+  let catalogue = given || [], bindings = [], busy = false, pendingReview = null;
   const installedSet = new Set();
   const account = {
     read: read || (() => readInstalled(fetcher)),
@@ -92,11 +103,76 @@ export function mountSkills(document, {fetcher = globalThis.fetch.bind(globalThi
     const results=await Promise.all([request('GET','/v1/skills/catalog'),request('GET','/v1/skills/bindings')]);
     catalogue=results[0].items||[];bindings=results[1].items||[];render();await execution.refresh();
   }});
+  function openReview(skill, selected, control, current) {
+    if (busy || review.open) return;
+    pendingReview = {skill, scope: selected, control};
+    reviewTitle.textContent = skill.name;
+    reviewVersion.textContent = '版本 ' + skill.version;
+    reviewScope.textContent = scope?.selectedOptions?.[0]?.textContent || '我的账户';
+    reviewContent.textContent = skill.content;
+    reviewDigest.textContent = 'SHA-256 ' + skill.digest;
+    reviewInstall.hidden = current;
+    reviewError.textContent = '';
+    permission.checked = false;
+    confirmButton.disabled = true;
+    review.showModal();
+    reviewContent.scrollTop = 0;
+  }
+
+  async function updateBinding(skill, selected, enabled) {
+    await request('POST', '/v1/skills/bindings', {
+      skill_id: skill.id, version: skill.version, digest: skill.digest,
+      scope: selected, enabled, permissions: ['model_context'],
+    });
+    bindings = (await request('GET', '/v1/skills/bindings')).items || [];
+  }
+
+  closeButton.addEventListener('click', () => review.close());
+  review.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
+  review.addEventListener('close', () => {
+    if (review.open || !pendingReview) return;
+    const {skill, control} = pendingReview;
+    pendingReview = null;
+    permission.checked = false;
+    (cardControls.get(skill.id)?.[control] || input).focus();
+  });
+  permission.addEventListener('change', () => { confirmButton.disabled = !permission.checked; });
+  confirmButton.addEventListener('click', async () => {
+    if (busy || !review.open || !pendingReview || !permission.checked || reviewInstall.hidden) return;
+    const {skill, scope: selected} = pendingReview;
+    busy = true;
+    permission.disabled = true;
+    confirmButton.disabled = true;
+    closeButton.disabled = true;
+    confirmButton.textContent = '正在安装…';
+    reviewError.textContent = '';
+    error.textContent = '';
+    try {
+      await updateBinding(skill, selected, true);
+      error.textContent = '已安装到所选范围。';
+    } catch (failure) {
+      reviewError.textContent = failure.message || '网络错误，结果未知，请重试。';
+    } finally {
+      busy = false;
+      permission.disabled = false;
+      closeButton.disabled = false;
+      confirmButton.disabled = !permission.checked;
+      confirmButton.textContent = '确认安装';
+    }
+    if (reviewError.textContent) {
+      confirmButton.focus();
+      return;
+    }
+    render();
+    review.close();
+    await execution.refresh();
+  });
   function render() {
     execution.setSkills(catalogue,bindings);
     const matches = filterSkills(catalogue,input.value);
     const selected = scope ? scope.value : 'account';
     list.replaceChildren();
+    cardControls.clear();
     for (const skill of matches) {
       const item = document.createElement('li'); item.className='skill-card';
       if (installedSet.has(skill.id)) item.className+=' is-in-library';
@@ -105,27 +181,47 @@ export function mountSkills(document, {fetcher = globalThis.fetch.bind(globalThi
       const name = document.createElement('strong');name.textContent=skill.name;
       const status = document.createElement('p');
       const binding = bindings.find(b => b.scope === selected && b.skill_id === skill.id);
-      if(binding)item.className+=' is-installed';
-      status.textContent = binding && (binding.version!==skill.version || binding.digest!==skill.digest)
+      const current = Boolean(binding && binding.version === skill.version && binding.digest === skill.digest);
+      if (binding) item.className += ' is-installed';
+      status.textContent = binding && !current
         ? '版本已更新，请阅读新内容并重新安装'
-        : binding ? '已安装，可在所选范围内使用' : '未安装';
-      const details = document.createElement('details'), summary = document.createElement('summary');summary.textContent='查看真实技能内容 · '+skill.version;
-      const content = document.createElement('pre');content.style.whiteSpace='pre-wrap';content.textContent=skill.content;
-      const digest = document.createElement('small');digest.textContent='SHA-256: '+skill.digest;
-      details.append(summary,content,digest);copy.append(name,status,details);
-      const button=document.createElement('button');button.type='button';button.className='skill-install';button.dataset.skill=skill.id;
-      button.textContent=binding ? '卸载' : '安装';button.disabled=busy;button.setAttribute('aria-label',button.textContent+' '+skill.name);
-      button.addEventListener('click',async () => {
+        : current ? '已安装，可在所选范围内使用' : '未安装';
+      const details = document.createElement('button');
+      details.type = 'button';
+      details.className = 'skill-details';
+      details.textContent = '查看详情';
+      details.setAttribute('aria-label', '查看详情 ' + skill.name);
+      details.setAttribute('aria-haspopup', 'dialog');
+      details.addEventListener('click', () => openReview(skill, selected, 'details', current));
+      copy.append(name, status, details);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'skill-install';
+      button.dataset.skill = skill.id;
+      button.textContent = binding ? '卸载' : '安装';
+      button.disabled = busy;
+      button.setAttribute('aria-label', button.textContent + ' ' + skill.name);
+      if (!binding) button.setAttribute('aria-haspopup', 'dialog');
+      cardControls.set(skill.id, {details, binding: button});
+      button.addEventListener('click', async () => {
         if (busy) return;
-        if (!binding && !(permission && permission.checked)) { error.textContent='请先阅读技能内容并勾选允许将其作为模型上下文。'; return; }
-        const wantedScope=selected;busy=true;error.textContent='';render();
+        if (!binding) {
+          openReview(skill, selected, 'binding', false);
+          return;
+        }
+        busy = true;
+        button.disabled = true;
+        error.textContent = '';
         try {
-          await request('POST','/v1/skills/bindings',{skill_id:skill.id,version:skill.version,digest:skill.digest,scope:wantedScope,enabled:!binding,permissions:['model_context']});
-          if (permission) permission.checked = false;
-          bindings=(await request('GET','/v1/skills/bindings')).items || [];
-          error.textContent=binding ? '已卸载。' : '已安装到所选范围。';
-        } catch(e) {error.textContent=e.message || '网络错误，结果未知，请刷新检查。';}
-        finally {busy=false;render();}
+          await updateBinding(skill, selected, false);
+          error.textContent = '已卸载。';
+        } catch (failure) {
+          error.textContent = failure.message || '网络错误，结果未知，请刷新检查。';
+        } finally {
+          busy = false;
+          render();
+          (cardControls.get(skill.id)?.binding || input).focus();
+        }
       });
       const library = document.createElement('button');
       library.type='button';library.className='skill-library';library.dataset.library=skill.id;
@@ -151,21 +247,19 @@ export function mountSkills(document, {fetcher = globalThis.fetch.bind(globalThi
         copy.append(manage,download,revoke);
       }
       item.append(mark,copy,button,library);
-      if(binding){
-        const current=binding.version===skill.version&&binding.digest===skill.digest;
-        const use=document.createElement('button');use.type='button';use.textContent=current?'使用技能':'重新安装当前版本';use.className='skill-use';use.disabled=busy;
-        use.addEventListener('click',async()=>{
-          if(current){execution.selectSkill(skill.id);return;}
-          if(busy)return;
-          if(!permission.checked){error.textContent='请阅读新版本内容并确认模型上下文权限，再重新安装。';return;}
-          busy=true;render();
-          try{
-            await request('POST','/v1/skills/bindings',{skill_id:skill.id,version:skill.version,digest:skill.digest,scope:scope.value,enabled:true,permissions:['model_context']});
-            bindings=(await request('GET','/v1/skills/bindings')).items||[];permission.checked=false;error.textContent='已安装当前版本。';
-            await execution.refresh();
-          }catch(e){error.textContent=e.message||'绑定结果未知，请刷新核对。';}
-          finally{busy=false;render();}
-        });item.append(use);
+      if (binding) {
+        const use = document.createElement('button');
+        use.type = 'button';
+        use.textContent = current ? '使用技能' : '重新安装当前版本';
+        use.className = 'skill-use';
+        use.disabled = busy;
+        if (!current) use.setAttribute('aria-haspopup', 'dialog');
+        cardControls.get(skill.id).use = use;
+        use.addEventListener('click', () => {
+          if (current) execution.selectSkill(skill.id);
+          else openReview(skill, selected, 'use', false);
+        });
+        item.append(use);
       }
       list.append(item);
     }
@@ -204,7 +298,7 @@ export function mountSkills(document, {fetcher = globalThis.fetch.bind(globalThi
     } catch(e) {error.textContent=e.message || '技能读取失败，请刷新重试。';}
   }
   input.addEventListener('input',render);
-  if (scope) scope.addEventListener('change',() => {if (permission) permission.checked=false;render();execution.refresh();});
+  if (scope) scope.addEventListener('change', () => { render(); execution.refresh(); });
   const ready=load();return {render,ready,installed:installedSet};
 }
 

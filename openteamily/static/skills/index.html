@@ -75,7 +75,6 @@
     <p id="skills-count" class="skills-count" role="status" aria-live="polite"></p>
     <p id="skills-error" role="status" aria-live="polite"></p>
     <label>安装范围<select id="skills-scope"><option value="account">我的账户</option></select></label>
-    <label><input type="checkbox" id="skills-permission">我已阅读内容，允许模型使用所选技能的指令。</label>
     <p class="note skills-runtime-note">技能在你自己的 DS-Bot 中运行。安装仅授权模型读取指令。智能体和自动化范围需要工作区管理权限。</p>
 
 <details class="skill-import-panel"><summary>导入 / 升级私有指令包</summary>
@@ -85,6 +84,28 @@
 <button id="skill-import-template" type="button">填入原创核对模板</button><button id="skill-import-submit" type="submit">持久化导入（不自动安装）</button></form><p id="skill-import-status" role="status" aria-live="polite"></p></details>
 <details class="skill-import-panel"><summary>私有包历史与撤销记录（仅本人）</summary><button type="button" id="skill-package-history-refresh">刷新私有包历史</button><p id="skill-package-history-status" role="status"></p><ul id="skill-package-history"></ul></details>
 <ul id="skills-list" class="skills-grid"></ul>
+<dialog id="skills-review" class="skill-review" aria-labelledby="skills-review-title" aria-describedby="skills-review-access">
+  <header class="skill-review-header">
+    <div>
+      <h2 id="skills-review-title"></h2>
+      <p><span id="skills-review-version"></span><span aria-hidden="true"> · </span><span id="skills-review-scope"></span></p>
+    </div>
+    <button type="button" id="skills-review-close" autofocus>关闭</button>
+  </header>
+  <div class="skill-review-body">
+    <h3>技能指令</h3>
+    <pre id="skills-review-content" tabindex="0" aria-label="完整技能指令"></pre>
+    <details class="skill-review-integrity"><summary>内容校验</summary><p id="skills-review-digest"></p></details>
+  </div>
+  <footer class="skill-review-footer">
+    <p id="skills-review-access">模型上下文权限允许所选范围内的 DS-Bot 在运行时读取这些指令。</p>
+    <div id="skills-review-install">
+      <label class="skill-review-consent"><input type="checkbox" id="skills-permission">我已阅读此版本的指令，并允许模型使用。</label>
+      <p id="skills-review-error" role="alert"></p>
+      <button id="skills-review-confirm" type="button" disabled>确认安装</button>
+    </div>
+  </footer>
+</dialog>
     <p id="skills-empty" class="note skills-empty" hidden>没有匹配的技能</p>
 <section class="skills-execution" aria-labelledby="skill-execution-heading">
 <h2 id="skill-execution-heading">运行与验证</h2>

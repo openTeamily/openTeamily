@@ -411,7 +411,7 @@ export function renderModelApi(document, form, data, failed = false) {
   const effective = data?.effective;
   const platform = effective?.source === 'platform';
   const account = effective?.source === 'account';
-  const state = platform ? 'platform' : account ? 'account' : (values || failed) ? 'unavailable' : 'loading';
+  const state = platform ? 'platform' : account ? 'account' : failed ? 'read-failed' : values ? 'unavailable' : 'loading';
   const source = platform ? 'platform-active' : account ? 'account-active' :
     failed ? 'load-error' : values ? 'none' : 'loading';
 
@@ -430,6 +430,8 @@ export function renderModelApi(document, form, data, failed = false) {
   document.getElementById('model-platform-ready').hidden = !platform;
   document.getElementById('model-key-state-detail').hidden = !values?.api_key_set;
   document.getElementById('restore-platform-model').hidden = !values?.api_key_set;
+  const retry = document.getElementById('retry-model-api');
+  if (retry) retry.hidden = !failed;
   const override = document.getElementById('model-api-override');
   override.hidden = !values;
   override.open = account;
@@ -601,6 +603,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const form = document.getElementById('settings-form');
   const modelForm = document.getElementById('model-api-form');
   const modelFields = modelForm && document.getElementById('model-api-fields');
+  const modelRetry = document.getElementById('retry-model-api');
   const imageForm = document.getElementById('image-api-form');
   const imageFields = document.getElementById('image-api');
   const imageStatus = document.getElementById('image-api-status');
@@ -781,6 +784,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
 
+  async function loadModelStatus(sequence, pending) {
+    const model = await pending;
+    if (sequence !== loadSequence) return false;
+    const values = model?.status === 200 && model.body?.model_api;
+    modelRevision = Number.isInteger(values?.revision) ? values.revision : null;
+    const loaded = modelRevision !== null;
+    renderModelApi(document, modelForm, loaded ? model.body : null, !loaded);
+    return loaded;
+  }
+
   async function load() {
     const sequence = ++loadSequence;
     prepareNotificationPrefs();
@@ -790,6 +803,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (modelForm) {
       modelRevision = null;
+      if (modelRetry) modelRetry.disabled = false;
       renderModelApi(document, modelForm);
     }
     if (languageSave) {
@@ -835,13 +849,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     refreshAppearance();
     renderView();
     void renderNotificationPrefs(sequence, prefsRead);
-    if (modelRead) {
-      const model = await modelRead;
-      if (sequence !== loadSequence) return;
-      const values = model?.status === 200 && model.body?.model_api;
-      if (values && Number.isInteger(values.revision)) modelRevision = values.revision;
-      renderModelApi(document, modelForm, modelRevision === null ? null : model.body, modelRevision === null);
-    }
+    if (modelRead) await loadModelStatus(sequence, modelRead);
+    if (sequence !== loadSequence) return;
     await renderSkillSecrets();
     await syncComposio();
   }
@@ -1110,6 +1119,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   removeImageKey?.addEventListener('click',() => void saveImageApi({api_key:null}));
 
   if (modelForm) {
+    modelRetry?.addEventListener('click', async () => {
+      if (modelRetry.hidden || modelRetry.disabled) return;
+      const sequence = loadSequence;
+      const focused = document.activeElement === modelRetry;
+      modelRetry.disabled = true;
+      const loaded = await loadModelStatus(sequence, request('GET', '/v1/model-api').catch(() => null));
+      if (sequence !== loadSequence) return;
+      modelRetry.disabled = false;
+      if (focused && (document.activeElement === modelRetry || document.activeElement === document.body)) {
+        const target = loaded ? document.getElementById('model-api-override-title') : modelRetry;
+        target?.focus({preventScroll:true});
+      }
+    });
+
     async function saveModelApi(changes, success) {
       if (modelRevision === null || modelFields.disabled) return;
       const sequence = loadSequence;

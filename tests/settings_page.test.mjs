@@ -702,6 +702,50 @@ async function mountSettingsPage({secrets} = {}) {
   };
 }
 
+test('failed model status can be rechecked once without reloading settings', async () => {
+  const {doc} = settingsDocument();
+  const api = makeSettingsApi({});
+  const retry = doc.getElementById('retry-model-api');
+  const readCount = {models: 0, settings: 0};
+  let finishRetry;
+  const fetcher = (path, options) => {
+    if (path === '/v1/model-api') {
+      readCount.models += 1;
+      if (readCount.models === 1) return settingsJson(503, {});
+      return new Promise(resolve => { finishRetry = resolve; });
+    }
+    if (path === '/v1/settings') readCount.settings += 1;
+    return api.fetcher(path, options);
+  };
+  stubFormData(doc.getElementById('settings-form'));
+  const restoreListeners = stubWindowListeners();
+  try {
+    await mount(doc, {fetcher});
+    await settleSettings();
+    assert.equal(retry.hidden, false);
+    assert.equal(doc.getElementById('model-key-state').textContent, '读取失败');
+    assert.equal(doc.getElementById('model-api-fields').disabled, true);
+    retry.focus();
+    doc.fire('click', {target:retry});
+    doc.fire('click', {target:retry});
+    assert.equal(retry.disabled, true);
+    assert.deepEqual(readCount, {models:2, settings:1});
+    finishRetry(settingsJson(200, {
+      model_api:{revision:4, api_key_set:false},
+      effective:{source:'platform', model:'shared-model'},
+    }));
+    await settleSettings();
+    assert.equal(retry.hidden, true);
+    assert.equal(doc.getElementById('model-api-fields').disabled, false);
+    assert.equal(doc.getElementById('model-effective-model').textContent, ' (shared-model)');
+    assert.equal(doc.activeElement, doc.getElementById('model-api-override-title'));
+    assert.deepEqual(readCount, {models:2, settings:1});
+  } finally {
+    globalThis.FormData = REAL_FORM_DATA;
+    restoreListeners();
+  }
+});
+
 test('notification settings load native values, save only the changed switch and restore it on failure', async () => {
   const {doc} = settingsDocument();
   const api = makeSettingsApi({});
