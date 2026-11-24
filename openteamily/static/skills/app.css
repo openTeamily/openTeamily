@@ -76,8 +76,8 @@ body.app-workspace > #main > #main-panel {
   gap: 0.7rem;
   padding: 0.8rem;
   border: 1px solid var(--ot-line);
-  border-radius: 0.875rem;
-  background: var(--ot-surface);
+  border-radius: 1rem;
+  background: var(--ot-glass, var(--ot-surface));
 }
 
 .skill-card.is-installed {
@@ -107,7 +107,7 @@ body.app-workspace > #main > #main-panel {
 
 .skill-copy strong {
   color: var(--ot-ink);
-  font-size: 0.8125rem;
+  font-size: 0.93rem;
   font-weight: 650;
 }
 
@@ -166,14 +166,145 @@ body.app-workspace > #main > #main-panel {
 }
 
 #skills-scope { display: block; max-width: 100%; margin: .35rem 0 .75rem; font: inherit; }
-#skills-permission { margin: 0 .4rem 0 0; }
 .skills-runtime-note { margin: .65rem 0 1rem; }
 .skill-copy p { margin: .25rem 0; font-size: .75rem; line-height: 1.5; color: var(--ot-muted); }
-.skill-copy details { font-size: .75rem; line-height: 1.5; overflow-wrap: anywhere; }
-.skill-copy summary { cursor: pointer; color: var(--ot-accent-hover); }
-.skill-copy pre { max-height: 22rem; overflow: auto; font: inherit; overflow-wrap: anywhere; }
-.skill-copy small { overflow-wrap: anywhere; }
-.skill-install:focus-visible, .skill-copy summary:focus-visible { outline: 2px solid var(--ot-accent); outline-offset: 3px; }
+.skill-copy > .skill-details {
+  justify-self: start;
+  min-height: 2.75rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ot-accent-hover);
+  font-weight: 600;
+  text-align: start;
+}
+
+.skill-copy > .skill-details:hover { text-decoration: underline; }
+.skill-install:focus-visible, .skill-review :focus-visible {
+  outline: 2px solid var(--ot-accent);
+  outline-offset: 3px;
+}
+
+.skill-review {
+  width: min(39rem, calc(100% - 2rem));
+  max-height: calc(100dvh - 2rem);
+  box-sizing: border-box;
+  padding: 0;
+  border: 1px solid var(--ot-glass-line, var(--ot-line));
+  border-radius: 1.25rem;
+  color: var(--ot-ink);
+  overflow: auto;
+}
+
+.skill-review-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: .75rem;
+  padding: 1.2rem 1.35rem 1rem;
+}
+
+.skill-review-header h2 {
+  margin: 0 0 .25rem;
+  font-size: 1.3rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.skill-review-header p,
+.skill-review-footer p {
+  margin: 0;
+  color: var(--ot-muted);
+  font-size: .85rem;
+  overflow-wrap: anywhere;
+}
+
+.skill-review-header button,
+#skills-review-confirm {
+  min-height: 2.75rem;
+  padding-inline: 1rem;
+  border-radius: 999px;
+}
+
+.skill-review-header button { flex: none; }
+
+.skill-review-body {
+  margin: 0 1.35rem;
+  padding: .9rem 1rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 1rem;
+  background: var(--ot-surface);
+}
+
+.skill-review-body h3 { margin: 0 0 .6rem; font-size: .9rem; }
+
+#skills-review-content {
+  max-height: min(18rem, 34dvh);
+  margin: 0;
+  padding: 0 .25rem;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font: inherit;
+  font-size: .9rem;
+  line-height: 1.6;
+  overscroll-behavior: contain;
+}
+
+.skill-review-integrity {
+  margin-top: .65rem;
+  border-top: 1px solid var(--ot-line);
+  color: var(--ot-muted);
+  font-size: .8rem;
+}
+
+.skill-review-integrity summary {
+  align-content: center;
+  min-height: 2.75rem;
+  cursor: pointer;
+}
+
+#skills-review-digest { margin: 0 0 .35rem; overflow-wrap: anywhere; }
+
+.skill-review-footer {
+  padding: 1rem 1.35rem 1.2rem;
+}
+
+.skill-review-consent {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  min-height: 2.75rem;
+  margin: .5rem 0;
+  font-size: .9rem;
+}
+
+#skills-permission { flex: none; margin: 0; accent-color: var(--ot-accent); }
+#skills-review-error { margin-bottom: .65rem; color: var(--ot-danger); }
+#skills-review-error:empty { display: none; }
+
+#skills-review-confirm {
+  border-color: transparent;
+  background: var(--ot-action-gradient, var(--ot-accent));
+  color: var(--ot-on-accent, var(--ot-surface));
+  font-weight: 650;
+}
+
+#skills-review-confirm:disabled {
+  border-color: var(--ot-line);
+  background: var(--ot-surface);
+  color: var(--ot-muted);
+  cursor: default;
+}
+
+@media (max-width: 520px) {
+  .skill-review { width: calc(100% - 1rem); }
+  .skill-review-header, .skill-review-footer { padding-inline: 1rem; }
+  .skill-review-body { margin-inline: 1rem; }
+  #skills-review-confirm { width: 100%; }
+}
+
 .skills-grid { align-items: start; }
 #skills-error:empty { display: none; }
 

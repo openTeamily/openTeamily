@@ -30,7 +30,8 @@ class SkillsPageTests(unittest.TestCase):
         self.assertIn('技能库', html)
         self.assertIn('id="skills-permission"', html)
         self.assertIn('收藏会保存到「我的技能库」', html)
-        self.assertIn('允许模型使用所选技能的指令', html)
+        self.assertIn('我已阅读此版本的指令，并允许模型使用', html)
+        self.assertIn('<dialog id="skills-review"', html)
         self.assertIn('自己的 DS-Bot', html)
         self.assertIn('没有匹配的技能', html)
         self.assertIn('aria-label="搜索技能"', html)
@@ -49,7 +50,7 @@ class SkillsPageTests(unittest.TestCase):
         self.assertIn('/v1/skills/installed', script)
         self.assertIn('X-CSRF-Token', script)
         self.assertNotIn('export function toggleSkill', script)
-        self.assertIn('permission && permission.checked', script)
+        self.assertIn('!permission.checked || reviewInstall.hidden', script)
         self.assertIn('csrfCookie(document.cookie)', script)
         self.assertNotIn('innerHTML', script)
 

@@ -245,8 +245,11 @@ test('ticking an action item writes the meeting back without pressing 保存', a
       {text: 'A', done: true, owner: ''},
       {text: 'B', done: false, owner: ''},
     ], 'only the ticked item flips');
-    assert.equal((await doc.getElementById('status').textContent).trim(), '已标记完成。');
-    assert.match(doc.getElementById('meeting-list').children[0].children[0].children[1].textContent, /1\/2 行动项/,
+    assert.equal(doc.getElementById('meeting-action-status').textContent, '已标记完成。');
+    assert.equal(doc.getElementById('meeting-action-progress').textContent, '1/2 已完成');
+    const progress = doc.getElementById('meeting-list').children[0].children[0].children.find(
+      child => child.className === 'meeting-action-progress');
+    assert.match(progress.textContent, /1\/2 行动项/,
       'the list count follows the tick');
     assert.match(doc.getElementById('meeting-meta').textContent, /修订 4/);
   } finally {
@@ -265,9 +268,34 @@ test('a stale revision reverts the tick and says the meeting moved on', async ()
 
     assert.equal(state.posted.length, 1, 'the page tried once');
     assert.equal(box.checked, false, 'the tick goes back to the server state');
-    assert.equal((await doc.getElementById('status').textContent).trim(), '会议已在别处更新，请重新打开后再勾选。');
-    assert.equal(doc.getElementById('status').dataset.kind, 'error');
+    assert.equal(checkbox(doc, 0), box, 'the original checkbox remains mounted after rollback');
+    assert.equal(doc.getElementById('meeting-action-status').textContent, '会议已在别处更新，请重新打开后再勾选。');
+    assert.equal(doc.getElementById('meeting-action-status').dataset.kind, 'error');
   } finally {
+    restore();
+  }
+});
+
+test('a rejected tick reverts its current checkbox after adding another action', async () => {
+  let finish;
+  const held = new Promise(resolve => { finish = resolve; });
+  const {doc, state, restore} = await mountPage('action-remount', {revokeWith:409, beforeWrite:() => held});
+  try {
+    const box = checkbox(doc, 0);
+    box.checked = true;
+    const sent = box.handlers.change[0]();
+    doc.getElementById('add-action').handlers.click[0]();
+    const rendered = checkbox(doc, 0);
+    assert.notEqual(rendered, box);
+    assert.equal(rendered.getAttribute('aria-disabled'), 'true');
+    finish();
+    await sent;
+    assert.equal(state.posted.length, 1);
+    assert.equal(rendered.checked, false);
+    assert.equal(rendered.getAttribute('aria-disabled'), undefined);
+    assert.ok(checkbox(doc, 2), 'the new draft action remains');
+  } finally {
+    finish();
     restore();
   }
 });
@@ -315,7 +343,7 @@ test('a committed action toggle is confirmed by reading the saved revision after
     assert.equal(box.checked, true);
     assert.equal(summary.value, 'Unsaved summary');
     assert.match(doc.getElementById('meeting-meta').textContent, /修订 4/);
-    assert.equal(doc.getElementById('status').textContent, '已标记完成。');
+    assert.equal(doc.getElementById('meeting-action-status').textContent, '已标记完成。');
   } finally {
     restore();
   }
@@ -330,6 +358,12 @@ test('an earlier write cannot update the newly selected meeting', async () => {
     box.checked = true;
     const sent = box.handlers.change[0]();
     assert.equal(doc.getElementById('save-meeting').disabled, true);
+    assert.equal(box.disabled, false, 'the originating checkbox can retain keyboard focus');
+    assert.equal(box.getAttribute('aria-disabled'), 'true');
+    assert.equal(checkbox(doc, 1).disabled, true);
+    let repeatsBlocked = false;
+    box.handlers.click[0]({preventDefault() { repeatsBlocked = true; }});
+    assert.equal(repeatsBlocked, true);
     await doc.getElementById('meeting-list').handlers.click[0]({
       target: {closest: () => ({dataset: {meeting: OTHER_MEETING_ID}})},
     });
@@ -341,7 +375,7 @@ test('an earlier write cannot update the newly selected meeting', async () => {
     assert.equal(doc.getElementById('meeting-title').value, 'Other');
     assert.match(doc.getElementById('meeting-meta').textContent, /修订 8/);
     assert.equal(doc.getElementById('save-meeting').disabled, false);
-    assert.equal(doc.getElementById('status').textContent, '');
+    assert.equal(doc.getElementById('meeting-action-status').textContent, '');
   } finally {
     finish();
     restore();

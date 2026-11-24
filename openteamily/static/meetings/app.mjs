@@ -632,6 +632,10 @@ function mount() {
   const save = document.getElementById('save-meeting');
   const mobileSave = document.getElementById('save-meeting-mobile');
   const saveStatus = document.getElementById('meeting-save-status');
+  const actionList = document.getElementById('action-list');
+  const addAction = document.getElementById('add-action');
+  const actionStatus = document.getElementById('meeting-action-status');
+  const actionProgress = document.getElementById('meeting-action-progress');
   const remove = document.getElementById('remove-meeting');
   const deleteDialog = document.getElementById('meeting-delete-dialog');
   const actionCopyDialog = document.getElementById('meeting-action-copy-dialog');
@@ -676,6 +680,13 @@ function mount() {
   let viewer = '';
   let viewerId = '';
   if (!status || !loginPanel || !mainPanel || !form) return;
+  for (const button of document.querySelectorAll('#meeting-detail-nav [data-meeting-section]')) {
+    const target = document.getElementById(button.dataset.meetingSection);
+    button.addEventListener('click', () => {
+      target.focus({preventScroll: true});
+      target.scrollIntoView({block: 'start'});
+    });
+  }
   let current = null;
   let receivedMeeting = null;
   let callDraft = null;
@@ -792,6 +803,11 @@ function mount() {
     openRetry = null;
     status.dataset.kind = kind;
     status.textContent = text;
+  }
+
+  function showAction(kind, text) {
+    actionStatus.dataset.kind = kind;
+    actionStatus.textContent = text;
   }
 
   function readDetail(path) {
@@ -1220,7 +1236,16 @@ function mount() {
     const label = pending?.kind === 'save' ? '保存中…' : retry ? '确认并重试保存' : '保存';
     save.textContent = label;
     if (mobileSave) mobileSave.textContent = label;
-    for (const box of actionBoxes) box.disabled = blocked;
+    for (const [index, box] of actionBoxes.entries()) {
+      const savingThisAction = pending?.action === actions[index];
+      box.disabled = blocked && !savingThisAction;
+      if (savingThisAction) box.setAttribute('aria-disabled', 'true');
+      else box.removeAttribute('aria-disabled');
+    }
+    const listedActions = actions.filter(item => item.text?.trim());
+    actionProgress.hidden = !listedActions.length;
+    const progress = listedActions.length ? `${listedActions.filter(item => item.done).length}/${listedActions.length} 已完成` : '';
+    if (actionProgress.textContent !== progress) actionProgress.textContent = progress;
     syncSavedActions(blocked);
     syncLeaveProtection();
   }
@@ -1778,8 +1803,7 @@ function mount() {
   }
 
   function renderActions() {
-    const holder = document.getElementById('action-list');
-    holder.replaceChildren();
+    actionList.replaceChildren();
     actionBoxes = [];
     actionFollowups = [];
     actions.forEach((action, index) => {
@@ -1815,15 +1839,21 @@ function mount() {
       const box = document.createElement('input');
       box.type = 'checkbox';
       box.checked = Boolean(action.done);
+      box.setAttribute('aria-label', `完成行动项 ${index + 1}`);
+      box.addEventListener('click', event => {
+        if (box.getAttribute('aria-disabled') === 'true') event.preventDefault();
+      });
       box.addEventListener('change', () => persistActionToggle(action, box));
       actionBoxes.push(box);
       done.append(box, document.createTextNode('完成'));
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.textContent = '删除';
+      remove.setAttribute('aria-label', `删除行动项 ${index + 1}`);
       remove.addEventListener('click', () => {
         actions.splice(index, 1);
         renderActions();
+        (actionList.children[index]?.children[0] || addAction).focus();
       });
       const link = automationFollowupLink(document);
       const copy = document.createElement('button');
@@ -1837,7 +1867,7 @@ function mount() {
       if (Number.isInteger(action.savedIndex)) row.dataset.meetingActionIndex = action.savedIndex;
       actionFollowups.push({link, copy, action});
       row.append(text, owner, deadline, done, remove, destinations);
-      holder.append(row);
+      actionList.append(row);
     });
     syncWriting();
   }
@@ -1851,19 +1881,19 @@ function mount() {
     if (!current?.id || !saved || (action.text || '').trim() !== saved.text ||
         (action.owner || '').trim() !== (saved.owner || '') || (action.due_date || '') !== (saved.due_date || '')) {
       syncWriting();
-      show('ok', '这条行动项的完成状态会在保存会议后生效。');
+      showAction('ok', '这条行动项的完成状态会在保存会议后生效。');
       return;
     }
     const meeting = current;
-    const target = {...scope(), kind: 'action'};
+    const target = {...scope(), kind: 'action', action};
     const path = `${base()}/${meeting.id}`;
     const payload = actionToggleBody(meeting.action_items, action.savedIndex, done, meeting.revision);
     writing = target;
     syncWriting();
-    show('loading', '正在保存行动项…');
+    showAction('loading', '正在保存行动项…');
     let result = await saveRequest('POST', path, payload);
     if (active(target) && (ambiguousSave(result.status) || result.status === 409)) {
-      show('loading', '正在确认行动项是否已保存…');
+      showAction('loading', '正在确认行动项是否已保存…');
       const checked = await saveRequest('GET', path);
       const observed = checked.body.meeting;
       const {title, started_at, attendees, summary, transcript} = meeting;
@@ -1875,10 +1905,11 @@ function mount() {
     if (writing === target) writing = null;
     if (!active(target)) return;
     if (result.status !== 200 || result.body.meeting?.id !== meeting.id || result.body.meeting.workspace_id !== target.workspace) {
-      box.checked = previous;
       action.done = previous;
-      renderActions();
-      show('error', result.status === 409 ? '会议已在别处更新，请重新打开后再勾选。'
+      const currentBox = actionBoxes[actions.indexOf(action)];
+      if (currentBox) currentBox.checked = previous;
+      syncWriting();
+      showAction('error', result.status === 409 ? '会议已在别处更新，请重新打开后再勾选。'
         : messageFor(result.body.error, '无法保存这条行动项的完成状态。'));
       return;
     }
@@ -1890,7 +1921,7 @@ function mount() {
     meetings = meetings.map(item => item.id === current.id ? current : item);
     renderList();
     syncWriting();
-    show('ok', done ? '已标记完成。' : '已取消完成。');
+    showAction('ok', done ? '已标记完成。' : '已取消完成。');
     if (native && openOnly.checked) void loadList({keepEditor: true, preserve: true});
   }
 
@@ -1910,9 +1941,15 @@ function mount() {
       title.textContent = meeting.title;
       const meta = document.createElement('span');
       meta.className = 'preview';
-      meta.textContent = formatTime(meeting.started_at) + ' · ' + (meeting.attendees || []).length + ' 人 · ' +
-        meeting.done_count + '/' + meeting.action_count + ' 行动项';
+      meta.textContent = formatTime(meeting.started_at) + ' · ' + (meeting.attendees || []).length + ' 人';
       button.append(title, meta);
+      if (meeting.action_count > 0) {
+        const progress = document.createElement('span');
+        progress.className = 'meeting-action-progress';
+        progress.dataset.complete = String(meeting.done_count === meeting.action_count);
+        progress.textContent = `${meeting.done_count}/${meeting.action_count} 行动项已完成`;
+        button.append(progress);
+      }
       if (meeting.transcript_match) {
         const source = document.createElement('span');
         source.className = 'meeting-source-hit';
@@ -1993,6 +2030,7 @@ function mount() {
 
   function fill(meeting, source = null, draftJob = undefined, {recover = false, chatEditor = ''} = {}) {
     clearOpenRetry();
+    showAction('', '');
     editorReady = false;
     if (inboxReturn) inboxReturn.hidden = true;
     if (mobileBack) mobileBack.hidden = false;
@@ -2837,10 +2875,11 @@ function mount() {
     });
   });
 
-  document.getElementById('add-action').addEventListener('click', () => {
+  addAction.addEventListener('click', () => {
     if (actions.length >= 50) return;
     actions.push({text: '', owner: '', done: false});
     renderActions();
+    actionList.lastElementChild?.firstElementChild.focus();
   });
 
   document.getElementById('cancel-meeting').addEventListener('click', () => confirmNavigation(() => {

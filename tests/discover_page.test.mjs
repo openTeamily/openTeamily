@@ -2191,7 +2191,7 @@ test('the native direct excerpt paints before auth and is retained through a mis
   doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
   const session = Promise.withResolvers();
   const scoped = Promise.withResolvers();
-  const work = detailFixture();
+  const work = detailFixture({creator: {handle: 'writer.home', name: '作者'}});
   const next = detailFixture({slug: 'next-work'});
   const publicPath = '/w/' + work.slug + '?view=preview&nav=latest';
   const privatePath = '/v1/discover/works/' + work.slug;
@@ -2205,7 +2205,8 @@ test('the native direct excerpt paints before auth and is retained through a mis
       return commentResponse({...work, preview: '正文预览'});
     }
     if (path === privatePath) return requests.filter(url => url === privatePath).length < 2
-      ? commentResponse({viewer_username: 'bobby', work: {...work, liked: true}, next}) : scoped.promise;
+      ? commentResponse({viewer_username: 'bobby', work: {...work, liked: true, collected: true, following: true}, next})
+      : scoped.promise;
     throw new Error(path);
   }});
   const el = id => doc.getElementById('work-detail-' + id);
@@ -2216,7 +2217,7 @@ test('the native direct excerpt paints before auth and is retained through a mis
   assert.equal(el('title').textContent, work.title);
   assert.equal(el('open').href, '/w/' + work.slug);
   assert.equal(el('actions').hidden, false);
-  for (const action of ['comments', 'like', 'collect', 'follow']) assert.equal(el(action).hidden, true);
+  for (const action of ['comments', 'like', 'collect', 'follow', 'library']) assert.equal(el(action).hidden, true);
   assert.equal(el('next').disabled, true);
   await el('comments').handlers.click();
 
@@ -2224,13 +2225,17 @@ test('the native direct excerpt paints before auth and is retained through a mis
   await flush();
   assert.equal(requests.filter(url => url === privatePath).length, 2);
   assert.equal(el('like').hidden, true);
+  assert.equal(el('library').hidden, true);
   assert.equal(el('next').disabled, true);
-  scoped.resolve(commentResponse({viewer_username: 'alice', work: {...work, liked: false}, next}));
+  scoped.resolve(commentResponse({viewer_username: 'alice', work: {...work, liked: false, collected: true, following: true}, next}));
   await loaded;
   assert.equal(classHits(el('preview'), 'feed-detail-lines')[0], preview);
   assert.equal(el('comments').hidden, false);
   assert.equal(el('like').hidden, false);
   assert.equal(el('like').attributes['aria-pressed'], 'false');
+  assert.equal(el('library').hidden, false);
+  assert.equal(el('library-saved').href, '/discover?feed=collected&sort=collected');
+  assert.equal(el('library-author').href, '/discover?feed=following&creator=writer.home');
   assert.equal(el('next').disabled, false);
 });
 

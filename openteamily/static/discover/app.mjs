@@ -816,7 +816,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const retryFeed = document.getElementById('feed-retry');
   const detail = Object.fromEntries([
     'back', 'paper', 'title', 'meta', 'status', 'retry', 'resume-remix', 'preview', 'reader', 'actions', 'open', 'download',
-    'like', 'collect', 'follow', 'comments', 'share', 'remix', 'previous', 'next',
+    'like', 'collect', 'follow', 'comments', 'share', 'remix', 'previous', 'next', 'library', 'library-saved', 'library-author',
   ].map(name => [name, document.getElementById('work-detail-' + name)]));
   const share = Object.fromEntries(['dialog', 'url', 'status', 'copy', 'native', 'close']
     .map(name => [name, document.getElementById('work-share-' + name)]));
@@ -1120,6 +1120,15 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   function setWorkEngagement(entry) {
     const canEngage = Boolean(entry.viewer && entry.viewer === currentUser);
+    const verified = entry.ready && canEngage;
+    const handle = verified && entry.item.following && creatorHandle(entry.item);
+    const saved = detail['library-saved'];
+    const author = detail['library-author'];
+    saved.hidden = !verified || entry.item.collected !== true;
+    author.hidden = !handle;
+    detail.library.hidden = saved.hidden && author.hidden;
+    saved.href = '/discover' + feedSearchText({tab: 'collected', sort: nativeCatalog ? 'collected' : 'latest'});
+    author.href = '/discover' + feedSearchText({tab: 'following', creator: handle || ''});
     const recoverable = showWorkRemixRecovery(entry);
     if (detail.remix) detail.remix.hidden = !nativeCatalog || !canEngage ||
       entry.item?.remix_available !== true || recoverable;
@@ -1455,6 +1464,18 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   });
   for (const [action, flag] of engagement) {
     detail[action].addEventListener('click', () => updateWorkEngagement(action, flag));
+  }
+  for (const link of [detail['library-saved'], detail['library-author']]) {
+    link.addEventListener('click', event => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey ||
+          !history?.pushState || link.hidden || !activeWork?.ready || activeWork.viewer !== currentUser) return;
+      event.preventDefault();
+      const next = feedStateFromSearch(new URL(link.href).search);
+      if (feedSearchText(next) === feedSearchText(feedState)) return detail.back.click();
+      const loading = applyFeedFilters({creator: '', topic: '', ...next});
+      closeWorkDetail({restore: false});
+      return loading;
+    });
   }
   share.close.addEventListener('click', () => share.dialog.close());
   share.copy.addEventListener('click', copyWorkShare);

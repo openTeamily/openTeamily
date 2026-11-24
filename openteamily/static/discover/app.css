@@ -1389,6 +1389,40 @@ a.catalog-create.catalog-create-secondary:hover {
 .work-detail-actions #work-detail-share:hover { background: var(--ot-surface-2); }
 .work-detail-actions #work-detail-download { justify-content: center; background: var(--ot-surface); }
 .work-detail-actions #work-detail-download:hover { background: var(--ot-surface-2); text-decoration: none; }
+#work-detail-library:not([hidden]) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .375rem;
+  padding: .25rem;
+  border: 1px solid var(--ot-glass-line, var(--ot-line));
+  border-radius: .875rem;
+  background: var(--ot-grouped-fill, var(--ot-surface-2));
+}
+#work-detail-library a:not([hidden]) {
+  display: inline-flex;
+  flex: 1 1 13rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  min-height: 2.75rem;
+  padding: 0 .75rem;
+  border-radius: .625rem;
+  background: var(--ot-surface-solid);
+  color: var(--ot-ink);
+  font-size: .875rem;
+  font-weight: 580;
+  text-decoration: none;
+}
+#work-detail-library a:not([hidden]):hover { background: var(--ot-accent-soft); color: var(--ot-accent-hover); }
+#work-detail-library a::after {
+  content: "";
+  inline-size: .4375rem;
+  block-size: .4375rem;
+  flex: none;
+  border-block-start: 1.5px solid var(--ot-muted);
+  border-inline-end: 1.5px solid var(--ot-muted);
+  transform: rotate(45deg);
+}
 
 @media (max-width: 45rem) {
   body.app-workspace:not(.chat-open) > main > #main-panel { padding-top: .875rem; }
