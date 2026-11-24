@@ -59,6 +59,8 @@ export const SETTINGS_MESSAGES = {
   'settings.model-api.platform': ['平台默认', 'Platform default'],
   'settings.model-api.account': ['个人配置', 'Personal configuration'],
   'settings.model-api.unavailable': ['暂不可用', 'Unavailable'],
+  'settings.model-api.read-failed': ['读取失败', 'Read failed'],
+  'settings.model-api.retry': ['重试读取模型状态', 'Retry model status'],
   'settings.model-api.platform-active': ['正在使用平台默认配置', 'Using the platform default'],
   'settings.model-api.platform-ready': ['可以直接使用，无需填写个人 API 密钥。', 'Ready to use without a personal API key.'],
   'settings.model-api.account-active': ['正在使用个人配置', 'Using your personal configuration'],

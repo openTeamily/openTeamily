@@ -153,6 +153,11 @@
           </div>
         </article>
         <form id="meeting-form" hidden>
+          <nav id="meeting-detail-nav" aria-label="会议内容">
+            <button type="button" class="secondary" data-meeting-section="meeting-transcript-heading">转写</button>
+            <button type="button" class="secondary" data-meeting-section="meeting-summary-heading">摘要</button>
+            <button type="button" class="secondary" data-meeting-section="meeting-actions-heading">行动项</button>
+          </nav>
           <p id="meeting-call-source" class="note" tabindex="-1" hidden>来自通话</p>
           <div class="meeting-actions" id="meeting-discussion-entry" hidden>
             <button type="button" id="meeting-discussion" class="secondary" aria-haspopup="dialog">与个人智能体讨论</button>
@@ -165,7 +170,8 @@
           <label>开始时间 <input id="meeting-started-at" type="datetime-local" required></label>
           <label>参会人 <input id="meeting-attendees" maxlength="2000" placeholder="用逗号分隔"></label>
           <ul id="attendee-matches" class="attendee-matches" role="listbox" aria-label="成员候选" hidden></ul>
-          <label>转写/正文 <textarea id="meeting-transcript" maxlength="40000" rows="6"></textarea></label>
+          <h2 class="meeting-section-heading" id="meeting-transcript-heading" tabindex="-1">转写 / 正文</h2>
+          <textarea id="meeting-transcript" aria-labelledby="meeting-transcript-heading" maxlength="40000" rows="6"></textarea>
           <div id="meeting-transcript-import" class="meeting-transcript-import" hidden>
             <input type="file" id="meeting-transcript-import-file" accept=".txt,.md,.markdown,.vtt,.srt" hidden>
             <div class="meeting-actions">
@@ -216,9 +222,12 @@
             </div>
             <p id="meeting-draft-review-error" class="note" role="status"></p>
           </section>
-          <label>摘要 <textarea id="meeting-summary" maxlength="8000" rows="3"></textarea></label>
-          <fieldset>
-            <legend>行动项</legend>
+          <h2 class="meeting-section-heading" id="meeting-summary-heading" tabindex="-1">摘要</h2>
+          <textarea id="meeting-summary" aria-labelledby="meeting-summary-heading" maxlength="8000" rows="3"></textarea>
+          <fieldset class="meeting-action-section">
+            <legend id="meeting-actions-heading" class="meeting-section-heading" tabindex="-1">行动项</legend>
+            <p id="meeting-action-progress" class="meeting-action-progress" hidden></p>
+            <p id="meeting-action-status" class="note" role="status"></p>
             <div id="action-list" class="action-list"></div>
             <button type="button" id="add-action">添加行动项</button>
           </fieldset>

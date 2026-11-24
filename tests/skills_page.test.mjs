@@ -29,6 +29,9 @@ class Element {
   replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
   setAttribute(name, value) { this.attributes[name] = String(value); }
   addEventListener(type, handler) { this.handlers[type] = handler; }
+  focus() {}
+  showModal() { this.open = true; }
+  close() { this.open = false; this.handlers.close?.(); }
 }
 
 function fakeDocument() {
@@ -74,27 +77,49 @@ test('filter searches actual server content and counts it', () => {
   assert.equal(skillCountLabel(1,10),'显示 1 / 10 个技能');
 });
 
-test('installation needs permission, persists through service reload, and uninstall revokes', async () => {
+test('installation needs consent for the reviewed skill, persists through reload, and uninstall revokes', async () => {
   const svc=service();const {doc,el}=fakeDocument();doc.cookie='__Host-ot_csrf=synthetic-csrf';el('skills-scope').value='account';
   const mounted=mountSkills(doc,{fetcher:svc.fetcher});await mounted.ready;
-  assert.equal(el('skills-list').children.length,10);
-  let button=el('skills-list').children[0].children[2];await button.handlers.click();
-  assert.match(el('skills-error').textContent,/勾选/);assert.equal(svc.calls.filter(c=>c.options.method==='POST').length,0);
-  el('skills-permission').checked=true;await button.handlers.click();
-  assert.equal(el('skills-list').children[0].children[2].textContent,'卸载');
-  assert.match(el('skills-list').children[0].children[1].children[1].textContent,/已安装/);
-  assert.equal(el('skills-permission').checked,false);
-  const posted=svc.calls.find(c=>c.options.method==='POST');assert.equal(posted.options.headers['X-CSRF-Token'],'synthetic-csrf');
+  const list=el('skills-list'), permission=el('skills-permission'), confirm=el('skills-review-confirm');
+  assert.equal(list.children.length,10);
+  list.children[1].children[2].handlers.click();
+  assert.equal(el('skills-review-title').textContent,SKILLS[1].name);
+  permission.checked=true;
+  permission.handlers.change();
+  el('skills-review-close').handlers.click();
+
+  list.children[0].children[2].handlers.click();
+  assert.equal(el('skills-review-content').textContent,SKILLS[0].content);
+  assert.equal(permission.checked,false);
+  assert.equal(confirm.disabled,true);
+  await confirm.handlers.click();
+  assert.equal(svc.calls.filter(c=>c.options.method==='POST').length,0);
+
+  permission.checked=true;
+  permission.handlers.change();
+  await confirm.handlers.click();
+  assert.equal(list.children[0].children[2].textContent,'卸载');
+  assert.match(list.children[0].children[1].children[1].textContent,/已安装/);
+  assert.equal(permission.checked,false);
+  const posted=svc.calls.find(c=>c.options.method==='POST');
+  assert.equal(posted.options.headers['X-CSRF-Token'],'synthetic-csrf');
+  assert.equal(JSON.parse(posted.options.body).digest,SKILLS[0].digest);
   const next=fakeDocument();next.doc.cookie='__Host-ot_csrf=x';next.el('skills-scope').value='account';await mountSkills(next.doc,{fetcher:svc.fetcher}).ready;
   assert.equal(next.el('skills-list').children[0].children[2].textContent,'卸载');
   await next.el('skills-list').children[0].children[2].handlers.click();
   assert.equal(next.el('skills-list').children[0].children[2].textContent,'安装');
 });
 
-test('server refusal never invents installed or runtime-loaded state', async () => {
-  const svc=service({failWrite:true}),{doc,el}=fakeDocument();doc.cookie='';el('skills-scope').value='account';el('skills-permission').checked=true;
-  await mountSkills(doc,{fetcher:svc.fetcher}).ready;await el('skills-list').children[0].children[2].handlers.click();
-  assert.equal(el('skills-list').children[0].children[2].textContent,'安装');assert.equal(el('skills-error').textContent,'permission denied');
+test('server refusal keeps the reviewed version open for retry', async () => {
+  const svc=service({failWrite:true}),{doc,el}=fakeDocument();doc.cookie='';el('skills-scope').value='account';
+  await mountSkills(doc,{fetcher:svc.fetcher}).ready;
+  el('skills-list').children[0].children[2].handlers.click();
+  el('skills-permission').checked=true;
+  await el('skills-review-confirm').handlers.click();
+  assert.equal(el('skills-list').children[0].children[2].textContent,'安装');
+  assert.equal(el('skills-review-error').textContent,'permission denied');
+  assert.equal(el('skills-review').open,true);
+  assert.equal(el('skills-review-confirm').disabled,false);
 });
 
 // The per-account library mark (issue #263) is a separate persisted record: it never
@@ -209,11 +234,17 @@ test('ambiguous skill-run retry keeps its idempotency key; only server history i
   assert.equal(keys.length,2);assert.equal(keys[0],keys[1]);
 });
 
-test('a load receipt without task success does not create a save or verified-success control', async () => {
+test('a recognized skill with an unfinished run only offers cancellation', async () => {
   const {doc,el}=fakeDocument();el('skills-scope').value='account';
-  const record={scope:'account',skill_id:SKILLS[0].id,loaded:true,verified:false,task:{id:'actual',status:'claimed',prompt:'task',result:null}};
+  const record = {
+    scope: 'account', skill_id: SKILLS[0].id, loaded: true, verified: false,
+    skills: [{id: SKILLS[0].id}],
+    task: {id: 'actual', status: 'claimed', prompt: 'task', result: null},
+  };
   const request=async(method,path)=>path.includes('/readiness')?{ready:true,code:'ready'}:{items:path.endsWith('/runs')?[record]:[]};
   const app=mountSkillExecution(doc,{request,scope:el('skills-scope')});await app.refresh();
-  const row=el('skill-run-history').children[0];assert.match(row.children[1].textContent,/尚未成功/);
+  const row = el('skill-run-history').children[0];
+  assert.equal(row.children[1].textContent, '已确认所选技能可用。');
+  assert.doesNotMatch(row.children[3].textContent, /@undefined/);
   assert.equal(row.children.filter(e=>e.tagName==='BUTTON').length,1);assert.equal(row.children[4].textContent,'取消此任务');
 });
