@@ -1453,6 +1453,30 @@ function groupReplyChat(transport) {
   return {doc, el, restore, fetcher};
 }
 
+test('native group activity follows the handoff while the transcript has no reply jobs', async t => {
+  t.mock.timers.enable({apis:['setTimeout']});
+  let reads = 0;
+  const work = [[{id:'native-a',name:'主答 Bot'}],[{id:'native-b',name:'接力 Bot'}],[]];
+  const {doc, el, restore, fetcher} = groupReplyChat((path, opts, conversation) => {
+    if (!path) return json(200,{conversation:{...conversation,native_room_id:'native-room'},items:[]});
+    assert.equal(path,'/reply-progress');
+    const working_bots = work[reads++];
+    return json(200,{items:[],working_bots});
+  });
+  try {
+    await mount(doc,{fetcher});
+    const activity = el('group-bot-activity');
+    for (const label of ['主答 Bot 正在工作…','接力 Bot 正在工作…','']) {
+      t.mock.timers.tick(500);
+      await settle();
+      assert.equal(activity.textContent,label);
+    }
+    t.mock.timers.tick(1000);
+    await settle();
+    assert.equal(reads,3,'an idle native room should poll more slowly');
+  } finally { restore(); }
+});
+
 test('group progress updates only the original job and attempt and clears stale text', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
   const source = {id: 'source', user_id: alice, body: '请两位协助', created: 1, seq: 1, reply_jobs: [

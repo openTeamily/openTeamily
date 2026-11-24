@@ -433,6 +433,37 @@ test('manual group reply uses the same managed send and progress reads follow th
     [['otm_source',undefined],['otm_answer','otj_live']])
 })
 
+test('reply progress reads native working Bots only for the authorized linked group', async () => {
+  const dir = fixture()
+  const workspace = 'a'.repeat(32)
+  const room = {id:'native-room',openteamily:{conversation_id:'otc_group',native_exchange:'exchange-1'}}
+  const unrelated = {id:'other-room',openteamily:{conversation_id:'otc_other',native_exchange:'exchange-2'}}
+  let deny = false
+  const active = [{bot:{id:'native-a',name:'A'}},{bot:{id:'native-b',name:'B'}}]
+  let checked = 0
+  const rt = {state:{rooms:{room, unrelated}}, mobileEndpoint(){},sendUser(){},updateRoom(){},deleteRoom(){},
+    workingInRoom(input) {
+      checked += 1
+      assert.equal(input, room)
+      return active
+    }}
+  const path = '/v1/workspaces/'+workspace+'/social/conversations/otc_group/reply-progress'
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:join(dir,'bot','flybot-social.json'),fetch:async url => {
+    assert.ok(url.endsWith('/v1/ot/conversations/otc_group/reply-progress'))
+    return Response.json({items:[]},{status:deny?404:200})
+  }}))
+  const {v1} = messenger({dataDir:dir, currentRuntime:()=>({rt}), call:async()=>({workspace_id:workspace})}).endpoints
+  const payload = {method:'GET',path}
+  assert.deepEqual((await v1(payload)).body,{items:[],working_bots:[{id:'native-a',name:'A'},{id:'native-b',name:'B'}]})
+  deny = true
+  assert.equal((await v1(payload)).status,404)
+  assert.equal(checked,1)
+  deny = false
+  delete room.openteamily.native_exchange
+  assert.deepEqual((await v1(payload)).body,{items:[]})
+  assert.equal(checked,1)
+})
+
 test('the group settings route patches only the requested automatic-reply preference', async () => {
   const dir = fixture()
   const f = fake({'PATCH /v1/ot/conversations/otc_1/agents/helper': body => body})

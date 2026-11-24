@@ -120,26 +120,72 @@ test('a saved group stays visible in the plugin while the native room projection
   assert.deepEqual([writes, sessions], [1, 2])
 })
 
-test('the group owner projects the verified Personal Agent as the stable native room admin', async () => {
-  const chief = 'a'.repeat(32), helper = 'b'.repeat(32), workspace = 'c'.repeat(32)
+test('default groups clear an inferred Chief and preserve a deliberately selected native admin', async () => {
+  const chief = 'a'.repeat(32), helper = 'b'.repeat(32)
   const path = `/v1/ot/conversations/${room}`
-  const mine = {owner_id:'room-owner', handle:'owner'}
-  const chiefTarget = {owner_id:mine.owner_id,agent_id:chief}
-  const original = {...group('Project',1),account_group:true,team_id:null,members:[mine],
-    agents:[{mine:true,owner:mine,agent_ref:helper,name:'Helper'}],
-    group_agent_routing:{mode:'personal',policy:{mode:'default'},can_edit:true}}
-  const bound = {...original, activity_version:'1.2.0.0',
-    agents:[...original.agents,{mine:true,owner:mine,agent_ref:chief,name:'Personal Agent'}],
-    group_agent_routing:{...original.group_agent_routing,native_chief:chiefTarget}}
-  let conversation = original, binds = 0, rooms = 0, currentChief = 'chief-bot'
+  const owner = {owner_id:'room-owner', handle:'owner'}
+  const chiefTarget = {owner_id:owner.owner_id,agent_id:chief}
+  const helperTarget = {owner_id:owner.owner_id,agent_id:helper}
+  const original = {...group('Project',1),team_id:null,members:[owner],
+    agents:[{mine:true,owner,agent_ref:helper,name:'Helper'},{mine:true,owner,agent_ref:chief,name:'Personal Agent'}],
+    group_agent_routing:{mode:'personal',policy:{mode:'default'},can_edit:true,native_chief:chiefTarget}}
+  let conversation = original
+  const native = {id:'native-group',name:'Project',members:['helper-bot','chief-bot'],admin:'chief-bot',
+    mode:'admin',origin:'openteamily',openteamily:{conversation_id:room,reply_policy:{mode:'default',chief:chiefTarget}}}
   const rt = {
-    state:{rooms:{}}, roomOf(id) { return this.state.rooms[id] },
-    botOf(id) { return [currentChief,'helper-bot'].includes(id) ? {id} : undefined },
-    isMain(id) { return id === currentChief },
-    async createRoom(input) {
-      assert.deepEqual(input,{name:'Project',members:['helper-bot','chief-bot'],mode:'admin',admin:'chief-bot'})
-      rooms++
-      return this.state.rooms.group1 = {id:'group1',...input}
+    state:{rooms:{'native-group':native}},
+    roomOf(id) { return this.state.rooms[id] },
+    async save() {}, mobileEndpoint() {}, updateRoom() {}, deleteRoom() {}, sendUser() {},
+  }
+  const raw = {
+    async request(method,target) {
+      assert.deepEqual([method,target],['GET',path])
+      return conversation
+    },
+    async get(target) {
+      assert.equal(target,path+'/announcement')
+      return {announcement:{body:''}}
+    },
+    async put() { assert.fail('opening a shared group must not add or promote the account Chief') },
+  }
+  const host = {currentRuntime:() => ({rt}),
+    async call(operation,payload) {
+      assert.equal(operation,'agents/byId')
+      assert.ok([chief,helper].includes(payload.id))
+      return {agent:{id:payload.id,native_bot_id:payload.id === chief ? 'chief-bot' : 'helper-bot'}}
+    },
+  }
+  const client = nativeGroupClient(host, raw)
+  assert.equal((await client.get(path)).native_room_id,native.id)
+  assert.equal(native.admin,null)
+  assert.equal(native.mode,'admin')
+  assert.equal(native.openteamily.reply_policy.chief,undefined)
+  assert.deepEqual(native.members,['helper-bot','chief-bot'])
+
+  conversation = {...original,activity_version:'1.2.0.0',group_agent_routing:{...original.group_agent_routing,
+    policy:{mode:'lead',lead:helperTarget}}}
+  assert.equal((await client.get(path)).native_room_id,native.id)
+  assert.equal(native.admin,'helper-bot')
+  assert.deepEqual(native.openteamily.reply_policy.lead,helperTarget)
+
+  conversation = {...group('Project',3),team_id:null,members:[owner],agents:original.agents,
+    group_agent_routing:{mode:'personal',policy:{mode:'everyone'},can_edit:true}}
+  assert.equal((await client.get(path)).native_room_id,native.id)
+  assert.equal(native.admin,null)
+  assert.equal(native.mode,'everyone')
+})
+
+test('a new shared group with local members uses native room creation without an inferred admin', async () => {
+  const owner = {owner_id:'social_member', handle:'sample.home'}
+  const conversation = {...group('Project',1),agents:['first','second'].map(agent_ref=>({mine:true,owner,agent_ref,name:agent_ref})),
+    group_agent_routing:{mode:'personal',policy:{mode:'default'},can_edit:true}}
+  const path = `/v1/ot/conversations/${room}`
+  const rt = {
+    state:{rooms:{}},
+    roomOf(id) { return this.state.rooms[id] },
+    async createRoom({name,members,mode,admin}) {
+      assert.deepEqual({name,members,mode,admin},{name:'Project',members:['bot-first','bot-second'],mode:'admin',admin:null})
+      return this.state.rooms.native1 = {id:'native1',name,members,mode,admin}
     },
     async save() {}, mobileEndpoint() {}, updateRoom() {}, deleteRoom() {}, sendUser() {},
   }
@@ -152,42 +198,15 @@ test('the group owner projects the verified Personal Agent as the stable native 
       assert.equal(target,path+'/announcement')
       return {announcement:{body:''}}
     },
-    async put(target,payload) {
-      assert.equal(target,path+'/native-chief')
-      assert.deepEqual(payload,{agent_id:chief,name:'Personal Agent'})
-      binds++
-      conversation = bound
-      return bound
-    },
   }
-  const host = {currentRuntime:() => ({rt}),
-    async call(operation,payload) {
-      if (operation === 'agents/personal-binding') return {workspace_id:workspace,agent_id:chief}
-      assert.equal(operation,'agents/byId')
-      const isChief = payload.id === chief
-      assert.ok(isChief || payload.id === helper)
-      return {agent:{workspace_id:workspace,id:payload.id,name:isChief ? 'Personal Agent' : 'Helper',
-        native_bot_id:isChief ? currentChief : 'helper-bot'}}
-    },
-  }
-  const client = nativeGroupClient(host, raw)
-  const first = await client.get(path)
-  assert.equal(first.native_room_id,'group1')
-  assert.deepEqual(rt.roomOf(first.native_room_id).openteamily.reply_policy.chief,chiefTarget)
-  assert.equal(rt.roomOf(first.native_room_id).admin,'chief-bot')
-  assert.equal((await client.get(path)).native_room_id,first.native_room_id)
-  assert.deepEqual([binds,rooms],[1,1])
-
-  currentChief = 'already-existing-native-main'
-  assert.equal((await client.get(path)).native_room_id,first.native_room_id)
-  assert.equal(rt.roomOf(first.native_room_id).admin,currentChief)
-  assert.deepEqual(rt.roomOf(first.native_room_id).members,['helper-bot',currentChief])
-  assert.deepEqual([binds,rooms],[1,1])
-
-  conversation = {...bound, activity_version:'1.3.0.0', group_agent_routing:{...bound.group_agent_routing,
-    policy:{mode:'lead',lead:{owner_id:mine.owner_id,agent_id:helper}}}}
-  assert.equal((await client.get(path)).native_room_id,first.native_room_id)
-  assert.equal(rt.roomOf(first.native_room_id).admin,'helper-bot')
+  const host = {currentRuntime:() => ({rt}),async call(operation,{id}) {
+    assert.equal(operation,'agents/byId')
+    return {agent:{id,native_bot_id:'bot-'+id}}
+  }}
+  const client = nativeGroupClient(host,raw)
+  const opened = await client.get(path)
+  assert.equal(opened.native_room_id,'native1')
+  assert.equal(rt.roomOf('native1').openteamily.conversation_id,room)
 })
 
 test('sending plain text from the native room uses the same shared group and reply receipt', async () => {

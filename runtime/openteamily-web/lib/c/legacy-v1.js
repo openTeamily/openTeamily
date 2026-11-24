@@ -322,6 +322,18 @@ function client(host) {
   return sharedBotSocial(host)
 }
 
+function nativeWorkingBots(host, conversationId) {
+  const rt = host.currentRuntime?.()?.rt
+  if (typeof rt?.workingInRoom !== 'function') return []
+  const room = Object.values(rt.state?.rooms || {}).find(room =>
+    room.openteamily?.conversation_id === conversationId && room.openteamily.native_exchange)
+  if (!room) return []
+  return rt.workingInRoom(room).flatMap(({bot}) =>
+    typeof bot?.id === 'string' && GROUP_AGENT_ID.test(bot.id) && typeof bot.name === 'string' && bot.name
+      ? [{id:bot.id, name:bot.name}]
+      : [])
+}
+
 function membersRoutes(host) {
   const env = process.env
   return [
@@ -1436,7 +1448,9 @@ function messengerExtraRoutes(host, wakeReplies) {
           const binding = await host.call('agents/personal-binding', {})
           const path = binding?.workspace_id === workspace ? conv(conversation)
             : `/v1/ot/workspaces/${workspace}/conversations/${seg(conversation)}`
-          return [200, await client(host).get(path + '/reply-progress')]
+          const progress = await client(host).get(path + '/reply-progress')
+          const working = nativeWorkingBots(host, conversation)
+          return [200, working.length ? {...progress, working_bots:working} : progress]
         })
       },
     },

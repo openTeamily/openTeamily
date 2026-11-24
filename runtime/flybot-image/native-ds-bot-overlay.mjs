@@ -33,6 +33,10 @@ const files = {
     '90f2dd67f80cea35d08c0a8553891b03e44cab5929130d364bbff87c9a1389dd',
     'c09d6d8de803d46a8ca1346cc16f866561d13acb8e2fb67bfb9809618dc4f066',
   ],
+  'src/host/groups.js': [
+    '06c261868b55ee7cdc53dc3b98759779c1d0e5cd60ad6f39beeca24458e7a91c',
+    '337425d9d91ec2bfd51d0caf6e8222e6e02f33fb50ae7534533261ca47ab2605',
+  ],
   'src/host/capabilities.js': [
     '656fcc0b0fb7fd597dfd0f62bd49522d92becd4ed1c77dd53ba016f045614c89',
     '321be0845446f49d8e0a8a2c6fc6acc95e178042b33a5c37e93aa7f2e6c079ca',

@@ -4,6 +4,7 @@
 import { randomUUID } from 'node:crypto'
 import { nativeGroupCreation } from './native-group-create.js'
 import { nativeGroupDirectory } from './native-group-directory.js'
+import { nativeGroupRelay } from './native-group-relay.js'
 const installed = new WeakMap()
 const replyModes = new Set(['default', 'everyone', 'lead', 'mentions'])
 const groupAgentId = /^[A-Za-z0-9._:-]{1,80}$/
@@ -35,14 +36,12 @@ function projectedReplyPolicy(conversation, revision = conversation.group_manage
   const policy = routing?.policy
   if (!replyModes.has(policy?.mode)) return undefined
   const lead = replyTarget(policy.lead)
-  const chief = replyTarget(routing.native_chief)
   const targets = (conversation.agents || []).flatMap(agent => {
     const pair = replyTarget({owner_id:agent.owner?.owner_id, agent_id:agent.agent_ref})
     return pair ? [{...pair, name:agent.name, owner_name:agent.owner.display_name || agent.owner.handle,
       owner_handle:agent.owner.handle}] : []
   })
   return {mode:policy.mode, ...(lead ? {lead} : {}),
-    ...(chief ? {chief} : {}),
     ...(policy.lead_unavailable === true ? {lead_unavailable:true} : {}),
     context:routing.mode, default:routing.default, can_edit:routing.can_edit === true,
     ...(Number.isSafeInteger(revision) ? {revision} : {}), targets}
@@ -74,26 +73,8 @@ export function nativeGroupClient(host, raw) {
     const left = new Map()
     const groupRoom = cid => Object.values(rt.state.rooms).find(room => room.openteamily?.conversation_id === cid)
     const mapped = (conversation, room) => ({...conversation, native_room_id:room.id, native_session_id:room.id})
-    async function bindOwnerChief(conversation) {
-      const routing = conversation.group_agent_routing
-      if (!routing?.can_edit || routing.native_chief || !rt.isMain || !raw.put ||
-          !(conversation.agents || []).some(agent => agent.mine)) return conversation
-      const binding = await host.call('agents/personal-binding', {})
-      if (!objectId.test(binding?.agent_id || '') || !objectId.test(binding?.workspace_id || '')) return conversation
-      const seated = conversation.agents.some(agent => agent.mine && agent.agent_ref === binding.agent_id)
-      if (!seated && (conversation.team_id || !conversation.account_group || conversation.members?.length !== 1)) return conversation
-      const {agent} = await host.call('agents/byId', {id:binding.agent_id})
-      if (agent?.id !== binding.agent_id || agent.workspace_id !== binding.workspace_id || agent.archived ||
-          agent.native_deleted || !rt.isMain(agent.native_bot_id) || !rt.botOf(agent.native_bot_id)) return conversation
-      const result = await raw.put('/v1/ot/conversations/' + encodeURIComponent(conversation.id) + '/native-chief', {
-        agent_id:agent.id, name:agent.name.slice(0, 40).toWellFormed(),
-      })
-      return result?.id === conversation.id && result.group_agent_routing?.native_chief ? result : conversation
-    }
     const syncOne = async conversation => {
       if (conversation?.kind !== 'group' || conversation.public_agent) return conversation
-      try { conversation = await bindOwnerChief(conversation) }
-      catch { host.log?.('The shared group Chief binding will retry when opened.') }
       const title = conversation.title || 'OpenTeamily group'
       const revision = conversation.group_management?.revision
       if (left.has(conversation.id)) {
@@ -110,7 +91,7 @@ export function nativeGroupClient(host, raw) {
       const participants = (conversation.members || []).map(m => ({ id: m.owner_id, handle: m.handle, kind: 'human', remote: true, name: m.display_name || m.handle, platform_user_id: m.platform_user_id }))
       const projectedRevision = revision ?? (latest?.version === conversation.activity_version ? room?.openteamily.reply_policy?.revision : undefined)
       const replyPolicy = projectedReplyPolicy(conversation, projectedRevision)
-      const administrator = replyPolicy?.mode === 'lead' && !replyPolicy.lead_unavailable ? replyPolicy.lead : replyPolicy?.chief
+      const administrator = replyPolicy?.mode === 'lead' && !replyPolicy.lead_unavailable ? replyPolicy.lead : null
       const adminSeat = administrator && ownedAgents.find(agent => agent.owner?.owner_id === administrator.owner_id &&
         agent.agent_ref === administrator.agent_id)
       const adminAgent = adminSeat && (await host.call('agents/byId', {id:adminSeat.agent_ref})).agent
@@ -131,7 +112,7 @@ export function nativeGroupClient(host, raw) {
       if (!room) {
         // Shared groups allow duplicate and longer titles than DS-Bot's native creator.
         const nativeTitle = title.replace(/\s+/g, ' ')
-        if (replyPolicy?.chief && rt.createRoom && locals.length > 0 && locals.length <= 12 && nativeTitle.length <= 60 &&
+        if (rt.createRoom && locals.length >= 2 && locals.length <= 12 && nativeTitle.length <= 60 &&
             !rt.findRooms?.(nativeTitle).length) {
           room = await rt.createRoom({name:title,members:locals,mode,admin})
         } else {
@@ -165,6 +146,7 @@ export function nativeGroupClient(host, raw) {
     let queue = Promise.resolve()
     const ordered = task => { const next = queue.then(task); queue = next.catch(() => {}); return next }
     const sync = conversation => ordered(() => syncOne(conversation))
+    const relay = nativeGroupRelay({rt,raw,sync,log:host.log ?? (() => {})})
     const create = nativeGroupCreation(host, raw, rt, sync)
     const directory = nativeGroupDirectory(host, raw)
     const originalMobile = rt.mobileEndpoint.bind(rt)
@@ -198,9 +180,11 @@ export function nativeGroupClient(host, raw) {
       const cid = roomFor(p?.sessionId)
       if (!cid) return originalSend(p)
       if (!Array.isArray(p.content) || p.content.some(c => c.type !== 'text')) throw new Error('Shared groups currently accept text only')
-      return raw.post('/v1/ot/conversations/' + encodeURIComponent(cid) + '/messages', {
+      const path = '/v1/ot/conversations/' + encodeURIComponent(cid) + '/messages'
+      const body = {
         ...nativeGroupMessage(p.content.map(c => c.text).join('\n')), client_key:String(p.requestId || randomUUID()).slice(0,80),
-      })
+      }
+      return relay ? relay.send(data => raw.post(path, data), 'POST', path, body) : raw.post(path, body)
     }
     const originalUpdate = rt.updateRoom.bind(rt)
     rt.updateRoom = async (id, patch, ...rest) => {
@@ -294,7 +278,7 @@ export function nativeGroupClient(host, raw) {
         pendingSave.delete(cid)
       })
     }
-    const api = { sync, archive }
+    const api = { sync, archive, relay }
     installed.set(rt, api)
     return api
   }
@@ -307,9 +291,10 @@ export function nativeGroupClient(host, raw) {
     }
   }
   const request = async (method, path, body, options) => {
-    const result = await raw.request(method, path, body, options)
-    if (!path.startsWith('/v1/ot/conversations')) return result
-    const api = await install()
+    const conversations = path.startsWith('/v1/ot/conversations')
+    const api = conversations ? await install() : null
+    const post = data => raw.request(method, path, data, options)
+    const result = api?.relay && method === 'POST' ? await api.relay.send(post, method, path, body) : await post(body)
     if (!api) return result
     if (path.endsWith('/management')) {
       if (result?.left === true && result.conversation_id) {
