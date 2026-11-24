@@ -3538,6 +3538,60 @@ body.app-workspace .mobile-inbox-heading h1 {
 .chat-markdown-table [data-align="left"] { text-align: left; }
 .chat-markdown-table :is(th, td) > code { white-space: normal; }
 
+.chat-diagram-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.chat-rich-preview-button {
+  flex: none;
+  padding: .35rem .55rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .45rem;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  font-size: .75rem;
+  line-height: 1.4;
+}
+.chat-rich-preview {
+  box-sizing: border-box;
+  inline-size: min(68rem, calc(100% - 1.25rem));
+  max-inline-size: none;
+  max-block-size: calc(100dvh - 1.25rem);
+  padding: 0;
+  border: 1px solid var(--ot-line);
+  border-radius: .9rem;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+}
+.chat-rich-preview[open] {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.chat-rich-preview::backdrop { background: rgb(16 28 22 / 46%); }
+.chat-rich-preview > header {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .65rem .8rem;
+  border-block-end: 1px solid var(--ot-line);
+}
+.chat-rich-preview h2 { margin: 0 auto 0 0; font-size: 1rem; }
+.chat-rich-preview > header button { min-block-size: 2.25rem; white-space: nowrap; }
+.chat-rich-preview-viewport {
+  min-block-size: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--ot-surface-2);
+}
+.chat-rich-preview-viewport > .chat-flowchart-stage { margin-block: .7rem; }
+.chat-rich-preview-viewport[data-fit="true"] > table { table-layout: fixed; }
+.chat-rich-preview-viewport[data-fit="true"] :is(th, td) { min-inline-size: 0; padding-inline: .4rem; }
+@media (pointer: coarse) {
+  .chat-rich-preview-button,
+  .chat-rich-preview > header button { min-block-size: 2.75rem; }
+}
+
 .chat-table-block {
   overflow: hidden;
   border: 1px solid var(--ot-line);

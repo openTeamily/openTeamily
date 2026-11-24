@@ -126,6 +126,46 @@ test('a new tab can draft only for the exact authenticated personal chat', () =>
   view.location.search = '';
   view.location.hash = hash + '&conversation=' + bob;
   assert.equal(personalDraftScope(view, alice, personal), null);
+  assert.equal(personalDraftScope(view, alice, personal, {allowBare:true}), null);
+  view.location.hash = '';
+  assert.equal(personalDraftScope(view, alice, personal), null);
+  assert.equal(personalDraftScope(view, alice, personal, {allowBare:true}), scope);
+  assert.equal(personalDraftScope(view, alice, {workspace_id:alice, agent_id:'other'}, {allowBare:true}), null);
+});
+
+test('bare Chat opens the verified personal destination for a startup draft', async () => {
+  const {document, read, view} = homeFixture('/chat');
+  const workspace = 'c'.repeat(32);
+  const route = '/chat#workspace=' + workspace + '&agent=' + bob;
+  const scope = JSON.stringify([alice, workspace, 'agent', bob, null]);
+  assert.equal(writeChatDrafts(view, alice, new Map([[scope, '第一条草稿']])), true);
+  const requests = [], navigation = [];
+  view.history = {state:null, replaceState:(_state, _title, path) => navigation.push(path)};
+  view.location.reload = () => navigation.push('reload');
+  await mountRuntimeStarting(document, {fetcher: async path => {
+    requests.push(path);
+    if (requests.length === 1) {
+      return {status:200, json:async () => ({state:'starting', user_id:alice, personal_chat:{workspace_id:workspace, agent_id:bob}})};
+    }
+    assert.equal(read('runtime-draft').hidden, false);
+    assert.equal(read('runtime-first-message').value, '第一条草稿');
+    return {status:200, json:async () => ({state:'ready', user_id:alice})};
+  }});
+  assert.deepEqual(requests, ['/v1/auth/runtime-readiness?include=personal-chat', '/v1/auth/runtime-readiness']);
+  assert.deepEqual(navigation, [route, 'reload']);
+  assert.equal(takeColdDraftHandoff(view, scope), scope);
+});
+
+test('bare Chat without a startup draft preserves default navigation', async () => {
+  const {document, read, view} = homeFixture('/chat');
+  let reloaded = false;
+  view.location.reload = () => { reloaded = true; };
+  await mountRuntimeStarting(document, {fetcher: async path => {
+    assert.equal(path, '/v1/auth/runtime-readiness?include=personal-chat');
+    return {status:200, json:async () => ({state:'ready', user_id:alice, personal_chat:{workspace_id:alice, agent_id:bob}})};
+  }});
+  assert.equal(reloaded, true);
+  assert.equal(read('runtime-first-message').value, '');
 });
 
 test('the startup composer drops its visible draft when another account signs in', async () => {

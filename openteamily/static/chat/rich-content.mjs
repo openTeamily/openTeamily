@@ -1,6 +1,7 @@
 import { markdownToBlocks, renderMarkdown, renderMarkdownBlocks } from '../shell/markdown.mjs';
 import { readMarkdownTable, renderMarkdownTable } from '../shell/markdown-table.mjs';
 import { renderChatCodeBlock } from './code-block.mjs';
+import { richPreviewButton } from './rich-preview.mjs';
 
 let flowchartModule;
 const streamingBlocks = new WeakMap();
@@ -42,7 +43,15 @@ async function showFlowchart(document, container, code, text) {
   });
   try {
     const module = await flowchartModule;
-    await module?.replaceMermaidSource(document, container, code, text);
+    const diagram = await module?.replaceMermaidSource(document, container, code, text);
+    if (diagram?.firstElementChild && container.isConnected) {
+      const english = document.documentElement?.lang === 'en';
+      const name = diagram.getAttribute('aria-label') || (english ? 'Diagram' : '图表');
+      const actions = document.createElement('div');
+      actions.className = 'chat-diagram-actions';
+      actions.append(richPreviewButton(document, 'diagram', () => diagram.firstElementChild, name));
+      container.append(actions);
+    }
   } catch {
     // Leave the original code visible if the chart renderer fails.
   }
@@ -84,7 +93,8 @@ function renderChatTable(document, block, appendCell) {
         : label('无法访问剪贴板。', 'Clipboard unavailable.');
     }
   });
-  toolbar.append(status, copy);
+  const preview = richPreviewButton(document, 'table', () => region.firstElementChild, label('表格', 'Table'));
+  toolbar.append(status, copy, preview);
   card.append(toolbar, region);
   return card;
 }
