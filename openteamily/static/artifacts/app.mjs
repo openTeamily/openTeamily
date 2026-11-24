@@ -364,8 +364,9 @@ export function applyDirectoryCollapsed(root, collapsed) {
 function bindCatalogToolbar(document, closePopovers) {
   const viewport = document.defaultView?.matchMedia?.('(max-width: 700px)');
   const panel = document.getElementById('main-panel');
-  const toolbar = document.getElementById('catalog-quick-actions');
   const title = document.getElementById('space-title');
+  const titleActions = document.getElementById('catalog-title-actions');
+  const searchActions = document.getElementById('catalog-search-actions');
   const directory = document.getElementById('artifact-dir');
   const catalog = document.getElementById('list-panel');
   const newMenu = document.getElementById('new-menu-button')?.parentElement;
@@ -374,7 +375,8 @@ function bindCatalogToolbar(document, closePopovers) {
   const filter = document.getElementById('filter-button')?.parentElement;
   const layout = document.getElementById('layout-toggle');
   const controls = [layout, newMenu, notify, search, filter];
-  if (!viewport || !panel || !toolbar || !title || !directory || !catalog || controls.some(control => !control?.parentElement)) {
+  if (!viewport || !panel || !title || !titleActions || !searchActions || !directory || !catalog ||
+      controls.some(control => !control?.parentElement)) {
     return () => {};
   }
   // Move the original controls so focus order follows their visual order and
@@ -394,10 +396,12 @@ function bindCatalogToolbar(document, closePopovers) {
     closePopovers();
     const focus = document.activeElement;
     const restoreFocus = controls.some(node => node.contains(focus));
-    if (compact) toolbar.append(...controls);
-    else {
+    if (compact) {
+      titleActions.append(layout, newMenu, notify);
+      searchActions.append(search, filter);
+    } else {
       for (const {node, parent, next} of original.slice().reverse()) parent.insertBefore(node, next);
-      if (active) toolbar.append(search);
+      if (active) searchActions.append(search, notify);
     }
     panel.classList.toggle('is-compact-catalog', compact);
     title.classList.toggle('visually-hidden', !active);

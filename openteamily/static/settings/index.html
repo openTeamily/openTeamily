@@ -254,16 +254,14 @@
         <fieldset id="appearance-schedule-card" class="settings-card">
           <legend class="visually-hidden">自动切换</legend>
           <h2 class="settings-card-title">自动切换</h2>
-          <label class="choice"><input type="radio" name="appearance_schedule" value="sunset_sunrise"> <span>日落到日出<span class="hint">拿不到你所在的位置，暂按 22:00 至次日 06:00 为夜间。</span></span></label>
+          <label class="choice"><input type="radio" name="appearance_schedule" value="sunset_sunrise"> <span>默认夜间时段<span class="hint">22:00 至次日 06:00 使用深色主题。</span></span></label>
           <label class="choice"><input type="radio" name="appearance_schedule" value="custom"> <span>自定义时段<span class="hint">在你设定的时间切换。</span></span></label>
           <div id="custom-period-fields" hidden>
             <label>开始 <input type="time" name="appearance_start"></label>
             <label>结束 <input type="time" name="appearance_end"></label>
-            <p class="note">自定义时段的具体字段还没有从对照里完整记下，这里暂用开始/结束时间，未经核对。</p>
           </div>
-          <p class="note">按本机时区（<span id="appearance-time-zone">Asia/Shanghai</span>）判断：OpenTeamily 拿不到你所在的位置，没有使用实际日出日落时刻，暂按 22:00 至次日 06:00 为夜间。要换时段，可选用「自定义时段」。</p>
+          <p class="note">时区为 <span id="appearance-time-zone">Asia/Shanghai</span>。重新打开页面时，按当前时间显示主题。</p>
           <p id="appearance-status" class="settings-appearance-status" role="status"></p>
-          <p class="note">到点不会为此刷新页面，重新加载后按上面的时段显示。侧栏「浅色」「深色」按钮也会写入已有外观设置；点击后的标签变化未经 Teamily 核实。</p>
         </fieldset>
       </div>
       <div data-settings-page="language" hidden>

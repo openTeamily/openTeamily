@@ -3361,18 +3361,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return {bubble, replyView};
   }
 
+  // A reply update only changes a few rows. Keep unchanged transcript controls
+  // mounted so streamed replies do not interrupt reading or keyboard focus.
+  const paintedAgentRows = new WeakMap();
+
   function renderAgentMessages(items, {followLatest = true, anchor} = {}) {
     const scroller = document.getElementById('message-scroller');
     const top = anchor?.top ?? scroller.scrollTop;
     const follow = anchor?.follow ?? (followLatest || messageScrollerAtBottom(scroller));
     const list = document.getElementById('message-list');
-    const bodyViews = captureMessageBodies(list, sendScope());
-    list.replaceChildren();
+    const scope = sendScope();
+    const context = JSON.stringify([scope, currentAgent?.name, document.documentElement?.lang, personalWorkspaceId]);
+    const canSaveSticker = Boolean(stickerContext());
+    const bodyViews = captureMessageBodies(list, scope);
+    const previousRows = new Map();
+    for (const row of list.children) {
+      const painted = paintedAgentRows.get(row);
+      if (painted?.context === context && painted.preferences === chatPreferences &&
+          (painted.canSaveSticker === undefined || painted.canSaveSticker === canSaveSticker)) previousRows.set(painted.id, {row, painted});
+    }
+    const rows = [];
     agentReplyViews.clear();
     lastAgentItems = items || [];
     syncCaptureButton();
     restorePendingPrivateText(lastAgentItems);
-    const queue = pendingSends.get(sendScope());
+    const queue = pendingSends.get(scope);
     if (queue && !queue.social) {
       const delivered = new Set(lastAgentItems.filter(item => item.role === 'user').map(item => item.client_key).filter(Boolean));
       for (const job of queue.jobs) if (job.failed && delivered.has(job.key)) removeSendJob(queue, job);
@@ -3380,19 +3393,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const pendingKeys = pendingMessageKeys();
     for (const item of lastAgentItems) {
       if (pendingKeys.has(item.client_key)) continue;
-      if (waitingAgentReply(item) && item.client_key && replyWatch?.scope === sendScope() && replyWatch.key === item.client_key) {
+      const waiting = waitingAgentReply(item);
+      if (waiting && item.client_key && replyWatch?.scope === scope && replyWatch.key === item.client_key) {
         // Keep the visible preview when the pending message gets its stored ID.
         const view = replyWatch.view;
         view.bubble.dataset.messageId = item.id;
         delete view.bubble.dataset.sendPending;
         agentReplyViews.set(item.client_key, view);
-        list.append(view.bubble);
+        rows.push(view.bubble);
+        continue;
+      }
+      const stable = item.id && !waiting && !(item.status === 'failed' && item.can_retry);
+      const previous = stable && previousRows.get(item.id);
+      const signature = stable && (previous?.painted.item === item ? previous.painted.signature : JSON.stringify(item));
+      if (previous && previous.painted.signature === signature) {
+        previousRows.delete(item.id);
+        rows.push(previous.row);
         continue;
       }
       const {bubble, replyView} = makeAgentMessage(item, bodyViews.bodies.get(item.id), bodyViews.previews.get(item.client_key));
       if (replyView) agentReplyViews.set(item.client_key, replyView);
-      list.append(bubble);
+      if (stable) paintedAgentRows.set(bubble, {id:item.id, item, signature, context, preferences:chatPreferences,
+        canSaveSticker:item.attachments?.length ? canSaveSticker : undefined});
+      rows.push(bubble);
     }
+    const next = new Set(rows);
+    const existing = new Set(list.children);
+    for (const row of existing) if (!next.has(row) && !row.dataset.sendPending) row.remove();
+    // Pending outbox bubbles keep their place after the durable transcript.
+    rows.forEach((row, index) => {
+      if (list.children[index] === row) return;
+      if (existing.has(row)) row.remove();
+      const before = list.children[index];
+      if (before) list.insertBefore(row, before);
+      else list.append(row);
+    });
     renderPendingSend();
     const tracking = syncReplyProgress();
     attachmentSender?.render();

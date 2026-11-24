@@ -175,6 +175,7 @@ class Element {
   select() {}
   replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
   setAttribute(key, value) { this.attributes[key] = value; }
+  getAttribute(key) { return this.attributes[key] ?? null; }
   removeAttribute(key) { delete this.attributes[key]; }
   addEventListener(key, handler) { this.handlers[key] = handler; }
 }
@@ -537,7 +538,7 @@ test('anonymous catalog search/clear/paging use public GETs and never publish on
         name: 'Fixture', slug: cursor ? 'fixture-two' : 'fixture-one',
         summary: '<script>not HTML</script>', chat_enabled: Boolean(cursor),
       }],
-        cursor: cursor ? null : 'fixture-one'}};
+        cursor: cursor ? null : 123}};
   };
   await mount(doc, {fetcher, location: {search: '?tab=agents'}});
   const el = id => doc.getElementById(id);
@@ -569,21 +570,47 @@ test('anonymous catalog search/clear/paging use public GETs and never publish on
   assert.equal(el('catalog-query').value, '');
   assert.equal(el('discover-list').children.length, 1);
   assert.equal(requests.every(([, method]) => method === 'GET'), true);
-  assert.equal(requests.some(([path]) => path.includes('cursor=fixture-one')), true);
+  assert.equal(requests.some(([path]) => path.includes('cursor=123')), true);
   assert.equal(requests.some(([path]) => path.includes('q=nothing+%26+%E4%B8%AD%E6%96%87')), true);
 });
 
-test('catalog failure displays an error and leaves loading state', async () => {
+test('catalog retries, aborts replaced searches, and clears an empty search', async () => {
   const {mount} = await import('../openteamily/static/discover/app.mjs');
   const doc = fakeDocument();
-  await mount(doc, {location: {search: '?tab=agents'}, fetcher: async path => {
+  const stale = Promise.withResolvers();
+  let staleSignal;
+  let attempts = 0;
+  await mount(doc, {location: {search: '?tab=agents'}, fetcher: async (path, options) => {
     if (path === '/v1/auth/session') return {status: 401, json: async () => ({})};
-    throw new Error('fixture unavailable');
+    if (++attempts === 1) throw new Error('fixture unavailable');
+    const query = new URL(path, 'https://management.test').searchParams.get('q');
+    if (query === 'stale') {
+      staleSignal = options.signal;
+      return stale.promise;
+    }
+    return {status: 200, json: async () => ({items: query ? [] : [{slug: 'example-agent', name: 'Example'}]})};
   }});
-  assert.equal(doc.getElementById('catalog-error').hidden, false);
-  assert.match(doc.getElementById('catalog-error').textContent, /fixture unavailable/);
-  assert.equal(doc.getElementById('catalog-panel').attributes['aria-busy'], 'false');
-  assert.equal(doc.getElementById('discover-empty').hidden, true);
+  const el = id => doc.getElementById(id);
+  assert.equal(el('catalog-error').hidden, false);
+  assert.match(el('catalog-error').textContent, /fixture unavailable/);
+  assert.equal(el('catalog-panel').getAttribute('aria-busy'), 'false');
+  assert.equal(el('discover-empty').hidden, true);
+  assert.equal(el('teams-retry').hidden, false);
+  await el('teams-retry').handlers.click();
+  assert.equal(el('discover-list').children.length, 1);
+  assert.equal(el('teams-retry').hidden, true);
+  el('catalog-query').value = 'stale';
+  const replaced = el('catalog-search').handlers.submit({preventDefault() {}});
+  el('catalog-query').value = 'empty';
+  await el('catalog-search').handlers.submit({preventDefault() {}});
+  assert.equal(staleSignal.aborted, true);
+  stale.resolve({status: 200, json: async () => ({items: [{slug: 'old-agent'}]})});
+  await replaced;
+  assert.equal(el('discover-list').children.length, 0);
+  assert.equal(el('catalog-empty-reset').hidden, false);
+  await el('catalog-empty-reset').handlers.click();
+  assert.equal(el('catalog-query').value, '');
+  assert.equal(el('discover-list').children.length, 1);
 });
 
 test('catalog history only reloads bounded pages for the same viewer and filters', async () => {

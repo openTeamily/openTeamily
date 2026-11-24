@@ -702,42 +702,43 @@ body.app-workspace > main > #settings-panel { width: 100%; max-width: 42rem; mar
   .settings-shortcut-row { flex-wrap: wrap; }
 }
 
-/* Page parity layer (2026-11-19): recorded settings hub — centered ~30rem column on a
-   soft canvas, 11px group labels, white rounded groups with compact 2.5rem rows. */
-body.app-workspace > main:has(> #settings-panel:not([hidden])) { background: var(--ot-surface-2); }
-body.app-workspace > main > #settings-panel { max-width: 32rem; padding: .875rem 1.25rem 3rem; }
-#settings-panel .page-top { margin: 0 0 .75rem; padding: 0; border: 0; background: transparent; box-shadow: none; min-height: 0; }
-#settings-panel .page-top h1 { font-size: 1rem; font-weight: 650; margin: 0; }
+body.app-workspace > main:has(> #settings-panel:not([hidden])) { background-color: var(--ot-grouped-bg); }
+body.app-workspace > main > #settings-panel { max-width: 34rem; padding: clamp(1.25rem, 4vw, 2.25rem) clamp(1rem, 4vw, 1.5rem) 3rem; }
+#settings-panel .page-top { margin: 0 0 1rem; padding: 0; border: 0; background: transparent; box-shadow: none; min-height: 0; }
+#settings-panel .page-top h1 { font-size: clamp(2rem, 5vw, 2.35rem); line-height: 1.16; letter-spacing: -.02em; font-weight: 720; margin: 0; }
 #settings-panel [data-settings-hub] > #whoami {
-  margin: 0 0 .375rem; padding: .625rem .875rem; border-radius: .75rem; background: var(--ot-surface);
-  box-shadow: 0 0 0 1px var(--ot-line); font-size: .8125rem; color: var(--ot-ink);
+  margin: 0 0 .625rem; padding: .75rem .875rem; border-radius: .875rem; background: var(--ot-grouped-surface);
+  border: 1px solid var(--ot-grouped-line); font-size: .875rem; color: var(--ot-ink);
 }
 #settings-panel .workspace-links { display: flex; gap: .375rem; margin: 0 0 .5rem; padding: 0; border: 0; background: transparent; box-shadow: none; }
 #settings-panel .workspace-links a {
-  display: inline-flex; align-items: center; height: 1.75rem; padding: 0 .75rem; border-radius: 999px;
-  background: var(--ot-surface); box-shadow: 0 0 0 1px var(--ot-line); color: var(--ot-ink); font-size: .75rem; text-decoration: none;
+  display: inline-flex; align-items: center; min-height: 2.75rem; padding: 0 .75rem; border-radius: .75rem;
+  background: var(--ot-grouped-surface); border: 1px solid var(--ot-grouped-line); color: var(--ot-ink); font-size: .8125rem; text-decoration: none;
 }
 #settings-panel .workspace-links a:hover { background: var(--ot-bg-accent); }
-#settings-index.settings-index { gap: .5rem; }
-#settings-index .settings-cluster { gap: .25rem; margin: 0; }
-#settings-index .settings-cluster > h2 { margin: .5rem 0 .125rem .75rem; font-size: .6875rem; font-weight: 500; color: var(--ot-muted); letter-spacing: .01em; }
+#settings-index.settings-index { gap: .875rem; }
+#settings-index .settings-cluster { gap: .375rem; margin: 0; }
+#settings-index .settings-cluster > h2 { margin: .375rem 0 0 .5rem; font-size: .75rem; font-weight: 600; color: var(--ot-muted); }
 #settings-panel .settings-group, #settings-panel .settings-card {
-  background: var(--ot-surface); border: 0; border-radius: .75rem; overflow: hidden;
-  box-shadow: 0 0 0 1px var(--ot-line), 0 1px 2px rgba(20, 40, 30, .03);
+  background: var(--ot-grouped-surface); border: 1px solid var(--ot-grouped-line); border-radius: 1rem; overflow: hidden;
+  box-shadow: none;
 }
 #settings-panel .settings-group > .settings-row, #settings-panel .settings-group > .settings-toggle,
 #settings-panel .settings-row, #settings-panel .settings-toggle {
-  min-height: 2.5rem; padding: .4375rem .875rem; gap: .625rem; font-size: .8125rem; line-height: 1.35;
-  border-bottom: 1px solid var(--ot-line); box-sizing: border-box;
+  min-height: 3.25rem; padding: .5rem .875rem; gap: .625rem; font-size: .9375rem; line-height: 1.35;
+  position: relative; border-bottom: 0; box-sizing: border-box;
 }
-#settings-panel .settings-group > :last-child { border-bottom: 0; }
-#settings-panel .settings-row-icon { flex: 0 0 1rem; width: 1rem; height: 1rem; color: var(--ot-ink); opacity: .72; }
+#settings-panel .settings-group > :is(.settings-row, .settings-toggle):not(:last-child)::after {
+  content: ""; position: absolute; inset: auto .875rem 0 3.25rem; border-bottom: 1px solid var(--ot-grouped-line); pointer-events: none;
+}
+#settings-panel .settings-row:focus-visible { outline-offset: -3px; }
+#settings-panel .settings-row-icon { flex: 0 0 1.75rem; width: 1.75rem; height: 1.75rem; color: var(--ot-accent-hover); background: var(--ot-accent-soft); border-radius: .5rem; }
 #settings-panel .settings-row-icon svg { width: 1rem; height: 1rem; }
 #settings-panel .settings-row-meta { font-size: .75rem; color: var(--ot-muted); line-height: 1.35; }
-#settings-panel .settings-row-stack .settings-row-meta { font-size: .6875rem; }
-#settings-panel .settings-row-title { font-size: .8125rem; }
+#settings-panel .settings-row-stack .settings-row-meta { font-size: .75rem; }
+#settings-panel .settings-row-title { font-size: .9375rem; }
 #settings-panel .settings-row-chevron { color: var(--ot-muted); font-size: 1rem; line-height: 1; }
-#settings-panel .settings-row:hover { background: var(--ot-surface-2); }
+#settings-panel .settings-row:hover { background: var(--ot-grouped-fill); }
 #settings-panel .settings-card { padding: .25rem .875rem; }
 #settings-panel .settings-card-title, #settings-panel .settings-card > legend { font-size: .6875rem; font-weight: 500; color: var(--ot-muted); }
 #settings-panel .settings-toggle input[role="switch"] { accent-color: var(--ot-accent); }
@@ -746,11 +747,11 @@ body.app-workspace > main > #settings-panel { max-width: 32rem; padding: .875rem
 /* Parity (2026-11-19) settings subpages: plain "‹ 标题" back header, field label above a
    full-width rounded select inside a white card, quiet notes, compact list rows. */
 #settings-panel .settings-subhead { margin: .25rem 0 .875rem; padding: 0; border: 0; background: transparent; box-shadow: none; border-radius: 0; min-height: 0; }
-#settings-panel .settings-subhead .settings-back { display: inline-flex; align-items: center; gap: .375rem; font-size: .9375rem; font-weight: 650; color: var(--ot-ink); text-decoration: none; }
+#settings-panel .settings-subhead .settings-back { display: inline-flex; align-items: center; min-height: 2.75rem; gap: .375rem; font-size: .9375rem; font-weight: 650; color: var(--ot-accent-hover); text-decoration: none; }
 #settings-panel .settings-subhead .settings-back:hover { color: var(--ot-accent-hover); }
 #settings-panel #language-section.settings-card { display: grid; gap: .875rem; padding: 1rem; margin: 0; }
 #settings-panel #language-section label.settings-field { display: grid; justify-items: stretch; gap: .375rem; font-size: .75rem; font-weight: 600; color: var(--ot-ink); text-align: left; }
-#settings-panel #language-section label.settings-field select { width: 100%; max-width: none; min-width: 0; margin: 0; height: 2.25rem; padding: 0 2rem 0 .75rem; border: 1px solid var(--ot-line); border-radius: .625rem; background-color: var(--ot-surface); font-size: .8125rem; font-weight: 400; }
+#settings-panel #language-section label.settings-field select { width: 100%; max-width: none; min-width: 0; margin: 0; min-height: 2.75rem; padding: 0 2rem 0 .75rem; border: 1px solid var(--ot-grouped-line); border-radius: .625rem; background-color: var(--ot-grouped-fill); font-size: 1rem; font-weight: 400; }
 #settings-panel #language-section label.settings-check { display: flex; justify-content: flex-start; align-items: center; gap: .5rem; font-size: .8125rem; }
 #settings-panel #language-section label.settings-check input { accent-color: var(--ot-accent); margin: 0; }
 #settings-panel [data-settings-page] > .note, #settings-panel .settings-lead { font-size: .75rem; line-height: 1.6; color: var(--ot-muted); }
@@ -761,7 +762,6 @@ body.app-workspace > main > #settings-panel { max-width: 32rem; padding: .875rem
 #settings-panel [data-settings-page] > .note { margin: .625rem .25rem 0; }
 #settings-panel .settings-card.settings-empty { margin: 0 0 .5rem; padding: 1rem .875rem; border-radius: .75rem; background: var(--ot-surface-2); box-shadow: 0 0 0 1px var(--ot-line); font-size: .75rem; color: var(--ot-muted); }
 #privacy #save:enabled:hover { background: var(--ot-accent-hover); color: var(--ot-on-accent); }
-#settings-panel .page-top h1 { font-size: 1.125rem; }
 
 #settings-panel #model-api-form > .settings-card { margin: 0; padding: .875rem 1rem; }
 #model-effective { margin: 0; font-size: .9375rem; line-height: 1.45; overflow-wrap: anywhere; }
@@ -1018,4 +1018,23 @@ html[data-theme-resolved="dark"] .connector-status[data-state="failed"], html[da
   box-shadow: var(--ot-shadow-sm);
   -webkit-backdrop-filter: var(--ot-blur);
   backdrop-filter: var(--ot-blur);
+}
+
+#settings-panel .settings-group,
+#settings-panel .settings-card,
+#settings-panel [data-settings-hub] > #whoami {
+  border-color: var(--ot-glass-line);
+  box-shadow: var(--ot-card-shadow);
+}
+
+#settings-panel .settings-row-icon { background: var(--ot-select-gradient); }
+
+#settings-panel :is(#appearance, #appearance-schedule-card, #message-display) .choice:has(input:checked) {
+  color: var(--ot-accent-hover);
+}
+
+#settings-panel :is(#appearance, #appearance-schedule-card, #message-display) .choice:has(input:focus-visible) {
+  outline: 2px solid var(--ot-focus);
+  outline-offset: -2px;
+  border-radius: .5rem;
 }

@@ -51,6 +51,8 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
   const save = get('save');
   const remove = get('delete');
   const closeButton = get('close');
+  const openActions = get('open-actions');
+  const openRetry = get('open-retry');
   const add = get('add');
   const copyLink = get('copy-link');
   const discuss = get('discuss');
@@ -59,6 +61,7 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
   const view = document.defaultView;
   let scope = null;
   let screen;
+  let catalogSignature = '';
 
   const searchable = value => String(value ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
   const catalogQueryKey = () => 'openteamily.studio-query:' + JSON.stringify([scope.account, scope.id]);
@@ -241,8 +244,6 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
     titleInput.value = bodyInput.value = get('link').value = '';
     clearComparison();
     renderPresence([]);
-    list.replaceChildren();
-    if (catalogNoMatch) catalogNoMatch.hidden = true;
   }
 
   function newScreen(mode, id, prepared) {
@@ -251,15 +252,15 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
       && !prepared.controller.signal.aborted ? prepared : null;
     screen = {
       path: '/v1/workspaces/' + scope.id + '/studio/documents',
-      mode, controller: opening?.controller || new AbortController(),
+      mode, id, controller: opening?.controller || new AbortController(),
       opening: opening?.response,
       draftKey:mode === 'catalog' ? null : draftKey(id || 'new'),
       base: null, remote: null, attempt: null, busy: false, blocked: false, unavailable: false, composing: false,
     };
     catalog.hidden = mode !== 'catalog';
     form.hidden = true;
+    openActions.hidden = true;
     linkWrap.hidden = true;
-    list.replaceChildren();
     compare.open = false;
     get('heading').textContent = mode === 'catalog' ? '团队协作' : mode === 'new' ? '新建团队文档' : '团队文档';
     show();
@@ -442,17 +443,23 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
 
   async function openDocument(id, revision, prepared) {
     if (!ID.test(id || '')) return;
+    const openedFrom = document.activeElement;
     const state = newScreen('edit', id, prepared);
+    state.revision = revision;
     show('正在打开团队文档…');
     const result = await readOpening(state, documentPath(state, id));
     if (!isCurrent(state)) return;
     const item = responseDocument(result, id);
     if (!item) {
-      const failure = result.status === 403 || result.status === 404
-        ? '团队文档不存在，或你没有访问权限。' : '暂时无法打开团队文档。';
-      if ([401,403,404,410].includes(result.status)) discardDraft(state);
-      onCatalog?.(scope.id);
-      await loadCatalog(failure);
+      if ([401,403,404,410].includes(result.status)) {
+        discardDraft(state);
+        onCatalog?.(scope.id);
+        await loadCatalog('团队文档不存在，或你没有访问权限。');
+      } else {
+        show('暂时无法打开团队文档。', 'error');
+        openActions.hidden = false;
+        if ([openedFrom, closeButton, document.body].includes(document.activeElement)) openRetry.focus();
+      }
       return;
     }
     show();
@@ -470,26 +477,24 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
     else get('back').focus();
   }
 
-  async function loadCatalog(failure = '', returnTo = '', prepared) {
-    const state = newScreen('catalog', undefined, prepared);
-    add.textContent = readDraft({mode:'new',draftKey:draftKey('new')}) ? '继续新建团队文档' : '新建团队文档';
-    const refresh = get('refresh');
-    refresh.disabled = true;
-    list.setAttribute('aria-busy', 'true');
-    show('正在读取团队文档…');
-    const result = await readOpening(state, state.path);
-    if (!isCurrent(state)) return;
-    refresh.disabled = false;
-    list.setAttribute('aria-busy', 'false');
-    if (result.status !== 200 || !Array.isArray(result.body.items)) {
-      show(result.status === 403 || result.status === 404
-        ? '你已无法访问此工作区的团队文档。' : '暂时无法读取团队文档，请刷新列表。', 'error');
-      add.disabled = true;
-      return;
-    }
-    show(failure || (result.body.items.length ? '' : '还没有团队文档。'), failure ? 'error' : '');
-    for (const item of result.body.items) {
-      if (!ID.test(item?.id || '') || typeof item.title !== 'string') continue;
+  function clearCatalog() {
+    catalogSignature = '';
+    list.replaceChildren();
+    if (catalogNoMatch) catalogNoMatch.hidden = true;
+  }
+
+  function focusCatalogDocument(id, fallback) {
+    const row = [...list.children].find(candidate => candidate.dataset.document === id && !candidate.hidden);
+    (row?.firstElementChild || fallback)?.focus();
+  }
+
+  function renderCatalogItems(items) {
+    const documents = items.filter(item => ID.test(item?.id || '') && typeof item.title === 'string');
+    const signature = JSON.stringify(documents.map(({id,title,revision,updated_by}) => [id,title,revision,updated_by]));
+    if (catalogSignature === signature) return;
+    catalogSignature = signature;
+    const focused = list.contains(document.activeElement) ? document.activeElement.parentElement.dataset.document : '';
+    const rows = documents.map(item => {
       const row = document.createElement('li');
       row.dataset.search = searchable(item.title + ' ' + (item.updated_by || ''));
       row.dataset.document = item.id;
@@ -502,12 +507,40 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
       meta.className = 'note';
       meta.textContent = '版本 ' + item.revision + (item.updated_by ? ' · ' + item.updated_by : '');
       row.append(open, meta);
-      list.append(row);
-    }
+      return row;
+    });
+    list.replaceChildren(...rows);
     filterCatalog();
-    if (returnTo && document.activeElement === add) {
-      [...list.children].find(row => row.dataset.document === returnTo && !row.hidden)?.firstElementChild.focus();
+    if (focused) focusCatalogDocument(focused, catalogQuery);
+  }
+
+  async function loadCatalog(failure = '', returnTo = '', prepared) {
+    const state = newScreen('catalog', undefined, prepared);
+    add.textContent = readDraft({mode:'new',draftKey:draftKey('new')}) ? '继续新建团队文档' : '新建团队文档';
+    if (!returnTo) clearCatalog();
+    filterCatalog();
+    if (returnTo) focusCatalogDocument(returnTo, add);
+    const refresh = get('refresh');
+    refresh.disabled = true;
+    list.setAttribute('aria-busy', 'true');
+    if (!list.children.length) show('正在读取团队文档…');
+    const result = await readOpening(state, state.path);
+    if (!isCurrent(state)) return;
+    refresh.disabled = false;
+    list.setAttribute('aria-busy', 'false');
+    if (result.status !== 200 || !Array.isArray(result.body?.items)) {
+      const denied = [401,403,404,410].includes(result.status);
+      if (denied) {
+        if (list.contains(document.activeElement)) refresh.focus();
+        clearCatalog();
+      }
+      show(denied ? '你已无法访问此工作区的团队文档。' : '暂时无法读取团队文档，请刷新列表。', 'error');
+      add.disabled = true;
+      return;
     }
+    renderCatalogItems(result.body.items);
+    show(failure || (list.children.length ? '' : '还没有团队文档。'), failure ? 'error' : '');
+    if (returnTo && document.activeElement === add) focusCatalogDocument(returnTo);
   }
 
   async function open(id, revision, returnTo, prepared) {
@@ -518,9 +551,7 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
     if (id) await openDocument(id, revision, prepared);
     else {
       onOpenCatalog?.(scope.id);
-      const loading = loadCatalog('', returnTo, prepared);
-      if (returnTo) add.focus();
-      await loading;
+      await loadCatalog('', returnTo, prepared);
     }
     return true;
   }
@@ -535,6 +566,7 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
   function close() {
     if (!mayLeave()) return;
     leaveForNavigation();
+    clearCatalog();
     onClose?.();
     if (!button.hidden) button.focus();
   }
@@ -550,13 +582,18 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
     event.preventDefault();
     close();
   });
-  get('back').addEventListener('click', () => {
+  function backToCatalog() {
     if (!mayLeave()) return;
-    const last = screen?.base?.id;
+    const last = screen?.base?.id || screen?.id;
     discardDraft(screen);
-    if (onCatalog?.(scope.id, {back:Boolean(last)})) return;
+    if (onCatalog?.(scope.id, {back:Boolean(screen?.base)})) return;
     void loadCatalog('', last);
-    add.focus();
+    if (!last) add.focus();
+  }
+  get('back').addEventListener('click', backToCatalog);
+  get('open-back').addEventListener('click', backToCatalog);
+  openRetry.addEventListener('click', () => {
+    if (screen?.id && !openActions.hidden) void openDocument(screen.id, screen.revision);
   });
   add.addEventListener('click', () => {
     const state = newScreen('new');
@@ -736,6 +773,7 @@ export function mountSharedStudio(document, {request, personalWorkspace, onClose
           dialog.close();
           onClose?.();
         }
+        clearCatalog();
       }
       scope = next;
       if (changed && catalogQuery) {
