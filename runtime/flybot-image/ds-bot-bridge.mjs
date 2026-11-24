@@ -165,14 +165,15 @@ async function streamedCompletion(body, onProgress) {
   throw new Error('Text inference stream ended early')
 }
 
-export async function textOnlyCompletion(bridge, prompt, {system, onProgress} = {}) {
+export async function textOnlyCompletion(bridge, prompt, {system, onProgress, signal} = {}) {
   await bridge.setup()
   const stream = typeof onProgress === 'function'
+  const timeout = AbortSignal.timeout(170000)
   const messages = [...(system ? [{role:'system', content:system}] : []), {role:'user', content:prompt}]
   const response = await fetch(bridge.baseURL + '/chat/completions', {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bridge.state.token },
     body: JSON.stringify({ model: MODEL_ID, messages, stream }),
-    signal: AbortSignal.timeout(170000), redirect: 'error',
+    signal: signal ? AbortSignal.any([timeout, signal]) : timeout, redirect: 'error',
   })
   if (!response.ok) throw new Error('Text-only model inference failed')
   const text = stream && response.headers.get('content-type')?.includes('text/event-stream')

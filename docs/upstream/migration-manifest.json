@@ -1900,8 +1900,8 @@
       "path": "src/openteamily/messenger.ts",
       "reason": "OpenTeamily-authored addition (MIT): shared social state for users' own DS-Bots (phase C, docs/DSBOT_PLUGIN_ARCHITECTURE.md).",
       "license_notice": "MIT (Bot Social snapshot) file added or modified by OpenTeamily; see OPENTEAMILY.md.",
-      "new_sha256": "72b8d84549a6855a8bdc94edb782ede06c08c608c7775d1f59b5bc32e0f0f395",
-      "bytes": 161507
+      "new_sha256": "3cbcec62487ace92625a18cbb70efacc89f8068e9a7b07b95c09fae26009a9db",
+      "bytes": 182044
     },
     "services/bot-social/test/openteamily_messenger.test.ts": {
       "destination": "services/bot-social",
@@ -2158,8 +2158,8 @@
     "services/bot-social/test/openteamily_group_reply_policy.test.ts": {
       "destination": "services/bot-social",
       "path": "test/openteamily_group_reply_policy.test.ts",
-      "new_sha256": "352b8f2c7082b849fd3b1df2e36a4236f67f02d1e3cf3567d6ffd2a0afbae171",
-      "bytes": 15273,
+      "new_sha256": "00c5a82f962f2c83915a81278b9081ea38ce51bff898347018c805474427a8cf",
+      "bytes": 15355,
       "reason": "DSH cutover modification/addition in the imported snapshot; see docs/DSBOT_PLUGIN_ARCHITECTURE.md.",
       "license_notice": "MIT (Bot Social snapshot)"
     },
@@ -2182,8 +2182,8 @@
     "services/bot-social/test/openteamily_natural_group_chat.test.ts": {
       "destination": "services/bot-social",
       "path": "test/openteamily_natural_group_chat.test.ts",
-      "new_sha256": "37c1fb0004fe1da163494851e8f315e6ccfb6c71bc27c10b15e558cf1c07761c",
-      "bytes": 29170,
+      "new_sha256": "adcb17b9b66f274c25ee55fe397ebae1d4ae3f66ce9c90d554a977c07364f6c9",
+      "bytes": 29396,
       "reason": "DSH cutover modification/addition in the imported snapshot; see docs/DSBOT_PLUGIN_ARCHITECTURE.md.",
       "license_notice": "MIT (Bot Social snapshot)"
     },
@@ -2256,8 +2256,8 @@
       "path": "test/openteamily_native_group_rounds.test.ts",
       "reason": "OpenTeamily-authored tests for owner-scoped native DS-Bot group synchronization.",
       "license_notice": "MIT (Bot Social snapshot)",
-      "new_sha256": "4615ca87569da9332ce5ba1ed242f5f054653b4ae9e80e64a655ca9b3bf78443",
-      "bytes": 5233
+      "new_sha256": "2a477b7e35cdf1d1245486e6980aeb4769d85fc05c82dac774b32814f6325785",
+      "bytes": 22655
     }
   },
   "core_fork_removed": {

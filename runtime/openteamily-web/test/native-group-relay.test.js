@@ -27,6 +27,7 @@ async function eventually(check) {
 
 function fixture(t, {exchange, initialState, roster = seats, mode = 'default', people = [{owner_id:owner}], lines = [],
   history, seq = 2, page = [{id:old,seq:1,body:'此前的讨论',created_at:1_700_000_000_000,author:{kind:'member',name:'Member'}}],
+  author, nativeHost = owner, coordinator = true, working = [],
 } = {}) {
   let lineListener
   let dispose
@@ -37,14 +38,16 @@ function fixture(t, {exchange, initialState, roster = seats, mode = 'default', p
   const opened = []
   const logged = [...lines]
   const members = ['writer', 'reviewer']
-  const room = {id:'native-room', members, openteamily:{conversation_id:cid,
+  const room = {id:'native-room', members, openteamily:{conversation_id:cid, native_group_host:nativeHost,
     ...(exchange ? {native_exchange:exchange} : {}),
     ...(history ? {native_history:history} : {}),
   }}
   const conversation = {id:cid,kind:'group',account_group:true,agents:roster,members:people,
-    group_management:{owner_id:owner},group_agent_routing:{can_edit:true,policy:{mode}},
+    group_management:{owner_id:owner},group_agent_routing:{can_edit:coordinator,policy:{mode},
+      native_group_host:nativeHost,native_group_coordinator:coordinator},
   }
-  const item = {message_id:mid,conversation_id:cid,seq,body:'评审文档',agent_mentions:[{owner_id:owner,agent_id:'writer'}]}
+  const item = {message_id:mid,conversation_id:cid,seq,body:'评审文档',agent_mentions:[{owner_id:owner,agent_id:'writer'}],
+    author,text_only:people.length > 1}
   function addLine(line) {
     logged.push({...line,seq:(logged.at(-1)?.seq ?? 0) + 1})
     lineListener?.(room)
@@ -54,7 +57,7 @@ function fixture(t, {exchange, initialState, roster = seats, mode = 'default', p
     ctx:{on:(_event, cb) => {dispose = cb}},
     botOf:id => ({name:id,openteamily:{agent_id:id}}),
     sharedRoomCursor:() => logged.at(-1)?.seq ?? 0,
-    workingInRoom:() => [],
+    workingInRoom:() => working,
     roomActive:() => busy,
     groupLinesAfter:async (_id, cursor) => logged.filter(line => line.seq > cursor),
     save:async options => {assert.deepEqual(options,{required:true})},
@@ -63,12 +66,12 @@ function fixture(t, {exchange, initialState, roster = seats, mode = 'default', p
     beginSharedRoomRound:async (roomId, input) => {
       busy = true
       opened.push({roomId,input})
-      addLine({who:'User', text:input.text, openteamilyMessageId:input.sourceId})
+      addLine({who:input.author ?? 'User', text:input.text, openteamilyMessageId:input.sourceId})
     },
   }
   const raw = {
     get:async path => {
-      if (path === '/v1/ot/native-group-inbox') return {items:state && state !== 'finished' ? [{...item,state}] : []}
+      if (path.startsWith('/v1/ot/native-group-inbox')) return {items:state && state !== 'finished' && coordinator ? [{...item,state}] : []}
       if (path === conversationPath) return conversation
       assert.equal(path, messagesPath + '?limit=40&before=' + seq)
       return {messages:page}
@@ -81,6 +84,7 @@ function fixture(t, {exchange, initialState, roster = seats, mode = 'default', p
       }
       writes.push({path,body})
       if (path === roundPath + '/lines') return {id:mirrored}
+      if (path === roundPath + '/progress') return {ok:true}
       assert.equal(path, roundPath)
       if (body.action === 'start') {
         assert.equal(state, 'queued')
@@ -133,14 +137,33 @@ test('an unknown running round is finalized without rerunning tools', async t =>
   assert.deepEqual(h.writes.map(item => item.body.action), ['finish'])
 })
 
-test('mixed owners, a missing native participant, mention-only policy and files use normal sends', async t => {
-  const [multi, missing, mentionsOnly, file] = [
-    fixture(t,{people:[{owner_id:owner},{owner_id:'other'}]}), fixture(t,{roster:seats.slice(0,1)}),
-    fixture(t,{mode:'mentions'}), fixture(t),
+test('unavailable native routes and files use normal sends', async t => {
+  const [mentionsOnly, file] = [
+    fixture(t,{mode:'mentions',nativeHost:null}), fixture(t),
   ]
-  for (const h of [multi,missing,mentionsOnly]) await h.send()
+  await mentionsOnly.send()
   await file.send({attachment:{title:'file'}})
-  for (const h of [multi,missing,mentionsOnly,file]) assert.equal(h.received[0].native_round, undefined)
+  for (const h of [mentionsOnly,file]) assert.equal(h.received[0].native_round, undefined)
+})
+
+test('a guest submits through the shared round, and only the host starts it in text-only mode', async t => {
+  const author = {owner_id:'guest',display_name:'Guest QA'}
+  const people = [{owner_id:owner},author]
+  const guest = fixture(t,{people,coordinator:false,author})
+  await guest.send()
+  assert.equal(guest.received[0].native_round, true)
+  assert.equal(guest.opened.length, 0)
+  const bot = {id:'writer',openteamily:{agent_id:'writer'}}
+  const working = []
+  const host = fixture(t,{people,author,initialState:'queued',working})
+  await eventually(() => host.opened.length === 1)
+  assert.deepEqual(host.writes[0].body, {action:'start',text_only:true})
+  assert.equal(host.opened[0].input.textOnly, true)
+  assert.equal(host.logged.at(-1).who, 'Guest QA')
+  working.push({bot})
+  host.addLine({botId:'writer',kind:'working',text:'working'})
+  await eventually(() => host.writes.some(item => item.path.endsWith('/progress')))
+  assert.deepEqual(host.writes.find(item => item.path.endsWith('/progress')).body, {working_agent_refs:['writer']})
 })
 
 
