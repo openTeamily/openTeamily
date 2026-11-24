@@ -248,13 +248,19 @@ test('calling both menu helpers without an existing 新手引导 link keeps the 
 });
 
 
-test('workspace pages render one accessible account icon in the rail before shell startup', () => {
+test('workspace pages render the same navigation and one accessible account icon before shell startup', () => {
   const staticPages = new URL('../openteamily/static/', import.meta.url);
   for (const page of readdirSync(staticPages, {recursive: true}).filter(path => path.endsWith('/index.html'))) {
     const html = readFileSync(new URL(page, staticPages), 'utf8');
     if (!html.includes('<nav class="app-rail"')) continue;
     const [nav, menu] = html.split('<nav class="app-rail"')[1].split('</nav>')[0].split('<div class="account-slot"');
-    assert.match(nav, /class="rail-actions"/, page);
+    const actions = nav.match(/<div class="rail-actions">([\s\S]*?)<\/div>/)?.[1] || '';
+    const globalActions = actions.replace(/<div id="login-panel" class="discover-guest-signin" hidden>[^]*$/, '');
+    const routes = Array.from(globalActions.matchAll(/<a [^>]*?href="([^"]+)"/g), ([, href]) => href);
+    assert.deepEqual(routes, [
+      '/', '/chat', '/agents', '/skills', '/automations', '/memory',
+      '/space', '/meetings', '/discover', '/contacts', '/download',
+    ], page);
     assert.doesNotMatch(nav, /href="\/profile"|class="rail-spacer"/, page);
     assert.match(nav, /href="\/chat"[^>]*aria-label="聊天">[\s\S]*?<svg/);
     assert.match(nav, /class="rail-label">发现<\/span>/);

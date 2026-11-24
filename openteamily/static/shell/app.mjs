@@ -18,8 +18,8 @@ function markNavigation() {
     if (!href.startsWith('/')) continue;
     const target = href.split('?')[0].split('#')[0].replace(/\/+$/, '') || '/';
     const works = (value) => value === '/space' || value === '/artifacts';
-    const inSettings = target === '/settings' && here.startsWith('/settings/');
-    if (target === here || inSettings || (works(target) && works(here))) link.setAttribute('aria-current', 'page');
+    const inSubpage = ['/settings', '/profile'].includes(target) && here.startsWith(target + '/');
+    if (target === here || inSubpage || (works(target) && works(here))) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   }
   const more = document.querySelector('.mobile-nav-more');
@@ -33,9 +33,14 @@ const mobileDestinations = [
   ['/chat', 'chat', '聊天', 'Chats', 'M4 4h16v12H9l-5 4V4Z'],
   ['/discover', 'discover', '发现', 'Discover', 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z'],
   ['/space', 'space', '作品', 'Space', 'm12 3 9 5-9 5-9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5'],
+  ['/', 'home', '首页', 'Home', 'M4 11 12 4l8 7v9h-5v-6H9v6H4z'],
+  ['/agents', 'agents', '智能体', 'Agents', 'M5 7h14v12H5z M9 3h6 M12 3v4 M8 12h1 M15 12h1 M9 16h6'],
   ['/contacts', 'contacts', '联系人', 'Contacts', 'M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z M3 21v-2a7 7 0 0 1 14 0v2 M17 4a3.5 3.5 0 0 1 0 7 M19 14a6 6 0 0 1 3 5v2'],
   ['/automations', 'automations', '自动化', 'Automations', 'M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9'],
   ['/meetings', 'meetings', '会议', 'Meetings', 'M4 6h16v14H4z M8 3v4 M16 3v4 M4 10h16'],
+  ['/memory', 'memory', '记忆', 'Memory', 'M8 4a4 4 0 0 0-4 4v8a4 4 0 0 0 4 4 M16 4a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4 M8 8h8 M8 12h8 M8 16h8 M12 4v16'],
+  ['/skills', 'skills', '技能', 'Skills', 'M12 3 4 7v10l8 4 8-4V7l-8-4Z M8.5 10.5h7 M8.5 14h4.5'],
+  ['/profile', 'profile', '我的资料', 'My profile', 'M8 7a4 4 0 1 0 8 0 4 4 0 0 0-8 0 M4 21v-2a8 8 0 0 1 16 0v2'],
   ['/settings', 'settings', '设置', 'Settings', 'M4 6h16 M4 12h16 M4 18h16 M9 4v4 M15 10v4 M9 16v4'],
 ];
 
@@ -54,7 +59,12 @@ function updateMobileNavigationLanguage(doc, language) {
 }
 
 function bindMobileNavigation(doc) {
-  const nav = doc.querySelector('.mobile-primary-nav');
+  let nav = doc.querySelector('.mobile-primary-nav');
+  if (!nav && doc.body.classList.contains('app-primary')) {
+    nav = doc.createElement('nav');
+    nav.className = 'mobile-primary-nav';
+    doc.body.appendChild(nav);
+  }
   if (!nav || nav.querySelector('.mobile-nav-more')) return;
   const icon = path => `<svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="${path}"/></svg>`;
   const link = ([href, key, , , path]) => `<a href="${href}">${icon(path)}<span data-ui-text="shell.${key}"></span></a>`;
@@ -376,8 +386,10 @@ export function syncAppearanceButton(doc, values, now, media) {
   const button = doc.getElementById('appearance-toggle');
   if (!button) return;
   const theme = resolveTheme(values || { appearance: 'system' }, now, media);
-  const labels = doc.documentElement?.lang === 'en' ? {light:'Light', dark:'Dark'} : {light:'浅色', dark:'深色'};
+  const english = doc.documentElement?.lang === 'en';
+  const labels = english ? {light:'Light', dark:'Dark'} : {light:'浅色', dark:'深色'};
   button.textContent = labels[theme];
+  button.setAttribute('title', english ? 'Switch appearance' : '切换浅色或深色外观');
   button.setAttribute('aria-pressed', theme === 'dark' ? 'true' : 'false');
 }
 

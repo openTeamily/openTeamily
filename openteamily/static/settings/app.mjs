@@ -896,7 +896,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (result.status !== 200) {
-      if (language) form.elements.language.value = current.language;
+      const latest = readForm(form);
+      for (const [name, value] of Object.entries(selected)) {
+        if (latest[name] !== value) continue;
+        const control = form.elements[name];
+        if (control?.type === 'checkbox') {
+          control.checked = Boolean(current[name]);
+          if (control.getAttribute('role') === 'switch') control.setAttribute('aria-checked', String(control.checked));
+        } else if (control) control.value = current[name] ?? '';
+      }
+      refreshAppearance();
       show('error', uiText(document, 'settings.save.error'));
       return;
     }

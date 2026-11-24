@@ -676,6 +676,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const form = document.getElementById('editor-form');
   const taskDraftPanel = document.getElementById('automation-draft-assist');
   const listPanel = document.getElementById('list-panel');
+  const listRetry = document.getElementById('automation-list-retry');
   const workspaceSelect = document.getElementById('workspace');
   const search = document.getElementById('search');
   const clearSearch = document.getElementById('automation-search-clear');
@@ -735,6 +736,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let runTimer = 0;
   let runRequest = 0;
   let listRequest = 0;
+  let listRead;
+  let searchTimer;
   let listTimer = 0;
   let listFingerprint = '';
   let listReturn = null;
@@ -1948,6 +1951,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     // drops the question instead of showing it again above a different item.
     closeConfirm({restoreFocus: false});
     globalThis.clearTimeout(listTimer);
+    globalThis.clearTimeout(searchTimer);
+    listRead?.abort();
     listRequest += 1;
     editorRequest += 1;
     if (linkRetry) linkRetry.hidden = true;
@@ -2260,15 +2265,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function selectCategory(value) {
     category = value;
     for (const tab of tabs) {
-      tab.setAttribute('aria-selected', tab.dataset.category === category ? 'true' : 'false');
+      const selected = tab.dataset.category === category;
+      tab.setAttribute('aria-selected', String(selected));
+      tab.tabIndex = selected ? 0 : -1;
     }
     const name = category === 'mine' ? '搜索我的自动化' : '搜索自动化模板';
     search.placeholder = name + '…';
     search.setAttribute('aria-label', name);
   }
 
-  async function loadList({startup, quiet = false} = {}) {
+  async function loadList({startup, quiet = false, retrying = false} = {}) {
     globalThis.clearTimeout(listTimer);
+    globalThis.clearTimeout(searchTimer);
+    listRead?.abort();
+    if (listRetry && !retrying) listRetry.hidden = true;
     if (clearSearch) clearSearch.hidden = !search.value;
     const id = workspaceId();
     const supportsUpcoming = native && Boolean(id) && category === 'mine';
@@ -2346,9 +2356,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       setBusy(empty, true);
       empty.textContent = '正在加载自动化…';
     }
-    const listed = await request('GET', `/v1/workspaces/${id}/automations${listQuery(category, search.value)}`)
+    const controller = listRead = new AbortController();
+    const listed = await request('GET', `/v1/workspaces/${id}/automations${listQuery(category, searchText)}`,
+      undefined, undefined, AbortSignal.any([controller.signal, AbortSignal.timeout(12000)]))
       .catch(() => ({status: 0, body: {}}));
-    if (seq !== listRequest || workspaceId() !== id || viewerId() !== viewer) return;
+    if (listRead === controller) listRead = undefined;
+    if (controller.signal.aborted || seq !== listRequest || workspaceId() !== id || viewerId() !== viewer || search.value !== searchText) return;
     setBusy(empty, false);
     setBusy(list, false);
     if (listed.status !== 200) {
@@ -2358,11 +2371,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       list.textContent = '';
       empty.hidden = false;
-      empty.textContent = messageFor(listed.body.error, '无法读取自动化列表。');
+      empty.textContent = messageFor(listed.body?.error, '无法读取自动化列表。');
+      if (listRetry) listRetry.hidden = !(listed.status === 0 || listed.status === 429 || listed.status >= 500);
       return;
     }
+    if (listRetry) listRetry.hidden = true;
     empty.textContent = search.value.trim() ? '没有匹配的自动化。' : '这个分类下还没有自动化。';
-    renderItems(listed.body.items || []);
+    renderItems(listed.body?.items || []);
   }
 
   function fillWorkspaces(items) {
@@ -2555,6 +2570,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     void loadTemplates();
     return loadList();
   });
+  listRetry?.addEventListener('click', async () => {
+    if (listRetry.getAttribute('aria-busy') === 'true') return;
+    const active = () => document.activeElement === listRetry;
+    listRetry.setAttribute('aria-busy', 'true');
+    const ownedFocus = active();
+    try {
+      await loadList({retrying: true});
+      if (ownedFocus && listRetry.hidden && (active() || document.activeElement === document.body) && !listPanel.hidden) {
+        search.focus({preventScroll: true});
+      }
+    } finally {
+      listRetry.removeAttribute('aria-busy');
+    }
+  });
   editorOptions?.addEventListener('toggle', () => {
     if (editorOptions.open && !form.hidden) void loadTemplates();
   });
@@ -2562,7 +2591,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     rememberCatalogue();
     return loadList();
   }
-  search.addEventListener('input', searchCatalogue);
+  search.addEventListener('input', () => {
+    if (clearSearch) clearSearch.hidden = !search.value;
+    if (listRetry) listRetry.hidden = true;
+    listRead?.abort();
+    globalThis.clearTimeout(searchTimer);
+    searchTimer = globalThis.setTimeout(searchCatalogue, 150);
+  });
   upcomingControl?.addEventListener('click', () => {
     upcoming = !upcoming;
     void searchCatalogue();
@@ -2668,6 +2703,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
   for (const tab of tabs) {
+    tab.addEventListener('keydown', event => {
+      const ordered = Array.from(tabs);
+      const index = ordered.indexOf(tab);
+      const tail = ordered.length - 1;
+      const offset = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? tail : offset ? (index + offset + ordered.length) % ordered.length : -1;
+      if (next < 0) return;
+      event.preventDefault();
+      ordered[next].focus({preventScroll: true});
+      ordered[next].click();
+    });
     tab.addEventListener('click', async () => {
       resetTaskDraft();
       resetSchedulePreview();

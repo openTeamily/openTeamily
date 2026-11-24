@@ -26,6 +26,7 @@
       <a href="/space" title="作品" aria-label="作品"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg><span class="rail-label">作品</span></a>
       <a href="/meetings" title="会议" aria-label="会议"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v14H4z M8 3v4 M16 3v4 M4 10h16"/></svg><span class="rail-label">会议</span></a>
       <a href="/discover" title="发现" aria-label="发现"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg><span class="rail-label">发现</span></a>
+      <a href="/contacts" title="联系人" aria-label="联系人" data-ui-title="shell.contacts" data-ui-label="shell.contacts"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z M3 21v-2a7 7 0 0 1 14 0v2 M17 4a3.5 3.5 0 0 1 0 7 M19 14a6 6 0 0 1 3 5v2"/></svg><span data-ui-text="shell.contacts" class="rail-label">联系人</span></a>
       <a href="/download" title="下载" aria-label="下载"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12 m-5-5 5 5 5-5 M4 16v5h16v-5"/></svg><span class="rail-label">下载</span></a>
     </div>
     <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换外观">浅色</button>
@@ -84,10 +85,10 @@
       <span id="workspace-status" role="status"></span>
     </div>
     <section id="list-panel">
-      <div class="tabs" role="tablist">
+      <div class="tabs" role="tablist" aria-label="自动化分类">
         <button type="button" role="tab" data-category="mine" aria-selected="true">我的自动化</button>
-        <button type="button" role="tab" data-category="work" aria-selected="false">工作</button>
-        <button type="button" role="tab" data-category="life" aria-selected="false">生活</button>
+        <button type="button" role="tab" data-category="work" aria-selected="false" tabindex="-1">工作</button>
+        <button type="button" role="tab" data-category="life" aria-selected="false" tabindex="-1">生活</button>
       </div>
       <div class="automation-list-controls">
         <div class="pill-search"><label class="visually-hidden" for="search">搜索我的自动化</label>
@@ -98,7 +99,8 @@
         <button type="button" id="automation-upcoming" class="secondary" aria-pressed="false" aria-controls="automation-list" hidden>即将运行</button>
       </div>
       <ul id="automation-list"></ul>
-      <p id="list-empty" class="empty-state" hidden>这个分类下还没有自动化。</p>
+      <p id="list-empty" class="empty-state" role="status" hidden>这个分类下还没有自动化。</p>
+      <button type="button" id="automation-list-retry" class="secondary" hidden>重试读取自动化</button>
       <button type="button" id="automation-template-retry" class="secondary" hidden>重试加载模板</button>
     </section>
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>

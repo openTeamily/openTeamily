@@ -1213,6 +1213,7 @@ test('a native reply streams as plain text without rebuilding history or changin
     assert.equal(historyReads, 1, 'live progress and final POST do not re-fetch previous messages');
     assert.equal(progressKeys.length, 3);
     assert.deepEqual(list.children.map(node => node.dataset.messageId), ['earlier', 'new-user', 'new-reply']);
+    assert.equal(list.children[0], original, 'settling the reply leaves the previous transcript mounted');
     assert.ok(descendants(list.children.at(-1)).some(node => node.tagName === 'STRONG' && node.textContent === '最终回复'));
     assert.equal(field.value, '下一条草稿');
     assert.equal(scroller.scrollTop, 130);
@@ -1247,6 +1248,7 @@ test('a running native reply preserves its partial text during reconnect and loa
   try {
     await mount(doc, {fetcher});
     const list = el('message-list');
+    const original = list.children[0];
     const pending = list.children.at(-1);
     const heading = pending.children.find(node => node.className === 'reply-state');
     assert.equal(pending.dataset.messageId, reply.id);
@@ -1267,6 +1269,7 @@ test('a running native reply preserves its partial text during reconnect and loa
     assert.equal(pending.children.at(-1).textContent, '正在继续回复，连接已恢复');
     t.mock.timers.tick(50); await settle();
     assert.deepEqual(list.children.map(node => node.dataset.messageId), [user.id, reply.id]);
+    assert.equal(list.children[0], original, 'a fresh history snapshot keeps an unchanged row mounted');
     assert.equal(list.children.at(-1).dataset.replyProgress, undefined);
     assert.ok(descendants(list.children.at(-1)).some(node => node.textContent === '已保存的答复'));
     t.mock.timers.tick(3000); await settle();

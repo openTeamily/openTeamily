@@ -891,6 +891,10 @@
             </div>
           </details>
           <textarea id="chat-body" name="body" maxlength="4000" required placeholder="输入消息" rows="1" aria-label="输入消息" aria-controls="chat-agent-mention-options" aria-autocomplete="list" data-ui-label="chat.compose.placeholder" data-ui-placeholder="chat.compose.placeholder"></textarea>
+          <div class="composer-turn-actions">
+            <button id="chat-reply-stop" type="button" aria-label="停止生成" title="停止生成" hidden data-ui-title="chat.reply.stop" data-ui-label="chat.reply.stop"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
+            <button id="chat-send" type="submit" class="composer-send" aria-label="发送" title="发送" data-ui-title="chat.send" data-ui-label="chat.send"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14 M13 6l6 6-6 6"/></svg></button>
+          </div>
         </div>
         <div id="chat-agent-mention-options" class="chat-agent-mention-options" role="listbox" aria-label="提及群智能体" hidden data-ui-label="chat.group.mention_agents"></div>
         <div id="chat-agent-mentions" class="chat-agent-mentions" aria-label="将提及的智能体" hidden data-ui-label="chat.group.agents_to_mention"></div>
@@ -927,8 +931,6 @@
               <option value="workspaces" data-ui-text="chat.memory.all_workspaces">记忆 · 跨工作区</option>
               <option value="off" data-ui-text="chat.memory.disabled">记忆 · 关闭</option>
             </select>
-            <button id="chat-reply-stop" type="button" aria-label="停止生成" title="停止生成" hidden data-ui-title="chat.reply.stop" data-ui-label="chat.reply.stop"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
-            <button id="chat-send" type="submit" class="composer-send" aria-label="发送" title="发送" data-ui-title="chat.send" data-ui-label="chat.send"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14 M13 6l6 6-6 6"/></svg></button>
           </div>
         </div>
       </div>

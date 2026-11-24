@@ -486,9 +486,14 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: .4rem .875rem;
-    border-bottom: 1px solid var(--ot-line);
-    background: var(--ot-surface);
+    gap: .375rem .65rem;
+    padding: .4rem .75rem;
+    border: 1px solid var(--ot-glass-line);
+    border-radius: 1.125rem;
+    background-color: var(--ot-glass);
+    background-image: linear-gradient(145deg, var(--ot-grouped-surface), transparent 92%);
+    box-shadow: var(--ot-card-shadow);
+    backdrop-filter: blur(16px) saturate(135%);
   }
   #meeting-library-mobile:not([hidden]) {
     display: inline-flex;
@@ -519,4 +524,25 @@
   body.app-workspace.app-primary:has(.meeting-layout[data-view="editor"]:not([hidden])) > :is(.app-rail, .mobile-primary-nav) { display: none; }
   #main-panel:has(.meeting-layout[data-view="editor"]:not([hidden])) .meeting-page-top { display: none; }
   .meeting-layout[data-view="editor"] #save-meeting { display: none; }
+}
+
+body.app-workspace :is(.meeting-list-pane, .meeting-editor-pane) {
+  border-color: var(--ot-glass-line);
+  border-radius: 1.125rem;
+  background: var(--ot-grouped-surface);
+  box-shadow: var(--ot-card-shadow);
+}
+
+body.app-workspace .meeting-list-pane {
+  background-image: linear-gradient(165deg, var(--ot-accent-soft), transparent 36%);
+}
+
+body.app-workspace :is(#new-meeting, #save-meeting, #save-meeting-mobile):enabled {
+  background: var(--ot-action-gradient);
+  color: var(--ot-on-accent);
+}
+
+body.app-workspace :is(.meeting-editor-pane, #meeting-inbox) h2 {
+  font-weight: 660;
+  letter-spacing: -.015em;
 }

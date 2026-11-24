@@ -255,7 +255,7 @@ test('syncAppearanceExtras moves the status into the schedule card only for auto
 test('settings subpages use a wider column than the hub, with language notes below the card', () => {
   const html = readFileSync(new URL('../openteamily/static/settings/index.html', import.meta.url), 'utf8');
   const css = readFileSync(new URL('../openteamily/static/settings/app.css', import.meta.url), 'utf8');
-  assert.match(css, /body\.app-workspace > main > #settings-panel \{ max-width: 32rem;/);
+  assert.match(css, /body\.app-workspace > main > #settings-panel \{ max-width: 34rem;/);
   for (const page of ['language', 'message-folding', 'privacy', 'shortcuts']) {
     assert.match(
       css,

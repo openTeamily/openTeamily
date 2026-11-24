@@ -503,6 +503,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   let remix = null;
   let manageRequest = 0;
   let catalogRequest = 0;
+  let catalogReader;
   let activeTeamQuery = '';
   const joiningTeams = new Set();
   const directoryItems = new Map();
@@ -520,6 +521,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const teamsView = isTeamsCatalog(location);
   const catalogView = agentsView || teamsView;
   const catalogSearch = document.getElementById('catalog-query');
+  const catalogEmptyReset = document.getElementById('catalog-empty-reset');
   if (catalogView) catalogSearch.value = (manageParams.get('q') || '').trim().slice(0, teamsView ? TEAM_SEARCH_LIMIT : 80);
 
   function saveCatalogQuery() {
@@ -530,6 +532,20 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     else params.delete('q');
     history?.replaceState?.(null, '', '/discover?' + params.toString());
     syncLoginLink();
+  }
+
+  function clearCatalogSearch({allFilters = false} = {}) {
+    catalogSearch.value = '';
+    if (allFilters && agentsView) {
+      activeCategory = 'all';
+      activeCreator = null;
+      const params = new URLSearchParams(location?.search);
+      for (const key of ['q', 'category', 'creator']) params.delete(key);
+      history?.replaceState?.(null, '', '/discover?' + params.toString());
+      syncLoginLink();
+    } else saveCatalogQuery();
+    catalogSearch.focus?.({preventScroll:true});
+    return agentsView ? loadCatalog() : loadTeams();
   }
 
   const initialFeed = feedStateFromSearch(catalogView ? '' : location?.search);
@@ -662,6 +678,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const panel = document.getElementById('catalog-panel');
     if (append && (!cursor || panel.getAttribute('aria-busy') === 'true')) return;
     const seq = ++catalogRequest;
+    const scope = sessionRequest;
     const user = currentUser;
     const empty = document.getElementById('discover-empty');
     const error = document.getElementById('catalog-error');
@@ -670,6 +687,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const more = document.getElementById('catalog-more');
     const shouldFocus = append && (document.activeElement === more || document.activeElement === retry);
     if (!append) {
+      catalogReader?.abort();
+      catalogReader = new AbortController();
       activeTeamQuery = catalogSearch.value.trim().slice(0, TEAM_SEARCH_LIMIT);
       directoryItems.clear();
       directoryRows.clear();
@@ -683,21 +702,28 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     more.disabled = true;
     more.textContent = '加载更多';
     empty.hidden = true;
+    catalogEmptyReset.hidden = true;
     error.hidden = true;
     retry.hidden = true;
     if (!user) {
-      panel.setAttribute('aria-busy', 'false');
-      count.textContent = '';
-      empty.textContent = '登录后可查看并申请加入公开团队。';
-      empty.hidden = false;
+      panel.setAttribute('aria-busy', String(Boolean(sessionPending)));
+      count.textContent = sessionPending ? '正在确认登录状态…' : '';
+      if (sessionState === 'failed') {
+        error.textContent = '暂时无法确认登录状态。';
+        error.hidden = false;
+        retry.hidden = false;
+      } else if (!sessionPending) {
+        empty.textContent = '登录后可查看并申请加入公开团队。';
+        empty.hidden = false;
+      }
       return;
     }
     panel.setAttribute('aria-busy', 'true');
     count.textContent = append ? '正在加载更多团队…' : '正在加载团队…';
     const requested = cursor;
-    const isCurrent = () => seq === catalogRequest && user === currentUser;
+    const isCurrent = () => seq === catalogRequest && scope === sessionRequest && user === currentUser;
     try {
-      const result = await request('GET', teamDirectoryQuery(activeTeamQuery, requested));
+      const result = await request('GET', teamDirectoryQuery(activeTeamQuery, requested), undefined, undefined, catalogReader.signal);
       if (!isCurrent()) return;
       if (result.status !== 200) throw new Error(messageFor(result.body.error, '无法加载团队目录。'));
       let firstAdded;
@@ -730,6 +756,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       empty.textContent = activeTeamQuery ? '没有匹配的团队。'
         : '暂无公开团队。创建团队后，可在成员页的「团队目录」中公开。';
       empty.hidden = directoryItems.size > 0;
+      catalogEmptyReset.hidden = empty.hidden || !activeTeamQuery;
       return seq;
     } catch (failure) {
       if (!isCurrent()) return;
@@ -2450,9 +2477,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   async function confirmCatalogViewer(page) {
     if (page.session) await page.session;
     const viewer = currentUser;
-    if (!viewer || page.scope !== sessionRequest || page.catalog !== catalog ||
+    if (!viewer || page.signal.aborted || page.scope !== sessionRequest || page.catalog !== catalog ||
         matchesNativeViewer(page.viewer, viewer) || !matchesNativeViewer(viewer.username, viewer)) return;
-    const response = await request('GET', page.path).catch(() => ({status: 0}));
+    const response = await request('GET', page.path, undefined, undefined, page.signal).catch(() => ({status: 0}));
     if (viewer !== currentUser || page.scope !== sessionRequest || page.catalog !== catalog ||
         response.status !== 200 || !matchesNativeViewer(response.body?.viewer_username, viewer)) return;
     const verified = new Map(catalogItems(response.body).filter(item => validSlug(item?.slug)).map(item => [item.slug, item]));
@@ -2573,34 +2600,50 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   async function loadCatalog(append = false) {
+    const panel = document.getElementById('catalog-panel');
+    if (append && (!cursor || panel.getAttribute('aria-busy') === 'true')) return;
     const seq = ++catalogRequest;
     const scope = sessionRequest;
     const checkingSession = sessionPending;
+    const empty = document.getElementById('discover-empty');
+    const retry = document.getElementById('teams-retry');
+    const more = document.getElementById('catalog-more');
+    const count = document.getElementById('catalog-count');
+    const error = document.getElementById('catalog-error');
+    const shouldFocus = append && document.activeElement === more;
     if (!append) {
+      catalogReader?.abort();
+      catalogReader = new AbortController();
       applyCatalogFilters();
-      activeQuery = document.getElementById('catalog-query').value.trim();
+      activeQuery = catalogSearch.value.trim().slice(0, 80);
       catalog = [];
       cursor = '';
       catalogPages = 0;
       catalogDeparture = null;
       renderCatalog([]);
-      document.getElementById('discover-empty').hidden = true;
+      empty.hidden = true;
+      more.hidden = true;
     }
-    const more = document.getElementById('catalog-more');
-    const count = document.getElementById('catalog-count');
-    const error = document.getElementById('catalog-error');
     error.hidden = true;
+    retry.hidden = true;
+    catalogEmptyReset.hidden = true;
     more.disabled = true;
-    count.textContent = append ? '正在加载更多…' : '正在加载…';
-    document.getElementById('catalog-panel').setAttribute('aria-busy', 'true');
+    more.textContent = '加载更多';
+    count.textContent = append ? '正在加载更多智能体…' : '正在加载智能体…';
+    panel.setAttribute('aria-busy', 'true');
+    const signal = catalogReader.signal;
+    const requested = cursor;
+    const isCurrent = () => seq === catalogRequest && scope === sessionRequest && !signal.aborted;
     try {
-      const path = catalogQuery(activeQuery, cursor, activeCategory, activeCreator?.handle);
-      const listed = await request('GET', path);
-      if (seq !== catalogRequest || scope !== sessionRequest) return;
+      const path = catalogQuery(activeQuery, requested, activeCategory, activeCreator?.handle);
+      const fetchCatalog = () => request('GET', path, undefined, undefined, signal);
+      let listed = await fetchCatalog();
+      if (!isCurrent()) return;
       if (listed.status === 401 && checkingSession) {
         await checkingSession;
-        if (seq !== catalogRequest || scope !== sessionRequest) return;
-        if (currentUser) return loadCatalog(append);
+        if (!isCurrent()) return;
+        if (currentUser) listed = await fetchCatalog();
+        if (!isCurrent()) return;
       }
       if (listed.status !== 200) throw new Error(messageFor(listed.body.error, '无法加载公共目录。'));
       const viewer = nativeCatalog ? listed.body.viewer_username : scope;
@@ -2612,7 +2655,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         catalogViewers.set(item, viewer);
         catalog.push(item);
       }
-      cursor = listed.body.cursor || '';
+      const next = listed.body.cursor;
+      const nextCursor = typeof next === 'string' || (Number.isSafeInteger(next) && next > 0) ? String(next) : '';
+      cursor = nextCursor === requested ? '' : nextCursor;
       catalogPages += 1;
       if (activeCreator) {
         const author = catalog.find(item => creatorHandle(item) === activeCreator.handle);
@@ -2623,24 +2668,34 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       }
       renderCatalog(catalog, start);
       more.hidden = !cursor;
-      document.getElementById('discover-empty').textContent = activeQuery || activeCategory !== 'all' || activeCreator
-        ? '没有匹配的智能体。' : '暂无公开智能体。';
-      count.textContent = '已显示 ' + catalog.length + ' 个智能体' + (cursor ? '，还有更多' : '');
+      const filtered = activeQuery || activeCategory !== 'all' || activeCreator;
+      empty.textContent = filtered ? '没有匹配的智能体。' : '暂无公开智能体。';
+      catalogEmptyReset.hidden = empty.hidden || !filtered;
+      count.textContent = catalog.length ? '已显示 ' + catalog.length + ' 个智能体' : '';
+      if (shouldFocus && [document.body, more].includes(document.activeElement)) {
+        const first = catalog[start]?.slug;
+        const last = !cursor && catalog.at(-1)?.slug;
+        const slug = first || last;
+        if (validSlug(slug)) document.querySelector(`#discover-list [data-catalog-slug="${slug}"] .catalog-profile`)?.focus();
+      }
       if (nativeCatalog && catalog.length > start) {
-        void confirmCatalogViewer({path, viewer, scope, session: checkingSession, catalog, items: catalog.slice(start)});
+        void confirmCatalogViewer({path, viewer, scope, session: checkingSession, catalog, items: catalog.slice(start), signal});
       }
       return seq;
     } catch (failure) {
-      if (seq !== catalogRequest) return;
+      if (!isCurrent()) return;
       error.hidden = false;
       error.textContent = failure.message || '无法加载公共目录。';
-      count.textContent = '目录加载失败，请重试搜索。';
+      count.textContent = catalog.length ? '已显示 ' + catalog.length + ' 个智能体' : '';
+      retry.hidden = append;
       more.hidden = !cursor;
-      document.getElementById('discover-empty').hidden = true;
+      if (append) more.textContent = '重试加载更多';
+      empty.hidden = true;
     } finally {
-      if (seq === catalogRequest) {
+      if (isCurrent()) {
         more.disabled = false;
-        document.getElementById('catalog-panel').setAttribute('aria-busy', 'false');
+        panel.setAttribute('aria-busy', 'false');
+        if (shouldFocus && append && !error.hidden && document.activeElement === document.body) more.focus({preventScroll:true});
       }
     }
   }
@@ -2884,8 +2939,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     sessionPending = sessionLoad;
     const detailIntent = catalogView ? null : workDetailFromSearch(location?.search);
     const detailLoad = detailIntent ? openWorkDetail(detailIntent) : closeWorkDetail();
-    if (!teamsView) mainPanel.hidden = false;
+    mainPanel.hidden = false;
     if (!catalogView) applyFeedChrome({restoreQuery: true});
+    if (teamsView) void loadTeams();
     const overlapSession = nativeCatalog && attempt === 1;
     const feedLoad = catalogView ? null : loadFeed({overlapSession});
     const initialFeedRequest = feedRequest;
@@ -3002,12 +3058,22 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (teamsView) return loadTeams();
   });
   document.getElementById('catalog-clear').addEventListener('click', () => {
-    catalogSearch.value = '';
-    saveCatalogQuery();
-    if (agentsView) return loadCatalog();
-    if (teamsView) return loadTeams();
+    if (catalogView) return clearCatalogSearch();
   });
-  document.getElementById('teams-retry').addEventListener('click', () => cursor ? loadMoreTeams() : loadTeams());
+  catalogSearch.addEventListener('keydown', event => {
+    if (!catalogView || event.key !== 'Escape' || event.isComposing ||
+        (!catalogSearch.value && !activeQuery && !activeTeamQuery)) return;
+    event.preventDefault();
+    return clearCatalogSearch();
+  });
+  catalogEmptyReset.addEventListener('click', () => {
+    if (catalogView) return clearCatalogSearch({allFilters:true});
+  });
+  document.getElementById('teams-retry').addEventListener('click', () => {
+    catalogSearch.focus?.({preventScroll:true});
+    if (agentsView) return loadCatalog();
+    if (teamsView) return sessionState === 'failed' ? load() : loadTeams();
+  });
   document.getElementById('catalog-more').addEventListener('click', () => {
     if (agentsView) return loadCatalog(true);
     if (teamsView) return loadMoreTeams();
