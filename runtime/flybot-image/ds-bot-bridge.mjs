@@ -20,6 +20,7 @@ export function userModelOverride(scope = globalThis) {
 }
 export const PROVIDER = 'openteamily'
 export const MODEL_ID = 'openteamily-model'
+const MODEL_REF = `${PROVIDER}/${MODEL_ID}`
 function modelInput(modelApi) {
   const model = String(modelApi?.model || '').toLowerCase()
   const isDeepSeekFlash = model === 'deepseek-flash' || model === 'deepseek-v4-flash-vision-exp'
@@ -404,6 +405,7 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, fil
 }
 
 export function createBridge(rt, { env = process.env, port } = {}) {
+  const bootstrapNative = rt.bootstrap.bind(rt)
   const state = {
     token: randomBytes(24).toString('hex'),
     // The account's own model settings (B4 @openteamily/web model-api feature,
@@ -475,7 +477,7 @@ export function createBridge(rt, { env = process.env, port } = {}) {
       await rt.setProviderKey(PROVIDER,state.token)
       await saveInput(input)
     }
-    await rt.bootstrap()
+    await bootstrapNative()
     botId = rt.state.mainBotIds.find(id => rt.botOf(id))
     if (!botId) throw new Error('DS-Bot has no Main Bot')
     // Remove the generated capability for the retired task MCP endpoint. The
@@ -487,7 +489,7 @@ export function createBridge(rt, { env = process.env, port } = {}) {
     }
     const bot = rt.botOf(botId)
     await protectLegacyForeground(bot)
-    if (!String(bot.model || '').endsWith('/' + MODEL_ID) && bot.model !== MODEL_ID) await rt.updateBot(botId, { model: MODEL_ID })
+    if (bot.model !== MODEL_REF) await rt.updateBot(botId, { model: MODEL_REF })
     return botId
   }
   const ensureSetup = () => (ready ??= setup().catch(error => { ready = null; throw error }))
@@ -505,7 +507,7 @@ export function createBridge(rt, { env = process.env, port } = {}) {
 
   function requireModel(botId) {
     const model = rt.botOf(botId)?.model
-    if ((!model || model === MODEL_ID || model === PROVIDER + '/' + MODEL_ID) && !state.startupModel()) {
+    if ((!model || model === MODEL_ID || model === MODEL_REF) && !state.startupModel()) {
       throw Object.assign(new Error('Configure a model API for this OpenTeamily runtime.'), {
         code: 'agents/model-unconfigured', status: 503,
       })
@@ -540,9 +542,21 @@ export function createBridge(rt, { env = process.env, port } = {}) {
 export function startBridge(rt, ctx, options = {}) {
   const log = options.log ?? console.error
   const bridge = createBridge(rt, options)
+  const bootstrapNative = rt.bootstrap.bind(rt)
+  // Native roster entry must finish the same provider setup as OpenTeamily.
+  // The bridge captures the original bootstrap above, so it can create Chief
+  // after registering the authenticated provider without re-entering setup.
+  rt.bootstrap = () => bridge.state.startupModel() ? bridge.setup() : bootstrapNative()
   const server = createBridgeServer(bridge.state, { log })
   server.on('error', error => log('ds-bot-bridge: loopback server error: ' + redact(error?.message || 'error')))
-  server.listen(bridge.port, '127.0.0.1')
+  server.listen(bridge.port, '127.0.0.1', () => {
+    void Promise.resolve().then(async () => {
+      await rt.load()
+      // A restarted runtime can receive native Bot messages before either Web
+      // client opens. Fresh runtimes still bootstrap on their ordinary entry.
+      if (bridge.state.startupModel() && rt.readOnly?.() === undefined && rt.state.mainBotIds.some(id => rt.botOf(id))) await bridge.setup()
+    }).catch(() => log('ds-bot-bridge: native provider setup will retry on the next request'))
+  })
   const dispose = () => server.close()
   ctx.on?.('dispose', dispose)
   return { bridge, server, dispose }

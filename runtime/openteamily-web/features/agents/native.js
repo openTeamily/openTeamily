@@ -1,9 +1,10 @@
 // Stable platform-agent -> actual native roster object. The SQLite record is
 // compatibility metadata, not an alternate executor. Native edits are pulled on
-// reads; writes use the roster API and all turns target this Bot, never Chief.
+// reads; writes and turns target the mapped Bot. The Personal Agent maps to
+// the native Chief.
 import { adoptThread, importHistory } from './history.js'
 import { createHash } from 'node:crypto'
-import { addPrivateChat, livePrivateChat } from '../../lib/native-chat.js'
+import { addPrivateChat, livePrivateChat, ownsPrivateChatPart, privateChatThread } from '../../lib/native-chat.js'
 
 export function nativeAgents({ host, db }) {
   db.exec(`CREATE TABLE IF NOT EXISTS native_agent_objects (
@@ -17,6 +18,69 @@ export function nativeAgents({ host, db }) {
   let queue = Promise.resolve()
   const serial = fn => { const next = queue.then(fn, fn); queue = next.catch(() => {}); return next }
   const services = async () => { const s = await host.runtime(); await s.mainBot(); return s }
+  const personal = row => row && one('SELECT 1 FROM native_personal_binding WHERE singleton=1 AND agent_id=? AND workspace_id=?', row.id, row.workspace_id)
+  async function chiefFor(s, row) {
+    if (!personal(row)) return undefined
+    const id = await s.mainBot()
+    return s.rt.isMain?.(id) === true ? s.rt.botOf(id) : undefined
+  }
+  const needsChiefBinding = (row, chief) => chief && one('SELECT bot_id FROM native_agent_objects WHERE agent_id=?', row.id)?.bot_id !== chief.id
+
+  async function bindChief(rt, row, chief, previous) {
+    const conflict = () => Object.assign(new Error('Cannot safely bind Personal Agent to the native Main Bot'),
+      {code:'agents/personal-binding-conflict', status:409})
+    const mapped = one('SELECT agent_id FROM native_agent_objects WHERE bot_id=?', chief.id)
+    const owned = link => link?.agent_id === row.id && link.workspace_id === row.workspace_id
+    if ((mapped && mapped.agent_id !== row.id) || (chief.openteamily?.agent_id && !owned(chief.openteamily))) throw conflict()
+    if (previous && !owned(previous.openteamily) && (!owned(chief.openteamily) || previous.openteamily?.agent_id)) throw conflict()
+
+    const prefix = `agent:${row.id}:`
+    const sessions = new Map(Object.entries(previous?.openteamily?.sessionKeys ?? {}).filter(([key]) => key.startsWith(prefix)))
+    for (const {conversation_key:key, session_id:id} of db.prepare('SELECT conversation_key,session_id FROM native_agent_sessions WHERE agent_id=?').all(row.id)) {
+      if (!key.startsWith(prefix) || (sessions.has(key) && sessions.get(key) !== id)) throw conflict()
+      sessions.set(key, id)
+    }
+    for (const [key, id] of sessions) {
+      const saved = chief.openteamily?.sessionKeys?.[key]
+      if ((saved && saved !== id) || typeof id !== 'string' || !id) throw conflict()
+      if (livePrivateChat(rt, chief.id, id)) continue
+      const thread = privateChatThread(previous, id)
+      if (!thread || !livePrivateChat(rt, previous.id, id)) throw conflict()
+      const parts = [thread.sessionId, ...thread.segments.map(part => part.sessionId)]
+      if (parts.some(part => !ownsPrivateChatPart(rt, previous.id, part) || privateChatThread(chief, part))) throw conflict()
+      if (parts.some(part => rt.live.get(part)?.turn !== undefined)) {
+        throw Object.assign(new Error('Wait for the Personal Agent to finish before reconnecting'), {code:'agents/history-busy', status:409})
+      }
+    }
+    for (const id of sessions.values()) if (!livePrivateChat(rt, chief.id, id)) await adoptThread({rt, source:previous, target:chief, sessionId:id})
+
+    chief.openteamily ??= {}
+    Object.assign(chief.openteamily, {agent_id:row.id, workspace_id:row.workspace_id, summary:row.summary,
+      category:row.category, quick_starts:JSON.parse(row.quick_starts), portrait:row.portrait})
+    for (const [key, id] of sessions) {
+      (chief.openteamily.sessionKeys ??= {})[key] = id
+      if (previous?.openteamily?.pendingSessionSetup?.[key]) (chief.openteamily.pendingSessionSetup ??= {})[key] = true
+      if (previous?.openteamily?.sessionKeys) delete previous.openteamily.sessionKeys[key]
+      if (previous?.openteamily?.pendingSessionSetup) delete previous.openteamily.pendingSessionSetup[key]
+    }
+    if (owned(previous?.openteamily)) {
+      delete previous.openteamily.agent_id
+      delete previous.openteamily.workspace_id
+    }
+    // Persist native ownership before committing its SQLite reference. Retrying
+    // a crash between writes recognizes the thread IDs now owned by Chief.
+    await rt.save()
+    run(`INSERT INTO native_agent_objects VALUES(?,?,?) ON CONFLICT(agent_id) DO UPDATE SET
+      bot_id=excluded.bot_id,last_name=excluded.last_name`, row.id, chief.id, chief.name)
+    return chief
+  }
+
+  async function withChiefLock(row, fn) {
+    if (!personal(row)) return serial(fn)
+    const s = await services()
+    const chief = await chiefFor(s, row)
+    return s.exclusive && needsChiefBinding(row, chief) ? s.exclusive(() => serial(fn)) : serial(fn)
+  }
   const titleJobs = new Map()
   const pendingTitle = (id, agentId) => one(`SELECT p.title FROM native_agent_pending_titles p
     JOIN agent_conversations c ON c.id=p.conversation_id WHERE c.id=? AND c.agent_id=?`, id, agentId)?.title
@@ -63,9 +127,15 @@ export function nativeAgents({ host, db }) {
   async function ensure(row) {
     const s = await services(), { rt } = s
     row = one('SELECT * FROM agents WHERE id=?', row.id)
-    const mapping = one('SELECT * FROM native_agent_objects WHERE agent_id=?', row.id)
+    let mapping = one('SELECT * FROM native_agent_objects WHERE agent_id=?', row.id)
     // Recover a create whose roster save completed before the mapping commit.
     let bot = mapping ? rt.botOf(mapping.bot_id) : Object.values(rt.state.bots).find(b => b.openteamily?.agent_id === row.id)
+    const chief = await chiefFor(s, row)
+    if (needsChiefBinding(row, chief)) {
+      if (mapping && !bot) throw Object.assign(new Error('The previous Personal Agent could not be found'), {code:'agents/personal-binding-conflict', status:409})
+      bot = await bindChief(rt, row, chief, bot === chief ? undefined : bot)
+      mapping = one('SELECT * FROM native_agent_objects WHERE agent_id=?', row.id)
+    }
     if (!bot && mapping) {
       run('UPDATE agents SET archived=1 WHERE id=?', row.id)
       return { ...row, archived: 1, native_bot_id: mapping.bot_id, native_deleted: true }
@@ -164,7 +234,9 @@ export function nativeAgents({ host, db }) {
   async function session(row, key, title) {
     const s = await services()
     const legacyIds = legacySessionIds(s, row, key)
-    const botId = legacyIds.length === 0 ? one('SELECT bot_id FROM native_agent_objects WHERE agent_id=?', row.id)?.bot_id : undefined
+    const chief = await chiefFor(s, row)
+    const botId = legacyIds.length === 0 && !needsChiefBinding(row, chief)
+      ? one('SELECT bot_id FROM native_agent_objects WHERE agent_id=?', row.id)?.bot_id : undefined
     // Never hold the roster write queue while waiting for the Bot. Adopting
     // an old thread may affect both the Main Bot and its new owner.
     const bind = () => serial(() => bindSession(s, row, key, title, legacyIds))
@@ -182,8 +254,8 @@ export function nativeAgents({ host, db }) {
   async function readSession(row, key, title) {
     return mappedSession(row, key) || session(row, key, title)
   }
-  return { ensure: row => serial(() => ensure(row)),
+  return { ensure: row => withChiefLock(row, () => ensure(row)),
     // Check the revision, change the roster, and advance SQLite under the same lock.
-    write: fn => serial(() => fn({ensure,update})),
+    write: (fn, id) => withChiefLock(typeof id === 'string' ? one('SELECT id,workspace_id FROM agents WHERE id=?', id) : undefined, () => fn({ensure,update})),
     session, readSession, mappedSession, markSessionTitle, renameSession }
 }

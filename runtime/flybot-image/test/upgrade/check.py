@@ -34,18 +34,23 @@ PACKAGE = '/opt/openteamily/runtime/ds-bot-upstream/ds-bot/package.json'
 
 VOLUME_PROBE = r"""
 const fs = require('node:fs')
+const { DatabaseSync } = require('node:sqlite')
 const s = JSON.parse(fs.readFileSync('/data/bot/state.json'))
 const a = JSON.parse(process.argv[1])
-const b = s.bots[a.botId]
-const task = (b?.tasks ?? []).find(task => task.id === a.taskId)
-if (!b || !task) throw Error('Owned Bot or unrelated task was lost')
+const original = s.bots[a.botId]
+const chief = s.bots[s.mainBotIds[0]]
+const task = (original?.tasks ?? []).find(task => task.id === a.taskId)
+if (!original || !chief || !task) throw Error('Native Chief, original Bot, or unrelated task was lost')
+const db = new DatabaseSync('/data/openteamily/features/agents/agents.sqlite3', {readOnly:true})
+const binding = db.prepare('SELECT bot_id FROM native_agent_objects WHERE agent_id=?').get(a.agentId)
+const thread = part => ({head:part.sessionId ?? part.id, segments:(part.segments ?? []).map(segment=>segment.sessionId)})
 const data = {
   sentinel: fs.readFileSync('/data/volume-sentinel', 'utf8'),
-  workspace: b.openteamily.workspace_id,
-  agent: b.openteamily.agent_id,
-  live: b.sessionId,
-  openParts: (b.openParts ?? []).map(part => ({head:part.sessionId, segments:(part.segments ?? []).map(segment=>segment.sessionId)})),
-  segments: (b.segments ?? []).map(part => part.sessionId),
+  workspace: chief.openteamily?.workspace_id,
+  agent: chief.openteamily?.agent_id,
+  sameChief: binding?.bot_id === chief.id,
+  originalStillBound: original !== chief && original.openteamily?.agent_id === a.agentId,
+  parts: [thread(chief), ...(chief.openParts ?? []).map(thread)],
   task: {id:task.id, sessionId:task.sessionId, status:task.status},
   retired: (s.retiredParts ?? []).map(part=>part.sessionId),
 }
@@ -147,21 +152,23 @@ def run(args):
         out = base.docker('exec',account['name'],'node','-e',VOLUME_PROBE,json.dumps(checkpoint)).stdout
         state = json.loads(out)
         require(state['sentinel']==checkpoint['sentinel'],'volume sentinel lost')
-        require(state['workspace']==checkpoint['workspaceId'] and state['agent']==checkpoint['agentId'], 'native Bot moved to a different identity')
+        require(state.get('workspace')==checkpoint['workspaceId'] and state.get('agent')==checkpoint['agentId']
+                and state['sameChief'] and not state['originalStillBound'], 'Personal Agent is not bound to its native Chief')
         first, second, prior, task = checkpoint['conversations']
-        require(state['live']==second['sessionId'],'the independent foreground conversation changed its native root')
-        open_part = next((part for part in state['openParts'] if part['head']==first['sessionId']),None)
+        independent = next((part for part in state['parts'] if part['head']==second['sessionId']),None)
+        require(independent is not None,'the independent conversation changed its native root')
+        open_part = next((part for part in state['parts'] if part['head']==first['sessionId']),None)
         require(open_part and open_part['segments']==[prior['sessionId']],
                 'managed migration must keep the legacy private part and its earlier segment')
-        require(prior['sessionId'] not in state['segments'] and first['sessionId'] not in state['segments'],
-                'another conversation was folded into the foreground')
+        require(prior['sessionId'] not in independent['segments'] and first['sessionId'] not in independent['segments'],
+                'another conversation was folded into the independent thread')
         require(state['task']=={
             'id':checkpoint['taskId'],
             'sessionId':task['sessionId'],
             'status':'done',
         },'closed unrelated task must keep its own session')
-        require(task['sessionId'] not in state['segments'] and task['sessionId'] not in open_part['segments'],
-                'settled task entered chat parts')
+        require(all(task['sessionId'] != part['head'] and task['sessionId'] not in part['segments']
+                    for part in state['parts']), 'settled task entered Chief chat parts')
         require(first['sessionId'] not in state['retired'],'managed private part was scheduled to retire')
         return state
 
@@ -296,6 +303,8 @@ def run(args):
                     with store.transaction() as db:
                         db.execute('UPDATE instances SET image_ref=? WHERE id=?',(after,account['id']))
                         base.gw.record_upstream(db,account['id'],account['address'],account['cookie'],int(time.time()))
+                    view = account['view']
+                    api(account,'GET','/v1/workspaces/'+view['workspaceId']+'/agents/'+view['agentId'])
                     assert_app_state(account)
                 browser(phase)
                 for account in accounts:

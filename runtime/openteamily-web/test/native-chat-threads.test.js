@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { createBridge, prepareNativeChat, runTurn } from '../../flybot-image/ds-bot-bridge.mjs'
+import { createBridge, MODEL_OVERRIDE, prepareNativeChat, runTurn, startBridge } from '../../flybot-image/ds-bot-bridge.mjs'
 import { addPrivateChat, livePrivateChat } from '../lib/native-chat.js'
 import { adoptThread } from '../features/agents/history.js'
 
@@ -110,6 +110,35 @@ test('bridge startup protects an existing workflow foreground chain without clai
   assert.deepEqual(bot.openteamily.sessionKeys, {'automation:saved': 'older-foreground'})
   assert.equal(saved, 1)
   assert.equal(bot.sessionId, 'foreground')
+})
+
+test('native bootstrap installs the authenticated provider before selecting Chief’s exact model', async t => {
+  const {rt, bot} = fixture()
+  const home = mkdtempSync(join(tmpdir(), 'ot-native-bootstrap-'))
+  t.after(() => rmSync(home, {recursive:true, force:true}))
+  globalThis[MODEL_OVERRIDE] = () => ({provider:'fixture'})
+  t.after(() => { delete globalThis[MODEL_OVERRIDE] })
+  rt.state = {mainBotIds:[bot.id]}
+  bot.model = 'other-provider/openteamily-model'
+  const calls = []
+  rt.load = async () => {}
+  rt.addProvider = async ({provider,baseURL,key}) => {
+    assert.equal(provider, 'openteamily')
+    assert.equal(new URL(baseURL).hostname, '127.0.0.1')
+    assert.match(key, /^[a-f0-9]{48}$/)
+    calls.push('provider')
+  }
+  rt.bootstrap = async () => { calls.push('native bootstrap') }
+  rt.updateBot = async (id, {model}) => {
+    assert.equal(id, bot.id)
+    bot.model = model
+    calls.push('model')
+  }
+  const {server,bridge} = startBridge(rt, {}, {env:{DSH_HOME:home}, port:0, log:() => {}})
+  t.after(() => server.close())
+  await Promise.all([rt.bootstrap(), bridge.setup(), rt.bootstrap()])
+  assert.deepEqual(calls, ['provider', 'native bootstrap', 'model'])
+  assert.equal(bot.model, 'openteamily/openteamily-model')
 })
 
 test('cancellation stays bound to the selected live Session and a later turn can resume there', async () => {

@@ -857,7 +857,7 @@ export function createAgents({ db, host }) {
       run('UPDATE agents SET name=?, name_hash=?, summary=?, instructions=?, category=?, quick_starts=?, portrait=?, revision=revision+1, updated=? WHERE id=?',
         next.name, sha(next.name.toLowerCase()), next.summary, next.instructions, next.category, updatedStarts, next.portrait, now(), row.id)
       return { agent: view({...load(row.workspace_id, row.id), ...mapping}) }
-    }),
+    }, p.id),
     archive: p => native.write(async ({ensure, update}) => {
       const workspaceId = ws(p)
       await requireAgentManager(workspaceId)
@@ -869,7 +869,7 @@ export function createAgents({ db, host }) {
       const mapping = await update(row, { archived: !!archived })
       run('UPDATE agents SET archived=?, revision=revision+1, updated=? WHERE id=?', archived, now(), row.id)
       return { agent: view({...load(row.workspace_id, row.id), ...mapping}) }
-    }),
+    }, p.id),
     async conversations(p) {
       const agent = load(ws(p), p.id)
       if (p.archived === true) {

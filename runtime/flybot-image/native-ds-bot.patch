@@ -1527,3 +1527,41 @@ index 70319ca..2e55079 100644
 +  ...openTeamilyParts(bot).map(part => part.sessionId),
    ...activeTasksOf(bot).map(task => task.sessionId),
  ].filter((id, index, list) => id !== undefined && list.indexOf(id) === index)
+diff --git a/src/host/groups.js b/src/host/groups.js
+--- a/src/host/groups.js
++++ b/src/host/groups.js
+@@ -1741,6 +1741,26 @@
+     })
+     return run
+   }
++  // OpenTeamily supplies an already persisted, owner-authenticated human line.
++  // Native callFrom, work tracking and loop guards govern the entire round.
++  rt.sharedRoomCursor = roomId => {
++    const room = rt.roomOf(roomId)
++    if (!room?.openteamily?.conversation_id) throw new Error('Not a shared room')
++    ensureRoomLog(room)
++    return room.seq
++  }
++  rt.beginSharedRoomRound = async (roomId, { text, sourceId, mentions }) => {
++    const room = rt.roomOf(roomId)
++    const matches = () => room?.openteamily?.native_exchange?.id === sourceId && room.openteamily.native_exchange.dispatched === true
++    if (!sourceId || !matches() || !writes()) throw new Error('Not an active shared room')
++    const agent = await rt.resolveAgent(rt.sessionOfRoom(room))
++    if (rt.roomOf(roomId) !== room || !matches() || !writes() || rt.roomActive(roomId)
++        || workingIn(room).length > 0) throw new Error('The shared room is busy')
++    ensureRoomLog(room)
++    const addressed = mentions === undefined ? undefined : { ids:mentions.filter(id => room.members.includes(id)), all:false }
++    startRound(room, [{ text, openteamilyMessageId:sourceId, ...(addressed === undefined ? {} : { mentions: addressed }) }], agent)
++  }
++
+   async function runRoundFrom(room, queued, agent, key, signal, holder) {
+     const posts = queued.length > 0 ? queued : [{ text: '' }]
+     // A goal post queued for a goal that moved on is dropped: a check or resume
+@@ -1775,6 +1795,7 @@
+         who,
+         ...(post.botId ? { botId: post.botId } : {}),
+         text,
++        ...(post.openteamilyMessageId === undefined ? {} : { openteamilyMessageId: post.openteamilyMessageId }),
+         ...(post.images === undefined ? {} : { images: post.images }),
+         ...(post.files === undefined ? {} : { files: post.files }),
+         ...(post.via === undefined ? {} : { via: post.via }),
