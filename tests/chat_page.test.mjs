@@ -1459,12 +1459,12 @@ test('group progress updates only the original job and attempt and clears stale 
     {id: 'job-a', attempt: 2, status: 'queued', agent_name: '助手一'},
     {id: 'job-b', attempt: 1, status: 'queued', agent_name: '助手二'},
   ]};
-  const flowing = [{id: 'job-a', message_id: 'source', attempt: 2, text: '原样显示 <em>片段</em>'},
-    {id: 'job-b', message_id: 'other-source', attempt: 1, text: '别的消息'},
+  const flowing = [{id: 'job-a', message_id: 'source', attempt: 2, status: 'running', text: '原样显示 <em>片段</em>'},
+    {id: 'job-b', message_id: 'other-source', attempt: 1, status: 'running', text: '别的消息'},
     {id: 'job-b', message_id: 'source', attempt: 1, status: 'running', text: ''}];
   const batches = [...Array(18).fill(flowing),
-    [{id: 'job-a', message_id: 'source', attempt: 1, text: '过期的尝试'},
-      {id: 'job-b', message_id: 'source', attempt: 1, text: '另一个智能体的新进度'}],
+    [{id: 'job-a', message_id: 'source', attempt: 1, status: 'running', text: '过期的尝试'},
+      {id: 'job-b', message_id: 'source', attempt: 1, status: 'running', text: '另一个智能体的新进度'}],
   ];
   let historyReads = 0;
   let progressReads = 0;
@@ -1486,12 +1486,13 @@ test('group progress updates only the original job and attempt and clears stale 
   try {
     await mount(doc, {fetcher});
     const list = el('message-list');
+    const activity = el('group-bot-activity');
     const original = list.children[0];
     const jobs = list.children.slice(1);
     assert.ok(jobs.every(row => row.tagName === 'LI' && row.classList.contains('other')));
     assert.deepEqual(jobs.map(row => row.children[0].textContent), ['助手一 · AI 智能体', '助手二 · AI 智能体']);
-    assert.deepEqual(jobs.map(row => row.hidden), [false, true], 'queued agents share one visible indicator');
-    assert.match(jobs[0].children[1].textContent, /等待.*助手一/);
+    assert.deepEqual(jobs.map(row => row.hidden), [true, true]);
+    assert.equal(activity.textContent, '');
     assert.ok(!descendants(original).some(node => node.dataset.replyJobId));
     const [first, second] = jobs.map(row => row.children.find(node => node.classList.contains('group-reply-preview')));
     t.mock.timers.tick(500); await settle();
@@ -1502,9 +1503,9 @@ test('group progress updates only the original job and attempt and clears stale 
     assert.equal(second.hidden, true);
     assert.equal(jobs[0].dataset.state, 'running');
     assert.equal(jobs[1].dataset.state, 'running', 'a claimed job is running before text arrives');
-    assert.equal(jobs[0].classList.contains('group-reply-thinking'), false, 'partial text uses the regular bubble');
-    assert.equal(jobs[1].classList.contains('group-reply-thinking'), true);
-    assert.match(jobs[1].children[1].textContent, /助手二.*正在思考/);
+    assert.equal(jobs[0].hidden, false, 'partial text uses the regular bubble');
+    assert.equal(jobs[1].hidden, true, 'a running job without text has no placeholder bubble');
+    assert.equal(activity.textContent, '助手一、助手二 正在工作…');
     for (let index = 0; index < 17; index += 1) {
       t.mock.timers.tick(500);
       await settle();
@@ -1518,6 +1519,7 @@ test('group progress updates only the original job and attempt and clears stale 
     t.mock.timers.tick(500); await settle();
     assert.equal(first.hidden, true);
     assert.equal(second.textContent, '另一个智能体的新进度');
+    assert.equal(activity.textContent, '助手二 正在工作…');
     assert.equal(scroller.scrollTop, 120);
     assert.equal(historyReads, 1);
 
@@ -1527,6 +1529,7 @@ test('group progress updates only the original job and attempt and clears stale 
     assert.equal(signal.aborted, true);
     assert.equal(second.hidden, false);
     assert.equal(second.textContent, '另一个智能体的新进度');
+    assert.equal(activity.textContent, '');
     pending(json(200, {items: [{id: 'job-b', message_id: 'source', attempt: 1, text: '迟到的隐藏更新'}]}));
     t.mock.timers.tick(2000); await settle();
     assert.equal(progressReads, 20);
@@ -1539,6 +1542,7 @@ test('group progress updates only the original job and attempt and clears stale 
     assert.equal(progressReads, 21);
     assert.equal(second.hidden, true);
     assert.equal(second.textContent, '');
+    assert.equal(activity.textContent, '');
   } finally { restore(); }
 });
 

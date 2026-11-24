@@ -79,6 +79,7 @@ test('private sends resolve consented current native skills locally and discard 
     readOnly: () => undefined,
     isMain: id => id === 'main',
     chatOwners: new Map(),
+    live: new Map(),
     save: async () => {},
     createBot: async fields => {
       const id = 'bot-' + Object.keys(bots).length
@@ -165,6 +166,7 @@ test('private sends resolve consented current native skills locally and discard 
   })], [])
   const writesAfterInstall = writes
   const accountTurn = await owner.send()
+  assert.equal(accountTurn.botId, 'main')
   assert.deepEqual(accountTurn.effective, [builtin.content.trim()])
   assert.equal(accountTurn.model, model)
   assert.doesNotMatch(accountTurn.prompt, /From the transcript supplied/)

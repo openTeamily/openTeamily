@@ -35,12 +35,14 @@ function projectedReplyPolicy(conversation, revision = conversation.group_manage
   const policy = routing?.policy
   if (!replyModes.has(policy?.mode)) return undefined
   const lead = replyTarget(policy.lead)
+  const chief = replyTarget(routing.native_chief)
   const targets = (conversation.agents || []).flatMap(agent => {
     const pair = replyTarget({owner_id:agent.owner?.owner_id, agent_id:agent.agent_ref})
     return pair ? [{...pair, name:agent.name, owner_name:agent.owner.display_name || agent.owner.handle,
       owner_handle:agent.owner.handle}] : []
   })
   return {mode:policy.mode, ...(lead ? {lead} : {}),
+    ...(chief ? {chief} : {}),
     ...(policy.lead_unavailable === true ? {lead_unavailable:true} : {}),
     context:routing.mode, default:routing.default, can_edit:routing.can_edit === true,
     ...(Number.isSafeInteger(revision) ? {revision} : {}), targets}
@@ -72,8 +74,26 @@ export function nativeGroupClient(host, raw) {
     const left = new Map()
     const groupRoom = cid => Object.values(rt.state.rooms).find(room => room.openteamily?.conversation_id === cid)
     const mapped = (conversation, room) => ({...conversation, native_room_id:room.id, native_session_id:room.id})
+    async function bindOwnerChief(conversation) {
+      const routing = conversation.group_agent_routing
+      if (!routing?.can_edit || routing.native_chief || !rt.isMain || !raw.put ||
+          !(conversation.agents || []).some(agent => agent.mine)) return conversation
+      const binding = await host.call('agents/personal-binding', {})
+      if (!objectId.test(binding?.agent_id || '') || !objectId.test(binding?.workspace_id || '')) return conversation
+      const seated = conversation.agents.some(agent => agent.mine && agent.agent_ref === binding.agent_id)
+      if (!seated && (conversation.team_id || !conversation.account_group || conversation.members?.length !== 1)) return conversation
+      const {agent} = await host.call('agents/byId', {id:binding.agent_id})
+      if (agent?.id !== binding.agent_id || agent.workspace_id !== binding.workspace_id || agent.archived ||
+          agent.native_deleted || !rt.isMain(agent.native_bot_id) || !rt.botOf(agent.native_bot_id)) return conversation
+      const result = await raw.put('/v1/ot/conversations/' + encodeURIComponent(conversation.id) + '/native-chief', {
+        agent_id:agent.id, name:agent.name.slice(0, 40).toWellFormed(),
+      })
+      return result?.id === conversation.id && result.group_agent_routing?.native_chief ? result : conversation
+    }
     const syncOne = async conversation => {
       if (conversation?.kind !== 'group' || conversation.public_agent) return conversation
+      try { conversation = await bindOwnerChief(conversation) }
+      catch { host.log?.('The shared group Chief binding will retry when opened.') }
       const title = conversation.title || 'OpenTeamily group'
       const revision = conversation.group_management?.revision
       if (left.has(conversation.id)) {
@@ -90,22 +110,36 @@ export function nativeGroupClient(host, raw) {
       const participants = (conversation.members || []).map(m => ({ id: m.owner_id, handle: m.handle, kind: 'human', remote: true, name: m.display_name || m.handle, platform_user_id: m.platform_user_id }))
       const projectedRevision = revision ?? (latest?.version === conversation.activity_version ? room?.openteamily.reply_policy?.revision : undefined)
       const replyPolicy = projectedReplyPolicy(conversation, projectedRevision)
+      const administrator = replyPolicy?.mode === 'lead' && !replyPolicy.lead_unavailable ? replyPolicy.lead : replyPolicy?.chief
+      const adminSeat = administrator && ownedAgents.find(agent => agent.owner?.owner_id === administrator.owner_id &&
+        agent.agent_ref === administrator.agent_id)
+      const adminAgent = adminSeat && (await host.call('agents/byId', {id:adminSeat.agent_ref})).agent
+      const admin = (adminAgent && !adminAgent.native_deleted && adminAgent.native_bot_id) || null
       const signature = JSON.stringify([title, conversation.team_id, revision, conversation.activity_version,
-        participants, ownedAgents.map(agent => agent.agent_ref), replyPolicy])
+        participants, ownedAgents.map(agent => agent.agent_ref), replyPolicy, admin])
       if (room && latest?.signature === signature) return mapped(conversation, room)
-      const locals = []
+      const localBots = new Set()
       for (const agent of ownedAgents) {
-        const { agent: mappedAgent } = await host.call('agents/byId', { id: agent.agent_ref })
-        if (!mappedAgent.native_deleted && mappedAgent.native_bot_id) locals.push(mappedAgent.native_bot_id)
+        const mappedAgent = agent === adminSeat ? adminAgent : (await host.call('agents/byId', {id:agent.agent_ref})).agent
+        if (mappedAgent && !mappedAgent.native_deleted && mappedAgent.native_bot_id) localBots.add(mappedAgent.native_bot_id)
       }
+      const locals = [...localBots]
       const announcement = await raw.get('/v1/ot/conversations/'+encodeURIComponent(conversation.id)+'/announcement')
-      const state = {name:title, members:locals, remoteParticipants:participants, notice:announcement.announcement.body}
+      const mode = replyPolicy?.mode === 'everyone' || replyPolicy?.lead_unavailable ? 'everyone' : 'admin'
+      const state = {name:title, members:locals, remoteParticipants:participants, notice:announcement.announcement.body, mode, admin}
       let created = false
       if (!room) {
-        const id = await rt.createSession(title)
-        room = { id, named: true, mode: 'admin', admin: null, createdAt: Date.now(), createdBy: null,
-          origin: 'openteamily', openteamily: { conversation_id: conversation.id } }
-        rt.state.rooms[id] = room
+        // Shared groups allow duplicate and longer titles than DS-Bot's native creator.
+        const nativeTitle = title.replace(/\s+/g, ' ')
+        if (replyPolicy?.chief && rt.createRoom && locals.length > 0 && locals.length <= 12 && nativeTitle.length <= 60 &&
+            !rt.findRooms?.(nativeTitle).length) {
+          room = await rt.createRoom({name:title,members:locals,mode,admin})
+        } else {
+          const id = await rt.createSession(title)
+          room = {id,named:true,createdAt:Date.now(),createdBy:null}
+          rt.state.rooms[id] = room
+        }
+        Object.assign(room, {origin:'openteamily',openteamily:{conversation_id:conversation.id}})
         created = true
       }
       const changed = created || Object.keys(state).some(key => JSON.stringify(room[key]) !== JSON.stringify(state[key])) ||

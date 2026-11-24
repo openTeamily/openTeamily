@@ -59,6 +59,10 @@ CREATE TABLE IF NOT EXISTS ot_conversation_agents (
   auto_reply_after_seq INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, direct_grant_id TEXT,
   PRIMARY KEY (conversation_id, agent_ref, owner_id)
 );
+CREATE TABLE IF NOT EXISTS ot_group_native_chiefs (
+  conversation_id TEXT PRIMARY KEY REFERENCES ot_conversations(id) ON DELETE CASCADE,
+  owner_id TEXT NOT NULL, agent_ref TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ot_messages (
   rowseq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
   conversation_id TEXT NOT NULL REFERENCES ot_conversations(id) ON DELETE CASCADE, seq INTEGER NOT NULL,
@@ -719,6 +723,18 @@ function selectedLead(policy: ReturnType<typeof readGroupReplyPolicy>, agents: C
     : undefined;
 }
 
+function groupNativeChief(ot: OtContext, conv: Group) {
+  return ot.get<{owner_id: string; agent_id: string}>(`SELECT owner_id,agent_ref AS agent_id FROM ot_group_native_chiefs
+    WHERE conversation_id=? AND owner_id=?`, conv.id, groupOwner(conv));
+}
+
+function nativeRoomOpeningOrder(agents: ConversationAgent[], policy: ReturnType<typeof readGroupReplyPolicy>,
+  chief?: ReturnType<typeof groupNativeChief>) {
+  if (!chief) return agents;
+  const admin = selectedLead(policy, agents) ?? agents.find(agent => agent.owner_id === chief.owner_id && agent.agent_ref === chief.agent_id);
+  return admin ? [admin, ...agents.filter(agent => agent !== admin)] : agents;
+}
+
 function groupHasOtherMember(ot: OtContext, conv: Group, viewer: string) {
   return Boolean(ot.get(`SELECT 1 FROM ot_conversation_members member
     WHERE member.conversation_id=? AND member.owner_id<>? AND (? IS NULL OR EXISTS (
@@ -729,13 +745,14 @@ function groupHasOtherMember(ot: OtContext, conv: Group, viewer: string) {
 function groupAgentRouting(ot: OtContext, conv: Group, viewer: string, agents: ConversationAgent[]) {
   const policy = readGroupReplyPolicy(conv);
   const current = policy.mode === "lead" && !selectedLead(policy, agents) ? {...policy, lead_unavailable: true} : policy;
-  const access = {policy: current, can_edit: managedGroup(conv) && groupOwner(conv) === viewer};
+  const chief = managedGroup(conv) ? groupNativeChief(ot, conv) : undefined;
+  const access = {policy: current, can_edit: managedGroup(conv) && groupOwner(conv) === viewer, ...(chief ? {native_chief: chief} : {})};
   if (groupHasOtherMember(ot, conv, viewer)) return {mode: "shared" as const, ...access};
   return {mode: "personal" as const, default: agents.some(agent => agent.auto_reply) ? "auto" as const : "all" as const, ...access};
 }
 
 function unaddressedGroupTurn(agents: ConversationAgent[], quote: ReturnType<typeof replyOriginal>,
-  policy: ReturnType<typeof readGroupReplyPolicy>) {
+  policy: ReturnType<typeof readGroupReplyPolicy>, chief?: ReturnType<typeof groupNativeChief>) {
   if (policy.mode === "mentions" || !agents.length) return {agents: [], discretionary: false};
   if (quote?.author_kind === "agent") {
     return {agents: agents.filter(agent => agent.owner_id === quote.author_id && agent.agent_ref === quote.agent_ref), discretionary: false};
@@ -743,6 +760,12 @@ function unaddressedGroupTurn(agents: ConversationAgent[], quote: ReturnType<typ
   if (policy.mode === "lead") {
     const lead = selectedLead(policy, agents);
     if (lead) return {agents: [lead], discretionary: true};
+  }
+  if (chief) {
+    const admin = agents.find(agent => agent.owner_id === chief.owner_id && agent.agent_ref === chief.agent_id);
+    if (admin && policy.mode === "default") return {agents: [admin], discretionary: true};
+    return {agents: nativeRoomOpeningOrder(agents, policy, chief).slice(0, MAX_INFERRED_AGENTS),
+      discretionary: true};
   }
   // Keep the existing opt-in auto inbox and its rate limit. With no opt-ins,
   // the DS-Bot workers decide whether the ordinary message warrants a reply.
@@ -1507,14 +1530,16 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       }
       const addressText = conv.kind === "group" ? mentionText(file && !hasCaption ? "" : bodyText) : bodyText;
       const parsed = parseMentions(ot, conv, b.mentions, bodyText, addressText, selected, roster, scope, Boolean(studio));
-      const addressed = selected !== undefined || parsed.mentions.length > 0 || parsed.named || TYPED_ADDRESS.test(addressText);
       const canQueueGroup = group && !voice && !sourceConversation && (!file || captionCanMentionAgents);
       const allPeople = group && !sourceConversation && ALL_PEOPLE_ADDRESS.test(addressText);
       const policy = readGroupReplyPolicy(conv);
+      const chief = canQueueGroup && managedGroup(conv) ? groupNativeChief(ot, conv) : undefined;
+      const addressed = selected !== undefined || parsed.agents.length > 0 ||
+        (!chief && (parsed.mentions.length > 0 || parsed.named || TYPED_ADDRESS.test(addressText)));
       const explicitlyAll = canQueueGroup && !studio && (allPeople || ALL_AGENT_ADDRESS.test(addressText));
       const unaddressed = canQueueGroup && !file && !studio && !addressed && !explicitlyAll
-        ? unaddressedGroupTurn(roster, quote, policy) : undefined;
-      const targets = explicitlyAll ? roster : unaddressed?.agents ?? parsed.agents;
+        ? unaddressedGroupTurn(roster, quote, policy, chief) : undefined;
+      const targets = explicitlyAll ? nativeRoomOpeningOrder(roster, policy, chief) : unaddressed?.agents ?? parsed.agents;
       const suppressed = canQueueGroup && !file && targets.length === 0 &&
         (parsed.named || policy.mode !== "default" || quote?.author_kind === "agent");
       if (studio) requireStudioMessageScope(ot, conv, studio, parsed.agents);
@@ -1764,6 +1789,33 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   });
 
   // ---- conversation agents (executed in their owner's DS-Bot)
+  app.put("/v1/ot/conversations/:id/native-chief", {bodyLimit: 1024}, async req => {
+    const me = ot.me(req);
+    const input = body(req);
+    assert(Object.keys(input).length === 2 && Object.hasOwn(input, "agent_id") && Object.hasOwn(input, "name") &&
+      typeof input.agent_id === "string" && /^[a-f0-9]{32}$/.test(input.agent_id), 400, "invalid_request", "Invalid Personal Agent binding");
+    const agent = input.agent_id;
+    const name = text(input.name, "name", {min: 1, max: 40});
+    return ot.tx(() => {
+      const conv = memberOf(ot, params(req).id, me.ownerId);
+      assert(managedGroup(conv) && groupOwner(conv) === me.ownerId && !conv.group_archived_at,
+        403, "forbidden", "Only the active group owner can bind their Personal Agent");
+      const current = groupNativeChief(ot, conv);
+      if (current) return conversationView(ot, conv, me.ownerId, true);
+      const agents = conversationAgents(ot, conv.id);
+      const chiefIsMember = agents.some(item => item.owner_id === me.ownerId && item.agent_ref === agent);
+      if (!chiefIsMember) {
+        assert(!conv.team_id && !groupHasOtherMember(ot, conv, me.ownerId) && agents.some(item => item.owner_id === me.ownerId),
+          409, "native_chief_not_member", "Add your Personal Agent to the group first");
+        ot.run(`INSERT INTO ot_conversation_agents(conversation_id, agent_ref, owner_id, name, created_at) VALUES (?,?,?,?,?)`,
+          conv.id, agent, me.ownerId, name, ot.now());
+      }
+      ot.run(`INSERT INTO ot_group_native_chiefs VALUES (?,?,?) ON CONFLICT(conversation_id) DO UPDATE SET
+        owner_id=excluded.owner_id,agent_ref=excluded.agent_ref`, conv.id, me.ownerId, agent);
+      ot.run("UPDATE ot_conversations SET activity_revision=activity_revision+1 WHERE id=?", conv.id);
+      return conversationView(ot, memberOf(ot, conv.id, me.ownerId), me.ownerId, true);
+    });
+  });
   app.put("/v1/ot/conversations/:id/agents/:agent", async (req) => {
     const me = ot.me(req);
     const conv = memberOf(ot, params(req).id, me.ownerId);

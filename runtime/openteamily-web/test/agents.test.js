@@ -19,8 +19,9 @@ function fixture(options) {
     if (name === 'agents/personal-binding') return {workspace_id: W}
     throw new Error('Unexpected endpoint: ' + name)
   } }
-  const created = createAgents({ db: new DatabaseSync(join(mkdtempSync(join(tmpdir(), 'ot-agents-')), 'a.sqlite3')), host })
-  return { e: created.endpoints, migrate: created.migrate, ...runtime }
+  const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), 'ot-agents-')), 'a.sqlite3'))
+  const created = createAgents({ db, host })
+  return { e: created.endpoints, migrate: created.migrate, db, ...runtime }
 }
 
 test('categories stay in step with the Python source', () => {
@@ -182,6 +183,53 @@ test('messages to an agent are native DS-Bot turns on that conversation\'s own s
   await assert.rejects(e.send({ workspace_id: W, id: agent.id, conversation_id: conversation.id, text: 'x' }), (err) => err.code === 'agents/archived')
 })
 
+test('existing Personal Agent binds Chief without replacing native IDs, private history or unrelated sessions', async () => {
+  const {e, db, turns, bots, services} = fixture()
+  const {rt} = services
+  rt.isMain = id => id === 'main'
+  rt.live = new Map()
+  rt.pastOwners = new Map()
+  const chief = bots.main
+  chief.name = 'Chief'
+  chief.instructions = 'Existing native instructions'
+  chief.sessionId = await rt.createSession()
+  rt.chatOwners.set(chief.sessionId, chief.id)
+
+  const {agent} = await e.create({workspace_id:W, name:'Personal Agent', idempotency_key:'fixture-personal-chief'})
+  const old = bots[agent.native_bot_id]
+  const args = {workspace_id:W, id:agent.id}
+  const {conversation} = await e['conversation-create'](args)
+  const scope = {...args, conversation_id:conversation.id}
+  await e.send({...scope, text:'First native turn'})
+  const session = conversation.native_session_id
+  old.sessionId = await rt.createSession()
+  rt.chatOwners.set(old.sessionId, old.id)
+  db.prepare('INSERT INTO native_personal_binding VALUES (1,?,?)').run(W,agent.id)
+
+  rt.live.set(session,{turn:1})
+  await assert.rejects(e.get(args), {code:'agents/history-busy'})
+  assert.equal(rt.chatOwners.get(session),old.id)
+  rt.live.delete(session)
+  db.exec(`CREATE TRIGGER interrupt_binding BEFORE UPDATE OF bot_id ON native_agent_objects
+    BEGIN SELECT RAISE(ABORT,'Interrupted after roster save'); END`)
+  await assert.rejects(e.get(args), /Interrupted after roster save/)
+  assert.equal(rt.chatOwners.get(session),chief.id)
+  db.exec('DROP TRIGGER interrupt_binding')
+
+  const personal = (await e.get(args)).agent
+  assert.equal(personal.id, agent.id)
+  assert.equal(personal.name, 'Personal Agent')
+  assert.equal(personal.native_bot_id, chief.id)
+  assert.equal(chief.name, 'Chief')
+  assert.equal(chief.instructions, 'Existing native instructions')
+  assert.equal(rt.chatOwners.get(chief.sessionId),chief.id)
+  assert.equal(rt.chatOwners.get(old.sessionId),old.id)
+  assert.equal(old.openteamily?.agent_id,undefined)
+  await e.send({...scope, text:'Second native turn'})
+  assert.deepEqual(turns.map(value => [value.bot,value.sessionId]), [[old.id,session],[chief.id,session]])
+  assert.equal((await e.messages(scope)).items.length,4)
+})
+
 test('without the DS-Bot chat service a send fails closed and is recorded', async () => {
   const { e, turns } = fixture({ available: false })
   const { agent } = await e.create({ workspace_id: W, name: 'A', idempotency_key: 'b'.repeat(16) })
@@ -265,7 +313,7 @@ test('official agents bundle imports once including history', async () => {
   assert.equal((await migrate(bundle)).imported, 0)
 })
 
-test('official personal history is durable before the native runtime attaches', async () => {
+test('official personal history is durable before native attachment and binds to Chief on first use', async () => {
   const { createHash } = await import('node:crypto')
   const aid = 'c'.repeat(32), cid = 'd'.repeat(32)
   const tables = Object.fromEntries(Object.entries({
@@ -281,12 +329,24 @@ test('official personal history is durable before the native runtime attaches', 
       assert.equal(endpoint, 'chat/exportLegacy')
       return {conversations: [{id: cid, title: 'Retained history'}]}
     },
-    runtime: async () => { throw new Error('runtime has not attached') },
+    runtime: async () => {
+      if (!native) throw new Error('runtime has not attached')
+      return native.services
+    },
   }
+  let native
   const {endpoints, migrate} = createAgents({db, host})
   const bundle = {format: 'openteamily-dsbot-import', version: 1, feature: 'agents', tables, manifest}
   await migrate(bundle)
   await migrate(bundle)
   assert.deepEqual({...await endpoints['personal-binding']()}, {agent_id: aid, workspace_id: W})
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM agent_conversations WHERE id=?').get(cid).count, 1)
+  native = nativeAgentFixture()
+  native.services.rt.isMain = id => id === native.bots.main.id
+  native.bots.main.name = 'Chief'
+  const {agent} = await endpoints.get({workspace_id:W,id:aid})
+  assert.equal(agent.id, aid)
+  assert.equal(agent.native_bot_id, native.bots.main.id)
+  assert.equal(agent.name, 'Personal Agent')
+  assert.deepEqual(Object.keys(native.bots), ['main'])
 })
