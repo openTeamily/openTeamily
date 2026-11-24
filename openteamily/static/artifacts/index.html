@@ -369,6 +369,7 @@
         <div class="document-toolbar" role="toolbar" aria-label="文档格式">
           <button type="button" data-doc-format="undo" aria-label="撤销">↶</button>
           <button type="button" data-doc-format="redo" aria-label="重做">↷</button>
+          <button type="button" id="document-find-open" aria-controls="document-find" aria-expanded="false">查找</button>
           <button type="button" data-doc-format="bold" aria-label="加粗">B</button>
           <button type="button" data-doc-format="italic" aria-label="斜体">I</button>
           <button type="button" data-doc-format="strike" aria-label="删除线">S</button>
@@ -393,6 +394,16 @@
             <button type="button" data-doc-table="remove-column">删除这一列</button>
           </div>
         </details>
+        <div id="document-find" role="search" aria-label="在正文中查找" hidden>
+          <label class="visually-hidden" for="document-find-query">查找正文</label>
+          <input id="document-find-query" type="search" maxlength="80" placeholder="查找正文" autocomplete="off">
+          <div class="document-find-actions">
+            <span id="document-find-status" role="status" aria-live="polite"></span>
+            <button type="button" id="document-find-previous" aria-label="上一处匹配" disabled>↑</button>
+            <button type="button" id="document-find-next" aria-label="下一处匹配" disabled>↓</button>
+            <button type="button" id="document-find-close" aria-label="关闭查找">×</button>
+          </div>
+        </div>
         <div id="document-rich" contenteditable="true" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="开始写作…"></div>
         <textarea id="document-source" aria-label="文档 Markdown 源码" maxlength="8000" rows="16" hidden></textarea>
         <p id="document-length" class="note" hidden></p>

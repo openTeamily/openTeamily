@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {observeDiagramSize, parseFlowchart, renderFlowchart, renderMermaidDiagram} from '../openteamily/static/chat/flowchart.mjs';
-import {parseSequenceDiagram} from '../openteamily/static/chat/sequence-diagram.mjs';
+import {observeDiagramSize, parseFlowchart, renderFlowchart, renderMermaidDiagram} from '../openteamily/static/shell/flowchart.mjs';
+import {parseSequenceDiagram} from '../openteamily/static/shell/sequence-diagram.mjs';
 
 function createElement(tag) {
   return {

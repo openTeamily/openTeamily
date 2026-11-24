@@ -2350,7 +2350,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const workspace = workspaceId();
     const account = currentUser;
     const inScope = () => !!account && currentUser === account && workspaceId() === workspace;
-    const onOpen = item => inScope() && openEditor(item, {workspace});
+    const onOpen = (item, findText) => inScope() && openEditor(item, {workspace, findText});
     const list = document.getElementById('artifact-list');
     const empty = document.getElementById('list-empty');
     const previousRows = preserve ? [...list.children] : [];
@@ -2408,7 +2408,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       const titleMatch = match?.kind === 'title' && match.text === item.title && match.start < 16;
       if (titleMatch) appendArtifactHighlight(document, open, match);
       else open.textContent = item.title;
-      open.addEventListener('click', () => onOpen(item));
+      open.addEventListener('click', () => onOpen(item,
+        item.kind === 'document' && match?.kind === 'body' ? match.text.slice(match.start, match.end) : ''));
       const meta = document.createElement('span');
       meta.className = 'note';
       const origin = artifactOrigin(item, workspace);
@@ -2718,6 +2719,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
 
   function hideEditor() {
     closeDocumentTree();
+    richDocument.instance?.closeFind();
     workVersion.instance?.close();
     if (pendingDeleteCancel) pendingDeleteCancel();
     closeDuplicateDialog();
@@ -2790,7 +2792,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     renderCatalog({preserve});
   }
 
-  async function openEditor(item, {workspace = workspaceId(), notice, saved = false, focusTitle = false} = {}) {
+  async function openEditor(item, {workspace = workspaceId(), notice, saved = false, focusTitle = false, findText} = {}) {
     if (!canCreateInWorkspace() || workspaceId() !== workspace) return;
     if (!canLeaveEditor()) return false;
     const target = artifactTargetFromSearch(document.defaultView?.location?.search);
@@ -2852,6 +2854,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (current?.id) recordEditorAddress(selection, current);
     if (notice) show(notice.kind, notice.text);
     if (focusTitle) form.elements.title?.focus({preventScroll: true});
+    if (current?.kind === 'document' && findText) richDocument.instance?.find(findText);
     return true;
   }
 

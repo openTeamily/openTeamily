@@ -51,28 +51,35 @@ class Element {
     return null;
   }
   focus() { this.focused = true; }
+  showModal() { this.open = true; }
+  close() { this.open = false; }
   closest() { return null; }
 }
 
 const TEMPLATES = [
-  {slug: 'product-squad', name: '产品研发小队', summary: '从需求到验收的三人小队。',
+  {slug: 'product-squad', name: '产品研发小队', category: 'product', summary: '从需求到验收的三人小队。',
    agents: [{name: '产品经理助理', summary: '整理需求', category: 'product'},
             {name: '研发工程师助理', summary: '给出方案', category: 'engineering'},
             {name: '测试工程师助理', summary: '设计用例', category: 'engineering'}]},
-  {slug: 'content-studio', name: '内容工作室', summary: '选题、写作到审校。',
+  {slug: 'content-studio', name: '内容工作室', category: 'content-creation', summary: '选题、写作到审校。',
    agents: [{name: '选题策划助理', summary: '选题', category: 'content-creation'},
             {name: '文案写作助理', summary: '初稿', category: 'content-creation'},
             {name: '审校编辑助理', summary: '审校', category: 'content-creation'}]},
-  {slug: 'research-desk', name: '研究小组', summary: '检索、分析与报告。',
+  {slug: 'research-desk', name: '研究小组', category: 'research', summary: '检索、分析与报告。',
    agents: [{name: '资料整理助理', summary: '整理', category: 'data-analysis'},
             {name: '分析助理', summary: '分析', category: 'data-analysis'},
             {name: '报告撰写助理', summary: '报告', category: 'content-creation'}]},
 ];
 
-function fakeDocument() {
+function fakeDocument(storage = new Map()) {
   const elements = new Map();
   const doc = {
     cookie: '',
+    defaultView: {sessionStorage: {
+      getItem: key => storage.get(key),
+      setItem: (key, value) => storage.set(key, value),
+      removeItem: key => storage.delete(key),
+    }},
     getElementById(id) {
       if (!elements.has(id)) {
         const tag = id === 'workspace' ? 'select' : id.endsWith('-form') ? 'form' : id === 'agent-search' ? 'input' : 'div';
@@ -103,7 +110,7 @@ const textOf = (node) => (node.textContent || '') + node.children.map(textOf).jo
 
 function json(status, body) { return {status, json: async () => body}; }
 
-function fetcher(requests, {applyStatus = 200} = {}) {
+function fetcher(requests, {applyStatus = 200, loseReceipt = false} = {}) {
   const space = {id: 'ws-1', name: 'Desk', owner_id: 'user-1'};
   const user = {id: 'user-1', username: 'alice'};
   return async (path, options = {}) => {
@@ -117,10 +124,11 @@ function fetcher(requests, {applyStatus = 200} = {}) {
     if (path === '/v1/workspaces/ws-1/members') return json(200, {items: [{user_id: 'user-1', role: 'owner'}]});
     if (path === '/v1/workspaces/ws-1/agents?limit=100') return json(200, {items: []});
     if (/\/team-templates\/[a-z-]+$/.test(path) && method === 'POST') {
+      if (loseReceipt) throw new Error('lost receipt');
       if (applyStatus !== 200 && applyStatus !== 201) {
         return json(applyStatus, {error: {code: 'forbidden', message: 'Only workspace owners and admins can create agent teams'}});
       }
-      return json(201, {conversation: {id: 'cv-9', title: '产品研发小队'}, created_agents: []});
+      return json(201, {conversation: {id: 'cv-9', workspace_id: space.id}, created_agents: []});
     }
     throw new Error('unexpected ' + method + ' ' + path);
   };
@@ -128,7 +136,7 @@ function fetcher(requests, {applyStatus = 200} = {}) {
 
 async function mountAgents(options) {
   const requests = [];
-  const {doc, el} = fakeDocument();
+  const {doc, el} = fakeDocument(options?.storage);
   globalThis.location = {search: options?.search || '', pathname: '/agents', hash: '', href: '', assign(href) { this.href = href; }};
   globalThis.history = {replaceState() {}, pushState() {}};
   await mount(doc, {fetcher: fetcher(requests, options)});
@@ -169,12 +177,17 @@ test('applying a template posts its slug and opens the created conversation', as
   const card = el('team-template-list').children[0];
   const apply = card.children[card.children.length - 1];
   assert.equal(apply.tagName, 'BUTTON');
-  assert.match(apply.textContent, /用这个模板建团队/);
+  assert.match(apply.textContent, /使用模板/);
   await apply.handlers.click();
-  await tick();
+  assert.equal(requests.some(item => item.method === 'POST'), false);
+  assert.equal(el('team-template-name').value, '产品研发小队');
+  assert.equal(el('team-template-roles').children.length, 3);
+  el('team-template-name').value = '下一版本验收';
+  await el('team-template-form').handlers.submit({preventDefault() {}});
   const post = requests.find((item) => item.method === 'POST');
   assert.equal(post.path, '/v1/workspaces/ws-1/team-templates/product-squad');
   assert.match(post.headers['Idempotency-Key'], /^[A-Za-z0-9_-]{16,64}$/);
+  assert.deepEqual(post.body, {title:'下一版本验收'});
   assert.equal(globalThis.location.href, '/chat#workspace=ws-1&social=cv-9');
 });
 
@@ -184,7 +197,37 @@ test('a forbidden apply explains it in the page language and keeps the list', as
   await tick();
   const card = el('team-template-list').children[0];
   await card.children[card.children.length - 1].handlers.click();
-  await tick();
-  assert.match(el('status').textContent, /只有工作区所有者或管理员/, '403 要给中文原因');
+  await el('team-template-form').handlers.submit({preventDefault() {}});
+  assert.match(el('team-template-feedback').textContent, /只有工作区所有者或管理员/, '403 要给中文原因');
+  assert.equal(el('team-template-name').readOnly, false);
   assert.equal(el('team-template-list').children.length, 3, '失败不能清空模板列表');
+});
+
+test('filtering combines a category with the role name', async () => {
+  const {el} = await mountAgents({search:'?tab=teams'});
+  el('team-template-search').value = '编辑';
+  el('team-template-search').handlers.input();
+  assert.deepEqual(el('team-template-list').children.map(node => node.dataset.slug), ['content-studio']);
+  el('team-template-category').value = 'research';
+  el('team-template-category').handlers.change();
+  assert.equal(el('team-template-list').children.length, 0);
+});
+
+test('an uncertain write can be resumed after reloading with the same name and key', async () => {
+  const storage = new Map();
+  const submit = el => el('team-template-form').handlers.submit({preventDefault() {}});
+  const open = el => el('team-template-list').children[0].children.at(-1).handlers.click();
+  const first = await mountAgents({search:'?tab=teams', storage, loseReceipt:true});
+  open(first.el);
+  first.el('team-template-name').value = '发布群';
+  await submit(first.el);
+  assert.match(first.el('team-template-feedback').textContent, /未收到创建结果/);
+  const second = await mountAgents({search:'?tab=teams', storage});
+  open(second.el);
+  assert.equal(second.el('team-template-name').value, '发布群');
+  assert.equal(second.el('team-template-name').readOnly, true);
+  await submit(second.el);
+  const write = requests => requests.find(item => item.method === 'POST');
+  assert.deepEqual(write(second.requests), write(first.requests));
+  assert.equal(storage.size, 0);
 });

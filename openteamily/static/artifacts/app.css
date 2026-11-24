@@ -1706,6 +1706,20 @@ body.app-workspace #document-rich:focus-visible { outline: none; }
 #document-rich pre { white-space: pre-wrap; padding: .875rem; border-radius: .5rem; background: var(--ot-bg-accent); }
 #document-rich ul, #document-rich ol { padding-left: 1.5rem; }
 #document-rich hr { border: 0; border-top: 1px solid var(--ot-line); margin: 1.5rem 0; }
+#document-find:not([hidden]) {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .5rem;
+  position: sticky; top: 0; z-index: 2; margin-block: .5rem; padding: .45rem .55rem;
+  background: var(--ot-surface); border: 1px solid var(--ot-line); border-radius: .625rem;
+}
+#document-find-query { min-width: 0; width: 100%; margin: 0; }
+.document-find-actions { display: flex; align-items: center; gap: .25rem; }
+#document-find-status { color: var(--ot-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+#editor-form .document-find-actions button { min-width: 2.5rem; min-height: 2.5rem; width: auto; padding: 0 .45rem; }
+::highlight(space-document-match) { background: var(--ot-bg-accent); color: var(--ot-ink); text-decoration: underline; }
+#document-rich [data-document-find-active] { outline: 2px solid var(--ot-accent); }
+@media (max-width: 700px) {
+  #document-find:not([hidden]) { top: var(--space-editor-header-height); }
+}
 #document-table-actions { margin-top: .5rem; color: var(--ot-ink); }
 #document-table-actions summary { width: fit-content; padding: .35rem .5rem; cursor: pointer; }
 .document-table-buttons { display: flex; flex-wrap: wrap; gap: .375rem; padding: .25rem .5rem; }

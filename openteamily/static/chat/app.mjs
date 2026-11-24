@@ -1073,28 +1073,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderGroupComposerRouting();
   });
   function voiceContext() {
-    if (currentSource !== 'social' || !currentConversation || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
-    const wid = workspaceId();
-    const cid = currentConversation.id;
-    return {wid, cid, scope: `${wid}/${cid}`};
+    if (!currentUser || currentSource !== 'social' || !currentConversation ||
+        currentConversation.public_agent || currentConversation.direct?.open === false) return null;
+    return {owner:currentUser.id, wid:workspaceId(), cid:currentConversation.id, scope:sendScope()};
   }
   const voiceRecorder = mountVoiceRecorder(document, {
     context: voiceContext,
     createKey: () => idempotencyKey('voice-'),
     async send(destination, voice, key) {
-      const {wid, cid, scope} = destination;
-      const draftScope = sendScope();
-      const reply = replyDrafts.get(draftScope);
+      const {owner, wid, cid, scope} = destination;
+      const stillHere = () => voiceContext()?.scope === scope;
+      if (!stillHere()) return;
+      const reply = replyDrafts.get(scope);
       if (reply?.available === false) throw new Error(uiLabel('请先确认或取消引用。', 'Check or remove the quote before sending.'));
+      const target = {owner, wid, conversationId:cid};
+      const isVoice = message => Boolean(message?.voice);
       const result = await request('POST', `/v1/workspaces/${wid}/social/conversations/${cid}/messages`,
-        {voice, ...(reply ? {reply_to: reply.message_id} : {})}, {'Idempotency-Key': key});
-      if (![200, 201].includes(result.status) || !result.body?.message?.voice) {
-        throw new Error(messageFor(result.body?.error, '语音发送失败，请重试。'));
+        {voice, ...(reply ? {reply_to: reply.message_id} : {})}, {'Idempotency-Key': key}, AbortSignal.timeout(15000))
+        .catch(() => ({status:0,body:{}}));
+      const saved = result.body?.message;
+      let message = [200,201].includes(result.status) && isVoice(saved) &&
+        (!servedByDsbot || ownSocialReceipt(saved,target,key)) ? saved : null;
+      if (!message && servedByDsbot && unclearSocialDelivery(result.status)) {
+        message = await socialSendReceipt(target,key,stillHere,isVoice);
       }
-      consumeReplyDraft(draftScope, reply);
-      if (voiceContext()?.scope === scope) {
-        await openSocialConversation(cid);
-        show('ok', '语音已发送。', {announceOnly: true});
+      if (!message) {
+        throw new Error(messageFor(result.body?.error, uiLabel('语音发送失败，请重试。', 'Could not send the voice message. Try again.')));
+      }
+      consumeReplyDraft(scope, reply);
+      if (stillHere()) {
+        const olderWindow = socialHistory?.readingHistory && message.seq > (lastSocialItems.at(-1)?.seq ?? 0) + 1;
+        renderDeliveredSocialMessage(scope, message);
+        show('ok', uiLabel('语音已发送。', 'Voice message sent.'), {announceOnly: !olderWindow});
+        if (olderWindow && viewingSocialMessages()) void openSocialLatest();
+      } else if (owner === currentUser?.id && wid === workspaceId()) {
+        void loadSessions();
       }
     },
   });
@@ -9282,6 +9295,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
   document.getElementById('compose-member-search').addEventListener('input', applyMemberFilter);
   document.getElementById('compose-title').addEventListener('input', () => setComposeError());
+  const composeTeamTitle = document.getElementById('compose-team-title');
+  composeTeamTitle?.addEventListener('input', () => setComposeError());
   document.getElementById('member-choices').addEventListener('change', () => {
     setComposeError();
     syncSelectedCount();
@@ -9308,11 +9323,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!composeReceipt) {
         const memberIds = [...document.querySelectorAll('#member-choices input[name="member"]:checked')].map(box => box.value);
         const agentIds = [...document.querySelectorAll('#member-choices input[name="agent-member"]:checked')].map(box => box.value);
-        const title = document.getElementById('compose-title').value.trim();
+        const title = (template ? composeTeamTitle?.value || '' : document.getElementById('compose-title').value).trim();
         const picked = template ? document.querySelector('#team-template-choices input:checked') : null;
         if (template && !picked) return;
         const path = template ? `/v1/workspaces/${wid}/team-templates/${picked.value}` : socialBase();
-        const body = template ? {} : composeMode === 'contact'
+        const body = template ? (title ? {title} : {}) : composeMode === 'contact'
           ? {kind:'dm', member_ids:memberIds} : composeGroupPayload(memberIds, title, agentIds);
         const fingerprint = JSON.stringify([owner?.id, path, body]);
         if (composeAttempt?.fingerprint !== fingerprint) composeAttempt = {fingerprint, key:idempotencyKey('conv-')};

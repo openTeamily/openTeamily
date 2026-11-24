@@ -427,3 +427,50 @@ export function renderMermaidDiagram(document, source) {
   const header = source.split(/\r?\n/).map(line => line.trim()).find(line => line && !line.startsWith('%%'));
   return /^sequenceDiagram$/i.test(header || '') ? renderSequenceDiagram(document, source) : renderFlowchart(document, source);
 }
+
+const diagramStyles = new WeakMap();
+
+function readyDiagramStyles(document) {
+  let ready = diagramStyles.get(document);
+  if (!ready) {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = new URL('./diagram.css', import.meta.url).href;
+    ready = new Promise(resolve => {
+      link.onload = () => resolve(true);
+      link.onerror = () => {
+        diagramStyles.delete(document);
+        link.remove();
+        resolve(false);
+      };
+    });
+    diagramStyles.set(document, ready);
+    document.head.append(link);
+  }
+  return ready;
+}
+
+export async function replaceMermaidSource(document, container, code, text) {
+  if (!container.isConnected) return;
+  const diagram = renderMermaidDiagram(document, text);
+  if (!diagram || !await readyDiagramStyles(document) || !container.isConnected) return;
+  const english = document.documentElement?.lang === 'en';
+  const scroller = container.closest('#message-scroller');
+  const atBottom = scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32;
+  const source = document.createElement('details');
+  const summary = document.createElement('summary');
+  const hint = document.createElement('p');
+  hint.className = 'chat-diagram-scroll-hint';
+  hint.hidden = true;
+  hint.setAttribute('aria-hidden', 'true');
+  hint.textContent = english ? 'Scroll sideways to see the full diagram' : '横向滚动查看完整图表';
+  const focused = code.contains(document.activeElement) ? document.activeElement : null;
+  source.className = 'chat-diagram-source';
+  source.open = Boolean(focused);
+  summary.textContent = english ? 'Diagram source' : '图表源码';
+  source.append(summary, code);
+  container.replaceChildren(diagram, hint, source);
+  observeDiagramSize(diagram, hint);
+  focused?.focus({preventScroll:true});
+  if (atBottom) scroller.scrollTop = scroller.scrollHeight;
+}

@@ -4673,6 +4673,62 @@ test('a native group send releases the next message only after activity confirms
   }
 });
 
+test('a lost native voice response recognizes only the owner’s matching recording receipt', async () => {
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&social=${linkSocial}`);
+  const {doc,el,routes,calls,restore} = fixture;
+  const path = linkBase(linkWork) + linkSocialPath;
+  const media = new Map(['navigator','MediaRecorder'].map(name=>[name,Object.getOwnPropertyDescriptor(globalThis,name)]));
+  const keys = [];
+  let stored;
+  let stopped = 0;
+  class Recorder extends EventTarget {
+    static isTypeSupported() { return true; }
+    start() { this.state = 'recording'; }
+    stop() {
+      this.state = 'inactive';
+      this.dispatchEvent(Object.assign(new Event('dataavailable'),{data:new Blob(['audio'])}));
+      this.dispatchEvent(new Event('stop'));
+    }
+  }
+  Object.defineProperty(globalThis,'MediaRecorder',{configurable:true,value:Recorder});
+  Object.defineProperty(globalThis,'navigator',{configurable:true,value:{mediaDevices:{
+    async getUserMedia() { return {getTracks:()=>[{stop(){stopped++;}}]}; },
+  }}});
+  routes.set(path + '/messages',(call,opts)=>{
+    assert.equal(call.body.voice.mime,'audio/webm');
+    keys.push(opts.headers['Idempotency-Key']);
+    stored = {id:'otm_' + 'D'.repeat(26),workspace_id:linkWork,conversation_id:linkSocial,user_id:alice,
+      client_key:keys[0],body:'',voice:{mime:'audio/webm'},seq:9};
+    return json(503,{});
+  });
+  routes.set(path + '/messages?limit=50',()=>json(200,{items:[{...stored,user_id:bob},...(keys.length>1?[stored]:[])]}));
+  try {
+    await mount(doc,{fetcher:fixture.fetcher});
+    el('chat-body').value = 'Separate text draft';
+    await fire(el('voice-record'),'click');
+    await fire(el('voice-stop'),'click');
+    assert.equal(stopped,1);
+    await fire(el('voice-send'),'click');
+    assert.equal(el('voice-draft-panel').hidden,false);
+    assert.equal(el('voice-send').disabled,false);
+    assert.deepEqual(fixture.messages(),[linkSocialLatest]);
+    await fire(el('voice-send'),'click');
+    assert.equal(keys.length,2);
+    assert.equal(keys[0],keys[1]);
+    assert.equal(el('voice-draft-panel').hidden,true);
+    assert.deepEqual(fixture.messages(),[linkSocialLatest,stored.id]);
+    assert.equal(el('chat-body').value,'Separate text draft');
+    assert.deepEqual(calls.filter(call=>call.path===path || call.path===path+'?start=unread').map(call=>call.path),
+      [path+'?start=unread']);
+  } finally {
+    for (const [name,descriptor] of media) {
+      if (descriptor) Object.defineProperty(globalThis,name,descriptor);
+      else delete globalThis[name];
+    }
+    restore();
+  }
+});
+
 for (const unavailable of [false,true]) {
   test(`sending from a historical group keeps the receipt ${unavailable ? 'visible when the latest read fails' : 'until the latest window arrives'}`, async () => {
     const base = linkBase(linkWork);

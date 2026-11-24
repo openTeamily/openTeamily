@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {renderRunMarkdown} from '../openteamily/static/automations/result-markdown.mjs';
 import { automationEditionDraft, automationTargetFromSearch, cancellationPrompt, catalogItems, csrfCookie, deletePrompt, draftFromTemplate, listQuery, matchesRunFilter, meetingTargetFromSearch, memoryActionTargetFromSearch, mount, namesFromList, readEditor, RUN_DETAIL_EMPTY, runDetailFields, runErrorReason, runFilterFromSearch, runFilterSearchText, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory } from '../openteamily/static/automations/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
@@ -184,6 +185,10 @@ class FakeNode {
     return this._elements;
   }
   addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }
+  get childNodes() { return this.children; }
+  get firstChild() { return this.children[0] || null; }
+  append(...children) { for (const child of children) this.appendChild(child); }
+  replaceChildren(...children) { this.children = []; this.append(...children); }
   appendChild(child) {
     this.children.push(child);
     child.parentNode = this;
@@ -215,6 +220,7 @@ function fakeDocument() {
       return elements.get(id);
     },
     createElement(tag) { return new FakeNode(tag); },
+    createTextNode(text) { return Object.assign(new FakeNode('#text'), {textContent:text}); },
     querySelectorAll() { return []; },
     querySelector() { return new FakeNode(); },
   };
@@ -1918,6 +1924,22 @@ test('a succeeded run expands to its summary and the model that wrote it', () =>
     {label: '摘要', value: '今天的简报'},
     {label: '模型', value: 'deepseek-v4'},
   ]);
+  assert.deepEqual(runDetailFields(succeeded, {includeResult:false}), [{label:'模型', value:'deepseek-v4'}]);
+});
+
+test('an automation result renders its saved Markdown into headings, tables and fenced code', () => {
+  const {doc} = fakeDocument();
+  const target = doc.createElement('div');
+  const fence = String.fromCharCode(96).repeat(3);
+  const source = ['# 本次结果', '', '| 事项 | 状态 |', '| --- | --- |', '| 核对 | 完成 |', '',
+    fence+'text', '保持内容', fence].join('\n');
+  renderRunMarkdown(doc, target, source);
+  const [heading, table, code] = target.children;
+  assert.equal(heading.tagName, 'H4');
+  assert.equal(heading.children[0].textContent, '本次结果');
+  assert.equal(table.children[0].tagName, 'TABLE');
+  assert.equal(code.children[0].textContent, '保持内容');
+  assert.equal(target.dataset.rendered, 'true');
 });
 
 test('recorded trigger and execution location distinguish manual, scheduled and retried runs', () => {
