@@ -760,6 +760,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   const feedState = {...initialFeed, items: [], cursor: '', loading: false};
+  const followedCreators = document.getElementById('feed-followed-creators');
+  let followedCreatorPicker;
+  let followedCreatorSetup;
   let feedRequest = 0;
   let feedReader;
   let feedViewer;
@@ -814,6 +817,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   });
 
   function setWorkView(open) {
+    if (open) followedCreatorPicker?.close();
     detailPanel.hidden = !open;
     document.getElementById('feed-panel').hidden = open;
     document.getElementById('discover-title').hidden = open;
@@ -1430,6 +1434,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   });
 
   function applyFeedChrome({restoreQuery = false} = {}) {
+    if (followedCreators) {
+      followedCreators.hidden = !nativeCatalog || !currentUser || feedState.tab !== 'following';
+      if (followedCreators.hidden) followedCreatorPicker?.close();
+    }
     for (const name of FEED_TABS) {
       const button = document.getElementById('feed-tab-' + name);
       if (!button) continue;
@@ -1466,6 +1474,34 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (restoreQuery && searchInput) searchInput.value = feedState.query;
     if (topicFilter) topicFilter.value = feedState.topic || '';
     if (clearSearch) clearSearch.hidden = !searchInput?.value;
+  }
+
+  async function openFollowedCreators() {
+    const viewer = currentUser;
+    const scope = sessionRequest;
+    const current = () => currentUser === viewer && scope === sessionRequest && feedState.tab === 'following' && !activeWork;
+    if (!nativeCatalog || !viewer || !current()) return;
+    followedCreators.disabled = true;
+    try {
+      followedCreatorSetup ??= import('./followed-creators.mjs').then(({mountFollowedCreators}) => {
+        followedCreatorPicker = mountFollowedCreators(document, {
+          initial:catalogInitial,
+          read:(method, path, signal) => request(method, path, undefined, undefined,
+            AbortSignal.any([signal, AbortSignal.timeout(8000)])),
+        });
+        return followedCreatorPicker;
+      });
+      const picker = await followedCreatorSetup;
+      if (current()) return picker.open({
+        current, creator:feedState.creator, matchesViewer:name => matchesNativeViewer(name, viewer),
+        select:creator => applyFeedFilters({creator, query:searchText()}),
+      });
+    } catch {
+      followedCreatorSetup = null;
+      if (current()) setFeedError('无法打开已关注作者，请重试。', openFollowedCreators);
+    } finally {
+      followedCreators.disabled = false;
+    }
   }
 
   function setFeedCategory(button, current) {
@@ -1596,6 +1632,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (history && 'scrollRestoration' in history) history.scrollRestoration = 'manual';
     window.addEventListener('pagehide', () => { if (!activeWork) rememberFeedPosition(undefined, {persist: true}); });
     window.addEventListener('popstate', () => {
+      followedCreatorPicker?.close();
       syncLoginLink();
       cancelSearch();
       const next = feedStateFromSearch(location?.search);
@@ -2795,6 +2832,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   async function load() {
     const attempt = ++sessionRequest;
     currentUser = null;
+    followedCreatorPicker?.close();
     engagementPending.clear();
     sessionState = 'pending';
     cancelSearch();
@@ -2976,6 +3014,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     return loaded;
   });
   topicFilter?.addEventListener('change', () => applyFeedFilters({topic:topicFilter.value, query:searchText()}));
+  followedCreators?.addEventListener('click', openFollowedCreators);
   document.getElementById('feed-search')?.addEventListener('submit', event => {
     event.preventDefault();
     if (composingQuery) return;

@@ -135,6 +135,25 @@
       </section>
       <fieldset class="task-details">
         <legend>任务</legend>
+        <details id="automation-draft-assist" class="automation-draft-assist" hidden>
+          <summary>描述任务生成草稿</summary>
+          <label for="automation-draft-description">想自动完成什么
+            <textarea id="automation-draft-description" rows="3" maxlength="1600" placeholder="例如：把客户反馈归类，输出问题、频次和建议"></textarea>
+          </label>
+          <button type="button" id="automation-draft-generate" class="secondary" disabled>生成草稿</button>
+          <p id="automation-task-draft-status" class="note" role="status"></p>
+          <section id="automation-draft-preview" aria-labelledby="automation-draft-preview-heading" hidden>
+            <h3 id="automation-draft-preview-heading">草稿预览</h3>
+            <p id="automation-draft-preview-title"></p>
+            <label for="automation-draft-preview-prompt">任务说明
+              <textarea id="automation-draft-preview-prompt" rows="4" readonly></textarea>
+            </label>
+            <div class="editor-actions">
+              <button type="button" id="automation-draft-adopt">采用草稿</button>
+              <button type="button" id="automation-draft-reject" class="secondary">丢弃草稿</button>
+            </div>
+          </section>
+        </details>
         <label>名称 <input type="text" name="title" maxlength="80" required autocomplete="off" placeholder="例如：每周整理会议纪要"></label>
         <label>交给智能体的任务 <textarea name="prompt" maxlength="4000" placeholder="描述要完成的任务和期望的结果"></textarea></label>
       </fieldset>

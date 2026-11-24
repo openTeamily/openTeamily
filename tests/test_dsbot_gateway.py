@@ -663,6 +663,7 @@ class GatewayTest(unittest.TestCase):
             (f'/v1/agent-copy-grants/{grant}/remix', 'agents'),
             ('/v1/profile/follow-work', 'discover'),
             ('/v1/onboarding/automations', 'automations'),
+            (f'/v1/workspaces/{ws}/automations/draft', 'automations'),
             (f'/v1/workspaces/{ws}/agents/{ident}/conversations', 'agents'),
             (f'/v1/workspaces/{ws}/agents/{ident}/shares/{grant}/revoke', 'agents'),
             (f'/v1/workspaces/{ws}/agents/{ident}/access/{conversation}/revoke', 'agents'),

@@ -282,6 +282,9 @@ test('native Discover feeds and work detail bind the viewer to the trusted reque
   assert.equal(await viewer('/v1/discover/works/trusted-work?tab=collected', 'trusted.viewer'), 'trusted.viewer')
   assert.equal(await viewer('/v1/discover/works/trusted-work?tab=following', 'bad name'), undefined)
   assert.equal(await viewer('/v1/discover/works/trusted-work'), undefined)
+  assert.equal(await viewer('/v1/profile/social?view=following', 'trusted.viewer'), 'trusted.viewer')
+  assert.equal(await viewer('/v1/profile/social?view=following', 'bad name'), undefined)
+  assert.equal(await viewer('/v1/profile/social?view=following'), undefined)
 })
 
 test('discover endpoints publish only the whitelisted projection and browse the shared feed', async () => {

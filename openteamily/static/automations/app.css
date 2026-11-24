@@ -827,6 +827,30 @@ body.app-workspace #main-panel {
   resize: vertical;
 }
 
+.automation-draft-assist {
+  min-width: 0;
+  padding: .65rem .75rem;
+  margin-block-end: .8rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .75rem;
+  background: var(--ot-bg-accent);
+}
+.automation-draft-assist summary {
+  cursor: pointer;
+  font-size: .875rem;
+  font-weight: 650;
+}
+.automation-draft-assist[open] summary { margin-block-end: .65rem; }
+#automation-task-draft-status:empty { display: none; }
+#automation-draft-preview {
+  margin-block-start: .65rem;
+  padding-block-start: .75rem;
+  border-block-start: 1px solid var(--ot-line);
+}
+#automation-draft-preview h3 { margin: 0 0 .3rem; font-size: .95rem; }
+#automation-draft-preview-title { margin: 0 0 .6rem; overflow-wrap: anywhere; }
+#automation-draft-generate { min-height: 2.75rem; }
+
 #editor-form fieldset,
 .editor-options {
   min-width: 0;

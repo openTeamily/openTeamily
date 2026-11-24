@@ -1568,7 +1568,7 @@ function discoverRoutes(host) {
   return [
     {
       method: 'GET', path: /^\/v1\/profile\/(social|follow-work)$/,
-      async handle({ match, query }) {
+      async handle({ match, query }, call) {
         return wrap(async () => {
           const q = parseQuery(query)
           const notices = match[1] === 'follow-work'
@@ -1576,9 +1576,14 @@ function discoverRoutes(host) {
           if ([...q.keys()].some(key => !keys.includes(key) || q.getAll(key).length !== 1)) {
             throw new Fault(400, 'invalid', '无效的主页列表请求。')
           }
-          return [200, await client(host).get('/v1/ot/profile/social' + qs({
+          const result = await client(host).get('/v1/ot/profile/social' + qs({
             view: notices ? 'work-notices' : q.get('view'), q: q.get('q'), cursor: q.get('cursor'), limit: q.get('limit'),
-          }))]
+          }))
+          if (!notices && q.get('view') === 'following') {
+            const {items, next_cursor} = result
+            return [200, {items, next_cursor, ...platformViewer(call)}]
+          }
+          return [200, result]
         })
       },
     },

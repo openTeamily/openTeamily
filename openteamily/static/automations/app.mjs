@@ -654,6 +654,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const mainPanel = document.getElementById('main-panel');
   const main = document.getElementById('main');
   const form = document.getElementById('editor-form');
+  const taskDraftPanel = document.getElementById('automation-draft-assist');
   const listPanel = document.getElementById('list-panel');
   const workspaceSelect = document.getElementById('workspace');
   const search = document.getElementById('search');
@@ -738,6 +739,37 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const teamNames = new Map();
   const canShareToStudio = typeof document.getElementById('automation-studio-dialog')?.showModal === 'function';
   let studioShareLoad;
+  let taskDraftAssistant;
+
+  function taskDraftScope() {
+    const workspace = workspaceId();
+    const username = currentUser?.username;
+    if (!native || !username || !EDITOR_ID.test(workspace) || form.hidden || taskDraftPanel.hidden ||
+        current?.id || current?.edition || followupSource) return null;
+    return {workspace, username, key:JSON.stringify([currentUser.id || username, workspace, editorRequest])};
+  }
+
+  function resetTaskDraft(available = false) {
+    if (!taskDraftPanel) return;
+    taskDraftPanel.hidden = !available;
+    taskDraftPanel.open = false;
+    taskDraftAssistant?.reset();
+  }
+
+  taskDraftPanel?.addEventListener('toggle', async () => {
+    if (!taskDraftPanel.open || taskDraftAssistant || !taskDraftScope()) return;
+    try {
+      const {mountAutomationDraftAssist} = await import('./draft-assist.mjs');
+      if (taskDraftPanel.open && taskDraftScope() && !taskDraftAssistant) {
+        taskDraftAssistant = mountAutomationDraftAssist(document, {form, request, scope:taskDraftScope,
+          onApply:rememberChanges});
+      }
+    } catch {
+      if (taskDraftPanel.open && taskDraftScope()) {
+        document.getElementById('automation-task-draft-status').textContent = '暂时无法打开草稿工具，可以手动填写。';
+      }
+    }
+  });
 
   async function openStudioShare(trigger, target, run, team) {
     if (!currentRunScope(target) || trigger.disabled) return;
@@ -1921,6 +1953,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     stopRunPoll();
     listPanel.hidden = true;
     form.hidden = false;
+    resetTaskDraft(native && !item?.id && !source && !item?.edition);
     mainPanel.classList.add('is-editing');
     fillTemplates();
     fillEditor(form, item, currentUser && currentUser.username);
@@ -2240,6 +2273,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function load() {
+    resetTaskDraft();
     const seq = ++loadRequest;
     const target = editorTargetFromSearch(readSearch());
     const fragment = new URLSearchParams((view?.location?.hash || '').slice(1));
@@ -2389,6 +2423,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   workspaceSelect.addEventListener('change', () => {
+    resetTaskDraft();
     editorRequest += 1;
     if (editorTargetFromSearch(readSearch())) clearEditorLink();
     else writeWorkspaceLink();
@@ -2519,6 +2554,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   for (const tab of tabs) {
     tab.addEventListener('click', async () => {
+      resetTaskDraft();
       editorRequest += 1;
       clearEditorLink();
       selectCategory(tabCategory(tab.dataset.category));
@@ -2545,6 +2581,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   scheduleSettings?.addEventListener('change', renderEditorSchedule);
 
   async function returnToList(catalogue = null) {
+    resetTaskDraft();
     const transition = ++editorRequest;
     const position = listReturn || catalogue;
     listReturn = null;
@@ -2775,6 +2812,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       replaceAutomationLink(current);
     }
     renderFollowupSource(savedFollowupSource(current));
+    resetTaskDraft();
     if (!item) {
       selectCategory('mine');
       search.value = '';

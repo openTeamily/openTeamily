@@ -3934,6 +3934,36 @@ test('assistant Markdown tables render scoped table headers and delegate only ce
   assert.equal(body.children[0].children[1].textContent, '<img src=x>');
 });
 
+test('copying a streaming Chat table uses the current cells and keeps the same control', async () => {
+  const {renderStreamingMarkdown} = await import('../openteamily/static/chat/rich-content.mjs');
+  const {doc} = fakeChatDocument(chatHtml());
+  const copied = [];
+  doc.documentElement = {lang:'zh-CN'};
+  doc.defaultView = {navigator:{clipboard:{async writeText(text) {copied.push(text);}}}};
+  const create = doc.createElement;
+  doc.createElement = tag => {
+    const node = create(tag);
+    Object.defineProperty(node,'firstElementChild',{get:()=>node.children[0]});
+    if (tag === 'table') Object.defineProperty(node,'rows',{get:()=>node.children.flatMap(section=>section.children)});
+    if (tag === 'tr') Object.defineProperty(node,'cells',{get:()=>node.children});
+    return node;
+  };
+  const body = doc.createElement('div');
+  const source = '| 名称 | 状态 |\n| --- | --- |\n| **第一项** | `dev|prod` |';
+  renderStreamingMarkdown(doc,body,source);
+  const button = body.querySelector('.chat-table-copy');
+  const region = body.querySelector('.chat-markdown-table-scroll');
+  region.scrollLeft = 24;
+  await fire(button,'click');
+  assert.deepEqual(copied,['名称\t状态\n第一项\tdev|prod']);
+  renderStreamingMarkdown(doc,body,source + '\n| 第二项 | 已完成 |');
+  assert.equal(body.querySelector('.chat-table-copy'),button);
+  assert.equal(body.querySelector('.chat-markdown-table-scroll'),region);
+  assert.equal(region.scrollLeft,24);
+  await fire(button,'click');
+  assert.equal(copied.at(-1),'名称\t状态\n第一项\tdev|prod\n第二项\t已完成');
+});
+
 test('the inbox entry leaves Markdown modules outside its static dependency graph', () => {
   assert.doesNotMatch(chatHtml(), /rel="modulepreload"[^>]*href="[^"]*(?:rich-content|markdown(?:-table)?|\/rich|code-block)\.mjs"/);
   const source = readFileSync(new URL('../openteamily/static/chat/app.mjs', import.meta.url), 'utf8');

@@ -31,6 +31,46 @@ function fixture(turn, at = 1_800_000_000, saveArtifact, readMeetingAction, read
   return { feature, clock, calls, dbPath, e: feature.endpoints }
 }
 
+test('signed task drafting uses the scoped native model and returns only editable authoring fields', async t => {
+  const db = new DatabaseSync(':memory:')
+  t.after(() => db.close())
+  const first = Promise.withResolvers()
+  const queried = []
+  const feature = createAutomations({
+    db,
+    turn: () => assert.fail('drafting started an automation'),
+    async requireWorkspace(workspace) {
+      if (workspace !== W) throw Object.assign(new Error('Workspace unavailable'), {status:404})
+    },
+    draftRuntime: () => ({
+      backgroundTextOnly(description, {system}) {
+        queried.push(description)
+        assert.match(system, /do not perform the task/)
+        return queried.length === 1 ? first.promise : 'incomplete JSON'
+      },
+    }),
+  })
+  const context = username => ({request:new Request('http://fixture', {headers:{'x-ot-owner-username':username}})})
+  const draft = (workspace, description, username = 'alice') => feature.ops.v1({
+    method:'POST', path:`/v1/workspaces/${workspace}/automations/draft`, body:{description},
+  }, context(username))
+  assert.equal((await draft(W, '编写周报', '')).status, 403)
+  assert.equal((await draft('b'.repeat(32), '编写周报')).status, 404)
+  assert.equal((await draft(W, ' ')).status, 400)
+  assert.deepEqual(queried, [])
+  const accepted = draft(W, '  编写周报  ')
+  await flush()
+  assert.equal((await draft(W, '另一个草稿')).status, 429)
+  first.resolve(JSON.stringify({title:'整理周报', prompt:'写一份进展摘要。', schedule:{kind:'daily'}, enabled:true}))
+  assert.deepEqual(await accepted, {status:200,body:{
+    draft:{title:'整理周报',prompt:'写一份进展摘要。'}, workspace_id:W, viewer_username:'alice',
+  }})
+  assert.deepEqual(queried, ['编写周报'])
+  assert.equal((await draft(W, '无效的模型回复')).status, 502)
+  assert.equal((await draft(W, '允许重试')).status, 502)
+  assert.deepEqual(feature.endpoints['automations/list']({workspace_id:W}).items, [])
+})
+
 test('meeting follow-up verifies exact source, coalesces concurrent saves, and retains its original action', async () => {
   const MEETING = 'b'.repeat(32)
   const reference = { meeting_id: MEETING, revision: 2, action_index: 0 }

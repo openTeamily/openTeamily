@@ -3489,7 +3489,7 @@ body.app-workspace .mobile-inbox-heading h1 {
 }
 
 /* Keep rich message content inside its bubble on small screens. */
-#message-list .chat-markdown :is(.chat-markdown-table-scroll, .chat-flowchart, .chat-code-block) {
+#message-list .chat-markdown :is(.chat-table-block, .chat-markdown-table-scroll, .chat-flowchart, .chat-code-block) {
   max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
@@ -3535,6 +3535,29 @@ body.app-workspace .mobile-inbox-heading h1 {
 .chat-markdown-table [data-align="left"] { text-align: left; }
 .chat-markdown-table :is(th, td) > code { white-space: normal; }
 
+.chat-table-block {
+  overflow: hidden;
+  border: 1px solid var(--ot-line);
+  border-radius: .625rem;
+}
+#message-list .chat-table-block > .chat-markdown-table-scroll {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+.chat-table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: .2rem .5rem;
+  padding-inline: .4rem;
+  border-block-end: 1px solid var(--ot-line);
+  background: var(--ot-surface-2);
+  color: var(--ot-muted);
+  font-size: .74rem;
+}
+
 .chat-markdown .chat-code-block {
   overflow: hidden;
   border: 1px solid var(--ot-line);
@@ -3552,7 +3575,7 @@ body.app-workspace .mobile-inbox-heading h1 {
   font-size: .74rem;
   font-weight: 600;
 }
-#message-list .chat-code-toolbar .chat-code-copy {
+#message-list :is(.chat-code-copy, .chat-table-copy) {
   margin: 0;
   padding: .125rem .55rem;
   min-height: 2rem;
@@ -3561,7 +3584,7 @@ body.app-workspace .mobile-inbox-heading h1 {
   background: transparent;
   box-shadow: none;
 }
-#message-list .chat-code-toolbar .chat-code-copy:hover { background: var(--ot-accent-soft); }
+#message-list :is(.chat-code-copy, .chat-table-copy):hover { background: var(--ot-accent-soft); }
 #message-list .chat-markdown .chat-code-block > pre {
   margin: 0;
   padding: .6rem .65rem;
@@ -3581,7 +3604,7 @@ body.app-workspace .mobile-inbox-heading h1 {
   font-size: .8rem;
 }
 @media (pointer: coarse) {
-  #message-list .chat-code-toolbar .chat-code-copy { min-height: 2.75rem; }
+  #message-list :is(.chat-code-copy, .chat-table-copy) { min-height: 2.75rem; }
 }
 
 #chat-prompt-dialog {

@@ -13,3 +13,7 @@ one native DS-Bot turn via `chatTurn('automation:<id>', …)`. Endpoints:
 
 Open a run in history to read its headings, lists, code, tables, and supported Mermaid diagrams.
 Copy and download use the original result text.
+
+In a new editor, describe the intended task to generate a title and instructions using the
+owner's DS-Bot. Review and adopt the draft before saving the automation. Set the schedule and
+participants in the editor.

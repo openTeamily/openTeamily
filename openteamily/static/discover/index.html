@@ -87,6 +87,7 @@
           </form>
         </header>
         <div class="feed-filter-line">
+          <button type="button" id="feed-followed-creators" aria-haspopup="dialog" aria-controls="followed-creators-dialog" hidden>选择作者</button>
           <div class="feed-topic-field">
             <label for="feed-topic" class="visually-hidden">作品主题</label>
             <select id="feed-topic"><option value="">全部主题</option></select>
@@ -238,6 +239,23 @@
         <a class="feed-detail-open" id="work-remix-open" hidden>打开副本</a>
       </div>
     </form>
+  </dialog>
+  <dialog class="catalog-dialog followed-creators-dialog" id="followed-creators-dialog" aria-labelledby="followed-creators-title">
+    <header>
+      <h2 id="followed-creators-title">关注的作者</h2>
+      <button type="button" id="followed-creators-close">关闭</button>
+    </header>
+    <form id="followed-creators-form" role="search">
+      <label class="visually-hidden" for="followed-creators-query">搜索已关注作者</label>
+      <input type="search" id="followed-creators-query" autocomplete="off" maxlength="80" placeholder="搜索作者名称或账号" autofocus>
+    </form>
+    <button type="button" id="followed-creators-all" aria-pressed="false">所有关注作者</button>
+    <ul id="followed-creators-list" aria-label="已关注作者" hidden></ul>
+    <p id="followed-creators-status" role="status"></p>
+    <div class="catalog-dialog-actions">
+      <button type="button" id="followed-creators-retry" hidden>重试</button>
+      <button type="button" id="followed-creators-more" hidden>加载更多</button>
+    </div>
   </dialog>
   <dialog class="catalog-dialog work-share-dialog" id="work-share-dialog" aria-labelledby="work-share-title">
     <h2 id="work-share-title">分享作品</h2>
