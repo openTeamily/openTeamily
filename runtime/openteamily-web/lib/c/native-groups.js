@@ -168,7 +168,10 @@ export function nativeGroupClient(host, raw) {
       await sync(await raw.get('/v1/ot/conversations/' + encodeURIComponent(cid)))
       const before = p?.cursor?.beforeSeq
       const data = await raw.get('/v1/ot/conversations/' + encodeURIComponent(cid) + '/messages?limit=100' + (Number.isInteger(before) ? '&before=' + before : ''))
-      const activity = await host.call('agents/groupActivity', { conversation_id: cid })
+      const room = rt.roomOf(p.roomId)
+      const work = room?.openteamily?.native_exchange && rt.workingInRoom?.(room)
+      const activity = work ? {running:rt.roomActive(room.id) || work.length > 0, speaking:work[0]?.bot.id ?? null}
+        : await host.call('agents/groupActivity', { conversation_id: cid })
       return { roomId: p.roomId, items: (data.messages || []).map(m => ({
         id: m.id, kind: m.mine === true ? 'user' : 'bot',
         name: m.author?.name || m.author?.display_name || m.author?.handle || '',

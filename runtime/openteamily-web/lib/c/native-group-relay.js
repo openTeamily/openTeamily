@@ -81,7 +81,7 @@ export function nativeGroupRelay({ rt, raw, sync, log }) {
         ...(botId ? {botId} : {}),
         text:message.body.slice(0, MAX_LINE).toWellFormed(),
         openteamilyMessageId:message.id,
-        ...(Number.isFinite(message.created_at) ? {time:message.created_at * 1000} : {}),
+        ...(Number.isFinite(message.created_at) ? {time:message.created_at} : {}),
       })
     }
     history.through = item.seq - 1

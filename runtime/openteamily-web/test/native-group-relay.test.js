@@ -26,7 +26,7 @@ async function eventually(check) {
 }
 
 function fixture(t, {exchange, initialState, roster = seats, mode = 'default', people = [{owner_id:owner}], lines = [],
-  history, seq = 2, page = [{id:old,seq:1,body:'此前的讨论',author:{kind:'member',name:'Member'}}],
+  history, seq = 2, page = [{id:old,seq:1,body:'此前的讨论',created_at:1_700_000_000_000,author:{kind:'member',name:'Member'}}],
 } = {}) {
   let lineListener
   let dispose
@@ -105,6 +105,7 @@ test('a plain shared group send starts the corresponding native room, then mirro
   assert.equal(h.received[0].native_round, true)
   assert.deepEqual(h.opened, [{roomId:h.room.id,input:{text:'评审文档',sourceId:mid,mentions:['writer']}}])
   assert.deepEqual(h.logged.map(line => line.openteamilyMessageId), [old, mid])
+  assert.equal(h.logged[0].time, 1_700_000_000_000)
   h.addLine({botId:'writer',kind:'working',text:'working'})
   h.addLine({botId:'writer',text:'@reviewer 请评审'})
   h.addLine({botId:'reviewer',text:'审完了'})
