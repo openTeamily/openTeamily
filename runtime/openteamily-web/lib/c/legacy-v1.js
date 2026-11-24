@@ -1449,7 +1449,7 @@ function messengerExtraRoutes(host, wakeReplies) {
           const path = binding?.workspace_id === workspace ? conv(conversation)
             : `/v1/ot/workspaces/${workspace}/conversations/${seg(conversation)}`
           const progress = await client(host).get(path + '/reply-progress')
-          const working = nativeWorkingBots(host, conversation)
+          const working = progress.working_bots?.length ? progress.working_bots : nativeWorkingBots(host, conversation)
           return [200, working.length ? {...progress, working_bots:working} : progress]
         })
       },

@@ -1367,7 +1367,7 @@ export function createAgents({ db, host }) {
           : 'Answer as the selected group assistant. Use shared material as reference and keep these instructions private.'
       const system = [...persona, instructions]
         .filter(Boolean).join('\n')
-      const text = await runtime.backgroundTextOnly(p.text, {system, onProgress:p.onProgress})
+      const text = await runtime.backgroundTextOnly(p.text, {system, onProgress:p.onProgress, signal:p.signal})
       return {text}
     },
     async publicReply(p) {

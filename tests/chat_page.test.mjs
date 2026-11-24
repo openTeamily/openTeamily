@@ -1453,10 +1453,11 @@ function groupReplyChat(transport) {
   return {doc, el, restore, fetcher};
 }
 
-test('native group activity follows the handoff while the transcript has no reply jobs', async t => {
+test('native group activity follows local and remote Bot handoffs without reply jobs', async t => {
   t.mock.timers.enable({apis:['setTimeout']});
   let reads = 0;
-  const work = [[{id:'native-a',name:'主答 Bot'}],[{id:'native-b',name:'接力 Bot'}],[]];
+  const work = [[{id:'native-a',name:'主答 Bot'}],
+    [{id:'guest/native-b',name:'接力 Bot'},{id:'guest/invalid/bot',name:'无效状态'}],[]];
   const {doc, el, restore, fetcher} = groupReplyChat((path, opts, conversation) => {
     if (!path) return json(200,{conversation:{...conversation,native_room_id:'native-room'},items:[]});
     assert.equal(path,'/reply-progress');
