@@ -26,6 +26,8 @@ class ArtifactsPageTests(unittest.TestCase):
         self.assertEqual(page['status'], 200)
         html = page['body'].decode()
         self.assertIn('作品库', html)
+        self.assertIn('id="dir-title">资料空间', html)
+        self.assertNotIn('id="dir-title">作品分类', html)
         self.assertIn('新建云文档', html)
         self.assertIn('新建网站', html)
         self.assertIn('云文档', html)

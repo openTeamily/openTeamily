@@ -361,7 +361,7 @@ export function applyDirectoryCollapsed(root, collapsed) {
   return next;
 }
 
-function bindCatalogToolbar(document, closePopovers) {
+export function bindCatalogToolbar(document, closePopovers) {
   const viewport = document.defaultView?.matchMedia?.('(max-width: 700px)');
   const panel = document.getElementById('main-panel');
   const title = document.getElementById('space-title');
@@ -401,10 +401,10 @@ function bindCatalogToolbar(document, closePopovers) {
       searchActions.append(search, filter);
     } else {
       for (const {node, parent, next} of original.slice().reverse()) parent.insertBefore(node, next);
-      if (active) searchActions.append(search, notify);
+      // Desktop: leave search under +新建 and the bell in the top bar.
     }
     panel.classList.toggle('is-compact-catalog', compact);
-    title.classList.toggle('visually-hidden', !active);
+    title.classList.toggle('visually-hidden', !compact);
     directory.hidden = !compact && catalog.classList.contains('dir-collapsed');
     if (restoreFocus && !focus.closest('[hidden]')) focus.focus({preventScroll: true});
   }
