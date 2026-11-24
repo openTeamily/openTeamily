@@ -959,7 +959,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     detail.title.focus?.({preventScroll: true});
 
     const checkingSession = sessionPending;
-    const publicRead = !currentUser ? loadPublicWork(entry) : null;
+    const signedFeedCard = nativeCatalog && item?.slug === intent.slug && matchesFeedViewer(feedViewer);
+    // The public preview can paint while the owner plugin checks signed actions.
+    const publicRead = !currentUser || signedFeedCard
+      ? loadPublicWork(entry, {includeNeighbors: !currentUser}) : null;
     const path = '/v1/discover/works/' + intent.slug + workDetailQuery(feedState);
     const readScopedWork = () => request('GET', path, undefined, {}, entry.controller.signal).catch(() => ({status: 0}));
     const earlyScoped = nativeCatalog && checkingSession ? readScopedWork() : null;
@@ -994,9 +997,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     return finishWorkDetail(entry, viewer, result.body);
   }
 
-  async function loadPublicWork(entry) {
+  async function loadPublicWork(entry, {includeNeighbors}) {
     const scope = feedSearchText(feedState);
-    const useNeighbors = feedState.tab === 'activity' && feedState.sort === 'latest' &&
+    const useNeighbors = includeNeighbors && feedState.tab === 'activity' && feedState.sort === 'latest' &&
       (feedViewer !== null || !feedState.items.some(item => item.slug === entry.slug));
     const parameters = new URLSearchParams(useNeighbors ? scope : '');
     parameters.set('view', 'preview');

@@ -1,4 +1,6 @@
-import {csrfCookie, pendingSignupSession, personalDraftScope, readChatDrafts, rememberColdDraftHandoff, runtimeHoldNotice, signupDraftScope, waitForRuntime, workspaceLoginHash, workspacePageTarget, writeChatDrafts} from './runtime-readiness.mjs';
+import {csrfCookie, pendingSignupSession, personalChatPath, personalDraftScope, readChatDrafts, rememberColdDraftHandoff, runtimeHoldNotice, signupDraftScope, waitForRuntime, workspaceLoginHash, workspacePageTarget, writeChatDrafts} from './runtime-readiness.mjs';
+
+const startingTitle = '正在启动专属智能体';
 
 export function mountRuntimeStarting(document, {
   view = document.defaultView ?? globalThis, fetcher = globalThis.fetch.bind(globalThis),
@@ -11,7 +13,7 @@ export function mountRuntimeStarting(document, {
   const draft = document.getElementById('runtime-first-message');
   const continueButton = document.getElementById('runtime-continue');
   let checking = false;
-  let draftScope, draftOwner, draftHash;
+  let draftScope, draftOwner, draftLocation, draftDestination;
   let composing = false;
   let runtimeReady = false;
   let leaving = false;
@@ -20,10 +22,13 @@ export function mountRuntimeStarting(document, {
   const startupPath = view.location.pathname === '/runtime-starting';
   const returnHome = startupPath && view.location.hash === '#home=1';
   const chatTarget = !returnHome && ['/chat', '/chat/', '/messenger', '/messenger/', '/runtime-starting'].includes(view.location.pathname);
+  const bareChatTarget = () => (startupPath || ['/chat', '/chat/'].includes(view.location.pathname)) &&
+    !view.location.search && !view.location.hash;
+  const locationPath = () => view.location.pathname + (view.location.search || '') + (view.location.hash || '');
   if (returnHome) document.getElementById('runtime-home')?.setAttribute('hidden', '');
 
   function saveDraft() {
-    if (!draftScope || view.location.hash !== draftHash) return true;
+    if (!draftScope || locationPath() !== draftLocation) return true;
     const drafts = readChatDrafts(view, draftOwner);
     const text = draft.value || '';
     if ((drafts.get(draftScope) ?? '') === text) return true;
@@ -35,6 +40,15 @@ export function mountRuntimeStarting(document, {
   function openDestination() {
     if (leaving) return;
     leaving = true;
+    if (draftDestination && draft.value.trim() && locationPath() === draftLocation) {
+      if (startupPath) view.location.replace(draftDestination);
+      else {
+        // A fragment-only replace would leave the startup document mounted.
+        view.history.replaceState(view.history.state, '', draftDestination);
+        view.location.reload();
+      }
+      return;
+    }
     if (startupPath) view.location.replace(returnHome ? '/' : '/chat' + (view.location.hash || ''));
     else view.location.reload();
   }
@@ -45,7 +59,7 @@ export function mountRuntimeStarting(document, {
       status.textContent = '聊天已就绪，完成当前输入后会自动打开。';
       return;
     }
-    const handoff = draftScope && draft.value && view.location.hash === draftHash;
+    const handoff = draftScope && draft.value && locationPath() === draftLocation;
     if (!saveDraft() || (handoff && !rememberColdDraftHandoff(view, draftScope))) {
       status.textContent = '聊天已就绪。浏览器暂时无法保留草稿，请复制文本后继续。';
       continueButton.hidden = false;
@@ -79,27 +93,31 @@ export function mountRuntimeStarting(document, {
     checking = true;
     retry.hidden = true;
     if (progress) progress.hidden = false;
-    title.textContent = wake ? '正在启动你的专属智能体' : '正在检查智能体状态';
+    title.textContent = wake ? startingTitle : '正在检查智能体状态';
     status.textContent = chatTarget ? '就绪后会自动打开聊天。' : '就绪后会自动返回当前页面。';
     const expectedUser = pendingSignupSession(view);
     const csrf = csrfCookie(document.cookie);
     const check = () => waitForRuntime(async () => {
-      const include = chatTarget && !expectedUser && !checkedPersonalChat && !view.location.search && view.location.hash
+      const include = chatTarget && !expectedUser && !checkedPersonalChat && !view.location.search &&
+        (view.location.hash || bareChatTarget())
         ? '?include=personal-chat' : '';
       const reply = await read('/v1/auth/runtime-readiness' + include);
       const owner = reply.body?.user_id;
       if (reply.status !== 200 || (expectedUser && owner !== expectedUser)) return reply;
       if (draftOwner && owner !== draftOwner) return {status: 401};
       if (include && ['starting', 'stopped', 'ready'].includes(reply.body?.state)) checkedPersonalChat = true;
-      if (reply.body?.state === 'starting' && title.textContent !== '正在启动你的专属智能体') {
-        title.textContent = '正在启动你的专属智能体';
+      if (reply.body?.state === 'starting' && title.textContent !== startingTitle) {
+        title.textContent = startingTitle;
       }
       if (!draftScope && chatTarget && draftPanel && draft) {
-        const scope = expectedUser ? signupDraftScope(view, owner) : personalDraftScope(view, owner, reply.body?.personal_chat);
+        const personal = reply.body?.personal_chat;
+        const allowBare = bareChatTarget();
+        const scope = expectedUser ? signupDraftScope(view, owner) : personalDraftScope(view, owner, personal, {allowBare});
         if (scope) {
           draftScope = scope;
           draftOwner = owner;
-          draftHash = view.location.hash;
+          draftLocation = locationPath();
+          draftDestination = allowBare ? personalChatPath(personal) : '';
           draft.value = readChatDrafts(view, draftOwner).get(scope) ?? '';
           draftPanel.hidden = false;
         }

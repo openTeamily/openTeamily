@@ -90,11 +90,16 @@ export function signupDraftScope(view, owner, now = Date.now()) {
   return target ? JSON.stringify([owner, target[1], 'agent', target[2], null]) : null;
 }
 
-export function personalDraftScope(view, owner, personal) {
+export function personalChatPath(personal) {
+  const workspace = personal?.workspace_id, agent = personal?.agent_id;
+  return validSignupUser(workspace) && validSignupUser(agent) ? '/chat#workspace=' + workspace + '&agent=' + agent : '';
+}
+
+export function personalDraftScope(view, owner, personal, {allowBare = false} = {}) {
   if (!validSignupUser(owner) || view.location.search) return null;
-  const target = signupChatPath.exec('/chat' + view.location.hash);
-  if (!target || target[1] !== personal?.workspace_id || target[2] !== personal.agent_id) return null;
-  return JSON.stringify([owner, target[1], 'agent', target[2], null]);
+  const path = personalChatPath(personal);
+  if (!path || ('/chat' + view.location.hash !== path && !(allowBare && !view.location.hash))) return null;
+  return JSON.stringify([owner, personal.workspace_id, 'agent', personal.agent_id, null]);
 }
 
 export function rememberColdDraftHandoff(view, scope) {

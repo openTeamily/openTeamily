@@ -20,6 +20,7 @@ export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 const loadGroupInviteModule = deferModule('./group-invite-link.mjs');
 const loadRichContent = deferModule('./rich-content.mjs');
 let richContent;
+const pendingMessageMarkdown = [];
 import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, memberChoices, validMessage,
   agentDirectoryHref, chatPathId, socialMessageHref, socialMessageFromHash, directAgentAccessFromHash } from '../shell/chat-utils.mjs';
 import { agentPortraitLook, createLookAvatar } from '../look/app.mjs';
@@ -358,21 +359,29 @@ function appendMessageMarkdown(doc, parent, source, assistantReply, updatePrevie
   parent.append(node);
   const format = module => {
     if (!assistantReply && !module.hasExplicitRichContent(source)) return;
-    const scroller = node.closest?.('#message-scroller');
-    const following = scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32;
     module.renderChatMarkdown(doc, node, source);
     updatePreview?.();
-    if (following) scroller.scrollTop = scroller.scrollHeight;
   };
-  if (richContent) format(richContent);
-  else {
-    void loadRichContent().then(module => {
-      richContent = module;
-      if (node.isConnected !== false) format(module);
-    }).catch(() => {
-      // The message text and transcript remain usable if formatting fails to load.
-    });
+  if (richContent) {
+    format(richContent);
+    return;
   }
+  pendingMessageMarkdown.push({node, format});
+  if (pendingMessageMarkdown.length > 1) return;
+  void loadRichContent().then(module => {
+    richContent = module;
+    const pending = pendingMessageMarkdown.splice(0).filter(({node}) => node.isConnected !== false);
+    const scrollers = new Set(pending.map(({node}) => node.closest?.('#message-scroller')).filter(Boolean));
+    // Measure before replacing any message bodies, then restore live scroll once.
+    const following = [...scrollers].filter(scroller => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32);
+    for (const {format} of pending) {
+      try { format(module); }
+      catch { /* Keep the message readable if its formatting fails. */ }
+    }
+    for (const scroller of following) scroller.scrollTop = scroller.scrollHeight;
+  }).catch(() => {
+    pendingMessageMarkdown.length = 0;
+  });
 }
 
 const streamingReplies = new WeakMap();
