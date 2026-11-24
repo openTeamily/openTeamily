@@ -99,6 +99,7 @@
         </div>
         <div class="memory-filters" role="group" aria-label="筛选">
           <button type="button" data-filter="all" aria-pressed="true">全部 <span id="filter-all-count" class="filter-count" hidden></span></button>
+          <button type="button" id="filter-pinned" data-filter="pinned" aria-pressed="false" hidden>置顶</button>
           <button type="button" data-filter="unread" aria-pressed="false" hidden>未读更新 <span id="filter-unread-count" class="filter-count" hidden></span></button>
           <button type="button" data-filter="updated" aria-pressed="false">近 7 天</button>
           <button type="button" data-filter="topics">标签 <span class="filter-caret" aria-hidden="true">▾</span></button>
@@ -291,6 +292,7 @@
         <button type="button" id="close-editor" class="memory-editor-back">‹ 返回列表</button>
         <p id="editor-saved" class="editor-saved" hidden></p>
         <div class="editor-top-actions">
+          <button type="button" id="page-pin" aria-pressed="false" hidden>置顶</button>
           <button type="button" id="dream-page" title="找出这一页可以合并的重复段落；不接受不会改动原文">做梦</button>
           <button type="button" id="memory-share-group" aria-haspopup="dialog" hidden>分享到来源群</button>
           <button type="button" id="page-history-open" aria-controls="page-history" aria-expanded="false" title="查看此页的历史版本">历史</button>

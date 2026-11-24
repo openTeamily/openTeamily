@@ -671,6 +671,7 @@ class GatewayTest(unittest.TestCase):
             (f'/v1/workspaces/{ws}/agents/{ident}/access/{conversation}/revoke', 'agents'),
             (f'/v1/workspaces/{ws}/memory/actions/from-chat', 'memory'),
             (f'/v1/workspaces/{ws}/memory/{ident}/versions/123/restore', 'memory'),
+            (f'/v1/workspaces/{ws}/memory/{ident}/pin', 'memory'),
             (f'/v1/workspaces/{ws}/team-runs/automation-results/{ident}/{ident}', 'team-runs'),
         ):
             with self.subTest(uri=uri):

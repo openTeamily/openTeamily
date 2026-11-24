@@ -3222,6 +3222,47 @@ test('pin a message and multi-select forward call the real endpoints', async () 
   } finally { restore(); }
 });
 
+test('a forward shows progress and retries an uncertain receipt with the same native key', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const calls = [];
+  let rejectForward;
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async (path, options = {}) => {
+      if (!path.endsWith('/conv-1/forward')) return original(path);
+      calls.push({path, key:options.headers['Idempotency-Key'], body:JSON.parse(options.body)});
+      if (calls.length === 1) return new Promise((_, reject) => { rejectForward = reject; });
+      return json(201, {forwarded:1, target_conversation_id:'conv-2'});
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await fire(el('multi-select-toggle'), 'click');
+    const box = el('message-list').children[0].querySelector('input');
+    box.checked = true;
+    await fire(box, 'change');
+    const target = el('forward-target'), submit = el('forward-submit'), status = el('forward-status');
+    target.value = 'conv-2';
+    await fire(target, 'change');
+
+    const sending = fire(submit, 'click');
+    assert.equal(status.textContent, '正在转发 1 条消息…');
+    assert.equal(target.disabled, true);
+    assert.equal(submit.disabled, true);
+    await fire(submit, 'click');
+    assert.equal(calls.length, 1);
+
+    rejectForward(new Error('receipt lost'));
+    await sending;
+    assert.equal(status.textContent, '未能确认转发结果，可以重试。');
+    assert.equal(target.value, 'conv-2');
+    assert.equal(submit.disabled, false);
+    await fire(submit, 'click');
+    assert.deepEqual(calls, [calls[0], calls[0]]);
+    assert.ok(calls[0].key);
+    assert.equal(el('forward-bar').hidden, true);
+  } finally { restore(); }
+});
+
 test('agent task completion notifications have their own summary', () => {
   assert.equal(notificationSummary({kind: 'agent_reply', status: 'succeeded', actor_username: '助理',
     conversation_kind: 'group', conversation_title: '项目群'}), '助理 在「项目群」已完成你的请求');

@@ -569,6 +569,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const newMenu = actionMenus.bind(newMenuButton, document.getElementById('new-menu'));
   let fileUpload;
   let fileUploadModule;
+  let artifactRename;
+  let artifactRenameModule;
   const catalogToolbar = bindCatalogToolbar(document, () => {
     actionMenus.close({focus: true});
     closeFilterPanel({focus: true});
@@ -726,6 +728,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (!enabled) {
       newMenu.close();
       fileUpload?.close();
+      artifactRename?.close();
       closeDocumentTree();
     }
   }
@@ -2262,6 +2265,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (itemMenuOpen()) actionMenus.close();
   }
 
+  async function renameFromCatalog(item, trigger, inScope) {
+    closeItemMenu();
+    const scope = () => canCreateInWorkspace() ? {owner:currentUser.id,workspace:workspaceId()} : null;
+    try {
+      artifactRenameModule ??= import('./rename.mjs');
+      const {mountArtifactRename} = await artifactRenameModule;
+      if (!inScope() || listPanel.hidden || !scope()) return;
+      artifactRename ??= mountArtifactRename(document, {
+        scope,
+        request: (method, path, data, signal) => request(method,path,data,undefined,signal),
+        updated(saved) {
+          allItems = allItems.map(row => row.id === saved.id && row.revision < saved.revision
+            ? {...row,title:saved.title,revision:saved.revision,updated:saved.updated,updated_by:saved.updated_by,
+              match:row.match?.kind === 'title' ? null : row.match}
+            : row);
+          renderCatalog({preserve:true});
+          show('ok', '已更新作品名称。');
+          void loadList({background:true});
+        },
+      });
+      artifactRename.open(item,trigger.id);
+    } catch {
+      artifactRenameModule = null;
+      if (inScope()) show('error', '暂时无法打开重命名窗口，请重试。');
+    }
+  }
+
   function canDuplicate(item) {
     return nativeCatalog && typeof duplicateDialog?.showModal === 'function' && /^[0-9a-f]{32}$/.test(item?.id || '') &&
       Number.isSafeInteger(item.revision) && item.revision > 0;
@@ -2386,8 +2416,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     rename.type = 'button';
     rename.setAttribute('role', 'menuitem');
     rename.textContent = '重命名';
-    rename.title = '打开文档并编辑标题';
     rename.addEventListener('click', async () => {
+      if (nativeCatalog && /^[0-9a-f]{32}$/.test(item.id || '') &&
+          Number.isSafeInteger(item.revision) && item.revision > 0) {
+        if (inScope()) await renameFromCatalog(item, button, inScope);
+        return;
+      }
       if (await onOpen(item)) {
         const title = form.elements.title;
         title?.focus();
@@ -2829,6 +2863,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
 
   function hideEditor() {
     closeDocumentTree();
+    artifactRename?.close();
     richDocument.instance?.closeFind();
     resetDocumentDraft();
     workVersion.instance?.close();

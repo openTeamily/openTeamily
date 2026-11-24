@@ -652,6 +652,11 @@ textarea {
 #page-links button { width: auto; margin-inline-start: auto; }
 .editor-connections { padding-top: .7rem; border-top: 1px solid var(--ot-line); }
 .editor-connections h2 { margin: 0 0 .45rem; font-size: 1rem; }
+.memory-pin-badge {
+  flex: 0 0 auto; padding: .18rem .45rem; border-radius: .5rem;
+  background: var(--ot-bg-accent); color: var(--ot-accent); font-size: .72rem; white-space: nowrap;
+}
+#page-pin[aria-pressed="true"] { background: var(--ot-bg-accent); color: var(--ot-accent); }
 
 .memory-page-head {
   display: flex;

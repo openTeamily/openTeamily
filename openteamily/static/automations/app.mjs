@@ -463,6 +463,18 @@ function clockChangeLabel(change) {
   return change === 'forward' ? '时钟跳转后顺延' : change === 'first' ? '按第一次出现的时间运行' : '';
 }
 
+export function upcomingAutomations(items, workspace) {
+  return items.filter(item => {
+    if (item?.workspace_id !== workspace || item.enabled !== true) return false;
+    const status = item.schedule_status;
+    return status?.state === 'due' || (status?.state === 'scheduled' && Number.isSafeInteger(status.at) && status.at > 0);
+  }).sort((first, second) => {
+    const a = first.schedule_status, b = second.schedule_status;
+    const atA = a.state === 'due' ? 0 : a.at, atB = b.state === 'due' ? 0 : b.at;
+    return atA - atB || first.title.localeCompare(second.title);
+  });
+}
+
 function renderNextRun(node, item) {
   const status = item?.schedule_status;
   node.textContent = '';
@@ -544,7 +556,7 @@ function monogram(name) {
   return {label, tone: (tone % 6) + 1};
 }
 
-function renderList(items, list, empty, onOpen, onToggle, togglePending) {
+function renderList(items, list, empty, onOpen, onToggle, togglePending, upcoming) {
   list.textContent = '';
   list.classList.remove('template-catalog');
   setBusy(list, false);
@@ -569,13 +581,16 @@ function renderList(items, list, empty, onOpen, onToggle, togglePending) {
     const title = document.createElement('strong');
     title.className = 'item-title';
     title.textContent = item.title;
-    const meta = document.createElement('span');
-    meta.className = 'item-schedule';
-    meta.id = 'automation-schedule-' + item.id;
-    const description = [meta.id];
-    meta.textContent = scheduleSummary(item.schedule, item.enabled, false);
+    const description = [];
     copy.appendChild(title);
-    copy.appendChild(meta);
+    if (!upcoming || item.schedule?.kind !== 'once' || item.schedule_status?.state === 'due') {
+      const meta = document.createElement('span');
+      meta.className = 'item-schedule';
+      meta.id = 'automation-schedule-' + item.id;
+      description.push(meta.id);
+      meta.textContent = scheduleSummary(item.schedule, item.enabled, false);
+      copy.appendChild(meta);
+    }
     const running = scopedActiveRun(item.active_run, item.workspace_id, item.id);
     if (running) {
       const pill = document.createElement('span');
@@ -601,27 +616,29 @@ function renderList(items, list, empty, onOpen, onToggle, togglePending) {
       && RECURRING_KINDS.has(item.schedule?.kind) && /^[0-9a-f]{32}$/.test(item.id)
       && ['paused', 'scheduled', 'due'].includes(item.schedule_status?.state)
       && Number.isSafeInteger(item.revision) && item.revision > 0;
-    const state = document.createElement(canToggle ? 'button' : 'span');
-    state.className = 'status-pill' + (canToggle ? ' automation-switch' : '') + (item.enabled && !consumed ? ' is-on' : '');
-    state.id = 'automation-state-' + item.id;
-    state.textContent = consumed || (item.enabled ? '已启用' : '未启用');
-    if (canToggle) {
-      state.type = 'button';
-      state.dataset.automationToggle = item.id;
-      state.setAttribute('role', 'switch');
-      state.setAttribute('aria-label', item.title + '自动运行');
-      state.setAttribute('aria-checked', String(Boolean(item.enabled)));
-      state.disabled = togglePending(item);
-      setBusy(state, state.disabled);
-      state.addEventListener('click', () => onToggle(item, state));
-    } else {
-      description.push(state.id);
+    row.appendChild(open);
+    if (canToggle || !upcoming) {
+      const state = document.createElement(canToggle ? 'button' : 'span');
+      state.className = 'status-pill' + (canToggle ? ' automation-switch' : '') + (item.enabled && !consumed ? ' is-on' : '');
+      state.id = 'automation-state-' + item.id;
+      state.textContent = consumed || (item.enabled ? '已启用' : '未启用');
+      if (canToggle) {
+        state.type = 'button';
+        state.dataset.automationToggle = item.id;
+        state.setAttribute('role', 'switch');
+        state.setAttribute('aria-label', item.title + '自动运行');
+        state.setAttribute('aria-checked', String(Boolean(item.enabled)));
+        state.disabled = togglePending(item);
+        setBusy(state, state.disabled);
+        state.addEventListener('click', () => onToggle(item, state));
+      } else {
+        description.push(state.id);
+      }
+      row.appendChild(state);
     }
     open.setAttribute('aria-describedby', description.join(' '));
     open.appendChild(avatar);
     open.appendChild(copy);
-    row.appendChild(open);
-    row.appendChild(state);
     list.appendChild(row);
   }
 }
@@ -662,6 +679,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const workspaceSelect = document.getElementById('workspace');
   const search = document.getElementById('search');
   const clearSearch = document.getElementById('automation-search-clear');
+  const upcomingControl = document.getElementById('automation-upcoming');
   const runButton = document.getElementById('tick-automation');
   const runHistoryButton = document.getElementById('show-run-history');
   const runPanel = document.getElementById('run-panel');
@@ -713,6 +731,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let draftSave = null;
   let editorDraft = null;
   let category = 'mine';
+  let upcoming = false;
   let runTimer = 0;
   let runRequest = 0;
   let listRequest = 0;
@@ -851,7 +870,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function snapshotCatalogue(automation, scroll = main.scrollTop || 0) {
     const owner = currentUser?.id, workspace = workspaceId();
     return native && EDITOR_ID.test(owner || '') && EDITOR_ID.test(workspace)
-      ? {owner, workspace, automation, category, query: search.value, scroll} : null;
+      ? {owner, workspace, automation, category, query: search.value, scroll, ...(upcoming && {upcoming:true})} : null;
   }
 
   function catalogueEditorState() {
@@ -863,6 +882,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function restoreCatalogue(catalogue) {
     search.value = typeof catalogue.query === 'string' ? catalogue.query.slice(0, 80) : '';
+    upcoming = catalogue.upcoming === true;
     selectCategory(tabCategory(catalogue.category));
   }
 
@@ -2251,34 +2271,46 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     globalThis.clearTimeout(listTimer);
     if (clearSearch) clearSearch.hidden = !search.value;
     const id = workspaceId();
+    const supportsUpcoming = native && Boolean(id) && category === 'mine';
+    if (upcomingControl) {
+      upcomingControl.hidden = !supportsUpcoming;
+      upcomingControl.setAttribute('aria-pressed', String(upcoming));
+    }
+    const showingUpcoming = supportsUpcoming && upcoming;
     if (!id) return;
     const seq = ++listRequest;
     const list = document.getElementById('automation-list');
     const empty = document.getElementById('list-empty');
     const searchText = search.value;
     const viewer = viewerId();
-    const refreshPending = () => {
+    const refresh = active => {
+      const delay = active ? (document.hidden ? 12000 : 3500) : (document.hidden ? 60000 : 30000);
       listTimer = globalThis.setTimeout(() => {
-        if (!listPanel.hidden && workspaceId() === id && search.value === searchText && listRequest === seq) void loadList({quiet: true});
-      }, document.hidden ? 12000 : 3500);
+        if (!listPanel.hidden && workspaceId() === id && viewerId() === viewer &&
+            search.value === searchText && listRequest === seq) void loadList({quiet: true});
+      }, delay);
     };
     const renderItems = items => {
-      const fingerprint = JSON.stringify(items);
+      const visible = showingUpcoming ? upcomingAutomations(items, id) : items;
+      if (showingUpcoming) empty.textContent = searchText.trim() ? '没有匹配的运行计划。' : '当前工作区没有即将运行的自动化。';
+      const fingerprint = JSON.stringify(visible);
       if (!quiet || listFingerprint !== fingerprint) {
         const active = document.activeElement?.dataset;
         const focused = active?.automationToggle || active?.automationId;
         listFingerprint = fingerprint;
-        renderList(items, list, empty, (item, opener) => {
+        renderList(visible, list, empty, (item, opener) => {
           openEditor(item, null, opener);
           if (native && EDITOR_ID.test(item.id) && item.workspace_id === id) replaceAutomationLink(item, null, true);
         }, native && viewer ? (item, control) => toggleSchedule(item, control, id, viewer) : null,
-        item => pendingScheduleSwitches.has(scheduleSwitchKey(id, viewer, item.id)));
+        item => pendingScheduleSwitches.has(scheduleSwitchKey(id, viewer, item.id)), showingUpcoming);
         if (quiet && /^[a-f0-9]{32}$/.test(focused || '')) {
           const replacement = active?.automationToggle && list.querySelector?.(`[data-automation-toggle="${focused}"]`);
-          (replacement || list.querySelector?.(`[data-automation-id="${focused}"]`))?.focus({preventScroll: true});
+          (replacement || list.querySelector?.(`[data-automation-id="${focused}"]`)
+            || (showingUpcoming ? upcomingControl : null))?.focus({preventScroll: true});
         }
       }
-      if (items.some(item => scopedActiveRun(item.active_run, id, item.id))) refreshPending();
+      const active = visible.some(item => scopedActiveRun(item.active_run, id, item.id));
+      if (active || showingUpcoming) refresh(active);
     };
     if (category === 'work' || category === 'life') {
       const render = () => {
@@ -2316,12 +2348,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const listed = await request('GET', `/v1/workspaces/${id}/automations${listQuery(category, search.value)}`)
       .catch(() => ({status: 0, body: {}}));
-    if (seq !== listRequest || workspaceId() !== id) return;
+    if (seq !== listRequest || workspaceId() !== id || viewerId() !== viewer) return;
     setBusy(empty, false);
     setBusy(list, false);
     if (listed.status !== 200) {
       if (quiet && ![401, 403, 404].includes(listed.status)) {
-        refreshPending();
+        refresh(!showingUpcoming);
         return;
       }
       list.textContent = '';
@@ -2372,6 +2404,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (seq !== loadRequest) return;
     if (session.status === 401) {
       currentUser = null;
+      upcoming = false;
       templates = [];
       templateState = 'idle';
       templateRequest = null;
@@ -2394,6 +2427,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentUser = session.body.user;
     if (previousViewer && previousViewer !== viewerId()) {
       editorRequest += 1;
+      upcoming = false;
       templates = [];
       templateState = 'idle';
       templateRequest = null;
@@ -2529,6 +2563,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return loadList();
   }
   search.addEventListener('input', searchCatalogue);
+  upcomingControl?.addEventListener('click', () => {
+    upcoming = !upcoming;
+    void searchCatalogue();
+  });
   clearSearch?.addEventListener('click', () => {
     search.value = '';
     search.focus();

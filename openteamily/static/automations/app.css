@@ -91,6 +91,20 @@ body.app-workspace #main-panel {
 
 .pill-search input::-webkit-search-cancel-button { appearance: none; }
 
+.automation-list-controls {
+  display: flex;
+  gap: .55rem;
+  align-items: center;
+}
+
+.automation-list-controls .pill-search { flex: 1; min-width: 0; }
+#automation-upcoming { flex: none; min-height: 2.75rem; border-radius: 999px; }
+#automation-upcoming[aria-pressed="true"] {
+  color: var(--ot-accent);
+  background: var(--ot-accent-soft);
+  border-color: var(--ot-accent);
+}
+
 #automation-search-clear:not([hidden]) {
   position: absolute;
   inset: 0 .25rem 0 auto;

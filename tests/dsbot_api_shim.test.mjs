@@ -277,3 +277,10 @@ test('collaboration pages use the owner runtime for private runs and Bot Social 
   }
   assert.equal(movedTarget(run + '/steps/8/retry', origin), null);
 });
+
+test('memory pin writes route to the owner plugin only for exact workspace and page ids', () => {
+  const path = `/v1/workspaces/${WS}/memory/${ID}/pin`;
+  assert.deepEqual(movedTarget(path, ORIGIN), {feature:'memory',path});
+  assert.equal(movedTarget(path + '/other', ORIGIN), null);
+  assert.equal(movedTarget(path.replace(ID, 'unrelated'), ORIGIN), null);
+});

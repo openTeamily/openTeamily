@@ -660,6 +660,18 @@
       <div class="space-action-row"><button type="submit" class="primary" id="move-document-submit" disabled>移动文档</button></div>
     </form>
   </dialog>
+  <dialog id="rename-artifact-dialog" class="send-dialog-card" aria-labelledby="rename-artifact-heading">
+    <form id="rename-artifact-form">
+      <h2 id="rename-artifact-heading">重命名作品</h2>
+      <label for="rename-artifact-name">作品名称</label>
+      <input id="rename-artifact-name" autocomplete="off" maxlength="80" required autofocus>
+      <p id="rename-artifact-status" class="note" role="status"></p>
+      <div class="space-action-row">
+        <button type="button" id="rename-artifact-cancel">取消</button>
+        <button type="submit" class="primary" id="rename-artifact-submit">保存名称</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="duplicate-artifact-dialog" class="send-dialog-card" aria-labelledby="duplicate-artifact-heading">
     <form id="duplicate-artifact-form">
       <h2 id="duplicate-artifact-heading">复制为新作品</h2>

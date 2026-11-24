@@ -1761,6 +1761,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     pendingSends.clear();
     reactionWrites.clear();
+    forwarding.clear();
+    uncertainForwards.clear();
+    forwardNotice = null;
     privateReplyRetries.clear();
     stoppingPrivateReplies.clear();
     privateThreadWrites.clear();
@@ -3584,8 +3587,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let selecting = false;
   let selectionEpoch = 0;
   let selectionScope = '';
-  let forwardBusy = false;
-  let forwardAttempt = null;
+  const forwarding = new Map();
+  const uncertainForwards = new Map();
+  let forwardNotice = null;
+  const forwardStatus = document.getElementById('forward-status');
   const selectedMessages = new Set();
   const hideDialog = document.getElementById('message-selection-hide-dialog');
   const hideConfirm = document.getElementById('message-selection-hide-confirm');
@@ -3596,11 +3601,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let pinnedIds = new Set();
 
   const selectedSocialIds = () => selectionScope === sendScope() ? [...selectedMessages] : [];
+  const forwardSignature = (scope, target, ids) => JSON.stringify([scope, target, [...ids].sort()]);
 
   function syncForwardBar() {
     const bar = document.getElementById('forward-bar');
     if (!bar) return;
-    if (selecting && selectionScope !== sendScope()) {
+    const scope = sendScope();
+    if (selecting && selectionScope !== scope) {
       selecting = false;
       selectedMessages.clear();
     }
@@ -3608,12 +3615,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const count = selectedMessages.size;
     document.getElementById('forward-count').textContent = uiLabel(forwardCountLabel(count), `${count} selected`);
     const target = document.getElementById('forward-target');
-    const hiding = hidingMessages.has(sendScope());
-    document.getElementById('forward-submit').disabled = forwardBusy || hiding || !(count && target.value);
+    const hiding = hidingMessages.has(scope);
+    const pending = forwarding.get(scope);
+    target.disabled = Boolean(pending) || target.options.length < 2;
+    document.getElementById('forward-submit').disabled = Boolean(pending) || hiding || !(count && target.value);
+    if (forwardStatus) {
+      const issue = forwardNotice?.epoch === selectionEpoch &&
+        forwardNotice.signature === forwardSignature(scope, target.value, selectedMessages) ? forwardNotice.message : '';
+      forwardStatus.textContent = !selecting ? '' : pending
+        ? uiLabel(`正在转发 ${pending.count} 条消息…`, `Forwarding ${pending.count} ${pending.count === 1 ? 'message' : 'messages'}…`) : issue;
+      forwardStatus.dataset.kind = pending ? '' : 'error';
+    }
     const remove = document.getElementById('selection-hide');
     if (remove) {
       remove.hidden = !servedByDsbot;
-      remove.disabled = !count || hiding || forwardBusy;
+      remove.disabled = !count || hiding || Boolean(pending);
     }
     if (hideDialog?.open && (!selecting || hideTarget?.scope !== sendScope())) hideDialog.close();
     const capture = document.getElementById('selection-group-capture');
@@ -8259,7 +8275,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('selection-hide')?.addEventListener('click', () => {
     const scope = sendScope(), ids = selectedSocialIds();
     if (!servedByDsbot || !selecting || currentSource !== 'social' || !currentConversation || currentConversation.public_agent ||
-        !ids.length || hidingMessages.has(scope) || forwardBusy || hideDialog.open) return;
+        !ids.length || hidingMessages.has(scope) || forwarding.has(scope) || hideDialog.open) return;
     hideTarget = {scope, ids, epoch: selectionEpoch, path: `${socialBase()}/${currentConversation.id}/messages/hide`};
     document.getElementById('message-selection-hide-heading').textContent =
       uiLabel(`从我的记录移除 ${ids.length} 条消息`, `Remove ${ids.length} ${ids.length === 1 ? 'message' : 'messages'} from my history`);
@@ -8311,31 +8327,39 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const cid = currentConversation && currentConversation.id, target = forwardTarget.value;
     const ids = selectedSocialIds();
     const scope = sendScope();
-    if (!cid || !target || !ids.length || forwardBusy || hidingMessages.has(scope)) return;
+    if (!selecting || !cid || !target || !ids.length || forwarding.has(scope) || hidingMessages.has(scope)) return;
     const epoch = selectionEpoch;
-    const signature = JSON.stringify([scope, target, ids]);
-    if (forwardAttempt?.signature !== signature) forwardAttempt = {signature, key:idempotencyKey('forward-')};
-    forwardBusy = true;
+    const signature = forwardSignature(scope, target, ids);
+    const key = uncertainForwards.get(signature) || idempotencyKey('forward-');
+    const pending = {count:ids.length};
+    forwarding.set(scope, pending);
+    forwardNotice = null;
     syncForwardBar();
-    try {
-      const result = await request('POST', `${socialBase()}/${cid}/forward`,
-        {message_ids: ids, target_conversation_id: target}, {'Idempotency-Key':forwardAttempt.key});
-      if (result.status !== 201 && result.status !== 200) {
-        if (scope === sendScope()) show('error', messageFor(result.body.error, '转发失败，请重试。'));
-        return;
-      }
-      forwardAttempt = null;
-      if (scope === sendScope()) {
-        if (epoch === selectionEpoch) setSelecting(false);
-        show('ok', `已转发 ${result.body.forwarded ?? ids.length} 条消息。`);
-        await loadSessions();
-      }
-    } catch {
-      if (scope === sendScope()) show('error', '未能确认转发结果，请重试。');
-    } finally {
-      forwardBusy = false;
-      syncForwardBar();
+    const result = await request('POST', `${socialBase()}/${cid}/forward`,
+      {message_ids: ids, target_conversation_id: target}, {'Idempotency-Key':key}, AbortSignal.timeout(15000))
+      .catch(() => ({status:0, body:{}}));
+    if (forwarding.get(scope) !== pending) return;
+    forwarding.delete(scope);
+    const saved = [200, 201].includes(result.status) && (!servedByDsbot ||
+      (result.body?.target_conversation_id === target && result.body?.forwarded === ids.length));
+    const uncertain = !saved && unclearSocialDelivery(result.status);
+    uncertainForwards.delete(signature);
+    if (uncertain) {
+      uncertainForwards.set(signature, key);
+      if (uncertainForwards.size > 64) uncertainForwards.delete(uncertainForwards.keys().next().value);
     }
+    if (scope === sendScope()) {
+      if (saved) {
+        if (epoch === selectionEpoch && signature === forwardSignature(scope, forwardTarget.value, selectedMessages)) setSelecting(false);
+        show('ok', uiLabel(`已转发 ${ids.length} 条消息。`, `Forwarded ${ids.length} ${ids.length === 1 ? 'message' : 'messages'}.`));
+        void loadSessions().catch(() => {});
+      } else {
+        const fallback = uncertain ? uiLabel('未能确认转发结果，可以重试。', 'Could not confirm forwarding. You can retry.')
+          : uiLabel('转发失败，请重试。', 'Could not forward the messages. Try again.');
+        forwardNotice = {signature, epoch, message:messageFor(result.body?.error, fallback)};
+      }
+    }
+    syncForwardBar();
   });
   notificationKind?.addEventListener('change', () => {
     if (notificationSnapshot) renderNotifications(notificationSnapshot.body, notificationSnapshot.scope);

@@ -3,19 +3,20 @@ import {ACTION_EDIT_FIELDS, actionSaveAttempt, encodeActionReview, decodeActionR
   actionEditCommitted, advanceActionEdit, decodeActionEdit, reconcileActionEdit} from './action-review.mjs';
 import { domToMarkdown, renderMarkdown, safeHref } from './rich.mjs';
 import { editRichTable, MAX_TABLE_COLUMNS, MAX_TABLE_ROWS, readMarkdownTable, renderMarkdownTable } from '../shell/markdown-table.mjs';
-import { readWorkspaceChoices } from '../shell/dsbot-api.mjs';
+import { readWorkspaceChoices, servedByDsBot } from '../shell/dsbot-api.mjs';
 import { actionFollowupChannel } from '../shell/action-followup-events.mjs';
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
 }
 
-export function memoryDirectoryQuery({needle, topic, updatedAfter, unread, cursor} = {}) {
+export function memoryDirectoryQuery({needle, topic, updatedAfter, unread, pinned, cursor} = {}) {
   const params = new URLSearchParams({order: 'recent', limit: '20'});
   if (needle) params.set('q', needle);
   if (topic) params.set('topic', topic);
   if (updatedAfter != null) params.set('updated_after', String(updatedAfter));
   if (unread) params.set('unread', '1');
+  if (pinned) params.set('pinned', '1');
   if (cursor) params.set('cursor', cursor);
   return '?' + params.toString();
 }
@@ -407,6 +408,7 @@ function messageFor(error, fallback) {
 }
 
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
+  const nativePins = servedByDsBot(document);
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
@@ -420,6 +422,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const directoryMore = document.getElementById('memory-load-more');
   const directoryRetry = document.getElementById('memory-directory-retry');
   const editor = document.getElementById('editor-form');
+  const pagePin = document.getElementById('page-pin');
+  const pinnedFilter = document.getElementById('filter-pinned');
+  if (pinnedFilter) pinnedFilter.hidden = !nativePins;
+  const pinWrites = new Set();
   const actionEditor = document.getElementById('action-editor-form');
   const actionSearch = document.getElementById('action-search');
   const actionFilter = document.getElementById('action-filter');
@@ -525,7 +531,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const saved = directoryAddress();
     searchInput.value = typeof saved?.query === 'string' ? saved.query.slice(0, 80) : '';
     topicFilter = saved?.filter === 'topics' && typeof saved.topic === 'string' ? saved.topic : '';
-    setDirectoryFilter(['unread', 'updated', 'topics'].includes(saved?.filter) ? saved.filter : 'all');
+    const filters = nativePins ? ['unread', 'updated', 'topics', 'pinned'] : ['unread', 'updated', 'topics'];
+    setDirectoryFilter(filters.includes(saved?.filter) ? saved.filter : 'all');
   }
 
   function setCitationStatus(message) {
@@ -851,6 +858,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       badge.textContent = '未读';
       button.appendChild(badge);
     }
+    if (item.pinned === true) {
+      const badge = document.createElement('span');
+      badge.className = 'memory-pin-badge';
+      badge.textContent = '已置顶';
+      button.append(badge);
+    }
     button.addEventListener('click', () => openPage(item.id, undefined, undefined, {fromDirectory: true}));
     return button;
   }
@@ -892,8 +905,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     emptyEl.textContent = state?.needle ? MEMORY_EMPTY_NO_MATCH : state?.topic
       ? '这个标签下还没有记忆页。'
       : state?.unread ? '没有未读的记忆更新。'
+      : state?.pinned ? '还没有置顶的记忆页。'
       : state?.updatedAfter != null ? '最近 7 天没有更新过的记忆页。' : MEMORY_EMPTY_WORKSPACE;
-    if (resetFilters) resetFilters.hidden = emptyEl.hidden || (!state?.topic && !state?.unread && state?.updatedAfter == null);
+    if (resetFilters) resetFilters.hidden = emptyEl.hidden || (!state?.topic && !state?.unread && !state?.pinned && state?.updatedAfter == null);
     if (clearSearch) clearSearch.hidden = !searchInput.value;
     if (directoryStatus) {
       directoryStatus.textContent = state?.error || (busy ? (state.needle ? '正在搜索…' : '正在加载记忆…')
@@ -1007,7 +1021,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const topic = listFilter === 'topics' ? topicFilter : '';
     const recent = listFilter === 'updated';
     const unread = listFilter === 'unread';
-    if (!needle && !topic && !recent && !unread) {
+    const pinned = nativePins && listFilter === 'pinned';
+    if (!needle && !topic && !recent && !unread && !pinned) {
       cancelDirectorySearch();
       activeDirectory = browseDirectory;
       renderDirectory();
@@ -1015,10 +1030,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const current = activeDirectory;
     if (!force && current?.needle === needle && current.topic === topic && (current.updatedAfter != null) === recent &&
-        Boolean(current.unread) === unread) return;
+        Boolean(current.unread) === unread && Boolean(current.pinned) === pinned) return;
     cancelDirectorySearch();
     const updatedAfter = recent ? Math.floor(Date.now() / 1000) - 7 * 86400 : null;
-    const state = directoryWindow({needle, topic, updatedAfter, unread});
+    const state = directoryWindow({needle, topic, updatedAfter, unread, pinned});
     activeDirectory = state;
     renderDirectory();
     if (delay) {
@@ -2662,7 +2677,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function applyPageToEditor(page) {
     if (linkSearch && currentPage?.id !== page.id) linkSearch.value = '';
+    if (page.pinned === undefined && currentPage?.id === page.id && typeof currentPage.pinned === 'boolean') {
+      page = {...page,pinned:currentPage.pinned};
+    }
     currentPage = page;
+    syncPagePin();
     syncPageSaveButton();
     fillEditorFields({title: page.title, body: page.body || '', topics: formatTopics(page.topics)});
     document.getElementById('editor-meta').textContent =
@@ -2670,6 +2689,51 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     updatePageSaveHint(page);
     renderPageLinks();
   }
+
+  const pinScope = () => JSON.stringify([currentUser?.id, workspaceId(), currentPage?.id]);
+
+  function syncPagePin() {
+    if (!pagePin) return;
+    pagePin.hidden = !nativePins || !currentPage?.id;
+    pagePin.disabled = pinWrites.has(pinScope());
+    pagePin.setAttribute('aria-pressed', String(currentPage?.pinned === true));
+    pagePin.textContent = currentPage?.pinned ? '取消置顶' : '置顶';
+  }
+
+  pagePin?.addEventListener('click', async () => {
+    if (!nativePins || !currentUser || !currentPage || editor.hidden) return;
+    const owner = currentUser, workspace = workspaceId(), id = currentPage.id;
+    const scope = pinScope();
+    if (!MEMORY_ID.test(workspace) || !MEMORY_ID.test(id) || pinWrites.has(scope)) return;
+    const pinned = currentPage.pinned !== true;
+    const path = `/v1/workspaces/${workspace}/memory/${id}`;
+    const activeWorkspace = () => owner === currentUser && workspaceId() === workspace;
+    pinWrites.add(scope);
+    syncPagePin();
+    let result = await request('POST', path + '/pin', {pinned}, undefined, AbortSignal.timeout(8000))
+      .catch(() => ({status:0,body:{}}));
+    let confirmed = result.status === 200 && result.body?.page_id === id && result.body.workspace_id === workspace && result.body.pinned === pinned;
+    if (!confirmed && activeWorkspace() && (!result.status || result.status >= 500 || result.status === 200)) {
+      result = await request('GET', path, undefined, undefined, AbortSignal.timeout(6000)).catch(() => ({status:0,body:{}}));
+      const found = result.body?.page;
+      confirmed = result.status === 200 && found?.id === id && found.workspace_id === workspace && found.pinned === pinned;
+    }
+    pinWrites.delete(scope);
+    if (!activeWorkspace()) return;
+    if (currentPage?.id === id) {
+      if (confirmed) currentPage.pinned = pinned;
+      syncPagePin();
+      show(confirmed ? 'ok' : 'error', confirmed ? (pinned ? '已置顶。' : '已取消置顶。') : '未能确认置顶状态，请重试。');
+    }
+    if (!confirmed || !browseDirectory) return;
+    const wasBrowsing = activeDirectory === browseDirectory;
+    cancelDirectorySearch();
+    browseDirectory.controller?.abort();
+    browseDirectory = directoryWindow();
+    if (wasBrowsing) activeDirectory = browseDirectory;
+    else searchDirectory({force:true});
+    await loadDirectoryPage(browseDirectory);
+  });
 
   async function loadPageHistory({append = false} = {}) {
     const wid = workspaceId(), id = currentPage?.id, owner = currentUser?.id;
