@@ -32,10 +32,15 @@ export function mountSkillExecution(document,{request,scope,keyFactory=()=>globa
     for(const record of records){
       const task=record.task,li=document.createElement('li'),title=document.createElement('strong');
       title.textContent=(record.skill_id==='*'?'自动化技能组合':(catalogue.find(i=>i.id===record.skill_id)?.name||record.skill_id))+' · '+task.status;
-      const proof=document.createElement('p');proof.textContent=record.verified?'本次任务成功，并收到所选版本的摘要加载回执（不等于内容质量已验收）。':record.loaded?'已收到加载回执；任务尚未成功，不算验证通过。':'尚无本次加载成功证明。';
+      const proof = document.createElement('p');
+      proof.textContent = record.verified ? '已确认所选技能可用，任务已返回结果。'
+        : record.loaded ? '已确认所选技能可用。' : '正在等待技能状态。';
       const output=document.createElement('pre');output.textContent=task.result?.text||task.result?.error||task.prompt;
       li.append(title,proof,output);
-      const identity=document.createElement('small');identity.textContent='任务 '+task.id+' · '+new Date(task.created*1000).toLocaleString()+' · '+(record.skills||[]).map(i=>i.id+'@'+i.version).join(', ');li.append(identity);
+      const identity = document.createElement('small');
+      const skills = (record.skills || []).map(skill => skill.version ? skill.id + '@' + skill.version : skill.id);
+      identity.textContent = ['任务 ' + task.id, new Date(task.created * 1000).toLocaleString(), ...skills].join(' · ');
+      li.append(identity);
       if(['queued','claimed'].includes(task.status)){
         const cancel=document.createElement('button');cancel.type='button';cancel.textContent='取消此任务';
         cancel.addEventListener('click',async()=>{cancel.disabled=true;try{await request('POST','/v1/skills/runs/'+task.id+'/cancel',{});await refresh()}catch(e){showError(e)}finally{cancel.disabled=false}});li.append(cancel);
