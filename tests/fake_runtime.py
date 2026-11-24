@@ -1,12 +1,17 @@
-"""Explicit simulation backend, for tests/local demos only. No FlyBot or Docker calls."""
+"""Explicit simulation backend owned by the tests. No FlyBot or Docker calls.
+
+The platform no longer executes workloads centrally, so this fake runtime lives
+with the suites that still need a simulated volume/process boundary instead of
+shipping in the ``openteamily`` production package.
+"""
 from contextlib import contextmanager
 from copy import deepcopy
 import json
 import threading
 from uuid import uuid4
 
-from .lifecycle import ACTIONS, ID, RuntimeFault
-from .security import digest
+from openteamily.lifecycle import ACTIONS, ID, RuntimeFault
+from openteamily.security import digest
 
 
 class RuntimeFailure(Exception):

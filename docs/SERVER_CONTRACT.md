@@ -131,7 +131,7 @@ Instance {
 
 ## 4. `RuntimeBackend` 接口（语言无关）
 
-实现必须遵守 §2–§3。测试用 `FakeRuntimeBackend`（内存，可注入失败）；自托管路径用 `ComposeCliBackend`（只发白名单命令，见 §6）。二者实现同一接口。不得在 Web 进程内嵌套「任意 docker run」。
+实现必须遵守 §2–§3。测试用 `FakeRuntimeBackend`（`tests/fake_runtime.py`，内存，可注入失败，不随产品包发布）；自托管路径用 `ComposeCliBackend`（只发白名单命令，见 §6）。二者实现同一接口。不得在 Web 进程内嵌套「任意 docker run」。
 
 ```
 RuntimeBackend
@@ -231,7 +231,7 @@ RuntimeBackend
 3. 用户 B 不能 `inspect` / `start` / `stop` 用户 A 的 `instance_id`（测 404/403）。
 4. `inspect` 与 logs 的测试夹具若注入 token/密钥，响应体不得出现。
 5. 管理存储转储中不得出现明文会话 token 或实例登录 token。
-6. 单元测试：`FakeRuntimeBackend` 覆盖：desired 已是 running 但未观测到时重复 start 不递增 revision；stop 同理；新 restart `operation_id` 递增且要求回收；同一 operation_id 重试不递增；revision 对齐、互斥、越权、unsupported 缺口。
+6. 单元测试（`tests/fake_runtime.py`）：`FakeRuntimeBackend` 覆盖：desired 已是 running 但未观测到时重复 start 不递增 revision；stop 同理；新 restart `operation_id` 递增且要求回收；同一 operation_id 重试不递增；revision 对齐、互斥、越权、unsupported 缺口。
 7. 至少一条**真实** compose 路径的集成测试或手工脚本（可在隔离环境，不碰生产）。文档写明：仅 fake 全绿不能宣称已部署容器。
 8. `backup` / `upgrade` / `purge` 在 API 与 README 中列为明确缺口（`501`）。
 

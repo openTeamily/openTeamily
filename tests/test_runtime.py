@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from openteamily.app import App, Config
 from openteamily.compose_planning import NodeComposePlanner, PlanningFailure
-from openteamily.fake_runtime import FakeManagerWorker, FakeRuntimeBackend, RuntimeFailure
+from fake_runtime import FakeManagerWorker, FakeRuntimeBackend, RuntimeFailure
 from openteamily.lifecycle import Lifecycle, ManagerAuth, ManagerIdentity, RuntimeFault, RuntimePolicy
 from openteamily.security import digest, opaque
 from openteamily.store import Store
