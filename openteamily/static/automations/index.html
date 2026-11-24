@@ -188,6 +188,13 @@
         </div>
         <label class="schedule-toggle"><input type="checkbox" name="enabled"> 启用自动运行</label>
         <p id="automation-next-run" class="note" role="status" hidden></p>
+        <button type="button" id="preview-automation-schedule" class="secondary" aria-controls="automation-schedule-preview" hidden>预览运行时间</button>
+        <section id="automation-schedule-preview" aria-labelledby="automation-schedule-preview-heading" hidden>
+          <h3 id="automation-schedule-preview-heading">接下来 3 次计划运行</h3>
+          <p id="automation-schedule-preview-status" class="note" role="status"></p>
+          <ol id="automation-schedule-preview-slots"></ol>
+          <p id="automation-schedule-preview-hint" class="note" hidden>没有该日期的月份会跳过。</p>
+        </section>
         <div id="automation-notification-settings" hidden>
           <label for="automation-notification-policy">运行结果通知</label>
           <select id="automation-notification-policy" name="notification_policy" aria-describedby="automation-notification-help">

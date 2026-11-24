@@ -643,11 +643,15 @@ textarea {
   display: grid;
   gap: 0.4rem;
   margin: 0.4rem 0;
+  padding: 0;
+  list-style: none;
 }
-
-#page-links button {
-  width: auto;
-}
+#page-links:empty { display: none; }
+#page-links li { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .6rem; min-width: 0; }
+#page-links a { min-width: 0; overflow-wrap: anywhere; }
+#page-links button { width: auto; margin-inline-start: auto; }
+.editor-connections { padding-top: .7rem; border-top: 1px solid var(--ot-line); }
+.editor-connections h2 { margin: 0 0 .45rem; font-size: 1rem; }
 
 .memory-page-head {
   display: flex;
@@ -1190,8 +1194,14 @@ body.app-workspace #editor-rich:focus-visible, #editor-rich:focus { outline: non
 #editor-rich h1 { font-size: 1.5rem; }
 #editor-rich h2 { font-size: 1.25rem; }
 #editor-rich h3 { font-size: 1.0625rem; }
-#editor-form .editor-link-row { display: flex; align-items: center; gap: .5rem; margin: .5rem 0; }
-html[data-theme-resolved="dark"] #editor-form .editor-link-row label{ display: flex; align-items: center; gap: .5rem; flex: 1 1 auto; min-width: 0; margin: 0; font-size: .8125rem; color: var(--ot-muted); white-space: nowrap; }html[data-theme-resolved="dark"] #editor-form .editor-link-row select{ flex: 1 1 auto; min-width: 0; height: 2rem; min-height: 0; padding: 0 .625rem; line-height: 2rem; font-size: .8125rem; }html[data-theme-resolved="dark"] #editor-form .editor-link-row button{ flex: none; height: 2rem; min-height: 0; padding: 0 .875rem; border-radius: 999px; font-size: .8125rem; }html[data-theme-resolved="dark"] /* Aurora Glass: memory */
+#editor-form .editor-link-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: center; gap: .5rem; margin: .5rem 0; }
+#editor-form .editor-link-row :is(input, select) { min-width: 0; width: 100%; margin: 0; }
+#editor-form .editor-link-row button { white-space: nowrap; }
+@media (max-width: 700px) {
+  #editor-form .editor-link-row { grid-template-columns: minmax(0, 1fr) auto; }
+  #link-search { grid-column: 1 / -1; }
+}
+html[data-theme-resolved="dark"] /* Aurora Glass: memory */
 .memory-dir, html[data-theme-resolved="dark"] .memory-side, html[data-theme-resolved="dark"] .overview-panel, html[data-theme-resolved="dark"] .actions-panel, html[data-theme-resolved="dark"] #meetings-panel, html[data-theme-resolved="dark"] .memory-top{
   background: var(--ot-surface);
   border: 1px solid var(--ot-line);

@@ -50,6 +50,13 @@ export function automationsV1({ endpoints, log, personalBinding, readSavedWorks 
       return { status, body: { created, skipped } }
     }) },
     { pattern: /^\/v1\/automation-templates$/, handle: wrap(async () => ({ status: 200, body: await call('templates') })) },
+    { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations/schedule-preview$`), handle: wrap(async (req, workspaceId) => {
+      if (req.method !== 'POST' || req.query.size) throw new FeatureError(405, 'method', 'Only POST is supported')
+      if (!req.ownerUsername) throw new FeatureError(403, 'forbidden', 'Schedule preview requires an authenticated owner')
+      const {schedule} = requireBodyKeys(await req.json(2048), ['schedule'])
+      const preview = await call('previewSchedule', {workspace_id:workspaceId, schedule})
+      return {body:{...preview, workspace_id:workspaceId, viewer_username:req.ownerUsername}}
+    }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations/draft$`), handle: wrap(async (req, workspaceId) => {
       if (req.method !== 'POST' || req.query.size) throw new FeatureError(405, 'method', 'Only POST is supported')
       if (!req.ownerUsername) throw new FeatureError(403, 'forbidden', 'Drafts require an authenticated owner')

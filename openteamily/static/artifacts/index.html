@@ -145,6 +145,7 @@
                 <label><input type="checkbox" name="file-type" value="网页"> 网页</label>
                 <label><input type="checkbox" name="file-type" value="图片"> 图片</label>
                 <label><input type="checkbox" name="file-type" value="视频"> 视频</label>
+                <label><input type="checkbox" name="file-type" value="文件"> 文件</label>
                 <label><input type="checkbox" name="file-type" value="音频"> 音频</label>
                 <label><input type="checkbox" name="file-type" value="3D 模型"> 3D 模型</label>
                 <label><input type="checkbox" name="file-type" value="白板"> 白板</label>
@@ -414,6 +415,7 @@
       <div id="media-editor" hidden>
         <label id="media-file-picker">文件 <input id="media-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp,audio/mpeg,audio/ogg,audio/wav,video/mp4,video/webm"></label>
         <p id="media-meta" class="note"></p>
+        <a id="media-file-download" hidden>下载原文件</a>
         <img id="media-image" alt="" hidden src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
         <audio id="media-audio" controls hidden></audio>
         <video id="media-video" controls hidden></video>
@@ -805,6 +807,20 @@
       <button type="button" id="studio-history-restore" class="secondary">恢复为新版本</button>
       <button type="button" id="studio-history-save-personal" class="secondary" aria-haspopup="dialog" hidden>保存个人副本</button>
     </section>
+  </dialog>
+  <dialog id="space-upload-dialog" aria-labelledby="space-upload-title">
+    <form id="space-upload-form">
+      <h2 id="space-upload-title">上传文件</h2>
+      <label for="space-upload-files">选择文件</label>
+      <input type="file" id="space-upload-files" multiple aria-describedby="space-upload-limit">
+      <p id="space-upload-limit" class="note">每个文件最大 2 MB。可在上传前修改作品标题。</p>
+      <ul id="space-upload-rows" aria-label="所选文件"></ul>
+      <p id="space-upload-status" role="status"></p>
+      <div class="space-upload-actions">
+        <button type="button" id="space-upload-close" class="secondary">关闭</button>
+        <button type="submit" id="space-upload-submit" disabled>上传文件</button>
+      </div>
+    </form>
   </dialog>
   </main>
   <nav class="mobile-primary-nav" aria-label="主导航" data-ui-label="shell.nav.mobile"></nav>

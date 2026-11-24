@@ -2765,3 +2765,32 @@ html[data-theme-resolved="dark"] :is(#main-panel, #studio-dialog) {
 @media (max-width: 700px) {
   #studio-dialog #studio-catalog-query, #studio-catalog-clear { min-height: 2.75rem; }
 }
+#space-upload-dialog {
+  box-sizing: border-box;
+  width: min(34rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  padding: 1.25rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .875rem;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+}
+#space-upload-dialog::backdrop { background: rgb(20 16 30 / 42%); }
+#space-upload-form { display: grid; gap: .625rem; }
+#space-upload-form :is(h2, p, label) { margin: 0; }
+#space-upload-title { font-size: 1.25rem; }
+#space-upload-files { max-width: 100%; }
+#space-upload-rows { display: grid; gap: .5rem; list-style: none; padding: 0; margin: 0; }
+#space-upload-rows li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: .25rem;
+  padding: .625rem .75rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .625rem;
+}
+.space-upload-filename { font-size: .8125rem; overflow-wrap: anywhere; }
+#space-upload-rows input { box-sizing: border-box; width: 100%; min-width: 0; font-size: 1rem; }
+#space-upload-status:empty { display: none; }
+.space-upload-actions { display: flex; justify-content: end; gap: .5rem; }
+.space-upload-actions button { min-height: 2.75rem; }

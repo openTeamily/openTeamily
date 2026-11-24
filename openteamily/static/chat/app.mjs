@@ -4710,6 +4710,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     queued: ['正在等待智能体', 'Waiting for the agent'],
     running: ['正在生成回复', 'Writing a reply'],
     failed: ['回复未完成', 'Reply could not be completed'],
+    replied: ['回复已完成', 'Reply completed'],
   };
   function compactGroupReplies() {
     return currentConversation?.kind === 'group' && !currentConversation.public_agent;
@@ -4825,13 +4826,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       .find(row => row.dataset.replyJobId === job.id);
     const retry = Symbol();
     groupReplyRetries.set(job.id, retry);
+    const inScope = () => sendScope() === scope && currentSource === 'social' && currentConversation?.id === cid;
+    const ownedRetry = () => groupReplyRetries.get(job.id) === retry && inScope();
+    const advanced = candidate => candidate?.id === job.id && Number.isSafeInteger(candidate.attempt) &&
+      candidate.attempt > job.attempt && candidate.agent_id === job.agent_id && candidate.agent_owner_id === job.agent_owner_id;
     setGroupReplyRetryButton(groupReplyButton(findRow()), true);
     const result = await request('POST', `${socialBase()}/${cid}/messages/${item.id}/agent-retry`,
-      {job_id: job.id, attempt: job.attempt}).catch(() => ({status: 0, body: {}}));
+      {job_id: job.id, attempt: job.attempt}, undefined, AbortSignal.timeout(15000)).catch(() => ({status: 0, body: {}}));
+    let next = result.status === 200 && Array.isArray(result.body.reply_jobs) && result.body.reply_jobs.find(advanced);
+    const history = socialHistory;
+    if (!next && servedByDsbot && ownedRetry() && history && chatPathId(item.id) &&
+        (unclearSocialDelivery(result.status) || result.status === 409)) {
+      // A lost acknowledgement can leave a real retry running in Bot Social.
+      const query = new URLSearchParams({around:item.id,limit:'1',scope:'workspace'});
+      const receipt = await historyPage(history,query,AbortSignal.timeout(4500)).catch(() => null);
+      const original = receipt?.status === 200 && Array.isArray(receipt.body.items) && receipt.body.items.find(message =>
+        message.id === item.id && !message.retracted && message.conversation_id === cid &&
+        message.workspace_id === history.wid && message.user_id === history.owner);
+      next = Array.isArray(original?.reply_jobs) && original.reply_jobs.find(advanced);
+    }
     if (groupReplyRetries.get(job.id) !== retry) return;
     groupReplyRetries.delete(job.id);
-    if (sendScope() !== scope || currentSource !== 'social' || currentConversation?.id !== cid) return;
-    const next = result.status === 200 && result.body.reply_jobs?.find(candidate => candidate.id === job.id);
+    if (!inScope()) return;
     const row = findRow();
     const button = groupReplyButton(row);
     const source = lastSocialItems.find(message => message.id === item.id && !message.retracted);
@@ -4851,7 +4867,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         }
         syncGroupReplyProgress();
       } else setGroupReplyRetryButton(button, false);
-      if (!socialHistory?.readingHistory) scheduleSocialPoll(currentConversation);
+      if (next.status === 'replied') {
+        if (!readingSocialContext()) void openSocialConversation(cid, {refresh:true});
+        else if (liveBanner) liveBanner.hidden = false;
+      } else if (!socialHistory?.readingHistory) scheduleSocialPoll(currentConversation);
       show('ok', uiLabel('已重新请求回复。', 'Reply requested again.'), {announceOnly: true});
     } else {
       setGroupReplyRetryButton(button, false);

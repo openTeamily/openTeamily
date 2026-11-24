@@ -72,6 +72,7 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget(`/v1/workspaces/${WS}/automations`, ORIGIN).feature, 'automations');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/automations/tick`, ORIGIN).feature, 'automations');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/automations/draft`, ORIGIN).feature, 'automations');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/automations/schedule-preview`, ORIGIN).feature, 'automations');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/automations/${ID}`, ORIGIN).feature, 'automations');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/automations/${ID}/run`, ORIGIN).feature, 'automations');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/automations/${ID}/runs/${ID}/retry`, ORIGIN).feature, 'automations');

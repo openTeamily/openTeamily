@@ -216,6 +216,44 @@ test('a scoped memory action prepares one durable follow-up for its reviewed rev
     {text: 'DS-Bot did it', model: 'm'})
 })
 
+test('the signed recurring preview uses scheduler dates and clock changes without saving or running', async t => {
+  const db = new DatabaseSync(':memory:')
+  t.after(() => db.close())
+  const epoch = text => Date.parse(text) / 1000
+  let current = epoch('2026-03-07T05:00:00Z')
+  const feature = createAutomations({
+    db, clock:() => current,
+    turn:() => assert.fail('schedule preview ran the automation'),
+    async requireWorkspace(workspace) {
+      if (workspace !== W) throw Object.assign(new Error('Workspace unavailable'), {status:404})
+    },
+  })
+  const scope = username => ({request:new Request('http://fixture', {headers:{'x-ot-owner-username':username}})})
+  const preview = (schedule, workspace = W, username = 'alice') => feature.ops.v1({
+    method:'POST', path:`/v1/workspaces/${workspace}/automations/schedule-preview`, body:{schedule},
+  }, scope(username))
+  const schedule = {kind:'daily', time:'02:30', time_zone:'America/New_York'}
+  assert.equal((await preview(schedule, W, '')).status, 403)
+  assert.equal((await preview(schedule, 'b'.repeat(32))).status, 404)
+  assert.equal((await preview({...schedule, time_zone:'not-a-zone'})).status, 400)
+  const spring = await preview(schedule)
+  assert.deepEqual(spring, {status:200, body:{time_zone:schedule.time_zone, workspace_id:W, viewer_username:'alice', slots:[
+    {at:epoch('2026-03-07T07:30:00Z'), date:'2026-03-07', weekday:6, time:'02:30'},
+    {at:epoch('2026-03-08T07:30:00Z'), date:'2026-03-08', weekday:7, time:'03:30', clock_change:'forward'},
+    {at:epoch('2026-03-09T06:30:00Z'), date:'2026-03-09', weekday:1, time:'02:30'},
+  ]}})
+  current = epoch('2026-10-31T23:00:00Z')
+  const autumn = (await preview({...schedule, time:'01:30'})).body.slots
+  assert.deepEqual(autumn.map(slot => slot.at), [
+    epoch('2026-11-01T05:30:00Z'), epoch('2026-11-02T06:30:00Z'), epoch('2026-11-03T06:30:00Z'),
+  ])
+  assert.equal(autumn[0].clock_change, 'first')
+  current = epoch('2026-02-01T05:00:00Z')
+  const months = (await preview({...schedule,kind:'monthly',day:31})).body.slots
+  assert.deepEqual(months.map(slot=>slot.date), ['2026-03-31','2026-05-31','2026-07-31'])
+  assert.deepEqual(feature.endpoints['automations/list']({workspace_id:W}).items, [])
+})
+
 test('next recurring slot follows local weekdays, month lengths and DST', () => {
   const seconds = iso => Date.parse(iso) / 1000
   const weekly = {kind:'weekly', weekday:1, time:'09:00', time_zone:'America/New_York'}

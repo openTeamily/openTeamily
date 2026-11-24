@@ -17,3 +17,6 @@ Copy and download use the original result text.
 In a new editor, describe the intended task to generate a title and instructions using the
 owner's DS-Bot. Review and adopt the draft before saving the automation. Set the schedule and
 participants in the editor.
+
+The recurring schedule preview shows the next three times calculated by the owner's DS-Bot
+from the editor's current settings. It accounts for short months and time-zone clock changes.

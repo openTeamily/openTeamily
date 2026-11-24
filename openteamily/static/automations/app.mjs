@@ -459,6 +459,10 @@ function oneTimeScheduleLabel(state) {
   return '';
 }
 
+function clockChangeLabel(change) {
+  return change === 'forward' ? '时钟跳转后顺延' : change === 'first' ? '按第一次出现的时间运行' : '';
+}
+
 function renderNextRun(node, item) {
   const status = item?.schedule_status;
   node.textContent = '';
@@ -466,8 +470,7 @@ function renderNextRun(node, item) {
   if (!status) return;
   if (status.state === 'due') node.textContent = '已到计划运行时间';
   if (oneTimeScheduleLabel(status.state)) node.textContent = oneTimeScheduleLabel(status.state);
-  const clockChange = status.clock_change === 'forward' ? '时钟跳转后顺延'
-    : status.clock_change === 'first' ? '按第一次出现的时间运行' : '';
+  const clockChange = clockChangeLabel(status.clock_change);
   const pausedPreview = status.state === 'paused' && clockChange;
   if ((status.state === 'scheduled' || pausedPreview) && Number.isSafeInteger(status.at) && status.at > 0) {
     const zone = item.schedule?.time_zone;
@@ -692,6 +695,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const templateRetry = document.getElementById('automation-template-retry');
   const editorOptions = document.getElementById('automation-editor-options');
   const nextRun = document.getElementById('automation-next-run');
+  const previewScheduleButton = document.getElementById('preview-automation-schedule');
+  const schedulePreview = document.getElementById('automation-schedule-preview');
+  const schedulePreviewStatus = document.getElementById('automation-schedule-preview-status');
+  const schedulePreviewSlots = document.getElementById('automation-schedule-preview-slots');
+  const schedulePreviewHint = document.getElementById('automation-schedule-preview-hint');
   const scheduleSettings = document.getElementById('automation-schedule-settings');
   const native = servedByDsBot(document);
   document.getElementById('automation-notification-settings').hidden = !native;
@@ -719,6 +727,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let nextRunCursor = '';
   let activeRun = false;
   let runSettingsChanged = false;
+  let scheduleReview;
   let editorRequest = 0;
   let editorInitial = '';
   let runIntent = 0;
@@ -1913,6 +1922,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function openEditor(item, source = null, opener = null, run = null, draftEntry) {
+    resetSchedulePreview();
     listReturn = opener && {opener, workspace: workspaceId(), category, query: search.value, scroll: main.scrollTop || 0};
     // A question belongs to the editor that raised it; entering another editor
     // drops the question instead of showing it again above a different item.
@@ -1995,6 +2005,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       sampleButton.hidden = !native || Boolean(current?.id || followupSource) || !RECURRING_KINDS.has(form.elements.kind.value);
       sampleButton.disabled = saveButton.disabled;
     }
+    if (previewScheduleButton) {
+      previewScheduleButton.hidden = !native || !RECURRING_KINDS.has(form.elements.kind.value);
+      if (scheduleReview && schedulePreviewScope()?.key !== scheduleReview.key) resetSchedulePreview();
+    }
     if (!nextRun) return;
     if (!current?.schedule_status || !current.schedule) {
       renderNextRun(nextRun);
@@ -2006,6 +2020,67 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       (key === 'kind' && saved.kind === 'later' ? 'once' : saved[key]) === shown[key]);
     renderNextRun(nextRun, unchanged ? current : null);
   }
+
+  function schedulePreviewScope() {
+    const workspace = workspaceId(), username = currentUser?.username;
+    if (!native || !username || !EDITOR_ID.test(workspace) || form.hidden ||
+        !RECURRING_KINDS.has(form.elements.kind.value)) return null;
+    const schedule = scheduleFromForm(new FormData(form));
+    return {schedule, workspace, username,
+      key:JSON.stringify([currentUser.id || username, workspace, editorRequest, current?.id, current?.revision, schedule])};
+  }
+
+  function resetSchedulePreview() {
+    scheduleReview?.controller.abort();
+    scheduleReview = undefined;
+    if (previewScheduleButton) previewScheduleButton.disabled = false;
+    if (schedulePreview) schedulePreview.hidden = true;
+    if (schedulePreviewStatus) schedulePreviewStatus.textContent = '';
+    if (schedulePreviewSlots) schedulePreviewSlots.textContent = '';
+    if (schedulePreviewHint) schedulePreviewHint.hidden = true;
+  }
+
+  previewScheduleButton?.addEventListener('click', async () => {
+    const target = schedulePreviewScope();
+    if (!target || !schedulePreview || !schedulePreviewStatus || !schedulePreviewSlots || !schedulePreviewHint) return;
+    resetSchedulePreview();
+    const controller = new AbortController();
+    const pending = scheduleReview = {...target, controller};
+    previewScheduleButton.disabled = true;
+    schedulePreview.hidden = false;
+    schedulePreviewStatus.textContent = '正在预览运行时间…';
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(12000)]);
+    const result = await request('POST', `/v1/workspaces/${target.workspace}/automations/schedule-preview`,
+      {schedule:target.schedule}, undefined, signal).catch(() => ({}));
+    if (scheduleReview !== pending || schedulePreviewScope()?.key !== target.key) return;
+    previewScheduleButton.disabled = false;
+    const {slots, time_zone, workspace_id, viewer_username} = result.body || {};
+    if (result.status !== 200 || workspace_id !== target.workspace || viewer_username !== target.username ||
+        time_zone !== target.schedule.time_zone || !Array.isArray(slots) || slots.length !== 3 ||
+        !slots.every((slot, index) => Number.isSafeInteger(slot?.at) && slot.at > (slots[index - 1]?.at || 0) &&
+          Number.isInteger(slot.weekday) && slot.weekday >= 1 && slot.weekday <= 7 &&
+          /^\d{4}-\d{2}-\d{2}$/.test(slot.date) && /^\d{2}:\d{2}$/.test(slot.time))) {
+      schedulePreviewStatus.textContent = result.body?.error?.message || '暂时无法预览运行时间，请重试。';
+      return;
+    }
+    schedulePreviewStatus.textContent = '时区 ' + time_zone;
+    schedulePreviewHint.hidden = target.schedule.kind !== 'monthly' || target.schedule.day <= 28;
+    for (const slot of slots) {
+      const row = document.createElement('li');
+      const time = document.createElement('time');
+      time.dateTime = new Date(slot.at * 1000).toISOString();
+      time.textContent = `${slot.date} 周${WEEKDAY_NAMES[slot.weekday - 1]} ${slot.time}`;
+      row.appendChild(time);
+      const clockChange = clockChangeLabel(slot.clock_change);
+      if (clockChange) {
+        const label = document.createElement('span');
+        label.className = 'note';
+        label.textContent = clockChange;
+        row.appendChild(label);
+      }
+      schedulePreviewSlots.appendChild(row);
+    }
+  });
 
   function readLinkedAutomation(target) {
     const path = runPath(target);
@@ -2274,6 +2349,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   async function load() {
     resetTaskDraft();
+    resetSchedulePreview();
     const seq = ++loadRequest;
     const target = editorTargetFromSearch(readSearch());
     const fragment = new URLSearchParams((view?.location?.hash || '').slice(1));
@@ -2424,6 +2500,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   workspaceSelect.addEventListener('change', () => {
     resetTaskDraft();
+    resetSchedulePreview();
     editorRequest += 1;
     if (editorTargetFromSearch(readSearch())) clearEditorLink();
     else writeWorkspaceLink();
@@ -2555,6 +2632,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   for (const tab of tabs) {
     tab.addEventListener('click', async () => {
       resetTaskDraft();
+      resetSchedulePreview();
       editorRequest += 1;
       clearEditorLink();
       selectCategory(tabCategory(tab.dataset.category));
@@ -2582,6 +2660,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   async function returnToList(catalogue = null) {
     resetTaskDraft();
+    resetSchedulePreview();
     const transition = ++editorRequest;
     const position = listReturn || catalogue;
     listReturn = null;

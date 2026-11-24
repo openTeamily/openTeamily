@@ -6,7 +6,7 @@ import { digest, HEX32, newId, nowSeconds, refuse, stableJson } from '../../feat
 import { GLB_MIME, MAX_GLB_BYTES } from '../../lib/glb.js'
 import { catalogContentMatch, catalogMatch } from './catalog-search.js'
 import {
-  emptyBoard, emptyDashboard, emptySlides, MAX_MEDIA_OBJECT_BYTES, MEDIA_MIMES, preview, PREFIX_LEN, publicKind, ROW_JOINS, ROW_SELECT, SHARE_CSP, sourceView,
+  emptyBoard, emptyDashboard, emptySlides, FILE_MIME, MAX_MEDIA_OBJECT_BYTES, MEDIA_MIMES, preview, PREFIX_LEN, publicKind, ROW_JOINS, ROW_SELECT, SHARE_CSP, sourceView,
   SLIDES_SCHEMA, TITLE_MAX, titleHash, TOKEN, validBody, validTitle,
 } from './model.js'
 import { attachMedia, mediaDigests, readMediaBytes, unlinkMedia, writeMedia } from './media.js'
@@ -84,6 +84,7 @@ function matchesFileTypes(row, kind, types) {
   if (kind === 'document' && row.chat_message_id) return false
   if (kind !== 'media') return types.has(kind)
   if (row.media_mime === GLB_MIME) return types.has('model3d')
+  if (row.media_mime === FILE_MIME) return types.has('file')
   return types.has(row.media_mime.split('/', 1)[0])
 }
 
@@ -534,17 +535,17 @@ export function duplicateArtifact({store, owner, featureDir}, workspaceId, {arti
   })
 }
 
-export function createMedia(ctx, workspaceId, { title, data, filename, mime, key }, {receiptHash} = {}) {
+export function createMedia(ctx, workspaceId, { title, data, filename, mime, key, allowFile }, {receiptHash} = {}) {
   const { store, owner, featureDir } = ctx
   if (typeof workspaceId !== 'string' || !HEX32.test(workspaceId)) refuse(400, 'invalid', 'Provide a workspace_id')
   if (!validTitle(title)) refuse(400, 'invalid', 'Provide a document title and body')
   const trimmed = title.trim()
   if (!KEY.test(key ?? '')) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
   const sniffed = sniffMime(data)
-  if (!sniffed || !MEDIA_MIMES.has(sniffed) || (mime && mime !== sniffed && !MEDIA_MIMES.has(mime))) {
+  const used = MEDIA_MIMES.has(sniffed) ? sniffed : allowFile ? FILE_MIME : null
+  if (!used || (mime && mime !== used && !MEDIA_MIMES.has(mime))) {
     refuse(400, 'invalid', 'Upload a supported media file')
   }
-  const used = sniffed
   const name = savedMediaFilename(filename)
   const sha = createHash('sha256').update(data).digest('hex')
   const payload = { title: trimmed, kind: 'media', sha256: sha, mime: used, filename: name }
@@ -886,6 +887,9 @@ export function content(row, featureDir, { preview: asPreview = false } = {}) {
     try {
       const payload = readMediaBytes(featureDir, row.workspace_id, row.media_sha256, row.media_bytes, row.media_mime)
       const name = savedMediaFilename(row.media_filename)
+      if (row.media_mime === FILE_MIME) {
+        return { status:200, raw:payload, filename:name, headers:exportHeaders(FILE_MIME, name) }
+      }
       return {
         status: 200, raw: payload, inline: true,
         headers: {

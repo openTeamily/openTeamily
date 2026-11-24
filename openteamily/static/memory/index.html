@@ -377,15 +377,18 @@
       <p id="editor-length" class="note editor-length" hidden></p>
       <p class="note">正文里用 [[已有标题]] 可以连到同工作区的记忆页。</p>
       <p id="editor-meta" class="note"></p>
-      <div id="page-links"></div>
-      <div class="editor-link-row">
-        <label>添加连接
-          <select id="link-target">
-            <option value="">选择记忆页</option>
-          </select>
-        </label>
-        <button type="button" id="add-link">添加连接</button>
-      </div>
+      <section class="editor-connections" aria-labelledby="editor-connections-title">
+        <h2 id="editor-connections-title">关联记忆</h2>
+        <ul id="page-links" aria-label="已关联的记忆页"></ul>
+        <p id="page-links-empty" class="note">还没有关联记忆。</p>
+        <div class="editor-link-row">
+          <label class="visually-hidden" for="link-search">搜索可连接的记忆页</label>
+          <input type="search" id="link-search" placeholder="搜索记忆页标题" maxlength="80" autocomplete="off">
+          <label class="visually-hidden" for="link-target">选择要连接的记忆页</label>
+          <select id="link-target" disabled><option value="">选择记忆页</option></select>
+          <button type="button" id="add-link" disabled>添加连接</button>
+        </div>
+      </section>
       <div class="actions">
         <button type="submit" id="save-page">保存</button>
         <button type="button" id="delete-page">删除</button>

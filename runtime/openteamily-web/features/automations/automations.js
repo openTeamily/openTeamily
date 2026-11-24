@@ -11,7 +11,7 @@ import { importPending } from '../../src/pending-import.js'
 //   DS-Bot's. No runtime_tasks row and no server queue are involved.
 import { createHash } from 'node:crypto'
 import { TEMPLATES, INTENTS } from './templates.js'
-import { dueAt, dueSlot, nextSlot, normalizeSchedule, validSchedule } from './schedule.js'
+import { dueAt, dueSlot, nextSlot, normalizeSchedule, partsIn, validSchedule } from './schedule.js'
 import { newId } from '../../src/store.js'
 import { automationsV1 } from './v1.js'
 import { importOfficialBundle, recordLegacyRuns } from './migrate.js'
@@ -307,6 +307,33 @@ export function createAutomations({ db, turn, runtimeReady = () => true, clock =
     const id = payload?.workspace_id
     if (typeof id !== 'string' || !HEX32.test(id)) refuse(400, 'invalid', 'workspace_id required')
     return id
+  }
+
+  async function previewSchedule(payload) {
+    const workspaceId = workspaceOf(payload)
+    if (typeof requireWorkspace !== 'function') refuse(503, 'unavailable', '暂时无法读取工作区。')
+    await requireWorkspace(workspaceId)
+    const {schedule} = payload
+    if (!RECURRING.has(schedule?.kind) || !validSchedule(schedule)) {
+      refuse(400, 'invalid_schedule', '请检查运行时间和时区。')
+    }
+    const zone = schedule.time_zone
+    const slots = []
+    const twoDigits = value => String(value).padStart(2, '0')
+    let after = clock()
+    for (let index = 0; index < 3; index += 1) {
+      const slot = nextSlot(schedule, after)
+      if (!slot) break
+      const local = partsIn(zone, slot.at * 1000)
+      slots.push({
+        at:slot.at, weekday:local.isoWeekday,
+        date:`${local.year}-${twoDigits(local.month)}-${twoDigits(local.day)}`,
+        time:`${twoDigits(local.hour)}:${twoDigits(local.minute)}`,
+        ...(slot.clockChange ? {clock_change:slot.clockChange} : {}),
+      })
+      after = slot.at
+    }
+    return {slots, time_zone:zone}
   }
 
   async function prepareTaskDraft(payload) {
@@ -1160,6 +1187,7 @@ export function createAutomations({ db, turn, runtimeReady = () => true, clock =
   const ops = {}
   for (const [name, handler] of Object.entries(endpoints)) ops[name.slice('automations/'.length)] = handler
   ops.prepareTaskDraft = prepareTaskDraft
+  ops.previewSchedule = previewSchedule
   ops.memoryFollowupsForAction = memoryFollowupsForAction
   ops.v1 = automationsV1({ endpoints: ops, log, personalBinding, readSavedWorks })
   ops.importRuns = (p) => ({ imported: recordLegacyRuns(db, p) })
@@ -1192,7 +1220,7 @@ export default async function automations(host) {
   if (!imported.some(item => item.status === 'rejected') && process.env.OPENTEAMILY_AUTOMATIONS_CLOCK !== '0') feature.start()
   const ops = {}
   for (const [name, handler] of Object.entries(feature.ops)) {
-    if (!['createOnboarding', 'meetingFollowup', 'memoryFollowup', 'memoryFollowupsForAction', 'prepareTaskDraft'].includes(name)) {
+    if (!['createOnboarding', 'meetingFollowup', 'memoryFollowup', 'memoryFollowupsForAction', 'prepareTaskDraft', 'previewSchedule'].includes(name)) {
       ops[name] = async (payload) => handler(payload ?? {})
     }
   }

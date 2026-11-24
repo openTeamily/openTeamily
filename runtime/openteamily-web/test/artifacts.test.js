@@ -581,6 +581,34 @@ test('media upload is stored in this DS-Bot feature directory and is listed for 
   assert.equal(all.value.items[0].kind, 'artifact')
 })
 
+test('ordinary uploads remain scoped download-only files and retry from the original receipt', async () => {
+  const bot = await boot()
+  const call = (...args) => bot.call('artifacts', ...args)
+  const raw = Buffer.from('<h1>Saved source file</h1>')
+  const input = {
+    _multipart: true,
+    fields: {title:'附加参考', kind:'media', allow_file:'1'},
+    files: {file:{filename:'参考说明.html', content_type:'text/html', data:raw.toString('base64')}},
+  }
+  const requestKey = key()
+  const created = await call('POST', base(), input, requestKey)
+  assert.equal(created.status, 201)
+  const item = created.body.artifact
+  assert.equal(item.media.mime, 'application/octet-stream')
+  const retried = await call('POST', base(), input, requestKey)
+  assert.equal(retried.status, 200)
+  assert.equal(retried.body.artifact.id, item.id)
+  const download = await call('GET', base(`/${item.id}/file`))
+  assert.equal(download.download.content_type, 'application/octet-stream')
+  assert.equal(download.download.filename, '参考说明.html')
+  assert.ok(!download.download.inline)
+  assert.deepEqual(Buffer.from(download.download.data, 'base64'), raw)
+  assert.deepEqual((await call('GET', base() + '?type=file')).body.items.map(row=>row.id), [item.id])
+  assert.deepEqual((await call('GET', base() + '?type=image')).body.items, [])
+  const outsider = await boot()
+  assert.equal((await outsider.call('artifacts', 'GET', base(`/${item.id}/file`))).status, 404)
+})
+
 test('artifact data stays in this volume; another DS-Bot never sees it', async () => {
   const vol = volume()
   const first = await boot(vol)

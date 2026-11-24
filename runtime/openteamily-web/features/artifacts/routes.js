@@ -47,7 +47,7 @@ function activity(req, workspaceId) {
 }
 
 const FILE_TYPES = new Set([
-  'document', 'website', 'image', 'video', 'audio', 'model3d',
+  'document', 'website', 'image', 'video', 'audio', 'model3d', 'file',
   'whiteboard', 'spreadsheet', 'slides', 'dashboard', 'messages',
 ])
 
@@ -99,9 +99,9 @@ export async function dispatch(req, workspaceId, artifactId, action) {
     const raw = await req.json(4 * 1024 * 1024)
     if (raw?._multipart) {
       const upload = decodeUpload(raw)
-      const mime = undefined
       return createMedia(context, workspaceId, {
-        title: upload.fields.title, data: upload.data, filename: upload.filename, mime, key: req.headers.get('idempotency-key'),
+        title: upload.fields.title, data: upload.data, filename: upload.filename,
+        allowFile: upload.fields.allow_file === '1', key: req.headers.get('idempotency-key'),
       })
     }
     if (raw.duplicate_from !== undefined) {

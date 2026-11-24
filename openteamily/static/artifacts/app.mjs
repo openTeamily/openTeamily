@@ -28,7 +28,7 @@ import {
 
 // `/space?new=<kind>` opens the matching 新建 editor once the page has loaded
 // (used by the chat composer's 创建 grid). Unknown values are ignored.
-const NEW_KIND_BUTTONS = {document: 'new-artifact', website: 'new-website', slides: 'new-slides', dashboard: 'new-dashboard', spreadsheet: 'new-spreadsheet', whiteboard: 'new-board'};
+const NEW_KIND_BUTTONS = {document: 'new-artifact', website: 'new-website', slides: 'new-slides', dashboard: 'new-dashboard', spreadsheet: 'new-spreadsheet', whiteboard: 'new-board', media: 'new-media'};
 export function newKindFromSearch(search) {
   const value = new URLSearchParams(search || '').get('new') || '';
   return Object.prototype.hasOwnProperty.call(NEW_KIND_BUTTONS, value) ? value : '';
@@ -64,6 +64,7 @@ const FILE_TYPES = {
   网页: 'website',
   图片: 'image',
   视频: 'video',
+  文件: 'file',
   音频: 'audio',
   '3D 模型': 'model3d',
   白板: 'whiteboard',
@@ -90,6 +91,7 @@ export function listQuery(search, {
 }
 
 const isModel3d = item => item?.kind === 'media' && item.media?.mime === 'model/gltf-binary';
+const isGeneralFile = item => item?.kind === 'media' && item.media?.mime === 'application/octet-stream';
 
 export function artifactMatchesType(item, type) {
   const mime = String((item && item.media && item.media.mime) || '');
@@ -97,6 +99,7 @@ export function artifactMatchesType(item, type) {
   if (type === '网页') return item.kind === 'website';
   if (type === '图片') return item.kind === 'media' && mime.startsWith('image/');
   if (type === '视频') return item.kind === 'media' && mime.startsWith('video/');
+  if (type === '文件') return isGeneralFile(item);
   if (type === '音频') return item.kind === 'media' && mime.startsWith('audio/');
   if (type === '3D 模型') return isModel3d(item);
   if (type === '白板') return item.kind === 'whiteboard';
@@ -564,6 +567,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const actionMenus = mountActionMenus(document);
   const newMenuButton = document.getElementById('new-menu-button');
   const newMenu = actionMenus.bind(newMenuButton, document.getElementById('new-menu'));
+  let fileUpload;
+  let fileUploadModule;
   const catalogToolbar = bindCatalogToolbar(document, () => {
     actionMenus.close({focus: true});
     closeFilterPanel({focus: true});
@@ -610,7 +615,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const workspaceSelect = document.getElementById('workspace');
   const workspacePending = document.getElementById('workspace-pending');
   const createButtons = [newMenuButton, ...[
-    ...Object.values(NEW_KIND_BUTTONS), 'new-media', 'new-agent-website', 'new-save-message',
+    ...Object.values(NEW_KIND_BUTTONS), 'new-agent-website', 'new-save-message',
     'empty-new-document', 'empty-agent-website', 'empty-save-message', 'empty-starred-save-message',
     'resume-draft-document', 'resume-draft-website',
   ].map(id => document.getElementById(id))].filter(Boolean);
@@ -720,6 +725,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     syncDocumentTreeAction();
     if (!enabled) {
       newMenu.close();
+      fileUpload?.close();
       closeDocumentTree();
     }
   }
@@ -1351,7 +1357,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const mediaMeta = document.getElementById('media-meta');
     const model3d = Boolean(item?.id && isModel3d(item));
     const picker = document.getElementById('media-file-picker');
-    if (picker) picker.hidden = model3d;
+    const download = document.getElementById('media-file-download');
+    const generalFile = isGeneralFile(item);
+    if (picker) picker.hidden = model3d || generalFile;
+    if (download) {
+      download.hidden = !generalFile;
+      if (generalFile) download.href = `/v1/workspaces/${workspaceId()}/artifacts/${item.id}/file`;
+      else download.removeAttribute('href');
+    }
     if (kind === 'media') document.getElementById('media-file').value = '';
     if (model3dPanel) model3dPanel.hidden = !model3d;
     let model3dSource = '';
@@ -1359,7 +1372,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     image.removeAttribute('src'); audio.removeAttribute('src'); video.removeAttribute('src');
     if (kind === 'media') {
       if (item && item.id && item.media) {
-        mediaMeta.textContent = `${item.media.filename || ''} · ${item.media.mime || ''} · ${item.media.bytes || 0} 字节`;
+        const fileType = generalFile ? '' : ` · ${item.media.mime || ''}`;
+        mediaMeta.textContent = `${item.media.filename || ''}${fileType} · ${item.media.bytes || 0} 字节`;
         const src = `/v1/workspaces/${workspaceId()}/artifacts/${item.id}/file`;
         if ((item.media.mime || '').startsWith('image/')) { image.hidden = false; image.src = src; }
         else if ((item.media.mime || '').startsWith('audio/')) { audio.hidden = false; audio.src = src; }
@@ -4066,6 +4080,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       params.delete('new');
       const rest = params.toString();
       document.getElementById(newKindButtonId(newKind))?.click();
+      if (newKind === 'media' && nativeCatalog) void loadList();
       const conversation = fragment.get('conversation');
       if (current?.kind === newKind && linkedWorkspace && workspaceId() === linkedWorkspace && /^[A-Za-z0-9_-]{1,128}$/.test(conversation || '')) {
         artifactSendOrigin = {wid: linkedWorkspace, conversation, item: current, allowed: false};
@@ -4234,10 +4249,49 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
 
   for (const [id, kind] of [
     ['new-artifact', 'document'], ['new-slides', 'slides'], ['new-spreadsheet', 'spreadsheet'],
-    ['new-dashboard', 'dashboard'], ['new-board', 'whiteboard'], ['new-media', 'media'],
+    ['new-dashboard', 'dashboard'], ['new-board', 'whiteboard'],
   ]) bindCreate(id, event => {
     draftKind = kind;
     void openEditor({kind}, {focusTitle: event.isTrusted && event.detail === 0});
+  });
+
+  const uploadScope = () => canCreateInWorkspace() ? {owner:currentUser.id, workspace:workspaceId()} : null;
+  bindCreate('new-media', async event => {
+    if (!nativeCatalog) {
+      draftKind = 'media';
+      void openEditor({kind:'media'}, {focusTitle:event.isTrusted && event.detail === 0});
+      return;
+    }
+    const requested = uploadScope();
+    if (!requested || !canLeaveEditor()) return;
+    closeNewMenu();
+    const sameScope = () => {
+      const live = uploadScope();
+      return live?.owner === requested.owner && live.workspace === requested.workspace;
+    };
+    try {
+      fileUploadModule ??= import('./upload-files.mjs');
+      const {mountSpaceFileUpload} = await fileUploadModule;
+      if (!sameScope()) return;
+      fileUpload ??= mountSpaceFileUpload(document, {
+        scope: uploadScope,
+        key: idempotencyKey,
+        refresh: () => void loadList({background:true}),
+        save(workspace, file, attempt, signal) {
+          const formData = new FormData();
+          formData.append('title', attempt.title);
+          formData.append('kind', 'media');
+          formData.append('allow_file', '1');
+          formData.append('file', file);
+          return sendFile(`/v1/workspaces/${workspace}/artifacts`, formData, attempt.key,
+            AbortSignal.any([signal, AbortSignal.timeout(30000)]));
+        },
+      });
+      fileUpload.open();
+    } catch {
+      fileUploadModule = null;
+      if (sameScope()) show('error', '无法打开上传窗口，请重试。');
+    }
   });
 
   bindCreate('empty-new-document', () => {
@@ -4442,6 +4496,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (returnToCatalog()) document.getElementById('new-menu-button')?.focus?.({preventScroll: true});
   });
 
+  async function sendFile(path, body, key, signal) {
+    const headers = {'Accept':'application/json', 'X-CSRF-Token':csrfCookie(document.cookie)};
+    if (key) headers['Idempotency-Key'] = key;
+    const response = await fetcher(path, {method:'POST', headers, credentials:'same-origin', body, signal});
+    return {status:response.status, body:await response.json().catch(() => ({}))};
+  }
+
   async function uploadMedia(path, extraFields) {
     const file = document.getElementById('media-file').files[0];
     const title = form.elements.title.value.trim();
@@ -4462,12 +4523,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     body.append('kind', 'media');
     body.append('file', file);
     if (extraFields) Object.entries(extraFields).forEach(([key, value]) => body.append(key, value));
-    const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie)};
-    if (!(current && current.id)) headers['Idempotency-Key'] = idempotencyKey();
-    const response = await fetcher(path, {method: 'POST', headers, credentials: 'same-origin', body});
-    let parsed = {};
-    try { parsed = await response.json(); } catch { parsed = {}; }
-    return {status: response.status, body: parsed};
+    return sendFile(path, body, current?.id ? null : idempotencyKey());
   }
 
   form.addEventListener('submit', async event => {
