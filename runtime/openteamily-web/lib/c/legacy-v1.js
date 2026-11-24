@@ -1536,21 +1536,27 @@ function discoverRoutes(host) {
     const bs = client(host)
     const q = parseQuery(query)
     const sort = q.get('sort')
-    if (q.getAll('sort').length > 1 || (sort !== null && sort !== 'latest' && sort !== 'popular')) {
+    if (q.getAll('sort').length > 1 || (sort !== null && !['latest', 'popular', 'collected'].includes(sort))) {
       throw new Fault(400, 'invalid', '无效的发现排序。')
     }
     const popular = sort === 'popular'
+    const collected = sort === 'collected'
+    if (collected && (kind !== 'work' || q.get('tab') !== 'collected' || q.getAll('tab').length !== 1)) {
+      throw new Fault(400, 'invalid', '收录时间排序仅用于已收录作品。')
+    }
     const cursor = q.get('cursor')
     if (q.getAll('cursor').length > 1) throw new Fault(400, 'invalid', '无效的发现分页。')
     if (popular && (kind !== 'work' || (cursor !== null && !/^[A-Za-z0-9_-]{32}\.[1-9][0-9]{0,2}$/.test(cursor)))) {
       throw new Fault(400, 'invalid', '无效的热门作品请求。')
     }
-    const keyset = kind === 'work' && !popular && (cursor === null || cursor.startsWith('l.'))
+    const keyset = kind === 'work' && !popular && (collected || cursor === null || cursor.startsWith('l.'))
     const position = cursor && keyset ? LATEST_WORK_CURSOR.exec(cursor) : null
     if (cursor !== null && !popular && (keyset ? !position || !Number.isSafeInteger(Number(position[1])) : !/^[0-9]{1,16}$/.test(cursor))) {
       throw new Fault(400, 'invalid', '无效的发现分页。')
     }
-    const pagination = popular ? {sort, cursor} : keyset ? {pagination: 'keyset', cursor} : {before: cursor}
+    const pagination = popular ? {sort, cursor}
+      : keyset ? {pagination: 'keyset', cursor, ...(collected ? {sort} : {})}
+        : {before: cursor}
     const data = await bs.get('/v1/ot/discover' + qs({
       kind, tab: q.get('tab'), q: q.get('q'), work_kind: q.get('kind'),
       creator: q.get('creator'), category: q.get('category'),
@@ -1568,7 +1574,7 @@ function discoverRoutes(host) {
   return [
     {
       method: 'GET', path: /^\/v1\/profile\/(social|follow-work)$/,
-      async handle({ match, query }) {
+      async handle({ match, query }, call) {
         return wrap(async () => {
           const q = parseQuery(query)
           const notices = match[1] === 'follow-work'
@@ -1576,9 +1582,14 @@ function discoverRoutes(host) {
           if ([...q.keys()].some(key => !keys.includes(key) || q.getAll(key).length !== 1)) {
             throw new Fault(400, 'invalid', '无效的主页列表请求。')
           }
-          return [200, await client(host).get('/v1/ot/profile/social' + qs({
+          const result = await client(host).get('/v1/ot/profile/social' + qs({
             view: notices ? 'work-notices' : q.get('view'), q: q.get('q'), cursor: q.get('cursor'), limit: q.get('limit'),
-          }))]
+          }))
+          if (!notices && q.get('view') === 'following') {
+            const {items, next_cursor} = result
+            return [200, {items, next_cursor, ...platformViewer(call)}]
+          }
+          return [200, result]
         })
       },
     },

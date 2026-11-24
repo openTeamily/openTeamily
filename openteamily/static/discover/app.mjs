@@ -93,7 +93,7 @@ export function feedQuery(query, cursor = '', kind = '', sort = 'latest', creato
   if (query) params.set('q', query);
   if (cursor) params.set('cursor', cursor);
   if (kind) params.set('kind', kind);
-  if (sort === 'popular') params.set('sort', sort);
+  if (sort === 'popular' || sort === 'collected') params.set('sort', sort);
   if (creator) params.set('creator', creator);
   if (isWorkTopic(topic)) params.set('category', topic);
   return params.toString();
@@ -114,7 +114,8 @@ export function feedStateFromSearch(search) {
   return {
     tab,
     kind,
-    sort: tab === 'activity' && !kind && !creator && params.get('sort') === 'popular' ? 'popular' : 'latest',
+    sort: tab === 'collected' && params.get('sort') === 'collected' ? 'collected'
+      : tab === 'activity' && !kind && !creator && params.get('sort') === 'popular' ? 'popular' : 'latest',
     query: (params.get('q') || '').slice(0, 80).trim(),
     ...(creator ? {creator} : {}),
     ...(params.getAll('topic').length === 1 && isWorkTopic(topic) ? {topic} : {}),
@@ -127,6 +128,7 @@ export function feedSearchText(state) {
   if (tab === 'following' || tab === 'collected') params.set('feed', tab);
   if (state && state.kind && FEED_KINDS.includes(state.kind)) params.set('kind', state.kind);
   if (tab === 'activity' && !state.kind && !state.creator && state.sort === 'popular') params.set('sort', 'popular');
+  if (tab === 'collected' && state.sort === 'collected') params.set('sort', 'collected');
   if (state && state.query) params.set('q', state.query);
   if (state && CREATOR_HANDLE.test(state.creator || '')) params.set('creator', state.creator.toLowerCase());
   if (isWorkTopic(state?.topic)) params.set('topic', state.topic);
@@ -531,6 +533,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   const initialFeed = feedStateFromSearch(catalogView ? '' : location?.search);
+  if (!nativeCatalog && initialFeed.sort === 'collected') initialFeed.sort = 'latest';
   const feedSections = document.getElementById('feed-sections');
   const directoryTabs = document.getElementById('discover-tabs');
   if (!catalogView && feedSections && directoryTabs) {
@@ -760,6 +763,11 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   const feedState = {...initialFeed, items: [], cursor: '', loading: false};
+  const followedCreators = document.getElementById('feed-followed-creators');
+  const collectedSortField = document.getElementById('feed-collected-sort-field');
+  const collectedSort = document.getElementById('feed-collected-sort');
+  let followedCreatorPicker;
+  let followedCreatorSetup;
   let feedRequest = 0;
   let feedReader;
   let feedViewer;
@@ -814,6 +822,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   });
 
   function setWorkView(open) {
+    if (open) followedCreatorPicker?.close();
     detailPanel.hidden = !open;
     document.getElementById('feed-panel').hidden = open;
     document.getElementById('discover-title').hidden = open;
@@ -1430,6 +1439,14 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   });
 
   function applyFeedChrome({restoreQuery = false} = {}) {
+    if (collectedSortField && collectedSort) {
+      collectedSortField.hidden = !nativeCatalog || !currentUser || feedState.tab !== 'collected';
+      collectedSort.value = feedState.sort === 'collected' ? 'collected' : 'latest';
+    }
+    if (followedCreators) {
+      followedCreators.hidden = !nativeCatalog || !currentUser || feedState.tab !== 'following';
+      if (followedCreators.hidden) followedCreatorPicker?.close();
+    }
     for (const name of FEED_TABS) {
       const button = document.getElementById('feed-tab-' + name);
       if (!button) continue;
@@ -1466,6 +1483,34 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (restoreQuery && searchInput) searchInput.value = feedState.query;
     if (topicFilter) topicFilter.value = feedState.topic || '';
     if (clearSearch) clearSearch.hidden = !searchInput?.value;
+  }
+
+  async function openFollowedCreators() {
+    const viewer = currentUser;
+    const scope = sessionRequest;
+    const current = () => currentUser === viewer && scope === sessionRequest && feedState.tab === 'following' && !activeWork;
+    if (!nativeCatalog || !viewer || !current()) return;
+    followedCreators.disabled = true;
+    try {
+      followedCreatorSetup ??= import('./followed-creators.mjs').then(({mountFollowedCreators}) => {
+        followedCreatorPicker = mountFollowedCreators(document, {
+          initial:catalogInitial,
+          read:(method, path, signal) => request(method, path, undefined, undefined,
+            AbortSignal.any([signal, AbortSignal.timeout(8000)])),
+        });
+        return followedCreatorPicker;
+      });
+      const picker = await followedCreatorSetup;
+      if (current()) return picker.open({
+        current, creator:feedState.creator, matchesViewer:name => matchesNativeViewer(name, viewer),
+        select:creator => applyFeedFilters({creator, query:searchText()}),
+      });
+    } catch {
+      followedCreatorSetup = null;
+      if (current()) setFeedError('无法打开已关注作者，请重试。', openFollowedCreators);
+    } finally {
+      followedCreators.disabled = false;
+    }
   }
 
   function setFeedCategory(button, current) {
@@ -1596,9 +1641,11 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (history && 'scrollRestoration' in history) history.scrollRestoration = 'manual';
     window.addEventListener('pagehide', () => { if (!activeWork) rememberFeedPosition(undefined, {persist: true}); });
     window.addEventListener('popstate', () => {
+      followedCreatorPicker?.close();
       syncLoginLink();
       cancelSearch();
       const next = feedStateFromSearch(location?.search);
+      if (!nativeCatalog && next.sort === 'collected') next.sort = 'latest';
       const nextKey = feedSearchText(next);
       const feedChanged = nextKey !== feedSearchText(feedState);
       if (feedChanged) {
@@ -2008,7 +2055,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     // The native all-works route includes the same viewer state as /me/works?tab=all.
     const viewer = currentUser;
     const privateFeed = needsViewer || (viewer && !nativeCatalog);
-    const sort = needsViewer ? 'latest' : feedState.sort;
+    const sort = feedState.sort;
     const params = feedQuery(feedState.query, append ? feedState.cursor : '', feedState.kind, sort, feedState.creator, feedState.topic);
     const tab = feedState.tab === 'activity' ? 'all' : feedState.tab;
     const path = privateFeed ? `/v1/discover/me/works?${params}&tab=${tab}` : `/v1/discover/works?${params}`;
@@ -2795,6 +2842,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   async function load() {
     const attempt = ++sessionRequest;
     currentUser = null;
+    followedCreatorPicker?.close();
     engagementPending.clear();
     sessionState = 'pending';
     cancelSearch();
@@ -2964,7 +3012,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   for (const kind of FEED_KINDS) {
     const button = document.getElementById('feed-kind-' + (kind || 'all'));
     if (!button) continue;
-    button.addEventListener('click', () => applyFeedFilters({kind, sort: 'latest', query: searchText()}, {refresh: true}));
+    button.addEventListener('click', () => applyFeedFilters({kind,
+      sort:feedState.tab === 'collected' ? feedState.sort : 'latest', query:searchText()}, {refresh:true}));
   }
   document.getElementById('feed-sort-popular')?.addEventListener('click', () => {
     if (feedState.tab !== 'activity') return;
@@ -2976,6 +3025,12 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     return loaded;
   });
   topicFilter?.addEventListener('change', () => applyFeedFilters({topic:topicFilter.value, query:searchText()}));
+  collectedSort?.addEventListener('change', () => {
+    if (nativeCatalog && currentUser && feedState.tab === 'collected') {
+      return applyFeedFilters({sort:collectedSort.value === 'collected' ? 'collected' : 'latest', query:searchText()});
+    }
+  });
+  followedCreators?.addEventListener('click', openFollowedCreators);
   document.getElementById('feed-search')?.addEventListener('submit', event => {
     event.preventDefault();
     if (composingQuery) return;
@@ -2998,7 +3053,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   clearSearch?.addEventListener('click', clearFeedSearch);
   resetEmptyFeed?.addEventListener('click', () => {
     searchInput?.focus?.({preventScroll: true});
-    return applyFeedFilters({query: '', kind: '', creator: '', topic: '', sort: 'latest'});
+    return applyFeedFilters({query:'', kind:'', creator:'', topic:'', sort:feedState.tab === 'collected' ? feedState.sort : 'latest'});
   });
   retryFeed?.addEventListener('click', () => {
     const retry = feedFailure;
@@ -3018,7 +3073,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     });
   }
   const selectFeedTab = tab => applyFeedFilters({
-    tab, sort: tab === 'activity' ? feedState.sort : 'latest', query: searchText(),
+    tab, sort: tab === feedState.tab ? feedState.sort : 'latest', query: searchText(),
   }, {resume: true});
   for (const [index, tab] of FEED_TABS.entries()) {
     const button = document.getElementById('feed-tab-' + tab);

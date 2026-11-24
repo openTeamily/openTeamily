@@ -145,6 +145,7 @@
                 <label><input type="checkbox" name="file-type" value="网页"> 网页</label>
                 <label><input type="checkbox" name="file-type" value="图片"> 图片</label>
                 <label><input type="checkbox" name="file-type" value="视频"> 视频</label>
+                <label><input type="checkbox" name="file-type" value="文件"> 文件</label>
                 <label><input type="checkbox" name="file-type" value="音频"> 音频</label>
                 <label><input type="checkbox" name="file-type" value="3D 模型"> 3D 模型</label>
                 <label><input type="checkbox" name="file-type" value="白板"> 白板</label>
@@ -224,6 +225,7 @@
             <button type="button" id="new-dashboard" role="menuitem">看板</button>
             <button type="button" id="new-board" role="menuitem">白板</button>
             <button type="button" id="new-media" role="menuitem">上传</button>
+            <button type="button" id="new-agent-document" role="menuitem" hidden>让智能体起草文档</button>
             <button type="button" id="new-agent-website" role="menuitem">让智能体搭建网站</button>
             <button type="button" id="new-save-message" role="menuitem">从对话保存</button>
           </div>
@@ -366,6 +368,20 @@
         </details>
       </section>
       <section id="document-editor" hidden aria-label="文档编辑器">
+        <details id="document-draft" class="document-draft" hidden>
+          <summary>让智能体起草</summary>
+          <div class="document-draft-input">
+            <label for="document-draft-prompt">主题和要点</label>
+            <textarea id="document-draft-prompt" rows="3" maxlength="1600" placeholder="例如：为新成员写一份项目入门指南"></textarea>
+            <button type="button" id="document-draft-generate">生成草稿</button>
+          </div>
+          <p id="document-draft-status" role="status" class="note"></p>
+          <section id="document-draft-preview" aria-labelledby="document-draft-title" hidden>
+            <h3 id="document-draft-title"></h3>
+            <div id="document-draft-body"></div>
+            <button type="button" id="document-draft-apply">采用草稿</button>
+          </section>
+        </details>
         <div class="document-toolbar" role="toolbar" aria-label="文档格式">
           <button type="button" data-doc-format="undo" aria-label="撤销">↶</button>
           <button type="button" data-doc-format="redo" aria-label="重做">↷</button>
@@ -414,6 +430,7 @@
       <div id="media-editor" hidden>
         <label id="media-file-picker">文件 <input id="media-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp,audio/mpeg,audio/ogg,audio/wav,video/mp4,video/webm"></label>
         <p id="media-meta" class="note"></p>
+        <a id="media-file-download" hidden>下载原文件</a>
         <img id="media-image" alt="" hidden src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
         <audio id="media-audio" controls hidden></audio>
         <video id="media-video" controls hidden></video>
@@ -643,6 +660,18 @@
       <div class="space-action-row"><button type="submit" class="primary" id="move-document-submit" disabled>移动文档</button></div>
     </form>
   </dialog>
+  <dialog id="rename-artifact-dialog" class="send-dialog-card" aria-labelledby="rename-artifact-heading">
+    <form id="rename-artifact-form">
+      <h2 id="rename-artifact-heading">重命名作品</h2>
+      <label for="rename-artifact-name">作品名称</label>
+      <input id="rename-artifact-name" autocomplete="off" maxlength="80" required autofocus>
+      <p id="rename-artifact-status" class="note" role="status"></p>
+      <div class="space-action-row">
+        <button type="button" id="rename-artifact-cancel">取消</button>
+        <button type="submit" class="primary" id="rename-artifact-submit">保存名称</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="duplicate-artifact-dialog" class="send-dialog-card" aria-labelledby="duplicate-artifact-heading">
     <form id="duplicate-artifact-form">
       <h2 id="duplicate-artifact-heading">复制为新作品</h2>
@@ -805,6 +834,20 @@
       <button type="button" id="studio-history-restore" class="secondary">恢复为新版本</button>
       <button type="button" id="studio-history-save-personal" class="secondary" aria-haspopup="dialog" hidden>保存个人副本</button>
     </section>
+  </dialog>
+  <dialog id="space-upload-dialog" aria-labelledby="space-upload-title">
+    <form id="space-upload-form">
+      <h2 id="space-upload-title">上传文件</h2>
+      <label for="space-upload-files">选择文件</label>
+      <input type="file" id="space-upload-files" multiple aria-describedby="space-upload-limit">
+      <p id="space-upload-limit" class="note">每个文件最大 2 MB。可在上传前修改作品标题。</p>
+      <ul id="space-upload-rows" aria-label="所选文件"></ul>
+      <p id="space-upload-status" role="status"></p>
+      <div class="space-upload-actions">
+        <button type="button" id="space-upload-close" class="secondary">关闭</button>
+        <button type="submit" id="space-upload-submit" disabled>上传文件</button>
+      </div>
+    </form>
   </dialog>
   </main>
   <nav class="mobile-primary-nav" aria-label="主导航" data-ui-label="shell.nav.mobile"></nav>

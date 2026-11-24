@@ -28,7 +28,7 @@ import {
 
 // `/space?new=<kind>` opens the matching 新建 editor once the page has loaded
 // (used by the chat composer's 创建 grid). Unknown values are ignored.
-const NEW_KIND_BUTTONS = {document: 'new-artifact', website: 'new-website', slides: 'new-slides', dashboard: 'new-dashboard', spreadsheet: 'new-spreadsheet', whiteboard: 'new-board'};
+const NEW_KIND_BUTTONS = {document: 'new-artifact', website: 'new-website', slides: 'new-slides', dashboard: 'new-dashboard', spreadsheet: 'new-spreadsheet', whiteboard: 'new-board', media: 'new-media'};
 export function newKindFromSearch(search) {
   const value = new URLSearchParams(search || '').get('new') || '';
   return Object.prototype.hasOwnProperty.call(NEW_KIND_BUTTONS, value) ? value : '';
@@ -64,6 +64,7 @@ const FILE_TYPES = {
   网页: 'website',
   图片: 'image',
   视频: 'video',
+  文件: 'file',
   音频: 'audio',
   '3D 模型': 'model3d',
   白板: 'whiteboard',
@@ -90,6 +91,7 @@ export function listQuery(search, {
 }
 
 const isModel3d = item => item?.kind === 'media' && item.media?.mime === 'model/gltf-binary';
+const isGeneralFile = item => item?.kind === 'media' && item.media?.mime === 'application/octet-stream';
 
 export function artifactMatchesType(item, type) {
   const mime = String((item && item.media && item.media.mime) || '');
@@ -97,6 +99,7 @@ export function artifactMatchesType(item, type) {
   if (type === '网页') return item.kind === 'website';
   if (type === '图片') return item.kind === 'media' && mime.startsWith('image/');
   if (type === '视频') return item.kind === 'media' && mime.startsWith('video/');
+  if (type === '文件') return isGeneralFile(item);
   if (type === '音频') return item.kind === 'media' && mime.startsWith('audio/');
   if (type === '3D 模型') return isModel3d(item);
   if (type === '白板') return item.kind === 'whiteboard';
@@ -564,6 +567,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const actionMenus = mountActionMenus(document);
   const newMenuButton = document.getElementById('new-menu-button');
   const newMenu = actionMenus.bind(newMenuButton, document.getElementById('new-menu'));
+  let fileUpload;
+  let fileUploadModule;
+  let artifactRename;
+  let artifactRenameModule;
   const catalogToolbar = bindCatalogToolbar(document, () => {
     actionMenus.close({focus: true});
     closeFilterPanel({focus: true});
@@ -610,7 +617,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const workspaceSelect = document.getElementById('workspace');
   const workspacePending = document.getElementById('workspace-pending');
   const createButtons = [newMenuButton, ...[
-    ...Object.values(NEW_KIND_BUTTONS), 'new-media', 'new-agent-website', 'new-save-message',
+    ...Object.values(NEW_KIND_BUTTONS), 'new-agent-document', 'new-agent-website', 'new-save-message',
     'empty-new-document', 'empty-agent-website', 'empty-save-message', 'empty-starred-save-message',
     'resume-draft-document', 'resume-draft-website',
   ].map(id => document.getElementById(id))].filter(Boolean);
@@ -720,6 +727,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     syncDocumentTreeAction();
     if (!enabled) {
       newMenu.close();
+      fileUpload?.close();
+      artifactRename?.close();
       closeDocumentTree();
     }
   }
@@ -1221,6 +1230,101 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const { bindDocumentEditor } = await import('../shell/rich-editor.mjs');
     return bindDocumentEditor(document, form);
   });
+  const documentDraftPanel = document.getElementById('document-draft');
+  const documentDraftPrompt = document.getElementById('document-draft-prompt');
+  const documentDraftStatus = document.getElementById('document-draft-status');
+  const documentDraftGenerate = document.getElementById('document-draft-generate');
+  const documentDraftPreview = document.getElementById('document-draft-preview');
+  let documentDraftRequest;
+  let documentDraftResult;
+
+  function resetDocumentDraft(enabled = false) {
+    documentDraftRequest?.abort();
+    documentDraftRequest = documentDraftResult = null;
+    if (!documentDraftPanel) return;
+    documentDraftPanel.hidden = !enabled;
+    documentDraftPanel.open = false;
+    documentDraftPrompt.value = documentDraftStatus.textContent = '';
+    documentDraftGenerate.disabled = false;
+    documentDraftPreview.hidden = true;
+    document.getElementById('document-draft-body').replaceChildren();
+  }
+
+  function acceptsDocumentDraft(selection) {
+    return nativeCatalog && activeEditor(selection) && current?.kind === 'document' && !current.id && !form.hidden && !form.inert;
+  }
+
+  documentDraftPrompt?.addEventListener('input', () => {
+    if (!documentDraftResult) return;
+    documentDraftResult = null;
+    documentDraftPreview.hidden = true;
+    documentDraftStatus.textContent = '描述已修改，请重新生成。';
+  });
+
+  documentDraftGenerate?.addEventListener('click', async () => {
+    const selection = editor;
+    if (!acceptsDocumentDraft(selection) || documentDraftRequest) return;
+    const prompt = documentDraftPrompt.value.trim();
+    if (!prompt) {
+      documentDraftStatus.textContent = '请填写主题或要点。';
+      documentDraftPrompt.focus();
+      return;
+    }
+    const controller = documentDraftRequest = new AbortController();
+    documentDraftResult = null;
+    documentDraftPreview.hidden = true;
+    documentDraftGenerate.disabled = true;
+    documentDraftStatus.textContent = '正在起草文档…';
+    const active = () => documentDraftRequest === controller && acceptsDocumentDraft(selection);
+    try {
+      const signal = AbortSignal.any([controller.signal, selection.controller.signal, AbortSignal.timeout(45000)]);
+      const result = await request('POST', `/v1/workspaces/${selection.workspace}/artifacts/document/draft`, {prompt}, undefined, signal);
+      if (!active()) return;
+      const {title, document: markdown} = result.body;
+      if (result.status !== 200 || typeof title !== 'string' || title.length > 80 ||
+          typeof markdown !== 'string' || !markdown.trim() || markdown.length > 8000) {
+        throw new Error(messageFor(result.body.error, '无法生成草稿，请重试。'));
+      }
+      const [{renderMarkdown}, {tableMarkdownOptions}] = await Promise.all([
+        import('../shell/markdown.mjs'), import('../shell/markdown-table.mjs'),
+      ]);
+      if (!active()) return;
+      if (prompt !== documentDraftPrompt.value.trim()) {
+        documentDraftStatus.textContent = '描述已修改，请重新生成。';
+        return;
+      }
+      documentDraftResult = {selection, title, markdown};
+      document.getElementById('document-draft-title').textContent = title;
+      renderMarkdown(document, document.getElementById('document-draft-body'), markdown, tableMarkdownOptions);
+      documentDraftPreview.hidden = false;
+      documentDraftStatus.textContent = '草稿已生成，可以预览并采用。';
+    } catch (error) {
+      if (active()) documentDraftStatus.textContent = error.name === 'Error' ? error.message : '无法生成草稿，请重试。';
+    } finally {
+      if (documentDraftRequest === controller) {
+        documentDraftRequest = null;
+        documentDraftGenerate.disabled = false;
+      }
+    }
+  });
+
+  document.getElementById('document-draft-apply')?.addEventListener('click', () => {
+    const preview = documentDraftResult;
+    if (!preview || !acceptsDocumentDraft(preview.selection) || !richDocument.instance) return;
+    richDocument.instance.flush();
+    if (form.elements.body.value.trim()) {
+      documentDraftStatus.textContent = '已保留你的正文。清空正文后可以采用预览，也可以复制其中需要的部分。';
+      return;
+    }
+    if (!form.elements.title.value.trim()) form.elements.title.value = preview.title;
+    form.elements.body.value = preview.markdown;
+    richDocument.instance.load(preview.markdown, true);
+    persistDraft();
+    resetDocumentDraft(true);
+    document.getElementById('document-rich').focus();
+    show('ok', '已采用草稿，可以编辑后保存。');
+  });
+
   const spreadsheet = lazyEditor(async () => {
     const { mountSpreadsheet } = await import('./spreadsheet.mjs');
     return mountSpreadsheet(document, {
@@ -1304,6 +1408,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     form.elements.body.value = item && typeof item.body === 'string' ? item.body : '';
     const kind = (item && item.kind) || draftKind;
     richDocument.instance?.load(form.elements.body.value, kind === 'document');
+    resetDocumentDraft(nativeCatalog && kind === 'document' && !item?.id);
     updateEditorMeta(item, kind);
     document.getElementById('body-label').hidden = kind !== 'website';
     document.getElementById('media-editor').hidden = kind !== 'media';
@@ -1351,7 +1456,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const mediaMeta = document.getElementById('media-meta');
     const model3d = Boolean(item?.id && isModel3d(item));
     const picker = document.getElementById('media-file-picker');
-    if (picker) picker.hidden = model3d;
+    const download = document.getElementById('media-file-download');
+    const generalFile = isGeneralFile(item);
+    if (picker) picker.hidden = model3d || generalFile;
+    if (download) {
+      download.hidden = !generalFile;
+      if (generalFile) download.href = `/v1/workspaces/${workspaceId()}/artifacts/${item.id}/file`;
+      else download.removeAttribute('href');
+    }
     if (kind === 'media') document.getElementById('media-file').value = '';
     if (model3dPanel) model3dPanel.hidden = !model3d;
     let model3dSource = '';
@@ -1359,7 +1471,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     image.removeAttribute('src'); audio.removeAttribute('src'); video.removeAttribute('src');
     if (kind === 'media') {
       if (item && item.id && item.media) {
-        mediaMeta.textContent = `${item.media.filename || ''} · ${item.media.mime || ''} · ${item.media.bytes || 0} 字节`;
+        const fileType = generalFile ? '' : ` · ${item.media.mime || ''}`;
+        mediaMeta.textContent = `${item.media.filename || ''}${fileType} · ${item.media.bytes || 0} 字节`;
         const src = `/v1/workspaces/${workspaceId()}/artifacts/${item.id}/file`;
         if ((item.media.mime || '').startsWith('image/')) { image.hidden = false; image.src = src; }
         else if ((item.media.mime || '').startsWith('audio/')) { audio.hidden = false; audio.src = src; }
@@ -2152,6 +2265,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (itemMenuOpen()) actionMenus.close();
   }
 
+  async function renameFromCatalog(item, trigger, inScope) {
+    closeItemMenu();
+    const scope = () => canCreateInWorkspace() ? {owner:currentUser.id,workspace:workspaceId()} : null;
+    try {
+      artifactRenameModule ??= import('./rename.mjs');
+      const {mountArtifactRename} = await artifactRenameModule;
+      if (!inScope() || listPanel.hidden || !scope()) return;
+      artifactRename ??= mountArtifactRename(document, {
+        scope,
+        request: (method, path, data, signal) => request(method,path,data,undefined,signal),
+        updated(saved) {
+          allItems = allItems.map(row => row.id === saved.id && row.revision < saved.revision
+            ? {...row,title:saved.title,revision:saved.revision,updated:saved.updated,updated_by:saved.updated_by,
+              match:row.match?.kind === 'title' ? null : row.match}
+            : row);
+          renderCatalog({preserve:true});
+          show('ok', '已更新作品名称。');
+          void loadList({background:true});
+        },
+      });
+      artifactRename.open(item,trigger.id);
+    } catch {
+      artifactRenameModule = null;
+      if (inScope()) show('error', '暂时无法打开重命名窗口，请重试。');
+    }
+  }
+
   function canDuplicate(item) {
     return nativeCatalog && typeof duplicateDialog?.showModal === 'function' && /^[0-9a-f]{32}$/.test(item?.id || '') &&
       Number.isSafeInteger(item.revision) && item.revision > 0;
@@ -2276,8 +2416,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     rename.type = 'button';
     rename.setAttribute('role', 'menuitem');
     rename.textContent = '重命名';
-    rename.title = '打开文档并编辑标题';
     rename.addEventListener('click', async () => {
+      if (nativeCatalog && /^[0-9a-f]{32}$/.test(item.id || '') &&
+          Number.isSafeInteger(item.revision) && item.revision > 0) {
+        if (inScope()) await renameFromCatalog(item, button, inScope);
+        return;
+      }
       if (await onOpen(item)) {
         const title = form.elements.title;
         title?.focus();
@@ -2719,7 +2863,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
 
   function hideEditor() {
     closeDocumentTree();
+    artifactRename?.close();
     richDocument.instance?.closeFind();
+    resetDocumentDraft();
     workVersion.instance?.close();
     if (pendingDeleteCancel) pendingDeleteCancel();
     closeDuplicateDialog();
@@ -4066,6 +4212,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       params.delete('new');
       const rest = params.toString();
       document.getElementById(newKindButtonId(newKind))?.click();
+      if (newKind === 'media' && nativeCatalog) void loadList();
       const conversation = fragment.get('conversation');
       if (current?.kind === newKind && linkedWorkspace && workspaceId() === linkedWorkspace && /^[A-Za-z0-9_-]{1,128}$/.test(conversation || '')) {
         artifactSendOrigin = {wid: linkedWorkspace, conversation, item: current, allowed: false};
@@ -4234,10 +4381,49 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
 
   for (const [id, kind] of [
     ['new-artifact', 'document'], ['new-slides', 'slides'], ['new-spreadsheet', 'spreadsheet'],
-    ['new-dashboard', 'dashboard'], ['new-board', 'whiteboard'], ['new-media', 'media'],
+    ['new-dashboard', 'dashboard'], ['new-board', 'whiteboard'],
   ]) bindCreate(id, event => {
     draftKind = kind;
     void openEditor({kind}, {focusTitle: event.isTrusted && event.detail === 0});
+  });
+
+  const uploadScope = () => canCreateInWorkspace() ? {owner:currentUser.id, workspace:workspaceId()} : null;
+  bindCreate('new-media', async event => {
+    if (!nativeCatalog) {
+      draftKind = 'media';
+      void openEditor({kind:'media'}, {focusTitle:event.isTrusted && event.detail === 0});
+      return;
+    }
+    const requested = uploadScope();
+    if (!requested || !canLeaveEditor()) return;
+    closeNewMenu();
+    const sameScope = () => {
+      const live = uploadScope();
+      return live?.owner === requested.owner && live.workspace === requested.workspace;
+    };
+    try {
+      fileUploadModule ??= import('./upload-files.mjs');
+      const {mountSpaceFileUpload} = await fileUploadModule;
+      if (!sameScope()) return;
+      fileUpload ??= mountSpaceFileUpload(document, {
+        scope: uploadScope,
+        key: idempotencyKey,
+        refresh: () => void loadList({background:true}),
+        save(workspace, file, attempt, signal) {
+          const formData = new FormData();
+          formData.append('title', attempt.title);
+          formData.append('kind', 'media');
+          formData.append('allow_file', '1');
+          formData.append('file', file);
+          return sendFile(`/v1/workspaces/${workspace}/artifacts`, formData, attempt.key,
+            AbortSignal.any([signal, AbortSignal.timeout(30000)]));
+        },
+      });
+      fileUpload.open();
+    } catch {
+      fileUploadModule = null;
+      if (sameScope()) show('error', '无法打开上传窗口，请重试。');
+    }
   });
 
   bindCreate('empty-new-document', () => {
@@ -4250,6 +4436,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   }
 
   bindCreate('empty-agent-website', () => { closeNewMenu(); openWebsiteBriefDialog(); });
+  const createAgentDocument = document.getElementById('new-agent-document');
+  if (createAgentDocument) createAgentDocument.hidden = !nativeCatalog;
+  bindCreate('new-agent-document', async () => {
+    if (await openEditor({kind:'document'}) && acceptsDocumentDraft(editor)) {
+      documentDraftPanel.open = true;
+      documentDraftPrompt.focus();
+    }
+  });
   bindCreate('new-agent-website', () => { closeNewMenu(); openWebsiteBriefDialog(); });
   bindCreate('empty-save-message', () => { closeNewMenu(); openSaveMessageDialog(); });
   bindCreate('empty-starred-save-message', () => { closeNewMenu(); openSaveMessageDialog(); });
@@ -4442,6 +4636,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (returnToCatalog()) document.getElementById('new-menu-button')?.focus?.({preventScroll: true});
   });
 
+  async function sendFile(path, body, key, signal) {
+    const headers = {'Accept':'application/json', 'X-CSRF-Token':csrfCookie(document.cookie)};
+    if (key) headers['Idempotency-Key'] = key;
+    const response = await fetcher(path, {method:'POST', headers, credentials:'same-origin', body, signal});
+    return {status:response.status, body:await response.json().catch(() => ({}))};
+  }
+
   async function uploadMedia(path, extraFields) {
     const file = document.getElementById('media-file').files[0];
     const title = form.elements.title.value.trim();
@@ -4462,12 +4663,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     body.append('kind', 'media');
     body.append('file', file);
     if (extraFields) Object.entries(extraFields).forEach(([key, value]) => body.append(key, value));
-    const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie)};
-    if (!(current && current.id)) headers['Idempotency-Key'] = idempotencyKey();
-    const response = await fetcher(path, {method: 'POST', headers, credentials: 'same-origin', body});
-    let parsed = {};
-    try { parsed = await response.json(); } catch { parsed = {}; }
-    return {status: response.status, body: parsed};
+    return sendFile(path, body, current?.id ? null : idempotencyKey());
   }
 
   form.addEventListener('submit', async event => {

@@ -89,10 +89,13 @@
         <button type="button" role="tab" data-category="work" aria-selected="false">工作</button>
         <button type="button" role="tab" data-category="life" aria-selected="false">生活</button>
       </div>
-      <div class="pill-search"><label class="visually-hidden" for="search">搜索我的自动化</label>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m20 20-3.5-3.5"/></svg>
-        <input id="search" type="search" maxlength="80" autocomplete="off" placeholder="搜索我的自动化…">
-        <button type="button" id="automation-search-clear" aria-label="清除搜索" hidden>×</button>
+      <div class="automation-list-controls">
+        <div class="pill-search"><label class="visually-hidden" for="search">搜索我的自动化</label>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="search" type="search" maxlength="80" autocomplete="off" placeholder="搜索我的自动化…">
+          <button type="button" id="automation-search-clear" aria-label="清除搜索" hidden>×</button>
+        </div>
+        <button type="button" id="automation-upcoming" class="secondary" aria-pressed="false" aria-controls="automation-list" hidden>即将运行</button>
       </div>
       <ul id="automation-list"></ul>
       <p id="list-empty" class="empty-state" hidden>这个分类下还没有自动化。</p>
@@ -135,6 +138,25 @@
       </section>
       <fieldset class="task-details">
         <legend>任务</legend>
+        <details id="automation-draft-assist" class="automation-draft-assist" hidden>
+          <summary>描述任务生成草稿</summary>
+          <label for="automation-draft-description">想自动完成什么
+            <textarea id="automation-draft-description" rows="3" maxlength="1600" placeholder="例如：把客户反馈归类，输出问题、频次和建议"></textarea>
+          </label>
+          <button type="button" id="automation-draft-generate" class="secondary" disabled>生成草稿</button>
+          <p id="automation-task-draft-status" class="note" role="status"></p>
+          <section id="automation-draft-preview" aria-labelledby="automation-draft-preview-heading" hidden>
+            <h3 id="automation-draft-preview-heading">草稿预览</h3>
+            <p id="automation-draft-preview-title"></p>
+            <label for="automation-draft-preview-prompt">任务说明
+              <textarea id="automation-draft-preview-prompt" rows="4" readonly></textarea>
+            </label>
+            <div class="editor-actions">
+              <button type="button" id="automation-draft-adopt">采用草稿</button>
+              <button type="button" id="automation-draft-reject" class="secondary">丢弃草稿</button>
+            </div>
+          </section>
+        </details>
         <label>名称 <input type="text" name="title" maxlength="80" required autocomplete="off" placeholder="例如：每周整理会议纪要"></label>
         <label>交给智能体的任务 <textarea name="prompt" maxlength="4000" placeholder="描述要完成的任务和期望的结果"></textarea></label>
       </fieldset>
@@ -169,6 +191,13 @@
         </div>
         <label class="schedule-toggle"><input type="checkbox" name="enabled"> 启用自动运行</label>
         <p id="automation-next-run" class="note" role="status" hidden></p>
+        <button type="button" id="preview-automation-schedule" class="secondary" aria-controls="automation-schedule-preview" hidden>预览运行时间</button>
+        <section id="automation-schedule-preview" aria-labelledby="automation-schedule-preview-heading" hidden>
+          <h3 id="automation-schedule-preview-heading">接下来 3 次计划运行</h3>
+          <p id="automation-schedule-preview-status" class="note" role="status"></p>
+          <ol id="automation-schedule-preview-slots"></ol>
+          <p id="automation-schedule-preview-hint" class="note" hidden>没有该日期的月份会跳过。</p>
+        </section>
         <div id="automation-notification-settings" hidden>
           <label for="automation-notification-policy">运行结果通知</label>
           <select id="automation-notification-policy" name="notification_policy" aria-describedby="automation-notification-help">

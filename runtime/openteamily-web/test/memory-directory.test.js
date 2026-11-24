@@ -147,3 +147,59 @@ test('memory unread filtering tracks the displayed revision and leaves other wor
   const other = await boot()
   assert.equal((await other.call('memory', 'POST', route() + '/' + page.id + '/read', {revision:2})).status, 404)
 })
+
+test('personal memory pins survive restarts and sort and filter before recent keyset paging', async () => {
+  const bot = await boot(undefined, {teams:[OTHER_WS]})
+  const older = await add(bot, {title:'工作归档', body:'第一版', topics:['项目']})
+  const recent = await add(bot, {title:'工作计划', body:'第二版'})
+  const middle = await add(bot, {title:'工作进度', body:'第三版'})
+  const otherWorkspace = await add(bot, {title:'另一个工作空间的工作计划'}, OTHER_WS)
+  setUpdated(bot, [older], 100)
+  setUpdated(bot, [middle], 200)
+  setUpdated(bot, [recent], 300)
+  const details = route() + '/' + older.id
+  const before = (await bot.call('memory', 'GET', details)).body.page
+  const pin = (page, pinned, workspace = WS, actor = bot) =>
+    actor.call('memory', 'POST', route(workspace) + '/' + page.id + '/pin', {pinned})
+  assert.equal(before.pinned, false)
+  assert.equal((await read(bot)).body.items[0].id, recent.id)
+  assert.equal((await pin(older, 'true')).status, 400)
+  assert.equal((await pin(older, true, OTHER_WS)).status, 404)
+  assert.equal((await pin(middle, true)).status, 200)
+  assert.equal((await pin(otherWorkspace, true, OTHER_WS)).status, 200)
+  for (const attempt of [await pin(older, true), await pin(older, true)]) {
+    assert.equal(attempt.status, 200)
+    assert.deepEqual(attempt.body, {page_id:older.id, workspace_id:WS, pinned:true})
+  }
+  assert.deepEqual((await bot.call('memory', 'GET', details)).body.page, {...before,pinned:true})
+
+  const reopened = await boot(bot.vol, {teams:[OTHER_WS]})
+  for (const query of [{}, {q:'工作'}]) {
+    const options = {...query,limit:'1'}
+    const first = (await read(reopened, options)).body
+    assert.deepEqual(first.items.map(page=>[page.id,page.pinned]), [[middle.id,true]])
+    assert.equal(first.total, 3)
+    const second = (await read(reopened, {...options,cursor:first.cursor})).body
+    assert.deepEqual(second.items.map(page=>[page.id,page.pinned]), [[older.id,true]])
+    const third = (await read(reopened, {...options,cursor:second.cursor})).body
+    assert.deepEqual(third.items.map(page=>[page.id,page.pinned]), [[recent.id,false]])
+    assert.equal(third.cursor, null)
+    assert.equal((await read(reopened, {...options,cursor:first.cursor,pinned:'1'})).status, 400)
+  }
+  const pinnedOnly = (await read(reopened, {pinned:'1', limit:'1'})).body
+  assert.equal(pinnedOnly.total, 2)
+  const remainingPin = (await read(reopened, {pinned:'1',limit:'1',cursor:pinnedOnly.cursor})).body
+  assert.deepEqual(remainingPin.items.map(page=>page.id), [older.id])
+  assert.equal(remainingPin.cursor, null)
+  assert.deepEqual((await read(reopened, {pinned:'1'}, OTHER_WS)).body.items.map(page=>page.id), [otherWorkspace.id])
+  assert.equal((await read(reopened, {pinned:'0'})).status, 400)
+
+  const peer = await boot(undefined, {teams:[OTHER_WS]})
+  assert.equal((await pin(older, false, WS, peer)).status, 404)
+  assert.equal((await read(peer, {pinned:'1'})).body.total, 0)
+  assert.equal((await pin(middle, false, WS, reopened)).status, 200)
+  assert.equal((await pin(older, false, WS, reopened)).status, 200)
+  assert.deepEqual((await read(reopened, {pinned:'1'})).body.items, [])
+  assert.equal((await read(reopened)).body.items[0].id, recent.id)
+  assert.deepEqual((await reopened.call('memory', 'GET', details)).body.page, before)
+})

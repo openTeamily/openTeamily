@@ -31,6 +31,46 @@ function fixture(turn, at = 1_800_000_000, saveArtifact, readMeetingAction, read
   return { feature, clock, calls, dbPath, e: feature.endpoints }
 }
 
+test('signed task drafting uses the scoped native model and returns only editable authoring fields', async t => {
+  const db = new DatabaseSync(':memory:')
+  t.after(() => db.close())
+  const first = Promise.withResolvers()
+  const queried = []
+  const feature = createAutomations({
+    db,
+    turn: () => assert.fail('drafting started an automation'),
+    async requireWorkspace(workspace) {
+      if (workspace !== W) throw Object.assign(new Error('Workspace unavailable'), {status:404})
+    },
+    draftRuntime: () => ({
+      backgroundTextOnly(description, {system}) {
+        queried.push(description)
+        assert.match(system, /do not perform the task/)
+        return queried.length === 1 ? first.promise : 'incomplete JSON'
+      },
+    }),
+  })
+  const context = username => ({request:new Request('http://fixture', {headers:{'x-ot-owner-username':username}})})
+  const draft = (workspace, description, username = 'alice') => feature.ops.v1({
+    method:'POST', path:`/v1/workspaces/${workspace}/automations/draft`, body:{description},
+  }, context(username))
+  assert.equal((await draft(W, '编写周报', '')).status, 403)
+  assert.equal((await draft('b'.repeat(32), '编写周报')).status, 404)
+  assert.equal((await draft(W, ' ')).status, 400)
+  assert.deepEqual(queried, [])
+  const accepted = draft(W, '  编写周报  ')
+  await flush()
+  assert.equal((await draft(W, '另一个草稿')).status, 429)
+  first.resolve(JSON.stringify({title:'整理周报', prompt:'写一份进展摘要。', schedule:{kind:'daily'}, enabled:true}))
+  assert.deepEqual(await accepted, {status:200,body:{
+    draft:{title:'整理周报',prompt:'写一份进展摘要。'}, workspace_id:W, viewer_username:'alice',
+  }})
+  assert.deepEqual(queried, ['编写周报'])
+  assert.equal((await draft(W, '无效的模型回复')).status, 502)
+  assert.equal((await draft(W, '允许重试')).status, 502)
+  assert.deepEqual(feature.endpoints['automations/list']({workspace_id:W}).items, [])
+})
+
 test('meeting follow-up verifies exact source, coalesces concurrent saves, and retains its original action', async () => {
   const MEETING = 'b'.repeat(32)
   const reference = { meeting_id: MEETING, revision: 2, action_index: 0 }
@@ -174,6 +214,44 @@ test('a scoped memory action prepares one durable follow-up for its reviewed rev
   assert.deepEqual(calls.map(call => call.prompt), [`[OpenTeamily 自动化 · ${saved.title}]\n${saved.prompt}`])
   assert.deepEqual(e['automations/run']({workspace_id: W, id: saved.id, run_id: manual.body.run.id}).run.result,
     {text: 'DS-Bot did it', model: 'm'})
+})
+
+test('the signed recurring preview uses scheduler dates and clock changes without saving or running', async t => {
+  const db = new DatabaseSync(':memory:')
+  t.after(() => db.close())
+  const epoch = text => Date.parse(text) / 1000
+  let current = epoch('2026-03-07T05:00:00Z')
+  const feature = createAutomations({
+    db, clock:() => current,
+    turn:() => assert.fail('schedule preview ran the automation'),
+    async requireWorkspace(workspace) {
+      if (workspace !== W) throw Object.assign(new Error('Workspace unavailable'), {status:404})
+    },
+  })
+  const scope = username => ({request:new Request('http://fixture', {headers:{'x-ot-owner-username':username}})})
+  const preview = (schedule, workspace = W, username = 'alice') => feature.ops.v1({
+    method:'POST', path:`/v1/workspaces/${workspace}/automations/schedule-preview`, body:{schedule},
+  }, scope(username))
+  const schedule = {kind:'daily', time:'02:30', time_zone:'America/New_York'}
+  assert.equal((await preview(schedule, W, '')).status, 403)
+  assert.equal((await preview(schedule, 'b'.repeat(32))).status, 404)
+  assert.equal((await preview({...schedule, time_zone:'not-a-zone'})).status, 400)
+  const spring = await preview(schedule)
+  assert.deepEqual(spring, {status:200, body:{time_zone:schedule.time_zone, workspace_id:W, viewer_username:'alice', slots:[
+    {at:epoch('2026-03-07T07:30:00Z'), date:'2026-03-07', weekday:6, time:'02:30'},
+    {at:epoch('2026-03-08T07:30:00Z'), date:'2026-03-08', weekday:7, time:'03:30', clock_change:'forward'},
+    {at:epoch('2026-03-09T06:30:00Z'), date:'2026-03-09', weekday:1, time:'02:30'},
+  ]}})
+  current = epoch('2026-10-31T23:00:00Z')
+  const autumn = (await preview({...schedule, time:'01:30'})).body.slots
+  assert.deepEqual(autumn.map(slot => slot.at), [
+    epoch('2026-11-01T05:30:00Z'), epoch('2026-11-02T06:30:00Z'), epoch('2026-11-03T06:30:00Z'),
+  ])
+  assert.equal(autumn[0].clock_change, 'first')
+  current = epoch('2026-02-01T05:00:00Z')
+  const months = (await preview({...schedule,kind:'monthly',day:31})).body.slots
+  assert.deepEqual(months.map(slot=>slot.date), ['2026-03-31','2026-05-31','2026-07-31'])
+  assert.deepEqual(feature.endpoints['automations/list']({workspace_id:W}).items, [])
 })
 
 test('next recurring slot follows local weekdays, month lengths and DST', () => {

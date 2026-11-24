@@ -3,8 +3,26 @@ import test from 'node:test';
 import { mergeMeetingFields, mountMeetingShares, parseAttendees, renderSharedMeeting } from '../openteamily/static/meetings/app.mjs';
 import { discussionContext, mountMeetingDiscussion } from '../openteamily/static/meetings/discussion.mjs';
 import { mountTranscriptSearch } from '../openteamily/static/meetings/transcript-search.mjs';
+import { readTranscriptFile } from '../openteamily/static/meetings/transcript-import.mjs';
 import { mountMeetingAudio } from '../openteamily/static/meetings/audio.mjs';
 import { mountMeetingPrint } from '../openteamily/static/meetings/print.mjs';
+
+test('meeting transcript imports preserve literal text and normalize caption cues', async () => {
+  const text = new File(['\uFEFF# Meeting\r\n<a> quoted verbatim'], 'notes.md');
+  assert.equal(await readTranscriptFile(text), '# Meeting\n<a> quoted verbatim');
+  const vtt = new File(['WEBVTT\n\nNOTE dropped\n\nintro\n00:01.000 --> 00:03.000 align:start\n<v Mei><i>Hello</i> &amp; bye.'], 'notes.VTT');
+  assert.equal(await readTranscriptFile(vtt), 'Mei：Hello & bye.');
+  const srt = new File(['1\r\n00:00:01,000 --> 00:00:04,000\r\nFirst line\r\n<i>Second line</i>\r\n\r\n2\r\n00:00:05,000 --> 00:00:07,000\r\nLast line'], 'notes.srt');
+  assert.equal(await readTranscriptFile(srt), 'First line\nSecond line\nLast line');
+});
+
+test('meeting transcript imports reject unsupported, malformed and oversized files', async () => {
+  await assert.rejects(readTranscriptFile(new File(['text'], 'notes.html')), /请选择 TXT/);
+  await assert.rejects(readTranscriptFile(new File(['WEBVTT\n\nNOTE discarded'], 'empty.vtt')), /没有读到字幕正文/);
+  await assert.rejects(readTranscriptFile(new File([Uint8Array.of(0xc0, 0xaf)], 'binary.txt')), /UTF-8/);
+  await assert.rejects(readTranscriptFile(new File(['transcript'], 'notes.txt'), 5), /超过 5 字/);
+  await assert.rejects(readTranscriptFile(new File(['a'.repeat(512 * 1024 + 1)], 'large.txt')), /超过 512 KB/);
+});
 
 test('meeting version review merges disjoint edits and flags overlapping fields', () => {
   const actions = [['核对报告', 'Alice', false, '2026-12-01']];

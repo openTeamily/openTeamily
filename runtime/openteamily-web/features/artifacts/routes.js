@@ -47,7 +47,7 @@ function activity(req, workspaceId) {
 }
 
 const FILE_TYPES = new Set([
-  'document', 'website', 'image', 'video', 'audio', 'model3d',
+  'document', 'website', 'image', 'video', 'audio', 'model3d', 'file',
   'whiteboard', 'spreadsheet', 'slides', 'dashboard', 'messages',
 ])
 
@@ -99,9 +99,9 @@ export async function dispatch(req, workspaceId, artifactId, action) {
     const raw = await req.json(4 * 1024 * 1024)
     if (raw?._multipart) {
       const upload = decodeUpload(raw)
-      const mime = undefined
       return createMedia(context, workspaceId, {
-        title: upload.fields.title, data: upload.data, filename: upload.filename, mime, key: req.headers.get('idempotency-key'),
+        title: upload.fields.title, data: upload.data, filename: upload.filename,
+        allowFile: upload.fields.allow_file === '1', key: req.headers.get('idempotency-key'),
       })
     }
     if (raw.duplicate_from !== undefined) {
@@ -403,6 +403,17 @@ export async function shares(req, workspaceId, artifactId, shareId, action) {
 
 const activeDrafts = new WeakSet()
 const drafts = {
+  document: {
+    name: '文档',
+    instructions: [
+      'Draft an editable Markdown document from the supplied description. Return one JSON object and no other output.',
+      'Use {"title":"…","markdown":"…"}. Write in the language of the description.',
+      'Keep the title at most 80 characters and the Markdown body at most 8,000 characters.',
+      'Use headings, lists and tables where they make the document clearer. Do not include raw HTML.',
+      'Do not invent facts. Use clearly marked placeholders if required information is missing.',
+    ],
+    normalize(value) { return validBody(value?.markdown) && value.markdown.trim() ? value.markdown : null },
+  },
   spreadsheet: {
     name: '表格',
     instructions: [
@@ -522,7 +533,7 @@ export const routes = [
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/studio-personal-copy$/, handle: copyStudioToPersonal },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/shared-copy$/, handle: copySharedText },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/activity$/, handle: activity },
-  { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/(spreadsheet|slides)\/draft$/, handle: artifactDraft },
+  { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/(document|spreadsheet|slides)\/draft$/, handle: artifactDraft },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/versions(?:\/(\d{1,8})(?:\/(export))?)?$/, handle: history },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/shares(?:\/([0-9a-f]{32})(\/(?:revoke|link))?)?$/, handle: shares },
   { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/studio-copy$/, handle: copyToStudio },

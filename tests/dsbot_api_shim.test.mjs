@@ -71,6 +71,8 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget('/v1/automation-templates', ORIGIN).feature, 'automations');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/automations`, ORIGIN).feature, 'automations');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/automations/tick`, ORIGIN).feature, 'automations');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/automations/draft`, ORIGIN).feature, 'automations');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/automations/schedule-preview`, ORIGIN).feature, 'automations');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/automations/${ID}`, ORIGIN).feature, 'automations');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/automations/${ID}/run`, ORIGIN).feature, 'automations');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/automations/${ID}/runs/${ID}/retry`, ORIGIN).feature, 'automations');
@@ -205,6 +207,7 @@ test('moved artifact routes go to the artifacts feature of the user\'s own DS-Bo
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/export`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/spreadsheet/draft`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/slides/draft`, ORIGIN).feature, 'artifacts');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/document/draft`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/versions/3/export`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/shares/${ID}/revoke`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/shares/${ID}/link`, ORIGIN).feature, 'artifacts');
@@ -273,4 +276,11 @@ test('collaboration pages use the owner runtime for private runs and Bot Social 
     assert.deepEqual(movedTarget(path, origin), {feature, path});
   }
   assert.equal(movedTarget(run + '/steps/8/retry', origin), null);
+});
+
+test('memory pin writes route to the owner plugin only for exact workspace and page ids', () => {
+  const path = `/v1/workspaces/${WS}/memory/${ID}/pin`;
+  assert.deepEqual(movedTarget(path, ORIGIN), {feature:'memory',path});
+  assert.equal(movedTarget(path + '/other', ORIGIN), null);
+  assert.equal(movedTarget(path.replace(ID, 'unrelated'), ORIGIN), null);
 });

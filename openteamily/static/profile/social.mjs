@@ -71,7 +71,7 @@ function bindTabs(byId, choices, activate) {
   }
 }
 
-function listPager({document, list, status, more, retry, discover, endpoint = SOCIAL, request, render, empty}) {
+export function listPager({document, list, status, more, retry, discover, endpoint = SOCIAL, request, render, empty}) {
   let controller;
   let view = '';
   let query = '';

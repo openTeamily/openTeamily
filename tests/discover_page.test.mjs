@@ -1112,6 +1112,10 @@ test('feed selection round-trips through the URL search', async () => {
   assert.equal(feedSearchText({tab: 'following', kind: 'video', query: 'cat'}),
     '?feed=following&kind=video&q=cat');
   assert.equal(feedSearchText({tab: 'collected', kind: '', query: ''}), '?feed=collected');
+  const collectionOrder = '?feed=collected&kind=document&sort=collected&q=cat&topic=technology';
+  assert.equal(feedSearchText(feedStateFromSearch(collectionOrder)), collectionOrder);
+  assert.equal(feedStateFromSearch('?sort=collected').sort, 'latest');
+  assert.equal(feedStateFromSearch('?feed=following&sort=collected').sort, 'latest');
   assert.equal(feedSearchText({tab: 'activity', kind: '', query: ''}), '');
   assert.equal(feedSearchText({tab: 'following', kind: 'bogus', query: ''}), '?feed=following');
 });

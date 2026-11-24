@@ -153,7 +153,7 @@ test('simultaneous edits and restores cannot replace a page from the same revisi
     assert.equal(saved.revision, expectedRevision)
     assert.equal(conflict.current.revision, expectedRevision)
     assert.equal(conflict.current.body,saved.body)
-    assert.deepEqual((await call('GET',path)).body.page,saved)
+    assert.deepEqual((await call('GET',path)).body.page,{...saved,pinned:false})
     assert.equal((await call('GET',path+'/versions/'+expectedRevision)).body.version.body,saved.body)
   }
   await checkRace([edit(1,'正文版本一'),edit(1,'正文版本二')],2)

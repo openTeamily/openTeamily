@@ -104,6 +104,12 @@ CREATE TABLE memory_page_reads (
  page_id TEXT NOT NULL REFERENCES memory_pages(id) ON DELETE CASCADE,
  user_id TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision >= 1),
  PRIMARY KEY(page_id, user_id));
+`, `
+CREATE TABLE memory_page_pins (
+ page_id TEXT NOT NULL REFERENCES memory_pages(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL,
+ PRIMARY KEY(page_id, user_id));
+CREATE INDEX memory_pins_by_user ON memory_page_pins(user_id, page_id);
 `]
 
 export const IMPORT_TABLES = {

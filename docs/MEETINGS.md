@@ -47,6 +47,10 @@ and received meeting notes also offer a print preview for the selected revision.
 the summary and action items with their owners, deadlines, and status. Use the browser print
 dialog to print or save the preview as PDF.
 
+Import text or Markdown transcripts and VTT or SRT captions in the meeting editor. Review
+the decoded text, then append it to the current transcript or replace the transcript. The
+import reads the file in the browser and the meeting save includes the reviewed text.
+
 The meeting action inbox lists tasks assigned to you in received meeting notes. Save an item
 directly from the list to your personal Memory to-dos, then reopen the saved copy from the same
 row. You can also complete or reopen the personal copy there. The inbox shows its current

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {renderRunMarkdown} from '../openteamily/static/automations/result-markdown.mjs';
+import {upcomingAutomations} from '../openteamily/static/automations/app.mjs';
 import { automationEditionDraft, automationTargetFromSearch, cancellationPrompt, catalogItems, csrfCookie, deletePrompt, draftFromTemplate, listQuery, matchesRunFilter, meetingTargetFromSearch, memoryActionTargetFromSearch, mount, namesFromList, readEditor, RUN_DETAIL_EMPTY, runDetailFields, runErrorReason, runFilterFromSearch, runFilterSearchText, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory } from '../openteamily/static/automations/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
@@ -29,6 +30,18 @@ test('listQuery encodes tab and search', () => {
   assert.equal(listQuery('work', '  brief '), '?category=work&q=brief');
   assert.equal(tabCategory('life'), 'life');
   assert.equal(tabCategory('other'), 'mine');
+});
+
+test('upcoming automation catalogue uses native slots and excludes inactive and foreign rows', () => {
+  const first = {title:'First', workspace_id:'workspace', enabled:true, schedule_status:{state:'scheduled', at:10}};
+  const later = {...first, title:'Later', schedule_status:{state:'scheduled', at:20}};
+  const due = {...first, title:'Due now', schedule_status:{state:'due'}};
+  const items = [later, first, due, {...first, enabled:false}, {...first, workspace_id:'other'},
+    {...first, schedule_status:{state:'once_triggered'}}, {...first, schedule_status:{state:'once_cancelled'}},
+    {...first, schedule_status:{state:'scheduled', at:0}}, {...first, schedule_status:{state:'paused', at:1}},
+    {...first, schedule_status:null}];
+  assert.deepEqual(upcomingAutomations(items, 'workspace'), [due, first, later]);
+  assert.equal(items[0], later);
 });
 
 test('an onboarding link must name exactly one saved automation and its workspace', () => {
