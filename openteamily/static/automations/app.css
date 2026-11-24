@@ -180,6 +180,7 @@ body.app-workspace .page-heading h1 {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   padding-inline-end: .75rem;
+  border-bottom: 0;
   position: relative;
 }
 
@@ -982,7 +983,13 @@ body.app-workspace .page-heading h1 {
 
 @media (max-width: 480px) {
   body.app-workspace #main-panel {
-    padding-inline: 0.85rem;
+    gap: .75rem;
+    padding-block-start: .75rem;
+    padding-inline: .85rem;
+  }
+
+  body.app-workspace #main-panel > .page-top {
+    padding-block: .25rem;
   }
 
   #automation-list .automation-row {
