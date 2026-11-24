@@ -2533,7 +2533,7 @@ html[data-theme-resolved="dark"] :is(#main-panel, #studio-dialog) {
   letter-spacing: -.025em;
 }
 
-#main-panel:not(.is-meetings) .dir-title { color: var(--space-muted); font-size: .875rem; }
+#main-panel:not(.is-meetings) .dir-title { color: var(--space-ink); font-size: 1.0625rem; font-weight: 700; letter-spacing: -.02em; }
 #main-panel:not(.is-meetings) #new-menu-button {
   color: var(--space-on-accent);
   background: var(--space-accent);
@@ -2677,15 +2677,10 @@ html[data-theme-resolved="dark"] :is(#main-panel, #studio-dialog) {
     row-gap: .6rem;
     border-bottom: 1px solid var(--space-line);
   }
-  #main-panel:not(.is-meetings) .catalog-quick-actions {
-    display: flex;
-    flex: 1 0 100%;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: .5rem 1rem;
-  }
-  #main-panel .catalog-quick-actions #space-title { font-size: 1.625rem; line-height: 1.2; }
+  /* Keep display:contents so the hidden #space-title does not occupy a
+     desktop row after search returns to the left directory. Compact
+     catalog (≤700px) still lays these slots out in its own media query. */
+  #main-panel:not(.is-meetings) .catalog-quick-actions { display: contents; }
   #main-panel .catalog-search-actions:not(:empty) { display: flex; align-items: center; gap: .5rem; }
   #main-panel .catalog-search-actions .dir-search { width: min(20rem, 100%); }
   #main-panel:not(.is-meetings) > #list-panel > .artifact-dir { padding: 1.125rem .875rem; background: var(--space-card); border-color: var(--space-line); }

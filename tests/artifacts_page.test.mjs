@@ -13,7 +13,7 @@ import {
 import {
   csrfCookie, listQuery, visibleArtifacts, artifactMatchesType,
   artifactMatchesModified, artifactModifiedBounds, viewFromSearch, queryForView, artifactOrigin, FILE_TYPE_LABELS,
-  sessionFilterChoices, applyDirectoryCollapsed, artifactDeletePrompt, mount,
+  sessionFilterChoices, applyDirectoryCollapsed, bindCatalogToolbar, artifactDeletePrompt, mount,
   createArtifactActivity,
   meetingRows, meetingActionLabel, meetingTimeLabel, meetingsForScope,
 } from '../openteamily/static/artifacts/app.mjs';
@@ -551,6 +551,115 @@ function fakeDocument() {
 function reply({status = 200, body = {}} = {}) {
   return {status, json: async () => body};
 }
+
+function catalogToolbarDocument({compact = false} = {}) {
+  const {doc, elements} = fakeDocument();
+  const enhance = (node) => {
+    Object.defineProperty(node, 'parentElement', {get() { return this.parentNode; }, configurable: true});
+    Object.defineProperty(node, 'nextElementSibling', {
+      get() {
+        if (!this.parentNode) return null;
+        const siblings = this.parentNode.children;
+        const index = siblings.indexOf(this);
+        return index >= 0 ? siblings[index + 1] || null : null;
+      },
+      configurable: true,
+    });
+    const owner = node;
+    const names = new Set(String(node.className || '').split(/\s+/).filter(Boolean));
+    node.classList = {
+      add(name) { names.add(name); owner.className = [...names].join(' '); },
+      remove(name) { names.delete(name); owner.className = [...names].join(' '); },
+      contains(name) { return names.has(name); },
+      toggle(name, on) {
+        if (on === undefined) on = !names.has(name);
+        if (on) names.add(name); else names.delete(name);
+        owner.className = [...names].join(' ');
+        return on;
+      },
+    };
+    const detach = (child) => {
+      if (child?.parentNode) child.parentNode.removeChild(child);
+    };
+    const rawAppend = node.appendChild.bind(node);
+    node.appendChild = (child) => { detach(child); return rawAppend(child); };
+    const rawInsert = node.insertBefore.bind(node);
+    node.insertBefore = (child, before) => { detach(child); return rawInsert(child, before); };
+    return node;
+  };
+  const el = (id, tag) => enhance(Object.assign(doc.getElementById(id), tag ? {tagName: tag.toUpperCase()} : {}));
+  const panel = el('main-panel');
+  const title = el('space-title', 'h1');
+  title.classList.add('visually-hidden');
+  const titleActions = el('catalog-title-actions');
+  const searchActions = el('catalog-search-actions');
+  const directory = el('artifact-dir');
+  const catalog = el('list-panel');
+  const newWrap = enhance(new FakeNode('div'));
+  const newMenu = el('new-menu-button', 'button');
+  const searchWrap = enhance(new FakeNode('div'));
+  searchWrap.className = 'dir-search';
+  enhance(searchWrap);
+  const search = el('search', 'input');
+  const filterWrap = enhance(new FakeNode('div'));
+  const filter = el('filter-button', 'button');
+  const layout = el('layout-toggle');
+  const notify = el('artifact-notify', 'button');
+  const header = enhance(new FakeNode('header'));
+  panel.append(title, titleActions, searchActions, catalog, header);
+  catalog.append(directory);
+  directory.append(newWrap, searchWrap);
+  newWrap.append(newMenu);
+  searchWrap.append(search);
+  header.append(filterWrap, layout, notify);
+  filterWrap.append(filter);
+  let matches = compact;
+  const listeners = [];
+  const media = {
+    get matches() { return matches; },
+    addEventListener(_type, handler) { listeners.push(handler); },
+    setMatches(next) { matches = next; for (const handler of listeners) handler(); },
+  };
+  doc.defaultView = { matchMedia() { return media; } };
+  return {doc, elements, title, directory, searchWrap, search, searchActions, notify, header, setCompact(next) {
+    media.setMatches(next);
+  }};
+}
+
+test('the desktop catalog keeps search in the directory and hides the extra title', () => {
+  const page = catalogToolbarDocument({compact: false});
+  const sync = bindCatalogToolbar(page.doc, () => {});
+  sync(true);
+  assert.equal(page.search.parentElement, page.searchWrap);
+  assert.equal(page.searchWrap.parentElement, page.directory);
+  assert.equal(page.searchActions.children.includes(page.search), false);
+  assert.equal(page.title.classList.contains('visually-hidden'), true);
+  assert.equal(page.notify.parentElement, page.header);
+  sync(false);
+  assert.equal(page.title.classList.contains('visually-hidden'), true);
+});
+
+test('the compact catalog still moves search into the header toolbar', () => {
+  const page = catalogToolbarDocument({compact: true});
+  const sync = bindCatalogToolbar(page.doc, () => {});
+  sync(true);
+  assert.equal(page.searchWrap.parentElement, page.searchActions);
+  assert.equal(page.search.parentElement, page.searchWrap);
+  assert.equal(page.title.classList.contains('visually-hidden'), false);
+  assert.equal(page.notify.parentElement, page.elements.get('catalog-title-actions'));
+  page.setCompact(false);
+  assert.equal(page.searchWrap.parentElement, page.directory);
+  assert.equal(page.search.parentElement, page.searchWrap);
+  assert.equal(page.title.classList.contains('visually-hidden'), true);
+  assert.equal(page.notify.parentElement, page.header);
+});
+
+test('the Space directory heading uses the recorded 资料空间 label', () => {
+  const html = readFileSync(new URL('../openteamily/static/artifacts/index.html', import.meta.url), 'utf8');
+  assert.match(html, /id="dir-title">资料空间/);
+  assert.doesNotMatch(html, /id="dir-title">作品分类/);
+});
+
 
 test('Studio retries the exact document after a temporary read failure', async () => {
   const {doc} = fakeDocument();
