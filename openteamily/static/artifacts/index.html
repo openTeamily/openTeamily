@@ -95,6 +95,8 @@
       <button type="button" id="dir-expand" class="dir-expand" hidden aria-label="展开侧边栏" title="展开侧边栏">展开侧边栏</button>
       <div class="catalog-quick-actions" id="catalog-quick-actions">
         <h1 class="visually-hidden" id="space-title">作品库</h1>
+        <div id="catalog-title-actions" class="catalog-title-actions"></div>
+        <div id="catalog-search-actions" class="catalog-search-actions"></div>
       </div>
       <nav class="artifact-scopes" id="artifact-scopes" aria-label="作品范围">
         <button type="button" data-scope="all" aria-current="page">全部</button>
@@ -726,6 +728,10 @@
       <button type="button" id="studio-close" class="secondary">关闭</button>
     </header>
     <p id="studio-status" role="status"></p>
+    <div id="studio-open-actions" class="studio-actions" hidden>
+      <button type="button" id="studio-open-back" class="secondary">返回团队文档</button>
+      <button type="button" id="studio-open-retry" class="primary">重试打开</button>
+    </div>
     <section id="studio-catalog">
       <div class="studio-catalog-search">
         <label class="visually-hidden" for="studio-catalog-query">搜索团队文档</label>
@@ -733,21 +739,23 @@
         <input id="studio-catalog-query" type="search" maxlength="80" autocomplete="off" placeholder="搜索团队文档或更新人" aria-controls="studio-list">
         <button type="button" id="studio-catalog-clear" aria-label="清除搜索" hidden>×</button>
       </div>
-      <p id="studio-catalog-no-match" class="note" role="status" hidden>没有匹配的团队文档。</p>
-      <ul id="studio-list"></ul>
-      <div class="studio-actions">
+      <div class="studio-actions studio-catalog-actions">
         <button type="button" id="studio-add">新建团队文档</button>
         <button type="button" id="studio-refresh" class="secondary">刷新列表</button>
       </div>
+      <p id="studio-catalog-no-match" class="note" role="status" hidden>没有匹配的团队文档。</p>
+      <ul id="studio-list"></ul>
     </section>
     <form id="studio-form" hidden>
-      <div class="studio-actions">
-        <button type="button" id="studio-back" class="secondary">← 返回团队文档</button>
+      <div class="studio-editor-toolbar">
         <div class="studio-actions">
+          <button type="button" id="studio-back" class="secondary">← 返回团队文档</button>
+          <button type="submit" id="studio-save">保存</button>
+        </div>
+        <div class="studio-actions studio-document-actions">
           <button type="button" id="studio-discuss" class="secondary" hidden>与个人智能体讨论</button>
           <button type="button" id="studio-copy-link" class="secondary" hidden>复制文档链接</button>
           <button type="button" id="studio-save-personal" class="secondary" aria-haspopup="dialog" hidden>保存个人副本</button>
-          <button type="submit" id="studio-save">保存</button>
         </div>
       </div>
       <label id="studio-link-wrap" hidden>文档链接<input id="studio-link" readonly></label>
@@ -774,10 +782,12 @@
           </div>
         </details>
       </div>
-      <label for="studio-title">标题</label>
-      <input id="studio-title" maxlength="120" required autocomplete="off">
-      <label for="studio-body">正文</label>
-      <textarea id="studio-body" maxlength="60000" rows="10"></textarea>
+      <div class="studio-document-fields">
+        <label for="studio-title">标题</label>
+        <input id="studio-title" maxlength="120" required autocomplete="off">
+        <label for="studio-body">正文</label>
+        <textarea id="studio-body" maxlength="60000" rows="10"></textarea>
+      </div>
       <div class="studio-actions">
         <p id="studio-revision" class="note"></p>
         <button type="button" id="studio-history-open" class="secondary" aria-haspopup="dialog" hidden>版本历史</button>

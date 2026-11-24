@@ -84,10 +84,10 @@
       <span id="workspace-status" role="status"></span>
     </div>
     <section id="list-panel">
-      <div class="tabs" role="tablist">
+      <div class="tabs" role="tablist" aria-label="自动化分类">
         <button type="button" role="tab" data-category="mine" aria-selected="true">我的自动化</button>
-        <button type="button" role="tab" data-category="work" aria-selected="false">工作</button>
-        <button type="button" role="tab" data-category="life" aria-selected="false">生活</button>
+        <button type="button" role="tab" data-category="work" aria-selected="false" tabindex="-1">工作</button>
+        <button type="button" role="tab" data-category="life" aria-selected="false" tabindex="-1">生活</button>
       </div>
       <div class="automation-list-controls">
         <div class="pill-search"><label class="visually-hidden" for="search">搜索我的自动化</label>
@@ -98,7 +98,8 @@
         <button type="button" id="automation-upcoming" class="secondary" aria-pressed="false" aria-controls="automation-list" hidden>即将运行</button>
       </div>
       <ul id="automation-list"></ul>
-      <p id="list-empty" class="empty-state" hidden>这个分类下还没有自动化。</p>
+      <p id="list-empty" class="empty-state" role="status" hidden>这个分类下还没有自动化。</p>
+      <button type="button" id="automation-list-retry" class="secondary" hidden>重试读取自动化</button>
       <button type="button" id="automation-template-retry" class="secondary" hidden>重试加载模板</button>
     </section>
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {artifactNoticeTarget, mountArtifactNotifications} from '../openteamily/static/artifacts/notifications.mjs';
+import {mountSharedStudio} from '../openteamily/static/artifacts/shared-studio.mjs';
 import {studioDiscussionContext} from '../openteamily/static/artifacts/studio-discussion.mjs';
 import {sharedWorkCopyToken} from '../openteamily/static/artifacts/shared-work-copy.mjs';
 import {
@@ -550,6 +551,40 @@ function fakeDocument() {
 function reply({status = 200, body = {}} = {}) {
   return {status, json: async () => body};
 }
+
+test('Studio retries the exact document after a temporary read failure', async () => {
+  const {doc} = fakeDocument();
+  const get = id => doc.getElementById('studio-' + id);
+  const dialog = get('dialog');
+  dialog.showModal = () => { dialog.open = true; };
+  dialog.close = () => { dialog.open = false; };
+  doc.visibilityState = 'hidden';
+  doc.defaultView = {location:{origin:'https://test.example'}, addEventListener() {}, clearTimeout() {},
+    sessionStorage:{getItem:() => null, removeItem() {}}};
+  const workspace = 'a'.repeat(32), id = 'b'.repeat(32);
+  const paths = [];
+  const opened = [];
+  const studio = mountSharedStudio(doc, {
+    onDocument: (_workspace, documentId) => { opened.push(documentId); },
+    async request(method, path) {
+      assert.equal(method, 'GET');
+      paths.push(path);
+      return paths.length === 1 ? {status:503, body:{}}
+        : {status:200, body:{document:{id,title:'协作方案',body:'已保存的正文',revision:1}}};
+    },
+  });
+  studio.setWorkspace({id:workspace, name:'团队', kind:'team', role:'member'}, 'account');
+  await studio.open(id);
+  assert.equal(get('catalog').hidden, true);
+  assert.equal(get('status').textContent, '暂时无法打开团队文档。');
+  assert.equal(doc.activeElement, get('open-retry'));
+  await get('open-retry').dispatch('click');
+  await new Promise(setImmediate);
+  assert.deepEqual(paths, Array(2).fill(`/v1/workspaces/${workspace}/studio/documents/${id}`));
+  assert.deepEqual(opened, [id]);
+  assert.equal(get('open-actions').hidden, true);
+  assert.equal(get('body').value, '已保存的正文');
+});
 
 const noticeWorkspace = 'a'.repeat(32);
 const noticeConversation = 'otc_' + 'B'.repeat(26);

@@ -171,9 +171,11 @@
         <input type="search" id="catalog-query" placeholder="搜索智能体…" maxlength="80" autocomplete="off">
         <button type="button" id="catalog-clear">清除</button>
       </form>
-      <a class="catalog-create" id="catalog-create-agent" href="/agents?new=1">+ 创建智能体</a>
-      <a class="catalog-create" id="catalog-create-team" href="/team" hidden>+ 创建团队</a>
-      <a class="catalog-create catalog-create-secondary" id="catalog-create-agent-team" href="/agents?tab=teams&amp;new=1" hidden>+ 创建 AI 智能体团队</a>
+      <div class="catalog-toolbar-actions">
+        <a class="catalog-create" id="catalog-create-agent" href="/agents?new=1" hidden>+ 创建智能体</a>
+        <a class="catalog-create" id="catalog-create-team" href="/team" hidden>+ 创建团队</a>
+        <a class="catalog-create catalog-create-secondary" id="catalog-create-agent-team" href="/agents?tab=teams&amp;new=1" hidden>+ 创建 AI 智能体团队</a>
+      </div>
     </header>
     <div id="catalog-filters" class="catalog-filters" aria-label="分类">
       <div class="catalog-filter-scroll">
@@ -211,12 +213,13 @@
       <ul id="received-agent-shares-list"></ul>
       <button type="button" id="received-agent-shares-more" hidden>加载更多</button>
     </details>
-    <section aria-label="公共目录" id="catalog-panel">
+    <section aria-labelledby="catalog-heading" id="catalog-panel">
       <h2 id="catalog-heading" class="visually-hidden">公共智能体</h2>
       <p id="catalog-count" role="status" aria-live="polite"></p>
       <p id="catalog-error" role="alert" hidden></p>
-      <button type="button" id="teams-retry" hidden>重试</button>
+      <button type="button" id="teams-retry" aria-describedby="catalog-error" hidden>重试</button>
       <p id="discover-empty" class="note" hidden>暂无公开智能体。</p>
+      <button type="button" id="catalog-empty-reset" hidden>清除筛选</button>
       <ul id="discover-list" class="catalog"></ul>
       <button type="button" id="catalog-more" hidden>加载更多</button>
     </section>
